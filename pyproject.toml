@@ -1,0 +1,38 @@
+[project]
+name = "lectio"
+version = "0.1.0"
+description = "Browser-based RSS and Atom reader"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite",
+    "fastapi",
+    "feedparser",
+    "httpx",
+    "jinja2",
+    "python-multipart",
+    "reader",
+    "readability-lxml",
+    "sqlalchemy",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "ty",
+    "uv",
+    "uvicorn[standard]>=0.44.0",
+]
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+extend-ignore = ["E203"]
+select = ["E", "F", "W", "I", "B"]
+
+# Ruff is the canonical linter/formatter for this project. The `select` list
+# enables pycodestyle (`E`), pyflakes (`F`), warnings (`W`), isort-style
+# import ordering (`I`) and bugbear (`B`). Add or remove checks here if
+# you want stricter or looser linting.

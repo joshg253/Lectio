@@ -1,0 +1,4389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lectio</title>
+  <script>
+    window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
+    window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
+    window.__lectioTheme = window.localStorage.getItem('lectio-theme') || 'dark';
+  </script>
+  <script>
+    document.write(`<link id="theme-stylesheet" rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v=${window.STATIC_ASSET_VERSION}" />`);
+  </script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
+  <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
+</head>
+<body>
+  <header class="topbar" role="banner">
+  <a class="menu-brand topbar-brand" href="/">Lectio</a>
+    <div class="topbar-actions">
+      <form method="get" action="/" class="topbar-search-form" role="search" aria-label="Search posts">
+        <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+        {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+        {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+        <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+        <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+        <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+        <input
+          id="topbar-search-input"
+          name="q"
+          class="topbar-search-input"
+          type="search"
+          value="{{ selected_query or '' }}"
+          placeholder="Search posts"
+          aria-label="Search posts"
+          autocomplete="off"
+        />
+      </form>
+      <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
+      <details class="hamburger-menu app-menu topbar-menu">
+        <summary title="Menu" aria-label="Open menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
+        <div class="menu-popover">
+          <a
+            class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
+            href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+            title="Global history"
+            aria-label="Global history"
+          ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
+          <div class="flyout-item">
+            <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+            <div class="flyout-panel">
+              <form method="post" action="/settings/auto-refresh">
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                {% for option_minutes in auto_refresh_option_minutes %}
+                <button type="submit" class="menu-item refresh-option {% if option_minutes == auto_refresh_minutes %}active{% endif %}" name="refresh_minutes" value="{{ option_minutes }}">{% if option_minutes == 0 %}Off{% else %}{{ (option_minutes|string) + 'm' if option_minutes < 60 else (option_minutes // 60)|string + 'h' }}{% endif %}</button>
+                {% endfor %}
+              </form>
+            </div>
+          </div>
+          <div class="flyout-item">
+            <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+            <div class="flyout-panel">
+              <button type="button" class="menu-item" data-toggle-panel="add-folder-modal">Folder</button>
+              <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
+            </div>
+          </div>
+          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
+          <div class="flyout-item">
+            <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+            <div class="flyout-panel">
+              <label for="opml-file-input" class="menu-item file-item">Import</label>
+              <a class="menu-item" href="/opml/export">Export</a>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <form id="opml-import-form" method="post" action="/opml/import" enctype="multipart/form-data" hidden>
+    <input id="opml-file-input" type="file" name="opml_file" accept=".opml,.xml,text/xml,application/xml" required />
+  </form>
+
+  <div id="medium-pane-backdrop" class="medium-pane-backdrop" hidden></div>
+
+  <main class="panes">
+
+    <section class="pane pane-folders">
+      <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
+        {% if root_folder_row %}
+        <div class="tree-block root-tree-block">
+          <div class="saved-items-row">
+            <a
+              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}&star_only=1&resume_read_filter={{ selected_resume_read_filter }}"
+              class="tree-item saved-item {% if selected_star_only and root_folder_row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-saved-items="true"
+            >
+              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
+              <span class="name">Saved Items</span>
+            </a>
+          </div>
+
+          <div class="root-item-row">
+            <a
+              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+              class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-folder-name="{{ root_folder_row.name }}"
+              data-folder-depth="{{ root_folder_row.depth }}"
+            >
+              <span class="name">{{ root_folder_row.name }}</span>
+              <button
+                type="button"
+                id="folders-unread-toggle"
+                class="folders-unread-toggle"
+                title="Toggle filter: show only folders with unread posts"
+                aria-label="Toggle filter: show only folders with unread posts"
+                aria-pressed="false"
+              >
+                <span class="material-symbols-rounded" aria-hidden="true">filter_alt</span>
+              </button>
+              {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
+            </a>
+          </div>
+
+          <div class="tree-children">
+            {% for row in child_folder_rows %}
+            {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
+            <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
+              <div class="tree-folder-row">
+                {% if folder_feeds %}
+                <button
+                  type="button"
+                  class="tree-toggle"
+                  data-tree-target="folder-feeds-{{ row.id }}"
+                  aria-expanded="false"
+                  title="Toggle feeds"
+                ><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+                {% else %}
+                <span class="tree-toggle-spacer"></span>
+                {% endif %}
+                <a
+                  href="/?folder_id={{ row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  class="tree-item child-item {% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
+                  data-folder-id="{{ row.id }}"
+                  data-folder-name="{{ row.name }}"
+                  data-folder-depth="{{ row.depth }}"
+                >
+                  <span class="name">{{ row.name }}</span>
+                  {% if row.unread_count %}<span class="count">{{ row.unread_count }}</span>{% endif %}
+                </a>
+              </div>
+
+              {% if folder_feeds %}
+              <ul id="folder-feeds-{{ row.id }}" class="feed-list tree-feed-list" hidden>
+                {% for feed in folder_feeds %}
+                <li>
+                  <a
+                    class="feed-link {% if selected_feed_url == feed.url %}active{% endif %}"
+                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                    data-feed-url="{{ feed.url }}"
+                    data-folder-id="{{ row.id }}"
+                    title="{{ feed.url }}"
+                  >
+                    <span class="feed-label">
+                      {% if feed.icon_url %}
+                      <img class="feed-favicon" src="{{ feed.icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
+                      {% endif %}
+                      <span>{{ feed.title }}</span>
+                    </span>
+                    {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
+                  </a>
+                </li>
+                {% endfor %}
+              </ul>
+              {% endif %}
+            </div>
+            {% endfor %}
+
+            {% set root_feeds = feeds_by_folder.get(root_folder_row.id, []) %}
+            {% if root_feeds %}
+            <ul class="feed-list tree-root-feed-list">
+              {% for feed in root_feeds %}
+              <li>
+                <a
+                  class="feed-link {% if selected_feed_url == feed.url and selected_folder_id == root_folder_row.id %}active{% endif %}"
+                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  data-feed-url="{{ feed.url }}"
+                  data-folder-id="{{ root_folder_row.id }}"
+                  title="{{ feed.url }}"
+                >
+                  <span class="feed-label">
+                    {% if feed.icon_url %}
+                    <img class="feed-favicon" src="{{ feed.icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
+                    {% endif %}
+                    <span>{{ feed.title }}</span>
+                  </span>
+                  {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="tree-block tags-tree-block" id="tags-tree-block">
+          <div class="tags-header-row">
+            <button
+              type="button"
+              id="tags-collapse-toggle"
+              class="tree-item root-item tags-header"
+              aria-expanded="true"
+              aria-controls="tags-tree-body"
+              title="Collapse tags"
+            >
+              <span class="name">Tags</span>
+              <span class="material-symbols-rounded tags-collapse-chevron" aria-hidden="true">expand_more</span>
+            </button>
+          </div>
+          <div class="tags-tree-body" id="tags-tree-body">
+            {% if tag_rows %}
+            <ul class="feed-list tag-list">
+              {% for tag_row in tag_rows %}
+              <li>
+                <a
+                  class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}"
+                  title="#{{ tag_row.name }}"
+                >
+                  <span class="tag-label">#{{ tag_row.name }}</span>
+                  <span class="count">{{ tag_row.count }}</span>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <div class="tags-empty muted">No tags in this view.</div>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </nav>
+
+      <footer class="folders-pane-footer">
+        <button id="folders-collapse-btn" class="folders-collapse-btn" type="button"
+          aria-label="Collapse folders pane" title="Collapse folders pane">
+          <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+          <span class="folders-btn-icon folders-btn-strip-icon material-symbols-rounded" aria-hidden="true">chevron_right</span>
+          <span class="folders-btn-icon folders-btn-popout-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+        </button>
+      </footer>
+    </section>
+
+    <div class="pane-resizer" data-resizer="left-middle" role="separator" aria-label="Resize left and middle panes"></div>
+
+    <section class="pane pane-posts">
+      {% if selected_read_filter == 'history' %}
+      <div class="pane-header history-pane-header">
+        <span class="material-symbols-rounded history-header-icon" aria-hidden="true">history</span>
+        <span class="history-header-label">History</span>
+        <button type="button" class="history-close-pill" title="Close History" aria-label="Close History" onclick="closeHistoryView()"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      {% else %}
+      <div class="posts-toolbar">
+        <div class="sort-group" role="group" aria-label="Filter posts">
+          {% set rf_base = '/?folder_id=' ~ selected_folder_id %}
+          {% if selected_feed_url %}{% set rf_base = rf_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+          {% if selected_tag %}{% set rf_base = rf_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
+          {% set rf_base = rf_base ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir ~ '&read_filter=' %}
+          {% set rf_star_current = '&star_only=1' if selected_star_only else '&star_only=0' %}
+            <a class="sort-pill filter-pill {% if selected_read_filter == 'all' %}active{% endif %}" href="{{ rf_base }}all{{ rf_star_current }}&resume_read_filter=all" title="All posts" aria-label="All posts"><span class="material-symbols-rounded filter-icon" aria-hidden="true">asterisk</span></a>
+            <a class="sort-pill filter-pill {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ rf_base }}unread{{ rf_star_current }}&resume_read_filter=unread" title="Unread only" aria-label="Unread only"><span class="material-symbols-rounded filter-icon" aria-hidden="true">mark_email_unread</span></a>
+            {% set star_target_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
+            {% set star_next = '&star_only=0' if selected_star_only else '&star_only=1' %}
+            <a class="sort-pill filter-pill {% if selected_star_only %}active{% endif %}" href="{{ rf_base }}{{ star_target_filter }}{{ star_next }}&resume_read_filter={{ star_target_filter }}" title="Star-only" aria-label="Star-only"><span class="material-symbols-rounded filter-icon" aria-hidden="true">star</span></a>
+        </div>
+        <div class="sort-group" role="group" aria-label="Sort posts">
+          <a
+            class="sort-pill active"
+            href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}{% if selected_tag %}&tag={{ selected_tag | urlencode }}{% endif %}&sort_by={{ 'received' if selected_sort_by == 'post' else 'post' }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+            title="Currently sorting by {{ 'published' if selected_sort_by == 'post' else 'received' }}. Click to switch to {{ 'received' if selected_sort_by == 'post' else 'published' }}."
+          >{{ 'Published' if selected_sort_by == 'post' else 'Received' }}</a>
+          <a
+            class="sort-arrow active"
+            href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}{% if selected_tag %}&tag={{ selected_tag | urlencode }}{% endif %}&sort_by={{ selected_sort_by }}&sort_dir={{ 'asc' if selected_sort_dir == 'desc' else 'desc' }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+            title="Currently {{ 'descending' if selected_sort_dir == 'desc' else 'ascending' }}. Click to switch to {{ 'ascending' if selected_sort_dir == 'desc' else 'descending' }}."
+            aria-label="Sort {{ 'descending' if selected_sort_dir == 'desc' else 'ascending' }}"
+          ><span class="material-symbols-rounded" aria-hidden="true">{{ 'south' if selected_sort_dir == 'desc' else 'north' }}</span></a>
+        </div>
+      </div>
+      {% endif %}
+      <div class="posts" data-chunk-size="10" data-server-posts-total="{{ server_posts_total if server_posts_total is defined else '' }}" data-server-posts-sent="{{ server_posts_sent if server_posts_sent is defined else '' }}">
+        {% for post in posts %}
+        {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
+        {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}
+        {% set sort_query = '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
+        {% set read_filter_query = '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '&star_only=0') ~ '&resume_read_filter=' ~ selected_resume_read_filter %}
+        <div
+          class="post-item {% if selected_entry and selected_entry.feed_url == post.feed_url and selected_entry.id == post.id %}active{% endif %}{% if post.read %} is-read{% endif %}"
+          data-post-feed-url="{{ post.feed_url }}"
+          data-post-entry-id="{{ post.id }}"
+          data-post-read="{{ 1 if post.read else 0 }}"
+          data-post-saved="{{ 1 if post.saved else 0 }}"
+          data-post-link="{{ post.link or '' }}"
+        >
+          <div class="post-title-row">
+            <form method="post" action="/entries/saved" class="post-save-toggle-form">
+              <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+              <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
+              <input type="hidden" name="entry_id" value="{{ post.id }}" />
+              <input type="hidden" name="saved" value="{{ 0 if post.saved else 1 }}" />
+              <input type="hidden" name="select_entry" value="0" />
+              {% if selected_feed_url %}
+              <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+              {% endif %}
+              {% if selected_tag %}
+              <input type="hidden" name="tag" value="{{ selected_tag }}" />
+              {% endif %}
+              <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+              <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+              <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+              <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+              <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+              <button
+                type="submit"
+                class="post-save-toggle"
+                title="{{ 'Remove from saved' if post.saved else 'Save for later' }} (f)"
+                aria-label="{{ 'Remove from saved' if post.saved else 'Save for later' }}"
+              >
+                <span class="post-save-indicator material-symbols-rounded" aria-hidden="true">{{ 'star' if post.saved else 'star_outline' }}</span>
+              </button>
+            </form>
+            <a class="post-main-link"
+              href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}">
+              <div class="post-title" title="{{ post.title or '(untitled)' }}">{{ post.title or "(untitled)" }}</div>
+            </a>
+            <form method="post" action="/entries/read" class="post-read-toggle-form">
+              <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+              <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
+              <input type="hidden" name="entry_id" value="{{ post.id }}" />
+              <input type="hidden" name="read" value="{{ 0 if post.read else 1 }}" />
+              <input type="hidden" name="select_entry" value="0" />
+              {% if selected_feed_url %}
+              <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+              {% endif %}
+              {% if selected_tag %}
+              <input type="hidden" name="tag" value="{{ selected_tag }}" />
+              {% endif %}
+              <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+              <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+              <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+              <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+              <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+              <button
+                type="submit"
+                class="post-read-toggle"
+                title="Mark as {{ 'Unread' if post.read else 'Read' }} (m)"
+                aria-label="Mark as {{ 'Unread' if post.read else 'Read' }}"
+              >
+                <span class="post-read-indicator" aria-hidden="true"></span>
+              </button>
+            </form>
+          </div>
+          <div class="post-meta-row">
+            <div class="post-meta">
+              <span class="post-feed">
+                {% if post.feed_icon_url %}
+                <img class="feed-favicon" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
+                {% else %}
+                <span class="feed-icon material-symbols-rounded" aria-hidden="true">article</span>
+                {% endif %}
+                <span class="feed-name">{{ post.feed_title }}</span>
+              </span>
+              {# Always render both timestamps as data attributes and let JS pick which to display #}
+              <time
+                class="post-time js-local-time"
+                data-post-iso="{{ post.post_timestamp or '' }}"
+                data-received-iso="{{ post.received_timestamp or '' }}"
+                data-post-display="{{ post.post_display or '' }}"
+                data-received-display="{{ post.received_display or '' }}"
+                data-read-iso="{{ post.read_timestamp or '' }}"
+                data-read-display="{{ post.read_display or '' }}"
+              >
+                {# Server-side initial render: show the value matching selected_sort_by (or read history) #}
+                {% if selected_read_filter == 'history' and not selected_star_only and post.read_display %}
+                  {{ post.read_display }}
+                {% elif selected_sort_by == 'received' and post.received_display %}
+                  {{ post.received_display }}
+                {% else %}
+                  {{ post.post_display }}
+                {% endif %}
+              </time>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+        <div id="posts-chunk-sentinel" class="posts-chunk-sentinel" aria-hidden="true"></div>
+      <script>
+      function closeHistoryView() {
+        // Try to restore previous filter, fallback to 'all'
+        let url = window.location.pathname + window.location.search;
+        const params = new URLSearchParams(window.location.search);
+        const resume = params.get('resume_read_filter') || 'all';
+        params.set('read_filter', resume);
+        params.delete('resume_read_filter');
+        // Remove star_only if it was only set for history
+        if (params.get('star_only') === '0') params.delete('star_only');
+        // Remove any page chunking
+        params.delete('chunk');
+        // Compose new URL
+        url = window.location.pathname + '?' + params.toString();
+        if (window.loadScopePanesWithoutFullRefresh) {
+          loadScopePanesWithoutFullRefresh(url);
+        } else {
+          window.location.href = url;
+        }
+      }
+      </script>
+      </div>
+    </section>
+
+    <div class="pane-resizer" data-resizer="middle-right" role="separator" aria-label="Resize middle and right panes"></div>
+
+    {% include "_entry_pane.html" %}
+  </main>
+
+  <script>
+  (function(){
+    const SINGLE_THRESHOLD = 720;
+    const MEDIUM_THRESHOLD = 1100;
+    const WIDE_LEFT_COLLAPSED_KEY = 'lectio-wide-left-collapsed';
+    let singleMode = window.innerWidth <= SINGLE_THRESHOLD;
+    let layoutMode = 'wide';
+    const bodyEl = document.body;
+    const mediumPaneBackdrop = document.getElementById('medium-pane-backdrop');
+
+    function getWideLeftCollapsedPreference() {
+      return window.localStorage.getItem(WIDE_LEFT_COLLAPSED_KEY) === '1';
+    }
+
+    function setWideLeftCollapsed(collapsed, persist = true) {
+      bodyEl.setAttribute('data-left-collapsed', collapsed ? '1' : '0');
+      if (persist) {
+        window.localStorage.setItem(WIDE_LEFT_COLLAPSED_KEY, collapsed ? '1' : '0');
+      }
+    }
+
+    function setMediumLeftOpen(isOpen) {
+      bodyEl.setAttribute('data-medium-left-open', isOpen ? '1' : '0');
+      if (mediumPaneBackdrop) {
+        if (isOpen) {
+          mediumPaneBackdrop.removeAttribute('hidden');
+        } else {
+          mediumPaneBackdrop.setAttribute('hidden', '');
+        }
+      }
+    }
+
+    function updateSingleMode() {
+      const width = window.innerWidth;
+      if (width <= SINGLE_THRESHOLD) {
+        layoutMode = 'narrow';
+      } else if (width <= MEDIUM_THRESHOLD) {
+        layoutMode = 'medium';
+      } else {
+        layoutMode = 'wide';
+      }
+
+      bodyEl.setAttribute('data-layout-mode', layoutMode);
+      singleMode = layoutMode === 'narrow';
+      bodyEl.setAttribute('data-single-mode', singleMode ? '1' : '0');
+
+      if (!singleMode) {
+        bodyEl.removeAttribute('data-single-pane-level');
+      } else if (!bodyEl.getAttribute('data-single-pane-level')) {
+        setSinglePaneLevel(0);
+      }
+
+      if (layoutMode === 'wide') {
+        setMediumLeftOpen(false);
+        setWideLeftCollapsed(getWideLeftCollapsedPreference(), false);
+      } else {
+        setWideLeftCollapsed(false, false);
+        setMediumLeftOpen(false);
+        bodyEl.removeAttribute('data-left-floating');
+      }
+      updateVisualViewportInset();
+    }
+
+    function updateVisualViewportInset() {
+      try {
+        const vv = window.visualViewport;
+        let inset = 0;
+        if (vv) {
+          inset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
+        } else {
+          inset = 0;
+        }
+        document.documentElement.style.setProperty('--vv-bottom-inset', inset + 'px');
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // listen for visual viewport changes to update bottom inset
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateVisualViewportInset, { passive: true });
+      window.visualViewport.addEventListener('scroll', updateVisualViewportInset, { passive: true });
+    }
+    window.addEventListener('resize', updateVisualViewportInset, { passive: true });
+
+    // Set dynamic --vh for accurate mobile viewport height
+    function setVh() {
+      try {
+        const vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', `${vh}px`);
+      } catch (e) {
+        // ignore
+      }
+    }
+    setVh();
+    window.addEventListener('resize', setVh, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', setVh, { passive: true });
+      window.visualViewport.addEventListener('scroll', setVh, { passive: true });
+    }
+
+    function setSinglePaneLevel(level) {
+      bodyEl.setAttribute('data-single-pane-level', String(level));
+    }
+
+    // Topbar hide/show on scroll in single-pane mode
+    let lastScrollTop = 0;
+    let scrollTimeoutId = null;
+    function bindSinglePaneScrollBehavior() {
+      function onScrollPane(e) {
+        const pane = e.target;
+        const st = pane.scrollTop;
+        const topbar = document.querySelector('.topbar');
+        if (!topbar) return;
+        if (st > lastScrollTop + 10) {
+          topbar.classList.add('topbar-hidden');
+        } else if (st < lastScrollTop - 10) {
+          topbar.classList.remove('topbar-hidden');
+        }
+        lastScrollTop = st;
+        if (scrollTimeoutId) clearTimeout(scrollTimeoutId);
+        // show topbar when scroll stops briefly
+        scrollTimeoutId = window.setTimeout(() => topbar.classList.remove('topbar-hidden'), 1200);
+      }
+
+      const postsPane = document.querySelector('.pane-posts');
+      const entryPane = document.querySelector('.pane-entry');
+      if (postsPane) {
+        postsPane.addEventListener('scroll', onScrollPane, { passive: true });
+      }
+      if (entryPane) {
+        entryPane.addEventListener('scroll', onScrollPane, { passive: true });
+      }
+    }
+
+    // Swipe gestures: post list items and entry pane navigation
+    function bindSwipeGestures() {
+      // post list swipe for toggles
+      function attachPostSwipe(postItem) {
+        let sx = 0, sy = 0, dx = 0, dy = 0, touching = false;
+        const threshold = 40;
+        postItem.addEventListener('touchstart', (ev) => {
+          const t = ev.changedTouches[0]; sx = t.clientX; sy = t.clientY; touching = true; dx = 0; dy = 0;
+        }, { passive: true });
+        postItem.addEventListener('touchmove', (ev) => {
+          if (!touching) return; const t = ev.changedTouches[0]; dx = t.clientX - sx; dy = t.clientY - sy; }, { passive: true });
+        postItem.addEventListener('touchend', (ev) => {
+          if (!touching) return; touching = false; if (Math.abs(dx) < Math.abs(dy)) return; if (Math.abs(dx) < threshold) return;
+          // Right swipe -> toggle saved, Left swipe -> toggle read/unread
+          if (dx > 0) {
+            const btn = postItem.querySelector('.post-save-toggle'); if (btn) btn.click();
+          } else {
+            const btn = postItem.querySelector('.post-read-toggle'); if (btn) btn.click();
+          }
+        }, { passive: true });
+      }
+
+      for (const postItem of document.querySelectorAll('.post-item')) {
+        attachPostSwipe(postItem);
+      }
+
+      // entry pane swipe for next/previous
+      const entryPaneEl = document.querySelector('.pane-entry');
+      if (entryPaneEl) {
+        let sx=0, sy=0, dx=0, dy=0, touching=false;
+        entryPaneEl.addEventListener('touchstart', (ev)=>{ const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; }, { passive: true });
+        entryPaneEl.addEventListener('touchmove', (ev)=>{ if(!touching) return; const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy; }, { passive: true });
+        entryPaneEl.addEventListener('touchend', (ev)=>{
+          if(!touching) return; touching=false; if(Math.abs(dx) < Math.abs(dy)) return; const threshold=60; if(Math.abs(dx) < threshold) return;
+          if (dx < 0) { // swipe left -> next
+            navigateEntry(1);
+          } else { // swipe right -> prev
+            navigateEntry(-1);
+          }
+        }, { passive: true });
+      }
+    }
+
+    function navigateEntry(direction) {
+      // find active post in posts pane
+      const posts = Array.from(document.querySelectorAll('.post-item')).filter(p=>!p.classList.contains('post-item-hidden'));
+      const active = document.querySelector('.post-item.active');
+      if (!active) return;
+      const idx = posts.indexOf(active);
+      if (idx === -1) return;
+      const nextIdx = idx + direction;
+      if (nextIdx < 0 || nextIdx >= posts.length) return;
+      const target = posts[nextIdx];
+      const link = target.querySelector('.post-main-link');
+      if (link) loadEntryPaneWithoutFullRefresh(link.href);
+    }
+
+
+    // Expose for debugging
+    window.setSinglePaneLevel = setSinglePaneLevel;
+    window.isSingleMode = () => singleMode;
+
+    window.addEventListener('resize', () => updateSingleMode());
+
+    // Intercept internal app navigation links and perform SPA loads.
+    // Do not intercept external links, modified clicks, or the brand/logo
+    // (which must remain a bare `/`).
+    document.addEventListener('click', function(e){
+      const a = e.target.closest('a');
+      if (!a) return;
+      // ignore if already prevented or not a primary button click or modified
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      // ignore links that open in new contexts
+      if (a.target && a.target.toLowerCase() !== '_self') return;
+      // only intercept internal same-origin links
+      let href;
+      try {
+        href = a.href;
+        const u = new URL(href, window.location.origin);
+        if (u.origin !== window.location.origin) return;
+      } catch (err) {
+        return;
+      }
+      // Don't intercept the brand/logo link
+      if (a.classList && a.classList.contains('topbar-brand')) return;
+      // Only intercept app navigation (folders/feeds/tags/tree links)
+      if (!(a.matches('.feed-link, .tag-link, .tree-item') || a.closest('.tree'))) return;
+
+      // If this is a filter pill click (All/Unread/Star), persist the
+      // `lectio-read-filter` immediately so the SPA loader can include it
+      // in headers for the server before performing the fetch. This avoids
+      // a race between capture-phase listeners.
+      try {
+        if (a.matches && a.matches('.filter-pill')) {
+          const u2 = new URL(href, window.location.origin);
+          const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
+          if (rf) {
+            window.localStorage.setItem('lectio-read-filter', rf);
+            try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_) {}
+          }
+        }
+      } catch (err) {}
+
+      e.preventDefault();
+      // Preserve explicit URL state (including read_filter) so filter pills
+      // and list content stay in sync after scope switches.
+      let navUrl = href;
+      try {
+        const u2 = new URL(href, window.location.origin);
+        applyCurrentScopeStateToScopeLink(u2, a);
+        const searchInput = document.getElementById('topbar-search-input');
+        const activeQuery = (searchInput instanceof HTMLInputElement ? searchInput.value : '').trim();
+        if (activeQuery && !u2.searchParams.has('q')) {
+          u2.searchParams.set('q', activeQuery);
+        }
+        navUrl = u2.toString();
+      } catch (err) {
+        // fallback to original href
+      }
+      if (window.loadScopePanesWithoutFullRefresh) {
+        loadScopePanesWithoutFullRefresh(navUrl).then(()=> {
+          try {
+            if (window.isSingleMode && window.isSingleMode()) {
+              setSinglePaneLevel(1);
+            }
+          } catch(e){}
+          if (layoutMode === 'wide') {
+            bodyEl.removeAttribute('data-left-floating');
+          } else if (layoutMode === 'medium') {
+            setMediumLeftOpen(false);
+            mediumFlyoutClickOpen = false;
+          }
+        }).catch((_err)=> {});
+      } else {
+        window.location.href = navUrl;
+      }
+    }, true);
+
+    // Persist read_filter when user clicks filter pills (All / Unread / Star)
+    document.addEventListener('click', function(e) {
+      const pill = e.target.closest('.filter-pill');
+      if (!pill) return;
+      try {
+        const u = new URL(pill.href, window.location.origin);
+        const rf = u.searchParams.get('read_filter') || u.searchParams.get('resume_read_filter');
+        if (rf) {
+          window.localStorage.setItem('lectio-read-filter', rf);
+          try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_){}
+        }
+      } catch (err) {
+        // ignore
+      }
+    }, true);
+
+    // Entry pane mutation observer is bound in `refreshEntryPaneRefs()`
+
+    if (mediumPaneBackdrop) {
+      mediumPaneBackdrop.addEventListener('click', () => {
+        mediumFlyoutClickOpen = false;
+        setMediumLeftOpen(false);
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      if (layoutMode === 'medium' && bodyEl.getAttribute('data-medium-left-open') === '1') {
+        mediumFlyoutClickOpen = false;
+        setMediumLeftOpen(false);
+      }
+      if (appMenuDetails?.open) {
+        appMenuDetails.removeAttribute('open');
+      }
+    });
+
+    // Folders pane in-pane collapse/expand + hover floater
+    const folderCollapseBtn = document.getElementById('folders-collapse-btn');
+    const folderPaneEl = document.querySelector('.pane-folders');
+    let mediumFlyoutManualClose = false;
+    let mediumFlyoutClickOpen = false;
+
+    if (folderCollapseBtn) {
+      folderCollapseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (layoutMode === 'wide') {
+          const collapsed = bodyEl.getAttribute('data-left-collapsed') === '1';
+          if (collapsed) {
+            setWideLeftCollapsed(false, true);
+            bodyEl.removeAttribute('data-left-floating');
+          } else {
+            setWideLeftCollapsed(true, true);
+          }
+        } else if (layoutMode === 'medium') {
+          const isOpen = bodyEl.getAttribute('data-medium-left-open') === '1';
+          if (isOpen) {
+            mediumFlyoutManualClose = true;
+            mediumFlyoutClickOpen = false;
+            setMediumLeftOpen(false);
+          } else {
+            mediumFlyoutManualClose = false;
+            mediumFlyoutClickOpen = true;
+            setMediumLeftOpen(true);
+          }
+        }
+      });
+    }
+
+    if (folderPaneEl) {
+      folderPaneEl.addEventListener('mouseenter', () => {
+        if (layoutMode === 'wide' && bodyEl.getAttribute('data-left-collapsed') === '1') {
+          bodyEl.setAttribute('data-left-floating', '1');
+        } else if (layoutMode === 'medium' && !mediumFlyoutManualClose) {
+          bodyEl.setAttribute('data-medium-left-open', '1');
+          mediumFlyoutClickOpen = false;
+        }
+      });
+      folderPaneEl.addEventListener('mouseleave', () => {
+        if (layoutMode === 'wide') {
+          bodyEl.removeAttribute('data-left-floating');
+        } else if (layoutMode === 'medium') {
+          if (!mediumFlyoutClickOpen) {
+            setMediumLeftOpen(false);
+          }
+          mediumFlyoutManualClose = false;
+        }
+      });
+      // Tap on strip to open flyout (touch / pointer click in medium mode)
+      folderPaneEl.addEventListener('click', () => {
+        if (layoutMode === 'medium' && bodyEl.getAttribute('data-medium-left-open') !== '1') {
+          setMediumLeftOpen(true);
+          mediumFlyoutClickOpen = true;
+        }
+      });
+    }
+
+    document.addEventListener('click', (event) => {
+      if (layoutMode === 'wide'
+        && bodyEl.getAttribute('data-left-collapsed') === '1'
+        && bodyEl.getAttribute('data-left-floating') === '1'
+        && folderPaneEl
+        && !folderPaneEl.contains(event.target)) {
+        bodyEl.removeAttribute('data-left-floating');
+      }
+    }, true);
+
+    // Close hamburger menu when clicking outside it
+    const appMenuDetails = document.querySelector('.hamburger-menu.topbar-menu');
+    if (appMenuDetails) {
+      document.addEventListener('click', (e) => {
+        if (appMenuDetails.open && !appMenuDetails.contains(e.target)) {
+          appMenuDetails.removeAttribute('open');
+        }
+      }, true);
+    }
+
+    // init
+    updateSingleMode();
+    // Ensure entry pane refs and observer are bound for initial load
+    try { refreshEntryPaneRefs(); } catch (e) {}
+    // (no URL mutation) rely on SPA interception + headers to persist filter
+    // bind single-pane niceties
+    bindSinglePaneScrollBehavior();
+    bindSwipeGestures();
+
+    // Leave the brand/logo as a normal bare link to `/` (no interception).
+  })();
+  </script>
+
+  {% if message %}
+  <div id="toast-message" class="toast-message">{{ message }}</div>
+  {% endif %}
+
+  <form id="context-add-feed-form" method="post" action="/feeds" hidden>
+    <input type="hidden" name="folder_id" id="context-folder-id" />
+    <input type="hidden" name="feed_url" id="context-feed-url" />
+  </form>
+
+  <form id="context-add-folder-form" method="post" action="/folders" hidden>
+    <input type="hidden" name="name" id="context-folder-name" />
+  </form>
+
+  <form id="context-delete-folder-form" method="post" action="/folders/delete" hidden>
+    <input type="hidden" name="folder_id" id="context-delete-folder-id" />
+  </form>
+
+  <form id="context-refresh-folder-form" method="post" action="/refresh" hidden>
+    <input type="hidden" name="folder_id" id="context-refresh-folder-id" />
+    {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+    {% if selected_entry %}
+    <input type="hidden" name="feed_url" value="{{ selected_entry.feed_url }}" />
+    <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
+    {% endif %}
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+  </form>
+
+  <form id="context-mark-read-folder-form" method="post" action="/folders/mark-read" hidden>
+    <input type="hidden" name="folder_id" id="context-mark-read-folder-id" />
+    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+  </form>
+
+  <form id="context-refresh-feed-form" method="post" action="/refresh/feed" hidden>
+    <input type="hidden" name="folder_id" id="context-refresh-feed-folder-id" />
+    <input type="hidden" name="feed_url" id="context-refresh-feed-url" />
+    <input type="hidden" name="list_feed_url" id="context-refresh-list-feed-url" />
+    {% if selected_entry %}<input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />{% endif %}
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+  </form>
+
+  <form id="context-mark-read-feed-form" method="post" action="/feeds/mark-read" hidden>
+    <input type="hidden" name="folder_id" id="context-mark-read-feed-folder-id" />
+    <input type="hidden" name="feed_url" id="context-mark-read-feed-url" />
+    <input type="hidden" name="list_feed_url" id="context-mark-read-list-feed-url" />
+    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+  </form>
+
+  <form id="context-post-read-form" method="post" action="/entries/read" hidden>
+    <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+    <input type="hidden" name="feed_url" id="context-post-read-feed-url" />
+    <input type="hidden" name="entry_id" id="context-post-read-entry-id" />
+    <input type="hidden" name="read" id="context-post-read-value" />
+    <input type="hidden" name="select_entry" value="0" />
+    {% if selected_feed_url %}
+    <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+    {% endif %}
+    {% if selected_tag %}
+    <input type="hidden" name="tag" value="{{ selected_tag }}" />
+    {% endif %}
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+  </form>
+
+  <form id="context-post-range-read-form" method="post" action="/entries/mark-range-read" hidden>
+    <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+    <input type="hidden" name="feed_url" id="context-post-range-feed-url" />
+    <input type="hidden" name="entry_id" id="context-post-range-entry-id" />
+    <input type="hidden" name="direction" id="context-post-range-direction" />
+    {% if selected_feed_url %}
+    <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+    {% endif %}
+    {% if selected_tag %}
+    <input type="hidden" name="tag" value="{{ selected_tag }}" />
+    {% endif %}
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+  </form>
+
+  <form id="context-move-feed-form" method="post" action="/feeds/move" hidden>
+    <input type="hidden" name="feed_url" id="context-move-feed-url" />
+    <input type="hidden" name="from_folder_id" id="context-move-feed-from-folder-id" />
+    <input type="hidden" name="to_folder_id" id="context-move-feed-to-folder-id" />
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+  </form>
+
+  <form id="context-unsubscribe-feed-form" method="post" action="/feeds/unsubscribe" hidden>
+    <input type="hidden" name="folder_id" id="context-unsubscribe-folder-id" />
+    <input type="hidden" name="feed_url" id="context-unsubscribe-feed-url" />
+    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+  </form>
+
+  <div id="folder-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-refresh" class="context-menu-item">Refresh</button>
+    <button type="button" id="ctx-mark-read" class="context-menu-item">Mark as read</button>
+    <div id="ctx-add-to-folder-wrap" class="context-submenu-wrap" hidden>
+      <button type="button" id="ctx-add-to-folder" class="context-menu-item context-submenu-trigger">Move to Folder <span class="submenu-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+      <div id="ctx-folder-submenu" class="context-submenu" hidden>
+        {% for folder in folder_options %}
+        <button
+          type="button"
+          class="context-menu-item context-submenu-item{% if folder.depth > 0 %} context-submenu-item--child{% endif %}"
+          data-target-folder-id="{{ folder.id }}"
+          data-target-folder-path="{{ folder.path }}"
+        >{{ folder.name }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
+    <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
+    <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
+    <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
+  </div>
+
+  <div id="root-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-root-refresh" class="context-menu-item">Refresh</button>
+    <button type="button" id="ctx-root-add-folder" class="context-menu-item">Add Folder</button>
+    <button type="button" id="ctx-root-add-feed" class="context-menu-item">Add Feed Here</button>
+  </div>
+
+  <div id="post-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
+    <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
+    <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
+    <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
+  </div>
+
+  <div id="add-folder-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="add-folder-modal-title">
+      <div class="modal-header-row">
+        <h3 id="add-folder-modal-title" class="action-modal-title">Add Folder</h3>
+        <button type="button" class="modal-close" data-close-modal="add-folder-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form method="post" action="/folders" class="action-modal-form">
+        <label for="add-folder-name" class="action-modal-label">Folder name</label>
+        <input id="add-folder-name" name="name" placeholder="New folder name" required />
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="add-folder-modal">Cancel</button>
+          <button type="submit">Add Folder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="add-feed-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="add-feed-modal-title">
+      <div class="modal-header-row">
+        <h3 id="add-feed-modal-title" class="action-modal-title">Add Feed</h3>
+        <button type="button" class="modal-close" data-close-modal="add-feed-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form method="post" action="/feeds" class="action-modal-form">
+        <label for="add-feed-url" class="action-modal-label">Feed URL</label>
+        <input id="add-feed-url" name="feed_url" placeholder="https://example.com/feed.xml" required />
+        <label for="add-feed-folder" class="action-modal-label">Folder</label>
+        <select id="add-feed-folder" name="folder_id">
+          {% for folder in folder_options %}
+          {% if folder.depth == 0 %}
+          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
+          {% else %}
+          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="add-feed-modal">Cancel</button>
+          <button type="submit">Add Feed</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="global-note-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="global-note-modal-title">
+      <div class="modal-header-row">
+        <h3 id="global-note-modal-title" class="action-modal-title">Global Note</h3>
+        <button type="button" class="modal-close" data-close-modal="global-note-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form id="global-note-form" method="post" action="/settings/global-note" class="action-modal-form">
+        <label for="global-note-text" class="action-modal-label">Shared notepad</label>
+        <textarea id="global-note-text" name="note_text" class="action-modal-textarea" placeholder="Write anything...">{{ global_note or '' }}</textarea>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="global-note-modal">Cancel</button>
+          <button id="global-note-save" type="submit">Save Note</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="action-input-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
+      <h3 id="action-modal-title" class="action-modal-title">Add</h3>
+      <form id="action-modal-form" class="action-modal-form">
+        <label for="action-modal-input" id="action-modal-label" class="action-modal-label">Value</label>
+        <input id="action-modal-input" type="text" required />
+        <div class="action-modal-actions">
+          <button type="button" id="action-modal-cancel" class="action-modal-cancel">Cancel</button>
+          <button type="submit" id="action-modal-submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="feed-properties-modal" class="action-modal" hidden>
+    <div class="action-modal-panel feed-properties-panel" role="dialog" aria-modal="true" aria-labelledby="feed-properties-title">
+      <div class="feed-properties-header-row">
+        <h3 id="feed-properties-title" class="action-modal-title">Feed Properties</h3>
+        <button type="button" id="feed-properties-close" class="feed-properties-close" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <dl class="feed-properties-grid">
+        <dt>Title</dt><dd id="feed-prop-title">-</dd>
+        <dt>Website</dt><dd id="feed-prop-website">-</dd>
+        <dt>XML address</dt><dd id="feed-prop-xml">-</dd>
+        <dt>Health</dt><dd id="feed-prop-health">-</dd>
+        <dt>Detail</dt><dd id="feed-prop-health-detail">-</dd>
+        <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
+        <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
+        <dt>Date followed</dt><dd id="feed-prop-added">-</dd>
+        <dt>Last crawled</dt><dd id="feed-prop-updated">-</dd>
+        <dt>Last received</dt><dd id="feed-prop-received">-</dd>
+        <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
+      </dl>
+    </div>
+  </div>
+
+  <script>
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeStylesheet = document.getElementById('theme-stylesheet');
+    let appUnreadCount = null;
+    let unreadSinceLastFocus = false;
+    let lastFocusedUnreadCount = 0;
+
+    const localTimeFormatter = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    function applyLocalTimestamps(root = document) {
+      for (const node of root.querySelectorAll('.js-local-time')) {
+        // pick which ISO to display based on CURRENT_SORT_BY or read history
+        const rawRead = (node.getAttribute('data-read-iso') || '').trim();
+        const readDisplay = (node.getAttribute('data-read-display') || '').trim();
+        let raw = '';
+        let altDisplay = '';
+        let titlePrefix = '';
+        if ((window.CURRENT_SORT_BY || 'post') === 'received') {
+          raw = (node.getAttribute('data-received-iso') || '').trim();
+          altDisplay = (node.getAttribute('data-post-display') || '').trim();
+          titlePrefix = 'Post';
+        } else {
+          raw = (node.getAttribute('data-post-iso') || '').trim();
+          altDisplay = (node.getAttribute('data-received-display') || '').trim();
+          titlePrefix = 'Received';
+        }
+        // If showing history view with a read time, prefer that
+        const inHistory = (node.getAttribute('data-read-display') || '').trim();
+        if (inHistory && window.location.search.includes('read_filter=history')) {
+          raw = rawRead;
+          altDisplay = (node.getAttribute('data-post-display') || '').trim();
+          titlePrefix = 'Read';
+        }
+
+        const formattedRaw = raw;
+        if (!formattedRaw) {
+          // nothing to show, skip formatting but set title if alt exists
+          if (altDisplay) node.title = `${titlePrefix} ${altDisplay}`;
+          continue;
+        }
+        const date = new Date(formattedRaw);
+        if (!raw) {
+          continue;
+        }
+        if (Number.isNaN(date.getTime())) {
+          continue;
+        }
+        const formatted = localTimeFormatter.format(date);
+        node.textContent = formatted;
+        if (node instanceof HTMLTimeElement) node.dateTime = date.toISOString();
+        // Tooltip should show the alternate date (if available)
+        if (altDisplay) {
+          node.title = `${titlePrefix} ${altDisplay}`;
+        } else if (titlePrefix) {
+          node.title = `${titlePrefix} ${formatted}`;
+        }
+      }
+    }
+
+    function getUnreadCountFromRootBadge() {
+      const rootCountNode = document.querySelector('.root-item .count');
+      if (!rootCountNode) {
+        return 0;
+      }
+      const raw = (rootCountNode.textContent || '').replace(/[^0-9]/g, '');
+      const value = Number.parseInt(raw, 10);
+      return Number.isFinite(value) ? value : 0;
+    }
+
+    function getUnreadCountFallback() {
+      return Array.from(document.querySelectorAll('.post-item'))
+        .filter((item) => item.getAttribute('data-post-read') === '0')
+        .length;
+    }
+
+    function getUnreadCountForFavicon() {
+      if (Number.isFinite(appUnreadCount)) {
+        return Math.max(0, appUnreadCount);
+      }
+      const fromRoot = getUnreadCountFromRootBadge();
+      if (fromRoot > 0) {
+        return fromRoot;
+      }
+      return getUnreadCountFallback();
+    }
+
+    function syncUnreadAttentionState(unreadCount) {
+      const isFocused = document.visibilityState === 'visible' && document.hasFocus();
+      if (isFocused) {
+        unreadSinceLastFocus = false;
+        lastFocusedUnreadCount = unreadCount;
+        return;
+      }
+
+      if (unreadCount > lastFocusedUnreadCount) {
+        unreadSinceLastFocus = true;
+      }
+    }
+
+    function drawFavicon(size, showAttentionDot) {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        return '';
+      }
+
+      // Base tile with Lectio "L" glyph.
+      ctx.fillStyle = '#1d3f66';
+      ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = '#f4f7fb';
+      ctx.font = `800 ${Math.round(size * 0.92)}px Merriweather, Georgia, serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('L', Math.round(size * 0.02), Math.round(size * 0.54));
+
+      if (showAttentionDot) {
+        const radius = size * 0.22;
+        const cx = size - radius + 0.5;
+        const cy = radius - 0.5;
+        ctx.fillStyle = '#d5332a';
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+        // Intentionally no stroke for a cleaner, simpler indicator.
+      }
+
+      return canvas.toDataURL('image/png');
+    }
+
+    function updateDynamicFavicon() {
+      const unreadCount = getUnreadCountForFavicon();
+      syncUnreadAttentionState(unreadCount);
+
+      const icon16 = drawFavicon(16, unreadSinceLastFocus);
+      const icon32 = drawFavicon(32, unreadSinceLastFocus);
+      if (!icon16 || !icon32) {
+        return;
+      }
+
+      let icon16Link = document.querySelector('link[data-dynamic-favicon="16"]');
+      if (!icon16Link) {
+        icon16Link = document.createElement('link');
+        icon16Link.setAttribute('rel', 'icon');
+        icon16Link.setAttribute('type', 'image/png');
+        icon16Link.setAttribute('sizes', '16x16');
+        icon16Link.setAttribute('data-dynamic-favicon', '16');
+        document.head.appendChild(icon16Link);
+      }
+      icon16Link.setAttribute('href', icon16);
+
+      let icon32Link = document.querySelector('link[data-dynamic-favicon="32"]');
+      if (!icon32Link) {
+        icon32Link = document.createElement('link');
+        icon32Link.setAttribute('rel', 'icon');
+        icon32Link.setAttribute('type', 'image/png');
+        icon32Link.setAttribute('sizes', '32x32');
+        icon32Link.setAttribute('data-dynamic-favicon', '32');
+        document.head.appendChild(icon32Link);
+      }
+      icon32Link.setAttribute('href', icon32);
+    }
+
+    function applyTheme(theme) {
+      window.localStorage.setItem('lectio-theme', theme);
+      window.__lectioTheme = theme;
+
+      if (themeStylesheet) {
+        themeStylesheet.href = `/static/themes/${theme}.css`;
+      }
+
+      if (themeToggle) {
+        themeToggle.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span>`;
+        themeToggle.setAttribute('aria-label', `Current theme: ${theme}. Click to switch to ${theme === 'dark' ? 'light' : 'dark'}.`);
+        themeToggle.title = `Current theme: ${theme}. Click to switch to ${theme === 'dark' ? 'light' : 'dark'}.`;
+      }
+
+      updateDynamicFavicon();
+    }
+
+    function updateHamburgerFlyoutDirection() {
+      for (const menu of document.querySelectorAll('.hamburger-menu')) {
+        const summary = menu.querySelector('summary');
+        const popover = menu.querySelector('.menu-popover');
+        if (!summary || !popover) {
+          continue;
+        }
+
+        const rect = summary.getBoundingClientRect();
+        const summaryMid = rect.left + rect.width / 2;
+        const side = summaryMid > window.innerWidth / 2 ? 'left' : 'right';
+
+        popover.classList.remove('anchor-left', 'anchor-right');
+        popover.classList.add(side === 'left' ? 'anchor-right' : 'anchor-left');
+
+        popover.classList.remove('flyout-left', 'flyout-right');
+        popover.classList.add(side === 'left' ? 'flyout-left' : 'flyout-right');
+
+        const arrowGlyph = side === 'left' ? 'chevron_left' : 'chevron_right';
+        for (const arrow of popover.querySelectorAll('.flyout-arrow')) {
+          arrow.textContent = arrowGlyph;
+        }
+      }
+    }
+
+    if (themeToggle) {
+      applyTheme(window.__lectioTheme || 'dark');
+      themeToggle.addEventListener('click', () => {
+        const nextTheme = window.__lectioTheme === 'dark' ? 'light' : 'dark';
+        applyTheme(nextTheme);
+      });
+    }
+
+    updateHamburgerFlyoutDirection();
+    window.addEventListener('resize', updateHamburgerFlyoutDirection);
+
+    appUnreadCount = getUnreadCountFromRootBadge();
+    lastFocusedUnreadCount = getUnreadCountForFavicon();
+    updateDynamicFavicon();
+
+    window.addEventListener('focus', () => {
+      unreadSinceLastFocus = false;
+      lastFocusedUnreadCount = getUnreadCountForFavicon();
+      updateDynamicFavicon();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        unreadSinceLastFocus = false;
+        lastFocusedUnreadCount = getUnreadCountForFavicon();
+      } else {
+        lastFocusedUnreadCount = getUnreadCountForFavicon();
+      }
+      updateDynamicFavicon();
+    });
+
+    for (const trigger of document.querySelectorAll('[data-toggle-panel]')) {
+      trigger.addEventListener('click', () => {
+        const panelId = trigger.getAttribute('data-toggle-panel');
+        if (!panelId) {
+          return;
+        }
+
+        const panel = document.getElementById(panelId);
+        if (!panel) {
+          return;
+        }
+
+        if (panel.classList.contains('action-modal')) {
+          panel.removeAttribute('hidden');
+        } else {
+          const willShow = panel.hasAttribute('hidden');
+
+          for (const otherPanel of document.querySelectorAll('.hidden-panel')) {
+            otherPanel.setAttribute('hidden', '');
+          }
+
+          if (willShow) {
+            panel.removeAttribute('hidden');
+          }
+        }
+
+        const burger = trigger.closest('.hamburger-menu');
+        if (burger) {
+          burger.removeAttribute('open');
+        }
+      });
+    }
+
+    function closeAddModal(modalId) {
+      const modal = document.getElementById(modalId);
+      if (modal) {
+        modal.setAttribute('hidden', '');
+      }
+    }
+
+    for (const btn of document.querySelectorAll('[data-close-modal]')) {
+      btn.addEventListener('click', () => {
+        closeAddModal(btn.getAttribute('data-close-modal'));
+      });
+    }
+
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal')) {
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          modal.setAttribute('hidden', '');
+        }
+      });
+    }
+
+    for (const toggle of document.querySelectorAll('.tree-toggle')) {
+      const targetId = toggle.getAttribute('data-tree-target');
+      if (!targetId) {
+        continue;
+      }
+
+      const target = document.getElementById(targetId);
+      if (!target) {
+        continue;
+      }
+
+      if (target.querySelector('.feed-link.active')) {
+        target.removeAttribute('hidden');
+        toggle.classList.add('expanded');
+        toggle.setAttribute('aria-expanded', 'true');
+      }
+
+      toggle.addEventListener('click', () => {
+        const willExpand = target.hasAttribute('hidden');
+        if (willExpand) {
+          target.removeAttribute('hidden');
+          toggle.classList.add('expanded');
+          toggle.setAttribute('aria-expanded', 'true');
+        } else {
+          target.setAttribute('hidden', '');
+          toggle.classList.remove('expanded');
+          toggle.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
+
+    for (const folderLink of document.querySelectorAll('.child-item, .root-item')) {
+      folderLink.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+    }
+
+    const opmlInput = document.getElementById('opml-file-input');
+    const opmlForm = document.getElementById('opml-import-form');
+    opmlInput?.addEventListener('change', () => {
+      if (opmlInput.files && opmlInput.files.length > 0) {
+        opmlForm?.submit();
+      }
+    });
+
+    const toast = document.getElementById('toast-message');
+    let toastFadeTimeoutId = null;
+    let toastRemoveTimeoutId = null;
+
+    function scheduleToastFade(nextToast, visibleMs) {
+      if (toastFadeTimeoutId) {
+        window.clearTimeout(toastFadeTimeoutId);
+      }
+      if (toastRemoveTimeoutId) {
+        window.clearTimeout(toastRemoveTimeoutId);
+      }
+
+      toastFadeTimeoutId = window.setTimeout(() => {
+        nextToast.classList.add('fade-out');
+        toastRemoveTimeoutId = window.setTimeout(() => nextToast.remove(), 500);
+      }, visibleMs);
+    }
+
+    function showToastMessage(message) {
+      if (!message) {
+        return;
+      }
+
+      const existingToast = document.getElementById('toast-message');
+      if (existingToast) {
+        existingToast.remove();
+      }
+
+      const nextToast = document.createElement('div');
+      nextToast.id = 'toast-message';
+      nextToast.className = 'toast-message';
+      nextToast.textContent = message;
+      document.body.appendChild(nextToast);
+
+      scheduleToastFade(nextToast, 3800);
+    }
+
+    if (toast) {
+      scheduleToastFade(toast, 3200);
+    }
+
+    const earlyGlobalNoteForm = document.getElementById('global-note-form');
+    const earlyGlobalNoteModal = document.getElementById('global-note-modal');
+    if (earlyGlobalNoteForm instanceof HTMLFormElement) {
+      earlyGlobalNoteForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        const formData = new FormData(earlyGlobalNoteForm);
+        const noteTextField = document.getElementById('global-note-text');
+        const previousNoteText = noteTextField instanceof HTMLTextAreaElement ? noteTextField.value : '';
+
+        // Treat note save as an account-level scratchpad action, independent of
+        // current folder/feed/view state: close immediately and save in background.
+        if (earlyGlobalNoteModal) {
+          earlyGlobalNoteModal.setAttribute('hidden', '');
+        }
+
+        try {
+          const response = await fetch(earlyGlobalNoteForm.action, {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+            headers: {
+              'X-Requested-With': 'lectio-global-note-save',
+            },
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (!data || data.ok !== true) {
+            throw new Error('Failed to save note.');
+          }
+          showToastMessage(data.message || 'Note saved.');
+        } catch (_error) {
+          if (noteTextField instanceof HTMLTextAreaElement) {
+            noteTextField.value = previousNoteText;
+          }
+          showToastMessage('Could not save note.');
+          if (earlyGlobalNoteModal) {
+            earlyGlobalNoteModal.removeAttribute('hidden');
+          }
+        }
+      });
+    }
+
+    const unreadFoldersOnlyToggle = document.getElementById('folders-unread-toggle');
+    const UNREAD_FOLDERS_ONLY_KEY = 'lectio-unread-folders-only';
+
+    function applyUnreadFoldersOnly(onlyUnread) {
+      for (const group of document.querySelectorAll('.tree-folder-group')) {
+        const unreadCount = Number(group.getAttribute('data-unread-count') || '0');
+        group.hidden = onlyUnread && unreadCount <= 0;
+      }
+
+      if (unreadFoldersOnlyToggle) {
+        unreadFoldersOnlyToggle.classList.toggle('active', onlyUnread);
+        unreadFoldersOnlyToggle.setAttribute('aria-pressed', onlyUnread ? 'true' : 'false');
+      }
+    }
+
+    if (unreadFoldersOnlyToggle) {
+      const savedUnreadOnly = window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1';
+      applyUnreadFoldersOnly(savedUnreadOnly);
+      unreadFoldersOnlyToggle.addEventListener('click', () => {
+        const enabled = unreadFoldersOnlyToggle.getAttribute('aria-pressed') !== 'true';
+        window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
+        applyUnreadFoldersOnly(enabled);
+      });
+    }
+
+    const tagsTreeBlock = document.getElementById('tags-tree-block');
+    const tagsCollapseToggle = document.getElementById('tags-collapse-toggle');
+    const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
+
+    function applyTagsCollapsed(collapsed) {
+      if (!tagsTreeBlock || !tagsCollapseToggle) {
+        return;
+      }
+      tagsTreeBlock.classList.toggle('is-collapsed', collapsed);
+      tagsCollapseToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      tagsCollapseToggle.title = collapsed ? 'Expand tags' : 'Collapse tags';
+    }
+
+    if (tagsTreeBlock && tagsCollapseToggle) {
+      const savedTagsCollapsed = window.localStorage.getItem(TAGS_COLLAPSED_KEY) === '1';
+      applyTagsCollapsed(savedTagsCollapsed);
+      tagsCollapseToggle.addEventListener('click', () => {
+        const nextCollapsed = !tagsTreeBlock.classList.contains('is-collapsed');
+        window.localStorage.setItem(TAGS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
+        applyTagsCollapsed(nextCollapsed);
+      });
+    }
+
+    const panes = document.querySelector('.panes');
+    const rootStyle = document.documentElement.style;
+    const RESIZER_SIZE = 8;
+    const MIN_LEFT = 220;
+    const MIN_MIDDLE = 280;
+    const MIN_RIGHT = 300;
+    const PANE_LEFT_KEY = 'lectio-pane-left';
+    const PANE_MIDDLE_KEY = 'lectio-pane-middle';
+
+    let activeResizer = null;
+
+    function pxVar(name, fallback) {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return Number.parseFloat(raw || fallback);
+    }
+
+    function clampPaneWidths(leftWidth, middleWidth, totalWidth) {
+      const maxLeft = totalWidth - RESIZER_SIZE * 2 - MIN_MIDDLE - MIN_RIGHT;
+      const nextLeft = Math.max(MIN_LEFT, Math.min(maxLeft, leftWidth));
+      const maxMiddle = totalWidth - nextLeft - RESIZER_SIZE * 2 - MIN_RIGHT;
+      const nextMiddle = Math.max(MIN_MIDDLE, Math.min(maxMiddle, middleWidth));
+      return { left: nextLeft, middle: nextMiddle };
+    }
+
+    function persistPaneWidths() {
+      if (!panes) {
+        return;
+      }
+      window.localStorage.setItem(PANE_LEFT_KEY, String(Math.round(pxVar('--pane-left', '280'))));
+      window.localStorage.setItem(PANE_MIDDLE_KEY, String(Math.round(pxVar('--pane-middle', '420'))));
+    }
+
+    function restorePaneWidths() {
+      if (!panes) {
+        return;
+      }
+      const savedLeft = Number.parseFloat(window.localStorage.getItem(PANE_LEFT_KEY) || '');
+      const savedMiddle = Number.parseFloat(window.localStorage.getItem(PANE_MIDDLE_KEY) || '');
+      if (!Number.isFinite(savedLeft) || !Number.isFinite(savedMiddle)) {
+        return;
+      }
+
+      const total = panes.getBoundingClientRect().width;
+      const clamped = clampPaneWidths(savedLeft, savedMiddle, total);
+      rootStyle.setProperty('--pane-left', `${clamped.left}px`);
+      rootStyle.setProperty('--pane-middle', `${clamped.middle}px`);
+    }
+
+    restorePaneWidths();
+
+    window.addEventListener('resize', () => {
+      if (!panes) {
+        return;
+      }
+      const total = panes.getBoundingClientRect().width;
+      const leftWidth = pxVar('--pane-left', '280');
+      const middleWidth = pxVar('--pane-middle', '420');
+      const clamped = clampPaneWidths(leftWidth, middleWidth, total);
+      rootStyle.setProperty('--pane-left', `${clamped.left}px`);
+      rootStyle.setProperty('--pane-middle', `${clamped.middle}px`);
+      persistPaneWidths();
+    });
+
+    for (const resizer of document.querySelectorAll('.pane-resizer')) {
+      resizer.addEventListener('mousedown', (event) => {
+        if (!panes) return;
+        event.preventDefault();
+        activeResizer = resizer.getAttribute('data-resizer');
+        document.body.classList.add('resizing');
+      });
+      // Touch/pen support
+      resizer.addEventListener('touchstart', (event) => {
+        if (!panes) return;
+        if (event.touches.length !== 1) return;
+        event.preventDefault();
+        activeResizer = resizer.getAttribute('data-resizer');
+        document.body.classList.add('resizing');
+      }, { passive: false });
+    }
+
+    function handleResize(clientX) {
+      if (!panes || !activeResizer) return;
+      const rect = panes.getBoundingClientRect();
+      const total = rect.width;
+      const leftWidth = pxVar('--pane-left', '280');
+      const middleWidth = pxVar('--pane-middle', '420');
+      if (activeResizer === 'left-middle') {
+        const desiredLeft = clientX - rect.left;
+        const clamped = clampPaneWidths(desiredLeft, middleWidth, total);
+        rootStyle.setProperty('--pane-left', `${clamped.left}px`);
+        rootStyle.setProperty('--pane-middle', `${clamped.middle}px`);
+        return;
+      }
+      if (activeResizer === 'middle-right') {
+        const desiredMiddle = clientX - rect.left - leftWidth - RESIZER_SIZE;
+        const clamped = clampPaneWidths(leftWidth, desiredMiddle, total);
+        rootStyle.setProperty('--pane-left', `${clamped.left}px`);
+        rootStyle.setProperty('--pane-middle', `${clamped.middle}px`);
+      }
+    }
+
+    window.addEventListener('mousemove', (event) => {
+      if (!activeResizer) return;
+      handleResize(event.clientX);
+    });
+
+    window.addEventListener('touchmove', (event) => {
+      if (!activeResizer) return;
+      if (event.touches.length !== 1) return;
+      handleResize(event.touches[0].clientX);
+    }, { passive: false });
+
+    function endResize() {
+      const wasResizing = Boolean(activeResizer);
+      activeResizer = null;
+      document.body.classList.remove('resizing');
+      if (wasResizing) persistPaneWidths();
+    }
+    window.addEventListener('mouseup', endResize);
+    window.addEventListener('touchend', endResize);
+
+    const contextMenu = document.getElementById('folder-context-menu');
+    const rootContextMenu = document.getElementById('root-context-menu');
+    const postContextMenu = document.getElementById('post-context-menu');
+    const treeNav = document.querySelector('.tree');
+    const refreshButton = document.getElementById('ctx-refresh');
+    const markReadButton = document.getElementById('ctx-mark-read');
+    const rootRefreshButton = document.getElementById('ctx-root-refresh');
+    const rootAddFolderButton = document.getElementById('ctx-root-add-folder');
+    const rootAddFeedButton = document.getElementById('ctx-root-add-feed');
+    const addToFolderWrap = document.getElementById('ctx-add-to-folder-wrap');
+    const addToFolderButton = document.getElementById('ctx-add-to-folder');
+    const folderSubmenu = document.getElementById('ctx-folder-submenu');
+    const addFeedButton = document.getElementById('ctx-add-feed');
+    const feedPropertiesButton = document.getElementById('ctx-feed-properties');
+    const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
+    const deleteFolderButton = document.getElementById('ctx-delete-folder');
+    const addFeedForm = document.getElementById('context-add-feed-form');
+    const addFolderForm = document.getElementById('context-add-folder-form');
+    const deleteFolderForm = document.getElementById('context-delete-folder-form');
+    const refreshFolderForm = document.getElementById('context-refresh-folder-form');
+    const markReadFolderForm = document.getElementById('context-mark-read-folder-form');
+    const refreshFeedForm = document.getElementById('context-refresh-feed-form');
+    const markReadFeedForm = document.getElementById('context-mark-read-feed-form');
+    const moveFeedForm = document.getElementById('context-move-feed-form');
+    const unsubscribeFeedForm = document.getElementById('context-unsubscribe-feed-form');
+    const contextFolderIdInput = document.getElementById('context-folder-id');
+    const contextFolderNameInput = document.getElementById('context-folder-name');
+    const contextFeedUrlInput = document.getElementById('context-feed-url');
+    const deleteFolderIdInput = document.getElementById('context-delete-folder-id');
+    const refreshFolderIdInput = document.getElementById('context-refresh-folder-id');
+    const markReadFolderIdInput = document.getElementById('context-mark-read-folder-id');
+    const refreshFeedFolderIdInput = document.getElementById('context-refresh-feed-folder-id');
+    const refreshFeedUrlInput = document.getElementById('context-refresh-feed-url');
+    const refreshListFeedUrlInput = document.getElementById('context-refresh-list-feed-url');
+    const markReadFeedFolderIdInput = document.getElementById('context-mark-read-feed-folder-id');
+    const markReadFeedUrlInput = document.getElementById('context-mark-read-feed-url');
+    const markReadListFeedUrlInput = document.getElementById('context-mark-read-list-feed-url');
+    const moveFeedUrlInput = document.getElementById('context-move-feed-url');
+    const moveFeedFromFolderIdInput = document.getElementById('context-move-feed-from-folder-id');
+    const moveFeedToFolderIdInput = document.getElementById('context-move-feed-to-folder-id');
+    const unsubscribeFolderIdInput = document.getElementById('context-unsubscribe-folder-id');
+    const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
+    const postMarkReadButton = document.getElementById('ctx-post-mark-read');
+    const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
+    const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
+    const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
+    const postReadForm = document.getElementById('context-post-read-form');
+    const postRangeReadForm = document.getElementById('context-post-range-read-form');
+    const postReadFeedUrlInput = document.getElementById('context-post-read-feed-url');
+    const postReadEntryIdInput = document.getElementById('context-post-read-entry-id');
+    const postReadValueInput = document.getElementById('context-post-read-value');
+    const postRangeFeedUrlInput = document.getElementById('context-post-range-feed-url');
+    const postRangeEntryIdInput = document.getElementById('context-post-range-entry-id');
+    const postRangeDirectionInput = document.getElementById('context-post-range-direction');
+    const actionInputModal = document.getElementById('action-input-modal');
+    const actionModalTitle = document.getElementById('action-modal-title');
+    const actionModalLabel = document.getElementById('action-modal-label');
+    const actionModalForm = document.getElementById('action-modal-form');
+    const actionModalInput = document.getElementById('action-modal-input');
+    const actionModalCancel = document.getElementById('action-modal-cancel');
+    const actionModalSubmit = document.getElementById('action-modal-submit');
+    const globalNoteModal = document.getElementById('global-note-modal');
+    const globalNoteForm = document.getElementById('global-note-form');
+    const feedPropertiesModal = document.getElementById('feed-properties-modal');
+    const feedPropertiesClose = document.getElementById('feed-properties-close');
+    const feedPropTitle = document.getElementById('feed-prop-title');
+    const feedPropWebsite = document.getElementById('feed-prop-website');
+    const feedPropXml = document.getElementById('feed-prop-xml');
+    const feedPropHealth = document.getElementById('feed-prop-health');
+    const feedPropHealthDetail = document.getElementById('feed-prop-health-detail');
+    const feedPropTotal = document.getElementById('feed-prop-total');
+    const feedPropUnread = document.getElementById('feed-prop-unread');
+    const feedPropAdded = document.getElementById('feed-prop-added');
+    const feedPropUpdated = document.getElementById('feed-prop-updated');
+    const feedPropReceived = document.getElementById('feed-prop-received');
+    const feedPropLastPost = document.getElementById('feed-prop-last-post');
+    let entryArticle = document.querySelector('.entry');
+    let entryPaneTitle = document.querySelector('.entry-pane-title');
+    let entryBody = document.getElementById('entry-body');
+    let entryReadabilityButton = document.getElementById('entry-readability-button');
+    let entrySourceButton = document.getElementById('entry-source-button');
+    let entrySourceFrame = document.getElementById('entry-source-frame');
+    let entrySourceFallback = document.getElementById('entry-source-fallback');
+    let entrySourceOpenExternal = document.getElementById('entry-source-open-external');
+    let entrySourceDismiss = document.getElementById('entry-source-dismiss');
+    let entrySourceModeIndicator = document.getElementById('entry-source-mode-indicator');
+    let entryPaneObserver = null;
+
+    let contextFolderId = null;
+    let contextFeedUrl = null;
+    let contextFolderName = '';
+    let contextFolderDepth = 0;
+    let contextTargetType = 'folder';
+    let contextPostFeedUrl = null;
+    let contextPostEntryId = null;
+    let contextPostRead = false;
+    let contextPostLink = '';
+    let actionModalSubmitHandler = null;
+    let sourceViewActive = false;
+    let sourceLoadTimeoutId = null;
+    let sourceFrameLoaded = false;
+    let sourceHealthCheckId = null;
+    let sourceViewMode = null;
+    let sourceViewUrl = '';
+    let sourceFallbackAttempted = false;
+    let sourceReadabilityAttempted = false;
+    let sourceDirectLoaded = false;
+    let frameCheckRequestToken = 0;
+    let entryPaneRequestToken = 0;
+    let scopePaneRequestToken = 0;
+    let activeScopeUrl = window.location.href;
+    let _prevPaneEntryOverflow = null;
+
+    function normalizeScopeUrl(rawUrl) {
+      const u = new URL(rawUrl, window.location.origin);
+      u.searchParams.delete('chunk');
+      u.searchParams.delete('chunk_delta');
+      return u.toString();
+    }
+
+    function refreshEntryPaneRefs() {
+      entryArticle = document.querySelector('.entry');
+      entryPaneTitle = document.querySelector('.entry-pane-title');
+      entryBody = document.getElementById('entry-body');
+      entryReadabilityButton = document.getElementById('entry-readability-button');
+      entrySourceButton = document.getElementById('entry-source-button');
+      entrySourceFrame = document.getElementById('entry-source-frame');
+      entrySourceFallback = document.getElementById('entry-source-fallback');
+      entrySourceOpenExternal = document.getElementById('entry-source-open-external');
+      entrySourceDismiss = document.getElementById('entry-source-dismiss');
+      entrySourceModeIndicator = document.getElementById('entry-source-mode-indicator');
+
+      // Rebind a mutation observer to the (possibly replaced) entry pane so
+      // activating the source view moves us into the entry single-pane level.
+      try {
+        if (entryPaneObserver) {
+          try { entryPaneObserver.disconnect(); } catch (e) {}
+          entryPaneObserver = null;
+        }
+        const newEntryPane = document.querySelector('.pane-entry');
+        if (newEntryPane) {
+          entryPaneObserver = new MutationObserver(() => {
+            try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(2); } catch (e) {}
+          });
+          entryPaneObserver.observe(newEntryPane, { childList: true, subtree: true });
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // Ensure the entry source iframe fills the available entry article area.
+    function ensureSourceFrameFills() {
+      try {
+        if (!entrySourceFrame) return;
+        // Anchor sizing to the pane container (more reliable than article height).
+        const paneEntry = document.querySelector('.pane-entry');
+        if (!paneEntry) return;
+        const header = paneEntry.querySelector('.entry-pane-header');
+        const paneRect = paneEntry.getBoundingClientRect();
+        const headerHeight = header ? header.getBoundingClientRect().height : 0;
+        const topOffset = Math.max(0, headerHeight);
+        // Prefer flex-based sizing: make the iframe a flex child that grows to
+        // fill remaining space in the `.entry` column. This is more reliable
+        // across browsers and avoids absolute positioning quirks.
+        try { entrySourceFrame.style.removeProperty('position'); } catch (e) {}
+        entrySourceFrame.style.left = '';
+        entrySourceFrame.style.right = '';
+        entrySourceFrame.style.top = '';
+        entrySourceFrame.style.bottom = '';
+        entrySourceFrame.style.width = '100%';
+        entrySourceFrame.style.flex = '1 1 auto';
+        entrySourceFrame.style.minHeight = '0';
+        entrySourceFrame.style.alignSelf = 'stretch';
+        entrySourceFrame.style.height = 'auto';
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // Wire resize/visualViewport events to keep iframe sized correctly.
+    window.addEventListener('resize', () => { window.setTimeout(ensureSourceFrameFills, 40); }, { passive: true });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => { window.setTimeout(ensureSourceFrameFills, 40); }, { passive: true });
+      window.visualViewport.addEventListener('scroll', () => { window.setTimeout(ensureSourceFrameFills, 40); }, { passive: true });
+    }
+
+    function markActivePostByUrl(url) {
+      const parsedUrl = new URL(url, window.location.origin);
+      const targetFeedUrl = parsedUrl.searchParams.get('feed_url');
+      const targetEntryId = parsedUrl.searchParams.get('entry_id');
+      if (!targetFeedUrl || !targetEntryId) {
+        return;
+      }
+
+      for (const postItem of document.querySelectorAll('.post-item')) {
+        const isTarget =
+          postItem.getAttribute('data-post-feed-url') === targetFeedUrl
+          && postItem.getAttribute('data-post-entry-id') === targetEntryId;
+        postItem.classList.toggle('active', isTarget);
+        if (isTarget) {
+          const wasUnread = postItem.getAttribute('data-post-read') === '0';
+          postItem.classList.add('is-read');
+          postItem.setAttribute('data-post-read', '1');
+          const readInput = postItem.querySelector('.post-read-toggle-form input[name="read"]');
+          if (readInput) {
+            readInput.value = '0';
+          }
+          const readButton = postItem.querySelector('.post-read-toggle');
+          if (readButton) {
+            readButton.title = 'Mark as Unread';
+            readButton.setAttribute('aria-label', 'Mark as Unread');
+          }
+          if (wasUnread) {
+            const fallbackBase = getUnreadCountFallback();
+            const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+            appUnreadCount = Math.max(0, current - 1);
+            updateDynamicFavicon();
+          }
+        }
+      }
+    }
+
+    function updateScopeActiveState(url) {
+      const nextUrl = new URL(url, window.location.origin);
+      const nextFolderId = nextUrl.searchParams.get('folder_id');
+      const nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
+      const nextTag = nextUrl.searchParams.get('tag');
+      const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
+
+      for (const folderLink of document.querySelectorAll('.tree-item[data-folder-id]')) {
+        let isMatch = false;
+        if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
+          // For .saved-item, active only if star_only=1
+          if (folderLink.classList.contains('saved-item')) {
+            isMatch = nextStarOnly;
+          }
+          // For .root-item, active only if star_only=0
+          else if (folderLink.classList.contains('root-item')) {
+            isMatch = !nextStarOnly;
+          }
+          // For other folder items (like in the tree), active if folder_id matches
+          else {
+            isMatch = true;
+          }
+        }
+        folderLink.classList.toggle('active', isMatch);
+      }
+
+      for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
+        const isMatch = Boolean(nextFeedUrl) && feedLink.getAttribute('data-feed-url') === nextFeedUrl;
+        feedLink.classList.toggle('active', isMatch);
+      }
+
+      for (const tagLink of document.querySelectorAll('.tag-link, .entry-tag-link')) {
+        const href = tagLink.getAttribute('href') || '';
+        const tagValue = new URL(href, window.location.origin).searchParams.get('tag');
+        tagLink.classList.toggle('active', Boolean(nextTag) && tagValue === nextTag);
+      }
+    }
+
+    function applyCurrentScopeStateToScopeLink(targetUrl, linkEl) {
+      try {
+        if (!linkEl || !targetUrl) {
+          return;
+        }
+        if (!linkEl.matches('.tree-item, .feed-link, .entry-feed-link')) {
+          return;
+        }
+
+        const currentParams = new URL(window.location.href, window.location.origin).searchParams;
+        const keysToSync = ['read_filter', 'resume_read_filter', 'star_only', 'sort_by', 'sort_dir'];
+        for (const key of keysToSync) {
+          if (currentParams.has(key)) {
+            targetUrl.searchParams.set(key, currentParams.get(key) || '');
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    
+
+    async function loadScopePanesWithoutFullRefresh(url, pushHistory = true) {
+      const token = ++scopePaneRequestToken;
+
+      // Determine if we should inform the server of the user's persisted read_filter
+      // via header rather than mutating visible URLs. Also prefer requesting
+      // a small chunk in single-pane mode by adding chunk=1 to the request URL.
+      let headerReadFilter = null;
+      try {
+        const u = new URL(url, window.location.origin);
+        if (!u.searchParams.has('read_filter')) {
+          const pref = window.localStorage.getItem('lectio-read-filter');
+          if (pref) {
+            // don't rewrite the visible URL; instead send as header
+            headerReadFilter = pref;
+          }
+        }
+        try {
+          if (window.isSingleMode && window.isSingleMode()) {
+            if (!u.searchParams.has('chunk')) {
+              u.searchParams.set('chunk', '1');
+              url = u.toString();
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      } catch (e) {
+        // ignore malformed urls
+      }
+
+      try {
+        const headers = {
+          'X-Requested-With': 'lectio-scope-panes',
+        };
+        if (headerReadFilter) headers['X-Lectio-Read-Filter'] = headerReadFilter;
+        const response = await fetch(url, {
+          headers,
+          credentials: 'same-origin',
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const htmlText = await response.text();
+        if (token !== scopePaneRequestToken) {
+          return;
+        }
+
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlText, 'text/html');
+        const nextPostsPane = doc.querySelector('.pane-posts');
+        const nextEntryPane = doc.querySelector('.pane-entry');
+        const currentPostsPane = document.querySelector('.pane-posts');
+        const currentEntryPane = document.querySelector('.pane-entry');
+        if (!nextPostsPane || !nextEntryPane || !currentPostsPane || !currentEntryPane) {
+          window.location.href = url;
+          return;
+        }
+
+        // If this request asked for a specific `chunk` and the caller doesn't
+        // want a history navigation (incremental load), append the new
+        // `.post-item` elements into the existing posts pane instead of
+        // replacing the whole pane. This preserves scroll and shows new items.
+        let maybeUrl;
+        try {
+          maybeUrl = new URL(url, window.location.origin);
+        } catch (e) {
+          maybeUrl = null;
+        }
+
+        if (maybeUrl && maybeUrl.searchParams.has('chunk') && pushHistory === false) {
+          const appended = Array.from(nextPostsPane.querySelectorAll('.post-item'));
+          if (appended.length === 0) {
+            // nothing new; avoid replacing pane which would scroll to top
+            updateScopeActiveState(url);
+            return;
+          }
+
+          // remember scroll position
+          const prevScroll = currentPostsPane.scrollTop;
+
+          // Avoid appending duplicates: only append items whose entry-id
+          // isn't already present in the current posts pane.
+          const existingIds = new Set(
+            Array.from(currentPostsPane.querySelectorAll('.post-item')).map((n) => n.getAttribute('data-post-entry-id'))
+          );
+
+          for (const item of appended) {
+            const id = item.getAttribute && item.getAttribute('data-post-entry-id');
+            if (id && existingIds.has(id)) {
+              // skip duplicates
+              continue;
+            }
+            // Move the node from the parsed doc into the live DOM
+            currentPostsPane.appendChild(item);
+          }
+
+          // Move/replace the sentinel so it remains at the end
+          try {
+            const nextSentinel = nextPostsPane.querySelector('#posts-chunk-sentinel');
+            const existingSentinel = currentPostsPane.querySelector('#posts-chunk-sentinel');
+            if (nextSentinel) {
+              if (existingSentinel) existingSentinel.remove();
+              currentPostsPane.appendChild(nextSentinel);
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // Apply timestamps and bind interactions for newly appended items
+          applyLocalTimestamps(currentPostsPane);
+          bindPostListInteractions();
+
+          // Unhide the next chunk of items (keep client chunking behavior)
+          try {
+            const chunkSize = Number.parseInt(currentPostsPane.getAttribute('data-chunk-size') || '10', 10) || 10;
+            const currentlyVisible = currentPostsPane.querySelectorAll('.post-item:not(.post-item-hidden)').length;
+            const items = Array.from(currentPostsPane.querySelectorAll('.post-item'));
+            const nextVisible = Math.min(items.length, currentlyVisible + chunkSize);
+            for (let i = currentlyVisible; i < nextVisible; i++) {
+              items[i].classList.remove('post-item-hidden');
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // restore scroll position so the viewport doesn't jump
+          currentPostsPane.scrollTop = prevScroll;
+          updateScopeActiveState(url);
+          return;
+        }
+
+        // default behavior: replace whole panes
+        currentPostsPane.replaceWith(nextPostsPane);
+        currentEntryPane.replaceWith(nextEntryPane);
+        activeScopeUrl = normalizeScopeUrl(url);
+        // Update client-side sort state from server-rendered hidden input if present
+        try {
+          const sortInput = doc.querySelector('input[name="sort_by"]');
+          if (sortInput && sortInput.value) {
+            window.CURRENT_SORT_BY = sortInput.value;
+          }
+        } catch (e) {
+          // ignore
+        }
+        applyLocalTimestamps(nextPostsPane);
+        applyLocalTimestamps(nextEntryPane);
+        refreshEntryPaneRefs();
+        bindEntryPaneInteractions();
+        bindEntryTagInteractions();
+        bindPostListInteractions();
+        setupPostChunks();
+        centerActivePostInView();
+        updateScopeActiveState(url);
+
+        if (pushHistory) {
+          history.pushState({ lectioScopePane: true, lectioPaneLevel: (window.isSingleMode && window.isSingleMode()) ? 1 : 0 }, '', url);
+        }
+      } catch (_error) {
+        window.location.href = url;
+        throw _error;
+      }
+    }
+
+    async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
+      const token = ++entryPaneRequestToken;
+
+      try {
+        const headers = { 'X-Requested-With': 'lectio-entry-pane' };
+        const requestUrl = new URL(url, window.location.origin);
+        requestUrl.pathname = '/entries/pane';
+        try {
+          if (!requestUrl.searchParams.has('read_filter')) {
+            const pref = window.localStorage.getItem('lectio-read-filter');
+            if (pref) headers['X-Lectio-Read-Filter'] = pref;
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        const response = await fetch(requestUrl.toString(), { headers, credentials: 'same-origin' });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const htmlText = await response.text();
+        if (token !== entryPaneRequestToken) {
+          return;
+        }
+
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlText, 'text/html');
+        const nextPane = doc.querySelector('.pane-entry');
+        const currentPane = document.querySelector('.pane-entry');
+        if (!nextPane || !currentPane) {
+          window.location.href = url;
+          return;
+        }
+
+        currentPane.replaceWith(nextPane);
+        applyLocalTimestamps(nextPane);
+        refreshEntryPaneRefs();
+        bindEntryPaneInteractions();
+        bindEntryTagInteractions();
+        markActivePostByUrl(url);
+        // If running in single-pane mode, ensure we switch to the entry pane
+        try {
+          if (window.isSingleMode && window.isSingleMode()) {
+            if (window.setSinglePaneLevel) {
+              window.setSinglePaneLevel(2);
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+        if (pushHistory) {
+          history.pushState({ lectioEntryPane: true, lectioPaneLevel: (window.isSingleMode && window.isSingleMode()) ? 2 : 0 }, '', url);
+        }
+      } catch (_error) {
+        window.location.href = url;
+        throw _error;
+      }
+    }
+
+    function setSourceModeIndicator(mode) {
+      if (!entrySourceModeIndicator) {
+        return;
+      }
+
+      if (!mode) {
+        entrySourceModeIndicator.setAttribute('hidden', '');
+        entrySourceModeIndicator.textContent = '';
+        return;
+      }
+
+      const labels = {
+        source: 'Direct',
+        'source-proxy': 'Proxy',
+        readability: 'Readability',
+      };
+      entrySourceModeIndicator.textContent = labels[mode] || mode;
+      entrySourceModeIndicator.removeAttribute('hidden');
+    }
+
+    function scheduleSourceLoadTimeout(timeoutMs) {
+      if (sourceLoadTimeoutId) {
+        window.clearTimeout(sourceLoadTimeoutId);
+      }
+      sourceLoadTimeoutId = window.setTimeout(() => {
+        if (!sourceViewActive || sourceFrameLoaded) {
+          return;
+        }
+
+        if (sourceViewMode === 'source' && !sourceFallbackAttempted) {
+          fallbackToProxiedSource();
+          return;
+        }
+
+        setEntrySourceFallbackVisible(true);
+      }, timeoutMs);
+    }
+
+    function fallbackToProxiedSource() {
+      if (!sourceViewActive || sourceViewMode !== 'source' || sourceFallbackAttempted || sourceDirectLoaded || !sourceViewUrl || !entrySourceFrame) {
+        return;
+      }
+
+      sourceFallbackAttempted = true;
+      sourceViewMode = 'source-proxy';
+      setSourceModeIndicator(sourceViewMode);
+      sourceFrameLoaded = false;
+      entrySourceFrame.src = `/entries/source?url=${encodeURIComponent(sourceViewUrl)}`;
+      scheduleSourceLoadTimeout(2600);
+    }
+
+    function setEntrySourceFallbackVisible(visible) {
+      if (!entrySourceFallback) {
+        return;
+      }
+      if (visible) {
+        entrySourceFallback.removeAttribute('hidden');
+      } else {
+        entrySourceFallback.setAttribute('hidden', '');
+      }
+    }
+
+    function showContextMenu(event) {
+      if (!contextMenu) {
+        return;
+      }
+      hideRootContextMenu();
+      hidePostContextMenu();
+      positionMenuInViewport(contextMenu, event.clientX, event.clientY);
+      contextMenu.removeAttribute('hidden');
+    }
+
+    function showRootContextMenu(event) {
+      if (!rootContextMenu) {
+        return;
+      }
+      hideContextMenu();
+      hidePostContextMenu();
+      positionMenuInViewport(rootContextMenu, event.clientX, event.clientY);
+      rootContextMenu.removeAttribute('hidden');
+    }
+
+    function showPostContextMenu(event) {
+      if (!postContextMenu) {
+        return;
+      }
+      hideContextMenu();
+      hideRootContextMenu();
+      positionMenuInViewport(postContextMenu, event.clientX, event.clientY);
+      postContextMenu.removeAttribute('hidden');
+    }
+
+    function positionMenuInViewport(menu, x, y) {
+      const viewportPadding = 8;
+      menu.style.left = '0px';
+      menu.style.top = '0px';
+      menu.removeAttribute('hidden');
+      const rect = menu.getBoundingClientRect();
+      const maxLeft = window.innerWidth - rect.width - viewportPadding;
+      const maxTop = window.innerHeight - rect.height - viewportPadding;
+      const clampedLeft = Math.max(viewportPadding, Math.min(x, maxLeft));
+      const clampedTop = Math.max(viewportPadding, Math.min(y, maxTop));
+      menu.style.left = `${clampedLeft}px`;
+      menu.style.top = `${clampedTop}px`;
+      menu.setAttribute('hidden', '');
+    }
+
+    async function copyTextToClipboard(text) {
+      if (!text) {
+        return false;
+      }
+
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_error) {
+        // Fall back to execCommand path below.
+      }
+
+      try {
+        const helper = document.createElement('textarea');
+        helper.value = text;
+        helper.setAttribute('readonly', '');
+        helper.style.position = 'fixed';
+        helper.style.opacity = '0';
+        document.body.appendChild(helper);
+        helper.select();
+        const copied = document.execCommand('copy');
+        helper.remove();
+        return copied;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function hideFolderSubmenu() {
+      if (!folderSubmenu) {
+        return;
+      }
+      folderSubmenu.setAttribute('hidden', '');
+      folderSubmenu.style.removeProperty('left');
+      folderSubmenu.style.removeProperty('top');
+    }
+
+    function positionFolderSubmenuInViewport() {
+      if (!folderSubmenu || !addToFolderButton) {
+        return;
+      }
+      const viewportPadding = 8;
+      const submenuRect = folderSubmenu.getBoundingClientRect();
+      const buttonRect = addToFolderButton.getBoundingClientRect();
+
+      let left = buttonRect.right + 6;
+      if (left + submenuRect.width > window.innerWidth - viewportPadding) {
+        left = buttonRect.left - submenuRect.width - 6;
+      }
+      left = Math.max(viewportPadding, Math.min(left, window.innerWidth - submenuRect.width - viewportPadding));
+
+      let top = buttonRect.top - 4;
+      top = Math.max(viewportPadding, Math.min(top, window.innerHeight - submenuRect.height - viewportPadding));
+
+      folderSubmenu.style.left = `${left}px`;
+      folderSubmenu.style.top = `${top}px`;
+    }
+
+    function showFolderSubmenu() {
+      if (!folderSubmenu) {
+        return;
+      }
+      folderSubmenu.removeAttribute('hidden');
+      positionFolderSubmenuInViewport();
+    }
+
+    function updateFolderSubmenuOptions() {
+      if (!folderSubmenu || !contextFolderId) {
+        return;
+      }
+
+      let hasVisibleOption = false;
+      for (const option of folderSubmenu.querySelectorAll('.context-submenu-item')) {
+        const optionFolderId = option.getAttribute('data-target-folder-id');
+        const isCurrentFolder = optionFolderId === contextFolderId;
+        option.hidden = isCurrentFolder;
+        if (!isCurrentFolder) {
+          hasVisibleOption = true;
+        }
+      }
+
+      if (addToFolderButton) {
+        addToFolderButton.disabled = !hasVisibleOption;
+      }
+    }
+
+    function hideContextMenu() {
+      if (!contextMenu) {
+        return;
+      }
+      contextMenu.setAttribute('hidden', '');
+      hideFolderSubmenu();
+    }
+
+    function hidePostContextMenu() {
+      if (!postContextMenu) {
+        return;
+      }
+      postContextMenu.setAttribute('hidden', '');
+    }
+
+    function hideRootContextMenu() {
+      if (!rootContextMenu) {
+        return;
+      }
+      rootContextMenu.setAttribute('hidden', '');
+    }
+
+    function setMenuItemVisible(item, visible) {
+      if (!item) {
+        return;
+      }
+      if (visible) {
+        item.removeAttribute('hidden');
+        item.style.removeProperty('display');
+      } else {
+        item.setAttribute('hidden', '');
+        item.style.display = 'none';
+      }
+    }
+
+    function hideAllContextMenus() {
+      hideContextMenu();
+      hidePostContextMenu();
+      hideRootContextMenu();
+    }
+
+    function closeFeedPropertiesModal() {
+      feedPropertiesModal?.setAttribute('hidden', '');
+    }
+
+    function setFeedPropText(node, value) {
+      if (!node) {
+        return;
+      }
+      node.textContent = value && String(value).trim() ? String(value) : '-';
+    }
+
+    async function openFeedPropertiesModal(feedUrl) {
+      if (!feedUrl || !feedPropertiesModal) {
+        return;
+      }
+
+      setFeedPropText(feedPropTitle, 'Loading...');
+      setFeedPropText(feedPropWebsite, '-');
+      setFeedPropText(feedPropXml, feedUrl);
+      setFeedPropText(feedPropHealth, '-');
+      setFeedPropText(feedPropHealthDetail, '-');
+      setFeedPropText(feedPropTotal, '-');
+      setFeedPropText(feedPropUnread, '-');
+      setFeedPropText(feedPropAdded, '-');
+      setFeedPropText(feedPropUpdated, '-');
+      setFeedPropText(feedPropReceived, '-');
+      setFeedPropText(feedPropLastPost, '-');
+      feedPropertiesModal.removeAttribute('hidden');
+
+      try {
+        const response = await fetch(`/feeds/properties?feed_url=${encodeURIComponent(feedUrl)}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!data.found) {
+          setFeedPropText(feedPropTitle, feedUrl);
+          setFeedPropText(feedPropHealth, 'error');
+          setFeedPropText(feedPropHealthDetail, data.error || 'Feed not found.');
+          return;
+        }
+
+        setFeedPropText(feedPropTitle, data.title || feedUrl);
+        setFeedPropText(feedPropWebsite, data.website || '-');
+        setFeedPropText(feedPropXml, data.feed_url || feedUrl);
+        setFeedPropText(feedPropHealth, data.health || '-');
+        setFeedPropText(feedPropHealthDetail, data.health_detail || '-');
+        setFeedPropText(feedPropTotal, data.total_posts);
+        setFeedPropText(feedPropUnread, data.unread_posts);
+        setFeedPropText(feedPropAdded, data.added);
+        setFeedPropText(feedPropUpdated, data.last_updated);
+        setFeedPropText(feedPropReceived, data.last_received);
+        setFeedPropText(feedPropLastPost, data.last_post);
+      } catch (error) {
+        setFeedPropText(feedPropTitle, feedUrl);
+        setFeedPropText(feedPropHealth, 'error');
+        setFeedPropText(feedPropHealthDetail, `Could not load properties: ${error}`);
+      }
+    }
+
+    function closeActionInputModal() {
+      if (!actionInputModal) {
+        return;
+      }
+      actionInputModal.setAttribute('hidden', '');
+      actionModalSubmitHandler = null;
+      if (actionModalForm) {
+        actionModalForm.reset();
+      }
+    }
+
+    function openActionInputModal(config) {
+      if (
+        !actionInputModal ||
+        !actionModalTitle ||
+        !actionModalLabel ||
+        !actionModalInput ||
+        !actionModalSubmit ||
+        !config ||
+        !config.onSubmit
+      ) {
+        return;
+      }
+
+      actionModalTitle.textContent = config.title;
+      actionModalLabel.textContent = config.label;
+      actionModalInput.placeholder = config.placeholder || '';
+      actionModalSubmit.textContent = config.submitLabel || 'Save';
+      actionModalInput.value = config.initialValue || '';
+      actionModalSubmitHandler = config.onSubmit;
+      actionInputModal.removeAttribute('hidden');
+      window.setTimeout(() => actionModalInput.focus(), 0);
+    }
+
+    actionModalForm?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!actionModalInput || !actionModalSubmitHandler) {
+        return;
+      }
+
+      const value = actionModalInput.value.trim();
+      if (!value) {
+        actionModalInput.focus();
+        return;
+      }
+
+      const submitHandler = actionModalSubmitHandler;
+      closeActionInputModal();
+      submitHandler(value);
+    });
+
+    actionModalCancel?.addEventListener('click', () => {
+      closeActionInputModal();
+    });
+
+    actionInputModal?.addEventListener('click', (event) => {
+      if (event.target === actionInputModal) {
+        closeActionInputModal();
+      }
+    });
+
+    feedPropertiesClose?.addEventListener('click', () => {
+      closeFeedPropertiesModal();
+    });
+
+    feedPropertiesModal?.addEventListener('click', (event) => {
+      if (event.target === feedPropertiesModal) {
+        closeFeedPropertiesModal();
+      }
+    });
+
+    document.querySelector('.action-modal-panel')?.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
+    contextMenu?.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+    rootContextMenu?.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+    postContextMenu?.addEventListener('click', (event) => {
+      event.stopPropagation();
+    });
+
+    for (const folderLink of document.querySelectorAll('.tree-item')) {
+      folderLink.addEventListener('contextmenu', (event) => {
+        if (!contextMenu) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        contextFolderId = folderLink.getAttribute('data-folder-id');
+        contextFeedUrl = null;
+        contextFolderName = folderLink.getAttribute('data-folder-name') || 'folder';
+        contextFolderDepth = Number(folderLink.getAttribute('data-folder-depth') || '0');
+        contextTargetType = 'folder';
+        const isRootFolder = folderLink.classList.contains('root-item');
+
+        if (isRootFolder) {
+          showRootContextMenu(event);
+          return;
+        }
+
+        setMenuItemVisible(refreshButton, true);
+        setMenuItemVisible(markReadButton, true);
+        setMenuItemVisible(addToFolderWrap, false);
+        setMenuItemVisible(addFeedButton, true);
+        setMenuItemVisible(feedPropertiesButton, false);
+        setMenuItemVisible(unsubscribeFeedButton, false);
+        setMenuItemVisible(deleteFolderButton, true);
+        hideFolderSubmenu();
+
+        showContextMenu(event);
+      });
+    }
+
+    for (const feedLink of document.querySelectorAll('.feed-link')) {
+      feedLink.addEventListener('contextmenu', (event) => {
+        if (!contextMenu) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        contextFolderId = feedLink.getAttribute('data-folder-id');
+        contextFeedUrl = feedLink.getAttribute('data-feed-url');
+        contextFolderName = feedLink.textContent || 'feed';
+        contextFolderDepth = 1;
+        contextTargetType = 'feed';
+
+        setMenuItemVisible(refreshButton, true);
+        setMenuItemVisible(markReadButton, true);
+        setMenuItemVisible(addToFolderWrap, true);
+        setMenuItemVisible(addFeedButton, false);
+        setMenuItemVisible(feedPropertiesButton, true);
+        setMenuItemVisible(unsubscribeFeedButton, true);
+        setMenuItemVisible(deleteFolderButton, false);
+        updateFolderSubmenuOptions();
+        hideFolderSubmenu();
+
+        showContextMenu(event);
+      });
+    }
+
+    refreshButton?.addEventListener('click', () => {
+      if (contextTargetType === 'feed') {
+        if (
+          !contextFolderId ||
+          !contextFeedUrl ||
+          !refreshFeedFolderIdInput ||
+          !refreshFeedUrlInput ||
+          !refreshListFeedUrlInput ||
+          !refreshFeedForm
+        ) {
+          return;
+        }
+
+        refreshFeedFolderIdInput.value = contextFolderId;
+        refreshFeedUrlInput.value = contextFeedUrl;
+        refreshListFeedUrlInput.value = contextFeedUrl;
+        hideContextMenu();
+        refreshFeedForm.submit();
+        return;
+      }
+
+      if (!contextFolderId || !refreshFolderIdInput || !refreshFolderForm) {
+        return;
+      }
+
+      refreshFolderIdInput.value = contextFolderId;
+      hideContextMenu();
+      refreshFolderForm.submit();
+    });
+
+    function bindEntryPaneInteractions() {
+      const entrySaveForm = document.querySelector('.entry-save-toggle-form');
+      if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
+        entrySaveForm.dataset.boundAsyncSubmit = '1';
+        entrySaveForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+
+          const savedInput = entrySaveForm.querySelector('input[name="saved"]');
+          const feedUrlInput = entrySaveForm.querySelector('input[name="feed_url"]');
+          const entryIdInput = entrySaveForm.querySelector('input[name="entry_id"]');
+          if (!(savedInput instanceof HTMLInputElement) || !(feedUrlInput instanceof HTMLInputElement) || !(entryIdInput instanceof HTMLInputElement)) {
+            entrySaveForm.submit();
+            return;
+          }
+
+          const nextIsSaved = savedInput.value === '1';
+          applyEntryPaneSavedState(nextIsSaved);
+
+          const linkedPostItem = document.querySelector(`.post-item[data-post-feed-url="${CSS.escape(feedUrlInput.value)}"][data-post-entry-id="${CSS.escape(entryIdInput.value)}"]`);
+          if (linkedPostItem instanceof HTMLElement) {
+            applyPostItemSavedState(linkedPostItem, nextIsSaved);
+          }
+
+          try {
+            const formData = new FormData(entrySaveForm);
+            const body = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+              body.append(key, String(value));
+            }
+
+            const response = await fetch(entrySaveForm.action, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'lectio-entry-save-toggle',
+              },
+              body: body.toString(),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+          } catch (_error) {
+            applyEntryPaneSavedState(!nextIsSaved);
+            if (linkedPostItem instanceof HTMLElement) {
+              applyPostItemSavedState(linkedPostItem, !nextIsSaved);
+            }
+            entrySaveForm.submit();
+          }
+        });
+      }
+
+      if (entryPaneTitle && !entryPaneTitle.dataset.boundContextMenu) {
+        entryPaneTitle.dataset.boundContextMenu = '1';
+        entryPaneTitle.addEventListener('contextmenu', (event) => {
+          if (!postContextMenu) {
+            return;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+          contextPostFeedUrl = entryPaneTitle.getAttribute('data-post-feed-url');
+          contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
+          contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
+          contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
+          if (postMarkReadButton) {
+            postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
+          }
+          setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+          showPostContextMenu(event);
+        });
+      }
+
+      if (entryReadabilityButton && !entryReadabilityButton.dataset.boundClick) {
+        entryReadabilityButton.dataset.boundClick = '1';
+        entryReadabilityButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          const sourceUrl = entryReadabilityButton.getAttribute('data-source-url');
+          if (!sourceUrl || !entryBody || !entrySourceFrame) {
+            return;
+          }
+          if (entryReadabilityButton.classList.contains('active')) {
+            deactivateSourceView();
+          } else {
+            const readabilityUrl = `/entries/readability?url=${encodeURIComponent(sourceUrl)}`;
+            activateSourceView(readabilityUrl, entryReadabilityButton);
+          }
+        });
+      }
+
+      if (entrySourceButton && !entrySourceButton.dataset.boundClick) {
+        entrySourceButton.dataset.boundClick = '1';
+        entrySourceButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          const sourceUrl = entrySourceButton.getAttribute('data-source-url');
+          if (!sourceUrl || !entryBody || !entrySourceFrame) {
+            return;
+          }
+          if (entrySourceButton.classList.contains('active')) {
+            deactivateSourceView();
+          } else {
+            frameCheckRequestToken += 1;
+            const requestToken = frameCheckRequestToken;
+            const frameCheckController = new AbortController();
+            const frameCheckTimeoutId = window.setTimeout(() => {
+              frameCheckController.abort();
+            }, 2200);
+
+            fetch(`/entries/frame-check?url=${encodeURIComponent(sourceUrl)}`, { signal: frameCheckController.signal })
+              .then((response) => (response.ok ? response.json() : null))
+              .then((frameCheck) => {
+                if (requestToken !== frameCheckRequestToken) {
+                  return;
+                }
+
+                if (frameCheck && frameCheck.blocked) {
+                  const proxiedUrl = `/entries/source?url=${encodeURIComponent(sourceUrl)}`;
+                  activateSourceView(proxiedUrl, entrySourceButton, 'source-proxy');
+                } else {
+                  activateSourceView(sourceUrl, entrySourceButton, 'source');
+                }
+              })
+              .catch(() => {
+                if (requestToken !== frameCheckRequestToken) {
+                  return;
+                }
+                activateSourceView(sourceUrl, entrySourceButton, 'source');
+              })
+              .finally(() => {
+                window.clearTimeout(frameCheckTimeoutId);
+              });
+          }
+        });
+      }
+
+      if (entrySourceFrame && !entrySourceFrame.dataset.boundLoad) {
+        entrySourceFrame.dataset.boundLoad = '1';
+        entrySourceFrame.addEventListener('load', () => {
+          sourceFrameLoaded = true;
+
+          if (sourceViewMode === 'source' && !sourceFallbackAttempted) {
+            try {
+              const loadedUrl = entrySourceFrame.contentWindow?.location?.href || '';
+              if (loadedUrl === 'about:blank') {
+                sourceFrameLoaded = false;
+                fallbackToProxiedSource();
+                return;
+              }
+              sourceDirectLoaded = true;
+            } catch (_error) {
+              sourceDirectLoaded = true;
+            }
+          }
+
+          if (sourceViewMode === 'source-proxy' && !sourceReadabilityAttempted) {
+            try {
+              const doc = entrySourceFrame.contentDocument;
+              const textLength = (doc?.body?.innerText || '').trim().length;
+              const hasContentNodes = Boolean(doc?.querySelector('img,video,article,main,p,h1,h2,h3,li,table,pre,blockquote'));
+              if (textLength < 80 && !hasContentNodes) {
+                setEntrySourceFallbackVisible(true);
+              }
+            } catch (_error) {
+              // Ignore introspection failures and keep proxy content.
+            }
+          }
+
+          setEntrySourceFallbackVisible(false);
+          if (sourceLoadTimeoutId) {
+            window.clearTimeout(sourceLoadTimeoutId);
+            sourceLoadTimeoutId = null;
+          }
+          // Ensure iframe height is adjusted after content loads.
+          window.setTimeout(ensureSourceFrameFills, 20);
+        });
+      }
+
+      if (entrySourceFrame && !entrySourceFrame.dataset.boundError) {
+        entrySourceFrame.dataset.boundError = '1';
+        entrySourceFrame.addEventListener('error', () => {
+          if (sourceDirectLoaded && sourceViewMode === 'source') {
+            return;
+          }
+
+          sourceFrameLoaded = false;
+          if (sourceViewMode === 'source' && !sourceFallbackAttempted) {
+            fallbackToProxiedSource();
+          } else {
+            setEntrySourceFallbackVisible(true);
+          }
+        });
+      }
+
+      if (entrySourceDismiss && !entrySourceDismiss.dataset.boundClick) {
+        entrySourceDismiss.dataset.boundClick = '1';
+        entrySourceDismiss.addEventListener('click', () => {
+          setEntrySourceFallbackVisible(false);
+        });
+      }
+    }
+
+    bindEntryPaneInteractions();
+
+    function bindPostListInteractions() {
+      for (const postMainLink of document.querySelectorAll('.post-main-link')) {
+        if (postMainLink.dataset.boundClick) {
+          continue;
+        }
+        postMainLink.dataset.boundClick = '1';
+        postMainLink.addEventListener('click', (event) => {
+          if (event.defaultPrevented) {
+            return;
+          }
+          event.preventDefault();
+          loadEntryPaneWithoutFullRefresh(postMainLink.href);
+        });
+      }
+
+      for (const postItem of document.querySelectorAll('.post-item')) {
+        if (!postItem.dataset.boundTileClick) {
+          postItem.dataset.boundTileClick = '1';
+          postItem.addEventListener('click', (event) => {
+            if (event.target.closest('.post-save-toggle-form, .post-read-toggle-form')) {
+              return;
+            }
+            if (event.target.closest('.post-feed')) {
+              event.preventDefault();
+              const feedUrl = postItem.getAttribute('data-post-feed-url');
+              const feedLink = feedUrl
+                ? document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`)
+                : null;
+              if (feedLink) {
+                loadScopePanesWithoutFullRefresh(feedLink.href);
+              } else if (feedUrl) {
+                const params = new URLSearchParams(window.location.search);
+                params.set('list_feed_url', feedUrl);
+                params.delete('tag');
+                params.delete('feed_url');
+                params.delete('entry_id');
+                loadScopePanesWithoutFullRefresh('/?' + params.toString());
+              }
+              return;
+            }
+            if (event.target.closest('.post-main-link')) {
+              return;
+            }
+            const link = postItem.querySelector('.post-main-link');
+            if (link) {
+              loadEntryPaneWithoutFullRefresh(link.href);
+            }
+          });
+        }
+
+        if (!postItem.dataset.boundContextMenu) {
+          postItem.dataset.boundContextMenu = '1';
+          postItem.addEventListener('contextmenu', (event) => {
+            if (!postContextMenu) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            contextPostFeedUrl = postItem.getAttribute('data-post-feed-url');
+            contextPostEntryId = postItem.getAttribute('data-post-entry-id');
+            contextPostRead = postItem.getAttribute('data-post-read') === '1';
+            contextPostLink = postItem.getAttribute('data-post-link') || '';
+            if (postMarkReadButton) {
+              postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
+            }
+            setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+            showPostContextMenu(event);
+          });
+        }
+        // attach swipe for post items (desktop and touch)
+        if (!postItem.dataset.boundSwipe) {
+          postItem.dataset.boundSwipe = '1';
+          (function(pi){
+            let sx=0, sy=0, dx=0, dy=0, touching=false; const threshold=40;
+            pi.addEventListener('touchstart', (ev)=>{ const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; }, { passive: true });
+            pi.addEventListener('touchmove', (ev)=>{ if(!touching) return; const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy; }, { passive: true });
+            pi.addEventListener('touchend', (ev)=>{ if(!touching) return; touching=false; if(Math.abs(dx) < Math.abs(dy)) return; if(Math.abs(dx) < threshold) return; if(dx>0){ const btn=pi.querySelector('.post-save-toggle'); if(btn) btn.click(); } else { const btn=pi.querySelector('.post-read-toggle'); if(btn) btn.click(); } }, { passive: true });
+          })(postItem);
+        }
+      }
+
+      for (const toggleButton of document.querySelectorAll('.post-read-toggle')) {
+        if (toggleButton.dataset.boundStopBubble) {
+          continue;
+        }
+        toggleButton.dataset.boundStopBubble = '1';
+        toggleButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+        });
+        toggleButton.addEventListener('mousedown', (event) => {
+          event.stopPropagation();
+        });
+      }
+
+      for (const toggleButton of document.querySelectorAll('.post-save-toggle')) {
+        if (toggleButton.dataset.boundStopBubble) {
+          continue;
+        }
+        toggleButton.dataset.boundStopBubble = '1';
+        toggleButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+        });
+        toggleButton.addEventListener('mousedown', (event) => {
+          event.stopPropagation();
+        });
+      }
+
+      for (const readForm of document.querySelectorAll('.post-read-toggle-form')) {
+        if (readForm.dataset.boundAsyncSubmit) {
+          continue;
+        }
+        readForm.dataset.boundAsyncSubmit = '1';
+        readForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const postItem = readForm.closest('.post-item');
+          const readInput = readForm.querySelector('input[name="read"]');
+          if (!postItem || !(readInput instanceof HTMLInputElement)) {
+            readForm.submit();
+            return;
+          }
+
+          const wasUnread = postItem.getAttribute('data-post-read') === '0';
+          const nextIsRead = readInput.value === '1';
+
+          try {
+            const formData = new FormData(readForm);
+            const body = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+              body.append(key, String(value));
+            }
+
+            const response = await fetch(readForm.action, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'lectio-post-read-toggle',
+              },
+              body: body.toString(),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+
+            const changed = applyPostItemReadState(postItem, nextIsRead);
+            if (changed) {
+              if (nextIsRead && wasUnread) {
+                const fallbackBase = getUnreadCountFallback();
+                const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+                appUnreadCount = Math.max(0, current - 1);
+                updateDynamicFavicon();
+              } else if (!nextIsRead && !wasUnread) {
+                const fallbackBase = getUnreadCountFallback();
+                const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+                appUnreadCount = Math.max(0, current + 1);
+                updateDynamicFavicon();
+              }
+            }
+          } catch (_error) {
+            readForm.submit();
+          }
+        });
+      }
+
+      for (const saveForm of document.querySelectorAll('.post-save-toggle-form')) {
+        if (saveForm.dataset.boundAsyncSubmit) {
+          continue;
+        }
+        saveForm.dataset.boundAsyncSubmit = '1';
+        saveForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const postItem = saveForm.closest('.post-item');
+          const savedInput = saveForm.querySelector('input[name="saved"]');
+          if (!postItem || !(savedInput instanceof HTMLInputElement)) {
+            saveForm.submit();
+            return;
+          }
+
+          const nextIsSaved = savedInput.value === '1';
+          applyPostItemSavedState(postItem, nextIsSaved);
+
+          try {
+            const formData = new FormData(saveForm);
+            const body = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+              body.append(key, String(value));
+            }
+
+            const response = await fetch(saveForm.action, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'lectio-post-save-toggle',
+              },
+              body: body.toString(),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+          } catch (_error) {
+            applyPostItemSavedState(postItem, !nextIsSaved);
+            saveForm.submit();
+          }
+        });
+      }
+    }
+
+    bindPostListInteractions();
+
+    postMarkReadButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (
+        !contextPostFeedUrl ||
+        !contextPostEntryId ||
+        !postReadFeedUrlInput ||
+        !postReadEntryIdInput ||
+        !postReadValueInput ||
+        !postReadForm
+      ) {
+        return;
+      }
+
+      postReadFeedUrlInput.value = contextPostFeedUrl;
+      postReadEntryIdInput.value = contextPostEntryId;
+      postReadValueInput.value = contextPostRead ? '0' : '1';
+      hideAllContextMenus();
+      postReadForm.submit();
+    });
+
+    function applyPostItemReadState(postItem, isRead) {
+      if (!postItem) {
+        return false;
+      }
+      const wasRead = postItem.getAttribute('data-post-read') === '1';
+      if (wasRead === isRead) {
+        return false;
+      }
+
+      postItem.setAttribute('data-post-read', isRead ? '1' : '0');
+      postItem.classList.toggle('is-read', isRead);
+
+      const readInput = postItem.querySelector('.post-read-toggle-form input[name="read"]');
+      if (readInput) {
+        readInput.value = isRead ? '0' : '1';
+      }
+
+      const readButton = postItem.querySelector('.post-read-toggle');
+      if (readButton) {
+        readButton.title = isRead ? 'Mark as Unread' : 'Mark as Read';
+        readButton.setAttribute('aria-label', isRead ? 'Mark as Unread' : 'Mark as Read');
+      }
+
+      return true;
+    }
+
+    function applyPostItemSavedState(postItem, isSaved) {
+      if (!postItem) {
+        return false;
+      }
+
+      const wasSaved = postItem.getAttribute('data-post-saved') === '1';
+      if (wasSaved === isSaved) {
+        return false;
+      }
+
+      postItem.setAttribute('data-post-saved', isSaved ? '1' : '0');
+
+      const savedInput = postItem.querySelector('.post-save-toggle-form input[name="saved"]');
+      if (savedInput) {
+        savedInput.value = isSaved ? '0' : '1';
+      }
+
+      const saveButton = postItem.querySelector('.post-save-toggle');
+      const saveIndicator = postItem.querySelector('.post-save-indicator');
+      if (saveButton) {
+        const label = isSaved ? 'Remove from saved' : 'Save for later';
+        saveButton.title = label;
+        saveButton.setAttribute('aria-label', label);
+      }
+      if (saveIndicator) {
+        saveIndicator.textContent = isSaved ? 'star' : 'star_outline';
+      }
+
+      return true;
+    }
+
+    function applyEntryPaneSavedState(isSaved) {
+      const entrySaveForm = document.querySelector('.entry-save-toggle-form');
+      const entrySaveInput = entrySaveForm?.querySelector('input[name="saved"]');
+      const entrySaveButton = entrySaveForm?.querySelector('.entry-save-toggle');
+      const entrySaveIndicator = entrySaveForm?.querySelector('.entry-save-indicator');
+
+      if (entrySaveInput instanceof HTMLInputElement) {
+        entrySaveInput.value = isSaved ? '0' : '1';
+      }
+      if (entrySaveButton instanceof HTMLElement) {
+        const label = isSaved ? 'Remove from saved' : 'Save for later';
+        entrySaveButton.title = label;
+        entrySaveButton.setAttribute('aria-label', label);
+      }
+      if (entrySaveIndicator instanceof HTMLElement) {
+        entrySaveIndicator.textContent = isSaved ? 'star' : 'star_outline';
+      }
+    }
+
+    function applyRangeReadStateInList(direction) {
+      const postsInList = Array.from(document.querySelectorAll('.posts .post-item'));
+      const anchorIndex = postsInList.findIndex(
+        (item) => item.getAttribute('data-post-feed-url') === contextPostFeedUrl
+          && item.getAttribute('data-post-entry-id') === contextPostEntryId
+      );
+      if (anchorIndex < 0) {
+        return;
+      }
+
+      const targets = direction === 'above'
+        ? postsInList.slice(0, anchorIndex)
+        : postsInList.slice(anchorIndex + 1);
+
+      let changedUnreadToRead = 0;
+      for (const postItem of targets) {
+        const wasUnread = postItem.getAttribute('data-post-read') === '0';
+        const changed = applyPostItemReadState(postItem, true);
+        if (changed && wasUnread) {
+          changedUnreadToRead += 1;
+        }
+      }
+
+      if (changedUnreadToRead > 0) {
+        const fallbackBase = getUnreadCountFallback();
+        const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+        appUnreadCount = Math.max(0, current - changedUnreadToRead);
+        updateDynamicFavicon();
+      }
+    }
+
+    async function markRangeReadWithoutRefresh(direction) {
+      if (
+        !contextPostFeedUrl
+        || !contextPostEntryId
+        || !postRangeFeedUrlInput
+        || !postRangeEntryIdInput
+        || !postRangeDirectionInput
+        || !postRangeReadForm
+      ) {
+        return;
+      }
+
+      postRangeFeedUrlInput.value = contextPostFeedUrl;
+      postRangeEntryIdInput.value = contextPostEntryId;
+      postRangeDirectionInput.value = direction;
+      hideAllContextMenus();
+
+      try {
+        const formData = new FormData(postRangeReadForm);
+        const body = new URLSearchParams();
+        for (const [key, value] of formData.entries()) {
+          body.append(key, String(value));
+        }
+
+        const response = await fetch(postRangeReadForm.action, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-Requested-With': 'lectio-post-range-read',
+          },
+          body: body.toString(),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        let result = null;
+        try {
+          result = await response.json();
+        } catch (_parseError) {
+          result = null;
+        }
+
+        applyRangeReadStateInList(direction);
+        if (result && typeof result.message === 'string' && result.message.trim()) {
+          showToastMessage(result.message);
+        }
+      } catch (_error) {
+        showToastMessage('Could not mark posts in that range.');
+      }
+    }
+
+    postMarkAboveReadButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      markRangeReadWithoutRefresh('above');
+    });
+
+    postMarkBelowReadButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      markRangeReadWithoutRefresh('below');
+    });
+
+    postCopyUrlButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextPostLink) {
+        hideAllContextMenus();
+        return;
+      }
+
+      const copied = await copyTextToClipboard(contextPostLink);
+      hideAllContextMenus();
+      if (!copied) {
+        window.alert('Could not copy URL to clipboard.');
+      }
+    });
+
+    markReadButton?.addEventListener('click', () => {
+      if (contextTargetType === 'feed') {
+        if (
+          !contextFolderId ||
+          !contextFeedUrl ||
+          !markReadFeedFolderIdInput ||
+          !markReadFeedUrlInput ||
+          !markReadListFeedUrlInput ||
+          !markReadFeedForm
+        ) {
+          return;
+        }
+
+        markReadFeedFolderIdInput.value = contextFolderId;
+        markReadFeedUrlInput.value = contextFeedUrl;
+        markReadListFeedUrlInput.value = contextFeedUrl;
+        hideContextMenu();
+        markReadFeedForm.submit();
+        return;
+      }
+
+      if (!contextFolderId || !markReadFolderIdInput || !markReadFolderForm) {
+        return;
+      }
+
+      markReadFolderIdInput.value = contextFolderId;
+      hideContextMenu();
+      markReadFolderForm.submit();
+    });
+
+    let _folderSubmenuCloseTimer = null;
+
+    function scheduleFolderSubmenuClose() {
+      _folderSubmenuCloseTimer = setTimeout(() => {
+        _folderSubmenuCloseTimer = null;
+        hideFolderSubmenu();
+      }, 120);
+    }
+
+    function cancelFolderSubmenuClose() {
+      if (_folderSubmenuCloseTimer !== null) {
+        clearTimeout(_folderSubmenuCloseTimer);
+        _folderSubmenuCloseTimer = null;
+      }
+    }
+
+    const hasCoarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+
+    if (!hasCoarsePointer) {
+      addToFolderButton?.addEventListener('mouseenter', () => {
+        cancelFolderSubmenuClose();
+        showFolderSubmenu();
+      });
+
+      folderSubmenu?.addEventListener('mouseenter', () => {
+        cancelFolderSubmenuClose();
+      });
+    }
+
+    if (!hasCoarsePointer) {
+      addToFolderWrap?.addEventListener('mouseleave', () => {
+        scheduleFolderSubmenuClose();
+      });
+
+      folderSubmenu?.addEventListener('mouseleave', () => {
+        scheduleFolderSubmenuClose();
+      });
+    }
+
+    addToFolderButton?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      if (!folderSubmenu) {
+        return;
+      }
+      if (hasCoarsePointer) {
+        cancelFolderSubmenuClose();
+        showFolderSubmenu();
+        return;
+      }
+      if (folderSubmenu.hasAttribute('hidden')) {
+        showFolderSubmenu();
+      } else {
+        hideFolderSubmenu();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (folderSubmenu && !folderSubmenu.hasAttribute('hidden')) {
+        positionFolderSubmenuInViewport();
+      }
+    });
+
+    for (const folderOption of document.querySelectorAll('.context-submenu-item')) {
+      folderOption.addEventListener('click', () => {
+        const targetFolderId = folderOption.getAttribute('data-target-folder-id');
+        if (
+          contextTargetType !== 'feed' ||
+          !contextFolderId ||
+          !contextFeedUrl ||
+          !targetFolderId ||
+          !moveFeedUrlInput ||
+          !moveFeedFromFolderIdInput ||
+          !moveFeedToFolderIdInput ||
+          !moveFeedForm
+        ) {
+          return;
+        }
+
+        moveFeedUrlInput.value = contextFeedUrl;
+        moveFeedFromFolderIdInput.value = contextFolderId;
+        moveFeedToFolderIdInput.value = targetFolderId;
+        hideContextMenu();
+        moveFeedForm.submit();
+      });
+    }
+
+    unsubscribeFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (
+        contextTargetType !== 'feed' ||
+        !contextFolderId ||
+        !contextFeedUrl ||
+        !unsubscribeFolderIdInput ||
+        !unsubscribeFeedUrlInput ||
+        !unsubscribeFeedForm
+      ) {
+        return;
+      }
+
+      const confirmed = window.confirm(`Unsubscribe feed \"${contextFolderName.trim() || contextFeedUrl}\"?`);
+      if (!confirmed) {
+        hideContextMenu();
+        return;
+      }
+
+      unsubscribeFolderIdInput.value = contextFolderId;
+      unsubscribeFeedUrlInput.value = contextFeedUrl;
+      hideAllContextMenus();
+      unsubscribeFeedForm.submit();
+    });
+
+    feedPropertiesButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (contextTargetType !== 'feed' || !contextFeedUrl) {
+        return;
+      }
+
+      hideAllContextMenus();
+      openFeedPropertiesModal(contextFeedUrl);
+    });
+
+    rootAddFolderButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderNameInput || !addFolderForm) {
+        return;
+      }
+      hideAllContextMenus();
+      openActionInputModal({
+        title: 'Add Folder',
+        label: 'Folder name',
+        placeholder: 'New folder name',
+        submitLabel: 'Add Folder',
+        onSubmit: (folderName) => {
+          contextFolderNameInput.value = folderName;
+          addFolderForm.submit();
+        },
+      });
+    });
+
+    rootRefreshButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !refreshFolderIdInput || !refreshFolderForm) {
+        return;
+      }
+
+      refreshFolderIdInput.value = contextFolderId;
+      hideAllContextMenus();
+      refreshFolderForm.submit();
+    });
+
+    rootAddFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !contextFolderIdInput || !contextFeedUrlInput || !addFeedForm) {
+        return;
+      }
+      hideAllContextMenus();
+      openActionInputModal({
+        title: 'Add Feed',
+        label: `Feed URL for ${contextFolderName}`,
+        placeholder: 'https://example.com/feed.xml',
+        submitLabel: 'Add Feed',
+        onSubmit: (feedUrl) => {
+          contextFolderIdInput.value = contextFolderId;
+          contextFeedUrlInput.value = feedUrl;
+          addFeedForm.submit();
+        },
+      });
+    });
+
+    addFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !contextFolderIdInput || !contextFeedUrlInput || !addFeedForm) {
+        return;
+      }
+      hideAllContextMenus();
+      openActionInputModal({
+        title: 'Add Feed',
+        label: `Feed URL for ${contextFolderName}`,
+        placeholder: 'https://example.com/feed.xml',
+        submitLabel: 'Add Feed',
+        onSubmit: (feedUrl) => {
+          contextFolderIdInput.value = contextFolderId;
+          contextFeedUrlInput.value = feedUrl;
+          addFeedForm.submit();
+        },
+      });
+    });
+
+    deleteFolderButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !deleteFolderIdInput || !deleteFolderForm || contextFolderDepth === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(`Delete folder "${contextFolderName}"?`);
+      if (!confirmed) {
+        hideContextMenu();
+        return;
+      }
+
+      deleteFolderIdInput.value = contextFolderId;
+      hideAllContextMenus();
+      deleteFolderForm.submit();
+    });
+
+    let postsContainer = null;
+    let postsChunkSentinel = null;
+    let postsChunkLoading = false;
+
+    function refreshPostChunkRefs() {
+      postsContainer = document.querySelector('.posts');
+      postsChunkSentinel = document.getElementById('posts-chunk-sentinel');
+    }
+
+    function setupPostChunks() {
+      refreshPostChunkRefs();
+      if (!postsContainer) {
+        return;
+      }
+      if (postsContainer.dataset.chunkBound === '1') {
+        return;
+      }
+      postsContainer.dataset.chunkBound = '1';
+
+      const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
+      let visibleCount = chunkSize;
+
+      function getPostItems() {
+        return Array.from(postsContainer.querySelectorAll('.post-item'));
+      }
+
+      function applyVisibleWindow() {
+        const items = getPostItems();
+        const boundedVisibleCount = Math.min(Math.max(visibleCount, chunkSize), items.length || chunkSize);
+        visibleCount = boundedVisibleCount;
+        items.forEach((item, index) => {
+          if (index < visibleCount) {
+            item.classList.remove('post-item-hidden');
+          } else {
+            item.classList.add('post-item-hidden');
+          }
+        });
+      }
+
+      function revealNextChunk() {
+        const items = getPostItems();
+        // If we've already revealed all items currently loaded, request
+        // the next server-side chunk (by bumping the `chunk` query param).
+        if (visibleCount >= items.length) {
+          if (postsChunkLoading) return;
+          try {
+            const url = new URL(normalizeScopeUrl(activeScopeUrl || window.location.href), window.location.origin);
+            const next = Math.max(1, Math.floor(items.length / chunkSize) + 1);
+            url.searchParams.set('chunk', String(next));
+            // Ask the server to return only the delta items for this chunk
+            // so the client can append a fixed-size batch instead of a
+            // cumulative list which may contain many items.
+            url.searchParams.set('chunk_delta', '1');
+            // Ensure the current list filter is included when requesting more.
+            if (!url.searchParams.has('read_filter')) {
+              const currentReadFilter = document.querySelector('.topbar-search-form input[name="read_filter"]')?.value;
+              if (currentReadFilter) url.searchParams.set('read_filter', currentReadFilter);
+            }
+            if (!url.searchParams.has('resume_read_filter')) {
+              const currentResumeReadFilter = document.querySelector('.topbar-search-form input[name="resume_read_filter"]')?.value;
+              if (currentResumeReadFilter) url.searchParams.set('resume_read_filter', currentResumeReadFilter);
+            }
+            if (!url.searchParams.has('star_only')) {
+              const currentStarOnly = document.querySelector('.topbar-search-form input[name="star_only"]')?.value;
+              if (currentStarOnly) url.searchParams.set('star_only', currentStarOnly);
+            }
+            if (!url.searchParams.has('q')) {
+              const currentQuery = document.querySelector('#topbar-search-input')?.value?.trim();
+              if (currentQuery) url.searchParams.set('q', currentQuery);
+            }
+            postsChunkLoading = true;
+            // Avoid pushing a history entry for incremental loads
+            return loadScopePanesWithoutFullRefresh(url.toString(), false).finally(() => {
+              postsChunkLoading = false;
+            });
+          } catch (e) {
+            // fallback to doing nothing
+            return;
+          }
+        }
+
+        visibleCount = Math.min(visibleCount + chunkSize, items.length);
+        applyVisibleWindow();
+      }
+
+      async function ensureViewportFilled() {
+        // Keep revealing chunks until the list can scroll, capped to avoid loops.
+        for (let i = 0; i < 6; i++) {
+          if (!postsContainer) {
+            return;
+          }
+
+          const remaining = postsContainer.scrollHeight - postsContainer.scrollTop - postsContainer.clientHeight;
+          if (remaining > 24) {
+            return;
+          }
+
+          const beforeVisible = postsContainer.querySelectorAll('.post-item:not(.post-item-hidden)').length;
+          const beforeTotal = postsContainer.querySelectorAll('.post-item').length;
+          await Promise.resolve(revealNextChunk());
+          await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+          const afterVisible = postsContainer.querySelectorAll('.post-item:not(.post-item-hidden)').length;
+          const afterTotal = postsContainer.querySelectorAll('.post-item').length;
+          if (afterVisible === beforeVisible && afterTotal === beforeTotal) {
+            return;
+          }
+        }
+      }
+
+      function maybeRevealOnScroll() {
+        if (!postsContainer) {
+          return;
+        }
+
+        const remaining = postsContainer.scrollHeight - postsContainer.scrollTop - postsContainer.clientHeight;
+        if (remaining < 180) {
+          revealNextChunk();
+        }
+      }
+
+      postsContainer.addEventListener('scroll', maybeRevealOnScroll);
+
+      // If items are removed from the top (e.g., unread view interactions), keep the window filled.
+      const mutationObserver = new MutationObserver(() => {
+        applyVisibleWindow();
+        ensureViewportFilled();
+      });
+      mutationObserver.observe(postsContainer, { childList: true, subtree: false });
+
+      window.addEventListener('resize', ensureViewportFilled, { passive: true });
+
+      applyVisibleWindow();
+      ensureViewportFilled();
+    }
+
+    setupPostChunks();
+
+    function centerActivePostInView() {
+      refreshPostChunkRefs();
+      const activePostItem = postsContainer?.querySelector('.post-item.active');
+      if (!postsContainer || !activePostItem) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const activeTop = activePostItem.offsetTop;
+        const activeBottom = activeTop + activePostItem.offsetHeight;
+        const viewTop = postsContainer.scrollTop;
+        const viewBottom = viewTop + postsContainer.clientHeight;
+        if (activeTop >= viewTop + 8 && activeBottom <= viewBottom - 8) {
+          return;
+        }
+
+        const centeredTop = activeTop - Math.max(0, (postsContainer.clientHeight - activePostItem.offsetHeight) / 2);
+        postsContainer.scrollTop = Math.max(0, centeredTop);
+      });
+    }
+
+    centerActivePostInView();
+
+    function activateSourceView(iframeUrl, triggerButton, forcedMode = null) {
+      const sourceUrl = triggerButton.getAttribute('data-source-url');
+      sourceViewMode = forcedMode || (triggerButton === entrySourceButton ? 'source' : 'readability');
+      setSourceModeIndicator(sourceViewMode);
+      sourceViewUrl = sourceUrl || '';
+      sourceFallbackAttempted = sourceViewMode !== 'source';
+      sourceReadabilityAttempted = sourceViewMode === 'readability';
+      sourceDirectLoaded = false;
+      sourceFrameLoaded = false;
+      if (entrySourceFrame.src !== iframeUrl) {
+        entrySourceFrame.src = iframeUrl;
+      } else {
+        sourceFrameLoaded = true;
+      }
+      if (entrySourceOpenExternal) {
+        entrySourceOpenExternal.href = sourceUrl;
+      }
+      entryBody.setAttribute('hidden', '');
+      entrySourceFrame.removeAttribute('hidden');
+      // When activating source view in single-mode ensure we switch to the
+      // entry single-pane level so the iframe becomes visible.
+      try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(2); } catch (e) {}
+      // Make sure iframe sits above other content and the article has a
+      // minimum height so absolute positioning has space to render.
+      try {
+        entrySourceFrame.style.zIndex = '3';
+        entrySourceFrame.style.display = 'block';
+        // Allow the entry article to flex-grow to fill the pane.
+        entryArticle.style.minHeight = '0';
+        entryArticle.style.flex = '1 1 auto';
+        entryArticle.style.height = '100%';
+      } catch (e) {}
+      // Make the pane container itself non-scrolling so the iframe becomes the
+      // single scrollable area and avoids double scrollbars.
+      try {
+        const paneEntry = document.querySelector('.pane-entry');
+        if (paneEntry) {
+          _prevPaneEntryOverflow = paneEntry.style.overflow || getComputedStyle(paneEntry).overflow;
+          paneEntry.style.overflow = 'hidden';
+        }
+        if (entrySourceFrame) entrySourceFrame.style.overflow = 'auto';
+      } catch (e) {}
+      entryArticle?.classList.add('source-active');
+      entryReadabilityButton?.classList.remove('active');
+      entrySourceButton?.classList.remove('active');
+      triggerButton.classList.add('active');
+      setEntrySourceFallbackVisible(false);
+      scheduleSourceLoadTimeout(3000);
+      // Force a layout reflow to ensure iframe fills the entry area.
+      window.setTimeout(ensureSourceFrameFills, 40);
+      requestAnimationFrame(ensureSourceFrameFills);
+      sourceViewActive = true;
+      // Kick off a health check: if iframe remains empty or inaccessible,
+      // attempt proxied source or show fallback.
+      if (sourceHealthCheckId) { window.clearTimeout(sourceHealthCheckId); sourceHealthCheckId = null; }
+      sourceHealthCheckId = window.setTimeout(() => {
+        try {
+          // If already loaded fine, nothing to do.
+          if (sourceFrameLoaded) return;
+          // If source mode, try proxied source as a fallback.
+          if (sourceViewMode === 'source' && !sourceFallbackAttempted && sourceViewUrl) {
+            fallbackToProxiedSource();
+            return;
+          }
+          // Otherwise show fallback UI.
+          setEntrySourceFallbackVisible(true);
+        } catch (e) {
+          // ignore
+        }
+      }, 900);
+    }
+
+    function deactivateSourceView() {
+      frameCheckRequestToken += 1;
+      // Hide iframe via attribute first
+      try { entrySourceFrame.setAttribute('hidden', ''); } catch (e) {}
+      // Remove any inline styles we applied so the iframe does not stay visible
+      try {
+        if (entrySourceFrame) {
+          entrySourceFrame.style.removeProperty('display');
+          entrySourceFrame.style.removeProperty('position');
+          entrySourceFrame.style.removeProperty('left');
+          entrySourceFrame.style.removeProperty('right');
+          entrySourceFrame.style.removeProperty('top');
+          entrySourceFrame.style.removeProperty('bottom');
+          entrySourceFrame.style.removeProperty('width');
+          entrySourceFrame.style.removeProperty('height');
+          entrySourceFrame.style.removeProperty('flex');
+          entrySourceFrame.style.removeProperty('align-self');
+          entrySourceFrame.style.removeProperty('z-index');
+          entrySourceFrame.style.removeProperty('overflow');
+        }
+      } catch (e) {}
+
+      // Restore article layout to normal
+      try {
+        if (entryArticle) {
+          entryArticle.style.removeProperty('min-height');
+          entryArticle.style.removeProperty('flex');
+          entryArticle.style.removeProperty('height');
+          entryArticle.style.removeProperty('position');
+        }
+      } catch (e) {}
+
+      entryBody?.removeAttribute('hidden');
+      entryArticle?.classList.remove('source-active');
+      entryReadabilityButton?.classList.remove('active');
+      entrySourceButton?.classList.remove('active');
+      setEntrySourceFallbackVisible(false);
+      if (sourceLoadTimeoutId) {
+        window.clearTimeout(sourceLoadTimeoutId);
+        sourceLoadTimeoutId = null;
+      }
+      if (sourceHealthCheckId) { window.clearTimeout(sourceHealthCheckId); sourceHealthCheckId = null; }
+
+      // Restore pane overflow so outer pane can scroll again.
+      try {
+        const paneEntry = document.querySelector('.pane-entry');
+        if (paneEntry) {
+          if (_prevPaneEntryOverflow !== null) {
+            paneEntry.style.overflow = _prevPaneEntryOverflow;
+          } else {
+            paneEntry.style.removeProperty('overflow');
+          }
+        }
+      } catch (e) {}
+
+      sourceFrameLoaded = false;
+      sourceViewActive = false;
+      sourceViewMode = null;
+      setSourceModeIndicator(null);
+      sourceViewUrl = '';
+      sourceFallbackAttempted = false;
+      sourceReadabilityAttempted = false;
+      sourceDirectLoaded = false;
+    }
+
+    document.addEventListener('click', (event) => {
+      if (event.defaultPrevented || event.button !== 0) {
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+
+      const link = event.target.closest('a[href]');
+      if (!link) {
+        return;
+      }
+      if (link.target && link.target !== '_self') {
+        return;
+      }
+      if (link.hasAttribute('download')) {
+        return;
+      }
+      if (!link.matches('.tree-item, .feed-link, .tag-link, .posts-toolbar a, .entry-feed-link, .entry-tag-link, .menu-popover > a.menu-item')) {
+        return;
+      }
+
+      const targetUrl = new URL(link.href, window.location.origin);
+      if (targetUrl.origin !== window.location.origin || targetUrl.pathname !== '/') {
+        return;
+      }
+
+      applyCurrentScopeStateToScopeLink(targetUrl, link);
+
+      const activeQuery = (document.getElementById('topbar-search-input')?.value || '').trim();
+      if (activeQuery && !targetUrl.searchParams.has('q')) {
+        targetUrl.searchParams.set('q', activeQuery);
+      }
+
+      event.preventDefault();
+      loadScopePanesWithoutFullRefresh(targetUrl.toString());
+    });
+
+    const topbarSearchForm = document.querySelector('.topbar-search-form');
+    topbarSearchForm?.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+      const targetUrl = new URL(topbarSearchForm.getAttribute('action') || '/', window.location.origin);
+      const formData = new FormData(topbarSearchForm);
+      for (const [key, value] of formData.entries()) {
+        const valueText = String(value);
+        if (key === 'q') {
+          const queryText = valueText.trim();
+          if (queryText) {
+            targetUrl.searchParams.set('q', queryText);
+          } else {
+            targetUrl.searchParams.delete('q');
+          }
+          continue;
+        }
+        targetUrl.searchParams.set(key, valueText);
+      }
+
+      loadScopePanesWithoutFullRefresh(targetUrl.toString())
+        .then(() => {
+          if (window.isSingleMode && window.isSingleMode()) {
+            setSinglePaneLevel(1);
+          }
+        })
+        .catch(() => {
+          window.location.href = targetUrl.toString();
+        });
+    });
+
+    window.addEventListener('popstate', (event) => {
+      const state = event.state || {};
+      if (window.isSingleMode && window.isSingleMode() && Number.isInteger(state.lectioPaneLevel)) {
+        setSinglePaneLevel(state.lectioPaneLevel);
+      }
+      const currentUrl = window.location.href;
+      const currentParams = new URL(currentUrl).searchParams;
+      if (currentParams.has('feed_url') && currentParams.has('entry_id')) {
+        loadEntryPaneWithoutFullRefresh(currentUrl, false);
+        return;
+      }
+      loadScopePanesWithoutFullRefresh(currentUrl, false);
+    });
+
+    let entryTagAddBtn = document.getElementById('entry-tag-add-btn');
+    let entryTagsForm = document.querySelector('.entry-tags-form');
+    let entryTagsInput = document.getElementById('entry-tags-input');
+    let entryTagsMergedInput = document.getElementById('entry-tags-input-merged');
+
+    function refreshEntryTagRefs() {
+      entryTagAddBtn = document.getElementById('entry-tag-add-btn');
+      entryTagsForm = document.querySelector('.entry-tags-form');
+      entryTagsInput = document.getElementById('entry-tags-input');
+      entryTagsMergedInput = document.getElementById('entry-tags-input-merged');
+    }
+
+    function normalizeTagToken(token) {
+      return token.trim().replace(/^#+/, '').toLowerCase();
+    }
+
+    function tokenizeTags(value) {
+      return value
+        .split(/[\s,]+/)
+        .map((token) => normalizeTagToken(token))
+        .filter(Boolean);
+    }
+
+    function setEntryTagsExpandedState(expanded) {
+      if (!entryTagAddBtn) {
+        return;
+      }
+      entryTagAddBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+
+    function bindEntryTagInteractions() {
+      refreshEntryTagRefs();
+      setEntryTagsExpandedState(Boolean(entryTagsForm && !entryTagsForm.hasAttribute('hidden')));
+
+      if (entryTagsForm && !entryTagsForm.dataset.boundSubmit) {
+        entryTagsForm.dataset.boundSubmit = '1';
+        entryTagsForm.addEventListener('submit', (event) => {
+          if (!(entryTagsInput instanceof HTMLInputElement) || !(entryTagsMergedInput instanceof HTMLInputElement)) {
+            return;
+          }
+
+          const existingTokens = tokenizeTags(entryTagsMergedInput.value);
+          const addedTokens = tokenizeTags(entryTagsInput.value);
+
+          if (addedTokens.length === 0) {
+            event.preventDefault();
+            entryTagsInput.focus();
+            return;
+          }
+
+          const merged = [];
+          const seen = new Set();
+          for (const token of [...existingTokens, ...addedTokens]) {
+            if (seen.has(token)) {
+              continue;
+            }
+            seen.add(token);
+            merged.push(token);
+            if (merged.length >= 12) {
+              break;
+            }
+          }
+
+          entryTagsMergedInput.value = merged.join(' ');
+        });
+      }
+
+      if (entryTagAddBtn && !entryTagAddBtn.dataset.boundClick) {
+        entryTagAddBtn.dataset.boundClick = '1';
+        entryTagAddBtn.addEventListener('click', () => {
+          if (entryTagsForm?.hasAttribute('hidden')) {
+            entryTagsForm.removeAttribute('hidden');
+            setEntryTagsExpandedState(true);
+            entryTagsInput?.focus();
+          } else {
+            entryTagsForm?.setAttribute('hidden', '');
+            setEntryTagsExpandedState(false);
+          }
+        });
+      }
+
+      for (const suggestionButton of document.querySelectorAll('[data-tag-suggestion]')) {
+        if (suggestionButton.dataset.boundClick) {
+          continue;
+        }
+        suggestionButton.dataset.boundClick = '1';
+        suggestionButton.addEventListener('click', () => {
+          const inputId = suggestionButton.getAttribute('data-tag-input');
+          const suggestedTag = suggestionButton.getAttribute('data-tag-suggestion');
+          if (!inputId || !suggestedTag) {
+            return;
+          }
+
+          const targetInput = document.getElementById(inputId);
+          if (!(targetInput instanceof HTMLInputElement)) {
+            return;
+          }
+
+          const normalizedSuggestion = suggestedTag.trim().replace(/^#+/, '').toLowerCase();
+          if (!normalizedSuggestion) {
+            return;
+          }
+
+          const existingTokens = targetInput.value
+            .split(/\s+/)
+            .map((token) => token.trim())
+            .filter(Boolean);
+          const existingLookup = new Set(existingTokens.map((token) => token.replace(/^#+/, '').toLowerCase()));
+          if (!existingLookup.has(normalizedSuggestion)) {
+            existingTokens.push(normalizedSuggestion);
+            targetInput.value = existingTokens.join(' ');
+          }
+
+          targetInput.focus();
+        });
+      }
+    }
+
+    function isTypingTarget(target) {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+      if (target.isContentEditable) {
+        return true;
+      }
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        return true;
+      }
+      return false;
+    }
+
+    function getVisiblePostItems() {
+      return Array.from(document.querySelectorAll('.posts .post-item:not(.post-item-hidden)'));
+    }
+
+    function getActivePostItem() {
+      const visiblePosts = getVisiblePostItems();
+      if (visiblePosts.length === 0) {
+        return null;
+      }
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      return activePost || visiblePosts[0];
+    }
+
+    function openPostItemInPane(postItem) {
+      if (!postItem) {
+        return;
+      }
+      const postLink = postItem.querySelector('.post-main-link');
+      if (postLink && postLink.href) {
+        loadEntryPaneWithoutFullRefresh(postLink.href);
+      }
+    }
+
+    function moveActivePostBy(delta) {
+      const visiblePosts = getVisiblePostItems();
+      if (visiblePosts.length === 0) {
+        return;
+      }
+
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      let nextIndex = activePost ? visiblePosts.indexOf(activePost) + delta : 0;
+      nextIndex = Math.max(0, Math.min(visiblePosts.length - 1, nextIndex));
+      openPostItemInPane(visiblePosts[nextIndex]);
+    }
+
+    function setActivePostSelection(postItem) {
+      if (!postItem) {
+        return;
+      }
+
+      const visiblePosts = getVisiblePostItems();
+      for (const item of visiblePosts) {
+        item.classList.toggle('active', item === postItem);
+      }
+
+      const postsPane = document.querySelector('.posts');
+      if (!(postsPane instanceof HTMLElement)) {
+        return;
+      }
+
+      const itemTop = postItem.offsetTop;
+      const itemBottom = itemTop + postItem.offsetHeight;
+      const viewTop = postsPane.scrollTop;
+      const viewBottom = viewTop + postsPane.clientHeight;
+      if (itemTop < viewTop + 8 || itemBottom > viewBottom - 8) {
+        const centeredTop = itemTop - Math.max(0, (postsPane.clientHeight - postItem.offsetHeight) / 2);
+        postsPane.scrollTop = Math.max(0, centeredTop);
+      }
+    }
+
+    function moveActivePostSelectionBy(delta) {
+      const visiblePosts = getVisiblePostItems();
+      if (visiblePosts.length === 0) {
+        return;
+      }
+
+      const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
+      let nextIndex = activePost ? visiblePosts.indexOf(activePost) + delta : 0;
+      nextIndex = Math.max(0, Math.min(visiblePosts.length - 1, nextIndex));
+      setActivePostSelection(visiblePosts[nextIndex]);
+    }
+
+    function setContextFromPostItem(postItem) {
+      if (!postItem) {
+        return false;
+      }
+      contextPostFeedUrl = postItem.getAttribute('data-post-feed-url') || null;
+      contextPostEntryId = postItem.getAttribute('data-post-entry-id') || null;
+      contextPostRead = postItem.getAttribute('data-post-read') === '1';
+      contextPostLink = postItem.getAttribute('data-post-link') || '';
+      return Boolean(contextPostFeedUrl && contextPostEntryId);
+    }
+
+    function toggleActivePostRead() {
+      const postItem = getActivePostItem();
+      if (!postItem) {
+        return;
+      }
+      const form = postItem.querySelector('.post-read-toggle-form');
+      if (form instanceof HTMLFormElement) {
+        form.requestSubmit();
+      }
+    }
+
+    function toggleActivePostSaved() {
+      const postItem = getActivePostItem();
+      if (!postItem) {
+        return;
+      }
+      const form = postItem.querySelector('.post-save-toggle-form');
+      if (form instanceof HTMLFormElement) {
+        form.requestSubmit();
+      }
+    }
+
+    function openActivePostInNewTab() {
+      const postItem = getActivePostItem();
+      if (!postItem || !setContextFromPostItem(postItem) || !contextPostLink) {
+        return;
+      }
+      window.open(contextPostLink, '_blank', 'noopener');
+    }
+
+    function toggleEntryReadability() {
+      if (entryReadabilityButton instanceof HTMLElement) {
+        entryReadabilityButton.click();
+      }
+    }
+
+    function toggleEntryWebView() {
+      if (entrySourceButton instanceof HTMLElement) {
+        entrySourceButton.click();
+      }
+    }
+
+    function openAddFeedModal() {
+      const modal = document.getElementById('add-feed-modal');
+      if (modal) {
+        modal.removeAttribute('hidden');
+        modal.querySelector('input[name="feed_url"]')?.focus();
+      }
+    }
+
+    function refreshCurrentFeedOrFolder() {
+      const searchParams = new URLSearchParams(window.location.search);
+      let folderId = contextFolderId || searchParams.get('folder_id') || null;
+      let feedUrl = contextFeedUrl || searchParams.get('list_feed_url') || null;
+
+      const postItem = getActivePostItem();
+      if (postItem) {
+        setContextFromPostItem(postItem);
+        feedUrl = postItem.getAttribute('data-post-feed-url') || feedUrl;
+        const folderInput = postItem.querySelector('.post-read-toggle-form input[name="folder_id"], .post-save-toggle-form input[name="folder_id"]');
+        if (folderInput instanceof HTMLInputElement && folderInput.value) {
+          folderId = folderInput.value;
+        }
+      }
+
+      if (feedUrl && folderId && refreshFeedFolderIdInput && refreshFeedUrlInput && refreshListFeedUrlInput && refreshFeedForm) {
+        refreshFeedFolderIdInput.value = folderId;
+        refreshFeedUrlInput.value = feedUrl;
+        refreshListFeedUrlInput.value = feedUrl;
+        refreshFeedForm.submit();
+      } else if (folderId && refreshFolderIdInput && refreshFolderForm) {
+        refreshFolderIdInput.value = folderId;
+        refreshFolderForm.submit();
+      }
+    }
+
+    function toggleEntryTagsPanel() {
+      if (entryTagsForm instanceof HTMLFormElement) {
+        if (entryTagsForm.hasAttribute('hidden')) {
+          entryTagsForm.removeAttribute('hidden');
+          setEntryTagsExpandedState(true);
+          entryTagsInput?.focus();
+        } else {
+          entryTagsForm.setAttribute('hidden', '');
+          setEntryTagsExpandedState(false);
+        }
+      }
+    }
+
+    function focusSearchInput() {
+      const searchInput = document.getElementById('topbar-search-input');
+      if (!(searchInput instanceof HTMLInputElement)) {
+        return;
+      }
+      searchInput.focus();
+      searchInput.select();
+    }
+
+    function shouldHandleGlobalShortcut(event) {
+      if (event.defaultPrevented) {
+        return false;
+      }
+      if (isTypingTarget(event.target)) {
+        return false;
+      }
+      if (event.altKey || event.metaKey) {
+        return false;
+      }
+      return true;
+    }
+
+    applyLocalTimestamps();
+    bindEntryTagInteractions();
+
+    window.addEventListener('click', hideAllContextMenus);
+    window.addEventListener('scroll', (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.context-menu, .context-submenu')) {
+        return;
+      }
+      hideAllContextMenus();
+    }, true);
+    window.addEventListener('resize', hideAllContextMenus);
+    window.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      // Close any open action modal (priority order)
+      const openModal = document.querySelector(
+        '#global-note-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+      );
+      if (openModal) {
+        openModal.setAttribute('hidden', '');
+        closeActionInputModal();
+        closeFeedPropertiesModal();
+        event.preventDefault();
+        return;
+      }
+
+      // Close tags panel if open
+      if (entryTagsForm instanceof HTMLFormElement && !entryTagsForm.hasAttribute('hidden')) {
+        entryTagsForm.setAttribute('hidden', '');
+        setEntryTagsExpandedState(false);
+        event.preventDefault();
+        return;
+      }
+
+      // Blur search input if focused
+      const searchInput = document.getElementById('topbar-search-input');
+      if (searchInput instanceof HTMLInputElement && document.activeElement === searchInput) {
+        searchInput.blur();
+        event.preventDefault();
+        return;
+      }
+
+      // Fall-through: close context menus
+      hideAllContextMenus();
+    });
+
+    window.addEventListener('keydown', (event) => {
+      if (!shouldHandleGlobalShortcut(event)) {
+        return;
+      }
+
+      const key = (event.key || '').toLowerCase();
+
+      if (event.shiftKey || event.ctrlKey) {
+        return;
+      }
+
+      if (key === '/') {
+        event.preventDefault();
+        focusSearchInput();
+        return;
+      }
+
+      if (key === 'j') {
+        event.preventDefault();
+        moveActivePostBy(1);
+        return;
+      }
+
+      if (key === 'k') {
+        event.preventDefault();
+        moveActivePostBy(-1);
+        return;
+      }
+
+      if (key === 'n') {
+        event.preventDefault();
+        moveActivePostSelectionBy(1);
+        return;
+      }
+
+      if (key === 'p') {
+        event.preventDefault();
+        moveActivePostSelectionBy(-1);
+        return;
+      }
+
+      if (key === 'm') {
+        event.preventDefault();
+        toggleActivePostRead();
+        return;
+      }
+
+      if (key === 'f' || key === 's') {
+        event.preventDefault();
+        toggleActivePostSaved();
+        return;
+      }
+
+      if (key === 'o' || key === 'b') {
+        event.preventDefault();
+        openActivePostInNewTab();
+        return;
+      }
+
+      if (key === 'w') {
+        event.preventDefault();
+        toggleEntryReadability();
+        return;
+      }
+
+      if (key === 'v') {
+        event.preventDefault();
+        toggleEntryWebView();
+        return;
+      }
+
+      if (key === 'a') {
+        event.preventDefault();
+        openAddFeedModal();
+        return;
+      }
+
+      if (key === 'r') {
+        event.preventDefault();
+        refreshCurrentFeedOrFolder();
+        return;
+      }
+
+      if (key === 't') {
+        event.preventDefault();
+        toggleEntryTagsPanel();
+        return;
+      }
+
+      // e = email (not yet implemented — placeholder)
+    });
+  </script>
+
+</body>
+</html>

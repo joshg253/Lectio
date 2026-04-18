@@ -1,0 +1,28 @@
+:root {
+  --bg: #f2efe7;
+  --surface: #fcfbf7;
+  --ink: #22201a;
+  --accent: #22577a;
+  --accent-soft: #d2e5ef;
+  --line: #ddd6c6;
+  --muted: #6a6659;
+  --hover-bg: #f0f8fb;
+  --tree-line: #eee7d9;
+  --status-bg: rgba(255, 255, 255, 0.35);
+  --elevated-bg: var(--surface);
+  --shadow: 0 10px 24px rgba(34, 32, 26, 0.16);
+  --toast-bg: #fff8dd;
+  --active-border: #8ab4c7;
+  --resizer-hover: rgba(34, 87, 122, 0.2);
+  --danger: #8a1d1d;
+  --danger-muted: #bda6a6;
+  --bg-top: #fffdf8;
+  --bg-mid: var(--bg);
+  --bg-bottom: #e9e3d8;
+  --scrollbar-track: #e7e0d3;
+  --scrollbar-thumb: #b8c7cf;
+  --scrollbar-thumb-hover: #94adba;
+  --link: #0f5f8f;
+  --link-hover: #0a476a;
+  --folder-name-ink: #1f252c;
+}
