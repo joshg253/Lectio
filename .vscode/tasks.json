@@ -4,7 +4,7 @@
     {
       "label": "Run Lectio",
       "type": "shell",
-      "command": ".venv\\Scripts\\python.exe -m uvicorn main:app --reload --reload-exclude .venv --host 0.0.0.0",
+      "command": "$env:LECTIO_REFRESH_DEBUG='1'; .venv\\Scripts\\python.exe -m uvicorn main:app --reload --reload-exclude .venv --host 0.0.0.0",
       "options": {
         "cwd": "${workspaceFolder}"
       },

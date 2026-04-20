@@ -2,110 +2,239 @@
   {% if selected_entry %}
   <div class="entry-pane-header">
     <div class="entry-pane-title-row">
-      <form method="post" action="/entries/saved" class="entry-save-toggle-form">
-        <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-        <input type="hidden" name="feed_url" value="{{ selected_entry.feed_url }}" />
-        <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
-        <input type="hidden" name="saved" value="{{ 0 if selected_entry.saved else 1 }}" />
-        <input type="hidden" name="select_entry" value="1" />
-        {% if selected_feed_url %}
-        <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
-        {% endif %}
-        {% if selected_tag %}
-        <input type="hidden" name="tag" value="{{ selected_tag }}" />
-        {% endif %}
-        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-        <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-        <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-        <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-        <button
-          type="submit"
-          class="entry-save-toggle"
-          title="{{ 'Remove from saved' if selected_entry.saved else 'Save for later' }}"
-          title="{{ 'Remove from saved' if selected_entry.saved else 'Save for later' }} (f)"
-          aria-label="{{ 'Remove from saved' if selected_entry.saved else 'Save for later' }}"
-        >
-          <span class="entry-save-indicator material-symbols-rounded" aria-hidden="true">{{ 'star' if selected_entry.saved else 'star_outline' }}</span>
-        </button>
-      </form>
       <h2
         class="entry-pane-title"
         data-post-feed-url="{{ selected_entry.feed_url }}"
         data-post-entry-id="{{ selected_entry.id }}"
         data-post-read="{{ 1 if selected_entry.read else 0 }}"
         data-post-link="{{ selected_entry.link or '' }}"
-      >{% if selected_entry.link %}<a class="entry-pane-title-link" href="{{ selected_entry.link }}">{{ selected_entry.title or "(untitled)" }}</a>{% else %}<span class="entry-pane-title-link">{{ selected_entry.title or "(untitled)" }}</span>{% endif %}</h2>
-      {% if selected_entry.link %}
-      <div class="entry-pane-title-actions">
-        <span id="entry-source-mode-indicator" class="entry-source-mode-indicator" hidden>Direct</span>
-        <a
-          id="entry-readability-button"
-          class="entry-source-button"
+      >
+        {% if selected_entry.link %}<a
+          class="entry-pane-title-link"
           href="{{ selected_entry.link }}"
-          data-source-url="{{ selected_entry.link }}"
-          title="Reader view (w)"
-          aria-label="Reader view"
-        ><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span></a>
-        <a
-          id="entry-source-button"
-          class="entry-source-button"
-          href="{{ selected_entry.link }}"
-          data-source-url="{{ selected_entry.link }}"
-          title="Web view (v)"
-          aria-label="Web view"
-        ><span class="material-symbols-rounded" aria-hidden="true">language</span></a>
-        <a
-          id="entry-open-tab-button"
-          class="entry-source-button"
-          href="{{ selected_entry.link }}"
-          target="_blank"
-          rel="noopener"
-          title="Open in new tab (b)"
-          aria-label="Open in new tab"
-        ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
-      </div>
-      {% endif %}
+          >{{ selected_entry.title or "(untitled)" }}</a
+        >{% else %}<span class="entry-pane-title-link"
+          >{{ selected_entry.title or "(untitled)" }}</span
+        >{% endif %}
+      </h2>
     </div>
-    <div class="entry-meta entry-pane-meta">
-      {% if selected_entry.feed_icon_url %}<img class="feed-favicon" src="{{ selected_entry.feed_icon_url }}" onerror="this.style.display='none'" />{% endif %}
-      <a class="entry-feed-link" href="/?folder_id={{ selected_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}">{{ selected_entry.feed_title }}</a>
-      {% if selected_entry.post_display %}
-      <span class="entry-meta-separator" aria-hidden="true">·</span>
-      <time
-        class="js-local-time"
-        data-iso="{{ selected_entry.post_timestamp or '' }}"
-        datetime="{{ selected_entry.post_timestamp or '' }}"
-      >{{ selected_entry.post_display }}</time>
-      {% endif %}
-      {% if selected_entry.author %}
-      <span class="entry-meta-separator" aria-hidden="true">·</span>
-      <span>by {{ selected_entry.author }}</span>
-      {% endif %}
+    <div class="entry-pane-bottom-row">
+      <div class="entry-meta entry-pane-meta">
+        <span class="entry-meta-left">
+        {% if selected_entry.feed_icon_url %}<img
+          class="feed-favicon"
+          src="{{ selected_entry.feed_icon_url }}"
+          onerror="this.style.display = 'none'"
+        />{% endif %}
+        <a
+          class="entry-feed-link"
+          href="/?folder_id={{ selected_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+          >{{ selected_entry.feed_title }}</a
+        >
+        {% if selected_entry.author %}
+        <span class="entry-meta-separator" aria-hidden="true">·</span>
+        <span class="entry-author-inline">by {{ selected_entry.author }}</span>
+        {% endif %}
+        </span>
+        {% if selected_entry.post_timestamp %}
+        <time
+          class="js-local-time-absolute entry-meta-time"
+          data-post-iso="{{ selected_entry.post_timestamp or '' }}"
+          data-received-iso="{{ selected_entry.received_timestamp or '' }}"
+          data-post-display="{{ selected_entry.post_display or '' }}"
+          data-received-display="{{ selected_entry.received_display or '' }}"
+          datetime="{{ selected_entry.post_timestamp or '' }}"
+          >{{ selected_entry.post_display }}</time
+        >
+        {% endif %}
+      </div>
     </div>
     <div class="entry-tags-row">
-      {% if selected_entry.manual_tags %}
-      {% for tag in selected_entry.manual_tags %}
-      <a class="entry-tag-link {% if selected_tag == tag %}active{% endif %}" href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}">#{{ tag }}</a>
-      {% endfor %}
-      {% endif %}
-      <form method="post" action="/entries/tags" class="entry-tags-form" id="entry-tags-form" hidden>
-        <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-        <input type="hidden" name="feed_url" value="{{ selected_entry.feed_url }}" />
+      <form method="post" action="/entries/read" class="entry-read-toggle-form">
+        <input
+          type="hidden"
+          name="folder_id"
+          value="{{ selected_folder_id }}"
+        />
+        <input
+          type="hidden"
+          name="feed_url"
+          value="{{ selected_entry.feed_url }}"
+        />
         <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
+        <input
+          type="hidden"
+          name="read"
+          value="{{ 0 if selected_entry.read else 1 }}"
+        />
         <input type="hidden" name="select_entry" value="1" />
-        <input type="hidden" name="append_mode" value="1" />
         {% if selected_feed_url %}
-        <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
-        {% endif %}
-        {% if selected_tag %}
+        <input
+          type="hidden"
+          name="list_feed_url"
+          value="{{ selected_feed_url }}"
+        />
+        {% endif %} {% if selected_tag %}
         <input type="hidden" name="tag" value="{{ selected_tag }}" />
         {% endif %}
         <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
         <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-        <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-        <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-        <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+        <input
+          type="hidden"
+          name="read_filter"
+          value="{{ selected_read_filter }}"
+        />
+        <input
+          type="hidden"
+          name="star_only"
+          value="{{ 1 if selected_star_only else 0 }}"
+        />
+        <input
+          type="hidden"
+          name="resume_read_filter"
+          value="{{ selected_resume_read_filter }}"
+        />
+        <button
+          type="submit"
+          class="entry-read-toggle"
+          title="Mark as {{ 'Unread' if selected_entry.read else 'Read' }}"
+          aria-label="Mark as {{ 'Unread' if selected_entry.read else 'Read' }}"
+        >
+          <span
+            class="material-symbols-rounded entry-read-toggle-icon"
+            aria-hidden="true"
+            >{{ 'mark_email_read' if selected_entry.read else
+            'mark_email_unread' }}</span
+          >
+        </button>
+      </form>
+      <form
+        method="post"
+        action="/entries/saved"
+        class="entry-save-toggle-form"
+      >
+        <input
+          type="hidden"
+          name="folder_id"
+          value="{{ selected_folder_id }}"
+        />
+        <input
+          type="hidden"
+          name="feed_url"
+          value="{{ selected_entry.feed_url }}"
+        />
+        <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
+        <input
+          type="hidden"
+          name="saved"
+          value="{{ 0 if selected_entry.saved else 1 }}"
+        />
+        <input type="hidden" name="select_entry" value="1" />
+        {% if selected_feed_url %}
+        <input
+          type="hidden"
+          name="list_feed_url"
+          value="{{ selected_feed_url }}"
+        />
+        {% endif %} {% if selected_tag %}
+        <input type="hidden" name="tag" value="{{ selected_tag }}" />
+        {% endif %}
+        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+        <input
+          type="hidden"
+          name="read_filter"
+          value="{{ selected_read_filter }}"
+        />
+        <input
+          type="hidden"
+          name="star_only"
+          value="{{ 1 if selected_star_only else 0 }}"
+        />
+        <input
+          type="hidden"
+          name="resume_read_filter"
+          value="{{ selected_resume_read_filter }}"
+        />
+        <button
+          type="submit"
+          class="entry-save-toggle"
+          title="{{ 'Remove from saved' if selected_entry.saved else 'Save for later' }} (f)"
+          aria-label="{{ 'Remove from saved' if selected_entry.saved else 'Save for later' }}"
+        >
+          <span
+            class="entry-save-indicator material-symbols-rounded"
+            aria-hidden="true"
+            >{{ 'star' if selected_entry.saved else 'star_outline' }}</span
+          >
+        </button>
+      </form>
+      <button
+        type="button"
+        class="entry-tag-add-button"
+        id="entry-tag-add-btn"
+        title="Add tags"
+        aria-label="Add tags"
+        aria-controls="entry-tags-form"
+        aria-expanded="false"
+      >
+        <span class="material-symbols-rounded" aria-hidden="true">sell</span>
+      </button>
+      <span class="entry-tags-row-sep" aria-hidden="true"></span>
+      {% if selected_entry.manual_tags %} {% for tag in
+      selected_entry.manual_tags %}
+      <a
+        class="entry-tag-link {% if selected_tag == tag %}active{% endif %}"
+        href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}"
+        >#{{ tag }}</a
+      >
+      {% endfor %} {% endif %}
+      <form
+        method="post"
+        action="/entries/tags"
+        class="entry-tags-form"
+        id="entry-tags-form"
+        hidden
+      >
+        <input
+          type="hidden"
+          name="folder_id"
+          value="{{ selected_folder_id }}"
+        />
+        <input
+          type="hidden"
+          name="feed_url"
+          value="{{ selected_entry.feed_url }}"
+        />
+        <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
+        <input type="hidden" name="select_entry" value="1" />
+        <input type="hidden" name="append_mode" value="1" />
+        {% if selected_feed_url %}
+        <input
+          type="hidden"
+          name="list_feed_url"
+          value="{{ selected_feed_url }}"
+        />
+        {% endif %} {% if selected_tag %}
+        <input type="hidden" name="tag" value="{{ selected_tag }}" />
+        {% endif %}
+        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+        <input
+          type="hidden"
+          name="read_filter"
+          value="{{ selected_read_filter }}"
+        />
+        <input
+          type="hidden"
+          name="star_only"
+          value="{{ 1 if selected_star_only else 0 }}"
+        />
+        <input
+          type="hidden"
+          name="resume_read_filter"
+          value="{{ selected_resume_read_filter }}"
+        />
         <input
           id="entry-tags-input-merged"
           name="tags_text"
@@ -123,16 +252,74 @@
         {% if selected_entry.feed_tag_suggestions %}
         <div class="entry-tag-suggestions" aria-label="Feed tag suggestions">
           {% for tag in selected_entry.feed_tag_suggestions %}
-          <button type="button" class="entry-tag-chip suggestion" data-tag-suggestion="{{ tag }}" data-tag-input="entry-tags-input">{{ tag }}</button>
+          <button
+            type="button"
+            class="entry-tag-chip suggestion"
+            data-tag-suggestion="{{ tag }}"
+            data-tag-input="entry-tags-input"
+          >
+            {{ tag }}
+          </button>
           {% endfor %}
         </div>
         {% endif %}
       </form>
-      <button type="button" class="entry-tag-add-button" id="entry-tag-add-btn" title="Add tags" aria-label="Add tags" aria-controls="entry-tags-form" aria-expanded="false">+</button>
+      {% if selected_entry.link %}
+      <div class="entry-pane-alt-actions">
+        <span
+          id="entry-source-mode-indicator"
+          class="entry-source-mode-indicator"
+          hidden
+          >Direct</span
+        >
+        <a
+          id="entry-readability-button"
+          class="entry-source-button"
+          href="{{ selected_entry.link }}"
+          data-source-url="{{ selected_entry.link }}"
+          title="Reader view (w)"
+          aria-label="Reader view"
+          ><span class="material-symbols-rounded" aria-hidden="true"
+            >chrome_reader_mode</span
+          ></a
+        >
+        <a
+          id="entry-source-button"
+          class="entry-source-button"
+          href="{{ selected_entry.link }}"
+          data-source-url="{{ selected_entry.link }}"
+          title="Web view (v)"
+          aria-label="Web view"
+          ><span class="material-symbols-rounded" aria-hidden="true"
+            >language</span
+          ></a
+        >
+        <a
+          id="entry-open-tab-button"
+          class="entry-source-button"
+          href="{{ selected_entry.link }}"
+          target="_blank"
+          rel="noopener"
+          title="Open in new tab (b)"
+          aria-label="Open in new tab"
+          ><span class="material-symbols-rounded" aria-hidden="true"
+            >open_in_new</span
+          ></a
+        >
+      </div>
+      {% endif %}
     </div>
   </div>
   <article class="entry">
     <div id="entry-body" class="entry-body">
+      {% if selected_entry.lead_image_url %}
+      <img
+        class="entry-lead-image"
+        src="{{ selected_entry.lead_image_url }}"
+        alt=""
+        loading="lazy"
+      />
+      {% endif %}
       {% if selected_entry.content_html %}
       <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
       {% elif selected_entry.summary %}
@@ -151,16 +338,33 @@
     ></iframe>
     <div id="entry-source-fallback" class="entry-source-fallback" hidden>
       <div class="entry-source-fallback-title">Page not visible?</div>
-      <div class="entry-source-fallback-text">Some sites block embedded previews.</div>
+      <div class="entry-source-fallback-text">
+        Some sites block embedded previews.
+      </div>
       <div class="entry-source-fallback-actions">
-        <a id="entry-source-open-external" class="entry-source-open-external" href="#" target="_blank" rel="noopener noreferrer">Open in new tab</a>
-        <button type="button" id="entry-source-dismiss" class="entry-source-dismiss">Dismiss</button>
+        <a
+          id="entry-source-open-external"
+          class="entry-source-open-external"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          >Open in new tab</a
+        >
+        <button
+          type="button"
+          id="entry-source-dismiss"
+          class="entry-source-dismiss"
+        >
+          Dismiss
+        </button>
       </div>
     </div>
   </article>
   {% else %}
   <div class="empty-state">
-    <div class="empty-state-message muted">Select a post from the middle pane.</div>
+    <div class="empty-state-message muted">
+      Select a post from the middle pane.
+    </div>
   </div>
   {% endif %}
 </section>

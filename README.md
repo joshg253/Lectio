@@ -33,6 +33,7 @@ This separation lets us keep reader's feed/entry lifecycle intact while supporti
 ## Run locally
 
 ```powershell
+$env:LECTIO_REFRESH_DEBUG = '1'
 uv run uvicorn main:app --reload
 ```
 
@@ -54,13 +55,14 @@ Open http://127.0.0.1:8000
 - Entry detail display
 - Mark read/unread
 - In 1-pane mobile mode, swipe post tiles left-to-right to toggle read/unread and right-to-left to toggle save/star, with the tile sliding over the action lane
+- Post tiles use a compact card layout with right-side unread/saved quick controls and denser feed/time metadata (Inoreader-inspired)
 - Mark all read for folder subtree
 - Mark all read for one feed
 - Mark read above/below an anchor post
 - Save/unsave (star) posts
-- Saved Items view: global sidebar shortcut to view all saved entries from all feeds
-- Post filters: all / unread plus a star-only override (shows starred items regardless of read status)
-- Filter state consistency: explicit all/unread selection is preserved across folder/feed/tag/search navigation
+- Post filters: unread toggle (all <-> unread) plus a star-only override
+- Star filter behavior: turning star on shows saved items regardless of read state; turning it off restores the previous all/unread view
+- Filter state consistency: all/unread + star state is preserved across folder/feed/tag/search navigation
 - Post search (top bar): case-insensitive term matching across title/feed/source text within the current folder/feed/tag scope, ordered by the active sort controls
 - Global History view (hamburger menu): ignores folder/feed/star constraints and forces read-most-recent-first ordering with read timestamp display
 - Sort by published vs received + ascending/descending toggle
@@ -68,10 +70,15 @@ Open http://127.0.0.1:8000
 - Post list chunking in batches of 10 with auto-fill-to-viewport and scroll-to-load
 - Manual entry tags with suggestions
 - Left pane tags card with counts and click-to-filter
+- Left pane quick-action utility strip (Saved toggle, Tags toggle, Global Note, Problem Feeds, Pin/Unpin)
+- Post list cards show a left-side thumbnail when an entry exposes an image (inline or linked image asset), with a fallback placeholder when it does not
+- Problematic feeds view (hazard icon) with failure count and retry timing
+- Problematic feeds warning indicator only signals new failures since the last time you opened the list; existing unresolved items remain listed until they recover
 - Feed properties/status endpoint and panel data
 - Source/readability/frame-check entry endpoints for source loading modes
 - Entry header quick actions for save + read/unread, with Reader/Web/Open controls moved into the lower tag/action row
 - Entry content media guardrails: oversized inline images are constrained to fit the viewport
+- For short blurb-style posts, Lectio attempts to pull a lead image from the source page (for example via og:image/twitter:image) when the feed payload has no inline image
 - Background auto-refresh of all feeds (default every 60 minutes)
 - Per-feed manual refresh endpoint
 - OPML import/export
@@ -91,6 +98,7 @@ PowerShell example (temporarily for the current shell):
 
 ```powershell
 $env:YOUTUBE_API_KEY = 'YOUR_API_KEY_HERE'
+$env:LECTIO_REFRESH_DEBUG = '1'
 uv run uvicorn main:app --reload
 ```
 
@@ -102,6 +110,8 @@ If `YOUTUBE_API_KEY` is not set, Lectio falls back to scraping the YouTube video
 
 - Manual refresh: use the `Refresh Selected` button to update feeds in the current folder subtree.
 - Manual refresh keeps your current scope/filter context (and selected entry when available) instead of resetting view state.
+- In 1-pane mobile mode, pull-to-refresh on Folders or Posts updates counts/posts in place without a full page reload.
+- Repeatedly failing feeds are automatically retried with exponential backoff (up to 24h), then resume normal cadence once healthy.
 - Scheduled refresh: Lectio refreshes all subscribed feeds in the background every 60 minutes by default.
 - To change the interval, set `LECTIO_AUTO_REFRESH_MINUTES` before starting the app; values lower than 15 are clamped to 15.
 - To disable scheduled refresh, set `LECTIO_AUTO_REFRESH_MINUTES=0`.
@@ -119,6 +129,7 @@ These shortcuts are active when focus is not inside an input/textarea/select fie
 - `w`: Toggle Reader view for the open post
 - `v`: Toggle Web view (embedded source) for the open post
 - `a`: Open Add Feed modal
+- `d`: Pin or unpin the left pane
 - `r`: Refresh current feed (or current folder when no feed is active)
 - `t`: Toggle entry tags panel
 - `Escape`: Close open flyouts/modals/menus and dismiss tags/search focus

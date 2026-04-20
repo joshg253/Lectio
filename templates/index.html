@@ -94,21 +94,9 @@
       <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
         {% if root_folder_row %}
         <div class="tree-block root-tree-block">
-          <div class="saved-items-row">
-            <a
-              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}&star_only=1&resume_read_filter={{ selected_resume_read_filter }}"
-              class="tree-item saved-item {% if selected_star_only and root_folder_row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
-              data-folder-id="{{ root_folder_row.id }}"
-              data-saved-items="true"
-            >
-              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
-              <span class="name">Saved Items</span>
-            </a>
-          </div>
-
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -211,19 +199,6 @@
         </div>
 
         <div class="tree-block tags-tree-block" id="tags-tree-block">
-          <div class="tags-header-row">
-            <button
-              type="button"
-              id="tags-collapse-toggle"
-              class="tree-item root-item tags-header"
-              aria-expanded="true"
-              aria-controls="tags-tree-body"
-              title="Collapse tags"
-            >
-              <span class="name">Tags</span>
-              <span class="material-symbols-rounded tags-collapse-chevron" aria-hidden="true">expand_more</span>
-            </button>
-          </div>
           <div class="tags-tree-body" id="tags-tree-body">
             {% if tag_rows %}
             <ul class="feed-list tag-list">
@@ -231,7 +206,7 @@
               <li>
                 <a
                   class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
-                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}"
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
                   title="#{{ tag_row.name }}"
                 >
                   <span class="tag-label">#{{ tag_row.name }}</span>
@@ -249,12 +224,63 @@
       </nav>
 
       <footer class="folders-pane-footer">
-        <button id="folders-collapse-btn" class="folders-collapse-btn" type="button"
-          aria-label="Collapse folders pane" title="Collapse folders pane">
-          <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
-          <span class="folders-btn-icon folders-btn-strip-icon material-symbols-rounded" aria-hidden="true">chevron_right</span>
-          <span class="folders-btn-icon folders-btn-popout-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
-        </button>
+        <div class="folders-utility-row" role="toolbar" aria-label="Folders actions">
+          {% set scope_base = '/?folder_id=' ~ selected_folder_id %}
+          {% if selected_feed_url %}{% set scope_base = scope_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+          {% if selected_tag %}{% set scope_base = scope_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
+          {% set scope_base = scope_base ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir ~ '&read_filter=' %}
+          {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
+          {% if selected_star_only %}
+          {% set star_href = scope_base ~ resume_filter ~ '&star_only=0&resume_read_filter=' ~ resume_filter %}
+          {% else %}
+          {% set star_href = scope_base ~ 'all&star_only=1&resume_read_filter=' ~ resume_filter %}
+          {% endif %}
+          <a
+            id="folders-star-toggle"
+            href="{{ star_href }}"
+            class="folders-utility-btn {% if selected_star_only %}active{% endif %}"
+            title="Toggle saved posts"
+            aria-label="Toggle saved posts"
+          ><span class="material-symbols-rounded" aria-hidden="true">star</span></a>
+
+          <button
+            id="folders-tags-toggle"
+            class="folders-utility-btn"
+            type="button"
+            aria-label="Toggle tags"
+            aria-pressed="false"
+            title="Toggle tags"
+          ><span class="material-symbols-rounded" aria-hidden="true">edit_note</span></button>
+
+          <button
+            type="button"
+            class="folders-utility-btn"
+            data-toggle-panel="global-note-modal"
+            aria-label="Open global note"
+            title="Open global note"
+          ><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
+
+          <button
+            id="folders-problematic-toggle"
+            type="button"
+            class="folders-utility-btn {% if problematic_unseen_count > 0 %}has-alert{% endif %}"
+            data-toggle-panel="problematic-feeds-modal"
+            aria-label="Open problematic feeds"
+            title="Open problematic feeds"
+          >
+            <span class="material-symbols-rounded" aria-hidden="true">warning</span>
+            {% if problematic_unseen_count > 0 %}
+            <span id="folders-problematic-badge" class="folders-utility-badge" aria-hidden="true">{{ problematic_unseen_count }}</span>
+            {% endif %}
+          </button>
+
+          <button id="folders-collapse-btn" class="folders-collapse-btn folders-utility-btn" type="button"
+            aria-label="Collapse folders pane" title="Collapse folders pane">
+            <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+            <span class="folders-btn-icon folders-btn-strip-icon material-symbols-rounded" aria-hidden="true">chevron_right</span>
+            <span class="folders-btn-icon folders-btn-popout-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+          </button>
+        </div>
       </footer>
     </section>
 
@@ -275,11 +301,15 @@
           {% if selected_tag %}{% set rf_base = rf_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
           {% set rf_base = rf_base ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir ~ '&read_filter=' %}
           {% set rf_star_current = '&star_only=1' if selected_star_only else '&star_only=0' %}
-            <a class="sort-pill filter-pill {% if selected_read_filter == 'all' %}active{% endif %}" href="{{ rf_base }}all{{ rf_star_current }}&resume_read_filter=all" title="All posts" aria-label="All posts"><span class="material-symbols-rounded filter-icon" aria-hidden="true">asterisk</span></a>
-            <a class="sort-pill filter-pill {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ rf_base }}unread{{ rf_star_current }}&resume_read_filter=unread" title="Unread only" aria-label="Unread only"><span class="material-symbols-rounded filter-icon" aria-hidden="true">mark_email_unread</span></a>
-            {% set star_target_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
-            {% set star_next = '&star_only=0' if selected_star_only else '&star_only=1' %}
-            <a class="sort-pill filter-pill {% if selected_star_only %}active{% endif %}" href="{{ rf_base }}{{ star_target_filter }}{{ star_next }}&resume_read_filter={{ star_target_filter }}" title="Star-only" aria-label="Star-only"><span class="material-symbols-rounded filter-icon" aria-hidden="true">star</span></a>
+          {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
+          {% set unread_toggle_target = 'all' if selected_read_filter == 'unread' else 'unread' %}
+          <a class="sort-pill filter-pill {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ rf_base }}{{ unread_toggle_target }}{{ rf_star_current }}&resume_read_filter={{ unread_toggle_target }}" title="Toggle unread filter" aria-label="Toggle unread filter"><span class="material-symbols-rounded filter-icon" aria-hidden="true">mark_email_unread</span></a>
+          {% if selected_star_only %}
+          {% set star_href = rf_base ~ resume_filter ~ '&star_only=0&resume_read_filter=' ~ resume_filter %}
+          {% else %}
+          {% set star_href = rf_base ~ 'all&star_only=1&resume_read_filter=' ~ resume_filter %}
+          {% endif %}
+          <a class="sort-pill filter-pill {% if selected_star_only %}active{% endif %}" href="{{ star_href }}" title="Toggle star filter" aria-label="Toggle star filter"><span class="material-symbols-rounded filter-icon" aria-hidden="true">star</span></a>
         </div>
         <div class="sort-group" role="group" aria-label="Sort posts">
           <a
@@ -310,93 +340,109 @@
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
         >
-          <div class="post-title-row">
-            <form method="post" action="/entries/saved" class="post-save-toggle-form">
-              <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-              <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
-              <input type="hidden" name="entry_id" value="{{ post.id }}" />
-              <input type="hidden" name="saved" value="{{ 0 if post.saved else 1 }}" />
-              <input type="hidden" name="select_entry" value="0" />
-              {% if selected_feed_url %}
-              <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
-              {% endif %}
-              {% if selected_tag %}
-              <input type="hidden" name="tag" value="{{ selected_tag }}" />
-              {% endif %}
-              <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-              <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-              <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-              <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-              <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-              <button
-                type="submit"
-                class="post-save-toggle"
-                title="{{ 'Remove from saved' if post.saved else 'Save for later' }} (f)"
-                aria-label="{{ 'Remove from saved' if post.saved else 'Save for later' }}"
-              >
-                <span class="post-save-indicator material-symbols-rounded" aria-hidden="true">{{ 'star' if post.saved else 'star_outline' }}</span>
-              </button>
-            </form>
-            <a class="post-main-link"
-              href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}">
-              <div class="post-title" title="{{ post.title or '(untitled)' }}">{{ post.title or "(untitled)" }}</div>
-            </a>
-            <form method="post" action="/entries/read" class="post-read-toggle-form">
-              <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-              <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
-              <input type="hidden" name="entry_id" value="{{ post.id }}" />
-              <input type="hidden" name="read" value="{{ 0 if post.read else 1 }}" />
-              <input type="hidden" name="select_entry" value="0" />
-              {% if selected_feed_url %}
-              <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
-              {% endif %}
-              {% if selected_tag %}
-              <input type="hidden" name="tag" value="{{ selected_tag }}" />
-              {% endif %}
-              <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-              <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-              <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-              <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-              <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-              <button
-                type="submit"
-                class="post-read-toggle"
-                title="Mark as {{ 'Unread' if post.read else 'Read' }} (m)"
-                aria-label="Mark as {{ 'Unread' if post.read else 'Read' }}"
-              >
-                <span class="post-read-indicator" aria-hidden="true"></span>
-              </button>
-            </form>
+          <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
+            {% if post.thumbnail_url %}
+            <img class="post-thumbnail-image" src="{{ post.thumbnail_url }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            {% endif %}
+            <span class="post-thumbnail-fallback material-symbols-rounded" aria-hidden="true">image</span>
           </div>
-          <div class="post-meta-row">
-            <div class="post-meta">
-              <span class="post-feed">
-                {% if post.feed_icon_url %}
-                <img class="feed-favicon" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
-                {% else %}
-                <span class="feed-icon material-symbols-rounded" aria-hidden="true">article</span>
-                {% endif %}
-                <span class="feed-name">{{ post.feed_title }}</span>
-              </span>
-              {# Always render both timestamps as data attributes and let JS pick which to display #}
-              <time
-                class="post-time js-local-time"
-                data-post-iso="{{ post.post_timestamp or '' }}"
-                data-received-iso="{{ post.received_timestamp or '' }}"
-                data-post-display="{{ post.post_display or '' }}"
-                data-received-display="{{ post.received_display or '' }}"
-                data-read-iso="{{ post.read_timestamp or '' }}"
-                data-read-display="{{ post.read_display or '' }}"
-              >
-                {# Server-side initial render: show the value matching selected_sort_by (or read history) #}
-                {% if selected_read_filter == 'history' and not selected_star_only and post.read_display %}
-                  {{ post.read_display }}
-                {% elif selected_sort_by == 'received' and post.received_display %}
-                  {{ post.received_display }}
-                {% else %}
-                  {{ post.post_display }}
-                {% endif %}
-              </time>
+          <div class="post-item-card">
+            <div class="post-content">
+              <div class="post-title-row">
+                <a class="post-main-link"
+                  href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}">
+                  <div class="post-title" title="{{ post.title or '(untitled)' }}">{{ post.title or "(untitled)" }}</div>
+                </a>
+              </div>
+            </div>
+            <div class="post-bottom-row">
+              <div class="post-feed-row">
+                <div class="post-meta">
+                  <span class="post-feed">
+                    {% if post.feed_icon_url %}
+                    <img class="feed-favicon" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
+                    {% else %}
+                    <span class="feed-icon material-symbols-rounded" aria-hidden="true">article</span>
+                    {% endif %}
+                    <span class="feed-name">{{ post.feed_title }}</span>
+                  </span>
+                </div>
+              </div>
+              <div class="post-actions-row">
+                {# Always render both timestamps as data attributes and let JS pick which to display #}
+                <time
+                  class="post-time js-local-time-relative"
+                  data-post-iso="{{ post.post_timestamp or '' }}"
+                  data-received-iso="{{ post.received_timestamp or '' }}"
+                  data-post-display="{{ post.post_display or '' }}"
+                  data-received-display="{{ post.received_display or '' }}"
+                  data-read-iso="{{ post.read_timestamp or '' }}"
+                  data-read-display="{{ post.read_display or '' }}"
+                >
+                  {# Server-side initial render: show the value matching selected_sort_by (or read history) #}
+                  {% if selected_read_filter == 'history' and not selected_star_only and post.read_display %}
+                    {{ post.read_display }}
+                  {% elif selected_sort_by == 'received' and post.received_display %}
+                    {{ post.received_display }}
+                  {% else %}
+                    {{ post.post_display }}
+                  {% endif %}
+                </time>
+                <div class="post-meta-actions">
+                    <form method="post" action="/entries/saved" class="post-save-toggle-form">
+                      <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                      <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
+                      <input type="hidden" name="entry_id" value="{{ post.id }}" />
+                      <input type="hidden" name="saved" value="{{ 0 if post.saved else 1 }}" />
+                    <input type="hidden" name="select_entry" value="0" />
+                    {% if selected_feed_url %}
+                    <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+                    {% endif %}
+                    {% if selected_tag %}
+                    <input type="hidden" name="tag" value="{{ selected_tag }}" />
+                    {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                    <button
+                      type="submit"
+                      class="post-save-toggle"
+                      title="{{ 'Remove from saved' if post.saved else 'Save for later' }} (f)"
+                      aria-label="{{ 'Remove from saved' if post.saved else 'Save for later' }}"
+                    >
+                      <span class="post-save-indicator material-symbols-rounded" aria-hidden="true">{{ 'star' if post.saved else 'star_outline' }}</span>
+                    </button>
+                  </form>
+                  <form method="post" action="/entries/read" class="post-read-toggle-form">
+                    <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                    <input type="hidden" name="feed_url" value="{{ post.feed_url }}" />
+                    <input type="hidden" name="entry_id" value="{{ post.id }}" />
+                    <input type="hidden" name="read" value="{{ 0 if post.read else 1 }}" />
+                    <input type="hidden" name="select_entry" value="0" />
+                    {% if selected_feed_url %}
+                    <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+                    {% endif %}
+                    {% if selected_tag %}
+                    <input type="hidden" name="tag" value="{{ selected_tag }}" />
+                    {% endif %}
+                    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                    <button
+                      type="submit"
+                      class="post-read-toggle"
+                      title="Mark as {{ 'Unread' if post.read else 'Read' }} (m)"
+                      aria-label="Mark as {{ 'Unread' if post.read else 'Read' }}"
+                    >
+                      <span class="post-read-indicator" aria-hidden="true"></span>
+                    </button>
+                  </form>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -676,11 +722,6 @@
       try {
         const u2 = new URL(href, window.location.origin);
         applyCurrentScopeStateToScopeLink(u2, a);
-        const searchInput = document.getElementById('topbar-search-input');
-        const activeQuery = (searchInput instanceof HTMLInputElement ? searchInput.value : '').trim();
-        if (activeQuery && !u2.searchParams.has('q')) {
-          u2.searchParams.set('q', activeQuery);
-        }
         navUrl = u2.toString();
       } catch (err) {
         // fallback to original href
@@ -1046,6 +1087,38 @@
     </div>
   </div>
 
+  <div id="problematic-feeds-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="problematic-feeds-modal-title">
+      <div class="modal-header-row">
+        <h3 id="problematic-feeds-modal-title" class="action-modal-title">Problematic Feeds</h3>
+        <button type="button" class="modal-close" data-close-modal="problematic-feeds-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      {% if problematic_feeds %}
+      <ul class="problem-feed-list">
+        {% for row in problematic_feeds %}
+        <li class="problem-feed-item">
+          <a
+            class="problem-feed-link"
+            href="/?folder_id={{ row.folder_id or selected_folder_id }}&list_feed_url={{ row.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+            title="{{ row.feed_url }}"
+          >{{ row.feed_title }}</a>
+          <div class="problem-feed-meta">
+            <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
+            {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+          </div>
+          {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No problematic feeds right now.</p>
+      {% endif %}
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="problematic-feeds-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="action-input-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
       <h3 id="action-modal-title" class="action-modal-title">Add</h3>
@@ -1089,13 +1162,156 @@
     let unreadSinceLastFocus = false;
     let lastFocusedUnreadCount = 0;
 
-    const localTimeFormatter = new Intl.DateTimeFormat(undefined, {
+    function measureAndSetTileHeight() {
+      // Find a 2-line title tile and measure its height to set thumbnail height dynamically
+      const items = Array.from(document.querySelectorAll('.post-item'));
+      
+      for (const item of items) {
+        const title = item.querySelector('.post-title');
+        if (!title) continue;
+        
+        const titleStyle = window.getComputedStyle(title);
+        const lineHeight = parseFloat(titleStyle.lineHeight);
+        const titleRect = title.getBoundingClientRect();
+        const titleLines = Math.round(titleRect.height / lineHeight);
+        
+        // Found a 2-line tile, measure its card height
+        if (titleLines === 2) {
+          const card = item.querySelector('.post-item-card');
+          const cardRect = card.getBoundingClientRect();
+          const tileHeight = Math.ceil(cardRect.height);
+          
+          // Set CSS custom property
+          document.documentElement.style.setProperty('--post-tile-height', `${tileHeight}px`);
+          return;
+        }
+      }
+    }
+
+    const localTimeFormatterShort = new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+    });
+    const localTimeFormatterShortWithYear = new Intl.DateTimeFormat(undefined, {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
     });
+
+    function formatRelativeDate(date) {
+      const now = new Date();
+      const diffMs = now - date;
+      const diffSecs = Math.floor(diffMs / 1000);
+      const diffMins = Math.floor(diffSecs / 60);
+      const diffHours = Math.floor(diffMins / 60);
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffSecs < 60) {
+        return 'now';
+      }
+      if (diffMins < 60) {
+        return `${diffMins}m`;
+      }
+      if (diffHours < 24) {
+        return `${diffHours}h`;
+      }
+      if (diffDays < 7) {
+        return `${diffDays}d`;
+      }
+      
+      const diffWeeks = Math.floor(diffDays / 7);
+      if (diffWeeks < 4) {
+        return `${diffWeeks}w`;
+      }
+      
+      // Fall back to absolute date for older items
+      const isCurrentYear = date.getFullYear() === now.getFullYear();
+      return isCurrentYear
+        ? localTimeFormatterShort.format(date)
+        : localTimeFormatterShortWithYear.format(date);
+    }
+
+    function applyRelativeTimestamps(root = document) {
+      for (const node of root.querySelectorAll('.js-local-time-relative')) {
+        const rawRead = (node.getAttribute('data-read-iso') || '').trim();
+        const readDisplay = (node.getAttribute('data-read-display') || '').trim();
+        let raw = '';
+        let altDisplay = '';
+        let titlePrefix = '';
+        
+        if ((window.CURRENT_SORT_BY || 'post') === 'received') {
+          raw = (node.getAttribute('data-received-iso') || '').trim();
+          altDisplay = (node.getAttribute('data-post-display') || '').trim();
+          titlePrefix = 'Posted';
+        } else {
+          raw = (node.getAttribute('data-post-iso') || '').trim();
+          altDisplay = (node.getAttribute('data-received-display') || '').trim();
+          titlePrefix = 'Received';
+        }
+        
+        const inHistory = (node.getAttribute('data-read-display') || '').trim();
+        if (inHistory && window.location.search.includes('read_filter=history')) {
+          raw = rawRead;
+          altDisplay = (node.getAttribute('data-post-display') || '').trim();
+          titlePrefix = 'Read';
+        }
+
+        if (!raw) {
+          if (altDisplay) node.title = `${titlePrefix} ${altDisplay}`;
+          continue;
+        }
+        
+        const date = new Date(raw);
+        if (Number.isNaN(date.getTime())) {
+          continue;
+        }
+        
+        const relative = formatRelativeDate(date);
+        node.textContent = relative;
+        if (node instanceof HTMLTimeElement) node.dateTime = date.toISOString();
+        
+        // Tooltip shows the full date
+        if (altDisplay) {
+          node.title = `${titlePrefix} ${altDisplay}`;
+        } else {
+          const fullDate = localTimeFormatterShortWithYear.format(date);
+          node.title = `${titlePrefix} ${fullDate}`;
+        }
+      }
+    }
+
+    function applyAbsoluteTimestamps(root = document) {
+      for (const node of root.querySelectorAll('.js-local-time-absolute')) {
+        const postIso = (node.getAttribute('data-post-iso') || '').trim();
+        const receivedIso = (node.getAttribute('data-received-iso') || '').trim();
+        const postDisplay = (node.getAttribute('data-post-display') || '').trim();
+        const receivedDisplay = (node.getAttribute('data-received-display') || '').trim();
+
+        if (!postIso) {
+          continue;
+        }
+        
+        const postDate = new Date(postIso);
+        if (Number.isNaN(postDate.getTime())) {
+          continue;
+        }
+        
+        // Format the post date
+        const now = new Date();
+        const isCurrentYear = postDate.getFullYear() === now.getFullYear();
+        const formatted = isCurrentYear
+          ? localTimeFormatterShort.format(postDate)
+          : localTimeFormatterShortWithYear.format(postDate);
+        
+        node.textContent = formatted;
+        if (node instanceof HTMLTimeElement) node.dateTime = postDate.toISOString();
+        
+        // Tooltip shows received date if available
+        if (receivedDisplay) {
+          node.title = `Article: ${postDisplay || formatted} · Received: ${receivedDisplay}`;
+        }
+      }
+    }
 
     function applyLocalTimestamps(root = document) {
       for (const node of root.querySelectorAll('.js-local-time')) {
@@ -1135,7 +1351,11 @@
         if (Number.isNaN(date.getTime())) {
           continue;
         }
-        const formatted = localTimeFormatter.format(date);
+        const now = new Date();
+        const isCurrentYear = date.getFullYear() === now.getFullYear();
+        const formatted = isCurrentYear
+          ? localTimeFormatterShort.format(date)
+          : localTimeFormatterShortWithYear.format(date);
         node.textContent = formatted;
         if (node instanceof HTMLTimeElement) node.dateTime = date.toISOString();
         // Tooltip should show the alternate date (if available)
@@ -1371,7 +1591,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -1537,27 +1757,55 @@
     }
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');
-    const tagsCollapseToggle = document.getElementById('tags-collapse-toggle');
+    const tagsToggleButton = document.getElementById('folders-tags-toggle');
+    const problematicFeedsToggle = document.getElementById('folders-problematic-toggle');
+    const problematicFeedsBadge = document.getElementById('folders-problematic-badge');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
 
     function applyTagsCollapsed(collapsed) {
-      if (!tagsTreeBlock || !tagsCollapseToggle) {
+      if (!tagsTreeBlock) {
         return;
       }
       tagsTreeBlock.classList.toggle('is-collapsed', collapsed);
-      tagsCollapseToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      tagsCollapseToggle.title = collapsed ? 'Expand tags' : 'Collapse tags';
+      if (tagsToggleButton) {
+        tagsToggleButton.classList.toggle('active', !collapsed);
+        tagsToggleButton.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
+        tagsToggleButton.title = collapsed ? 'Expand tags' : 'Collapse tags';
+      }
     }
 
-    if (tagsTreeBlock && tagsCollapseToggle) {
+    if (tagsTreeBlock && tagsToggleButton) {
       const savedTagsCollapsed = window.localStorage.getItem(TAGS_COLLAPSED_KEY) === '1';
       applyTagsCollapsed(savedTagsCollapsed);
-      tagsCollapseToggle.addEventListener('click', () => {
+      tagsToggleButton.addEventListener('click', () => {
         const nextCollapsed = !tagsTreeBlock.classList.contains('is-collapsed');
         window.localStorage.setItem(TAGS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
         applyTagsCollapsed(nextCollapsed);
       });
     }
+
+    async function markProblematicFeedsViewed() {
+      if (!problematicFeedsToggle || !problematicFeedsToggle.classList.contains('has-alert')) {
+        return;
+      }
+      try {
+        await fetch('/settings/problematic-feeds/viewed', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'lectio-problematic-feeds-viewed' },
+          credentials: 'same-origin',
+        });
+      } catch (_err) {
+        // ignore; UI still clears local alert state
+      }
+      problematicFeedsToggle.classList.remove('has-alert');
+      if (problematicFeedsBadge) {
+        problematicFeedsBadge.remove();
+      }
+    }
+
+    problematicFeedsToggle?.addEventListener('click', () => {
+      void markProblematicFeedsViewed();
+    });
 
     const panes = document.querySelector('.panes');
     const rootStyle = document.documentElement.style;
@@ -1909,6 +2157,31 @@
       const nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
+      const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
+      const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
+      const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
+      const nextSortDir = nextUrl.searchParams.get('sort_dir') || 'desc';
+
+      const foldersStarToggle = document.getElementById('folders-star-toggle');
+      if (foldersStarToggle) {
+        const resumeFilter = (nextReadFilter === 'history' || nextStarOnly) ? nextResumeReadFilter : nextReadFilter;
+        const params = new URLSearchParams();
+        params.set('folder_id', nextFolderId || '1');
+        if (nextFeedUrl) {
+          params.set('list_feed_url', nextFeedUrl);
+        }
+        if (nextTag) {
+          params.set('tag', nextTag);
+        }
+        params.set('sort_by', nextSortBy);
+        params.set('sort_dir', nextSortDir);
+        params.set('read_filter', nextStarOnly ? resumeFilter : 'all');
+        params.set('star_only', nextStarOnly ? '0' : '1');
+        params.set('resume_read_filter', resumeFilter);
+
+        foldersStarToggle.setAttribute('href', `/?${params.toString()}`);
+        foldersStarToggle.classList.toggle('active', nextStarOnly);
+      }
 
       for (const folderLink of document.querySelectorAll('.tree-item[data-folder-id]')) {
         let isMatch = false;
@@ -2076,6 +2349,9 @@
 
           // Apply timestamps and bind interactions for newly appended items
           applyLocalTimestamps(currentPostsPane);
+          applyRelativeTimestamps(currentPostsPane);
+          applyAbsoluteTimestamps(currentPostsPane);
+          measureAndSetTileHeight();
           bindPostListInteractions();
 
           // Unhide the next chunk of items (keep client chunking behavior)
@@ -2111,7 +2387,10 @@
           // ignore
         }
         applyLocalTimestamps(nextPostsPane);
+        applyRelativeTimestamps(nextPostsPane);
+        applyAbsoluteTimestamps(nextEntryPane);
         applyLocalTimestamps(nextEntryPane);
+        measureAndSetTileHeight();
         refreshEntryPaneRefs();
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
@@ -2167,6 +2446,9 @@
 
         currentPane.replaceWith(nextPane);
         applyLocalTimestamps(nextPane);
+        applyRelativeTimestamps(nextPane);
+        applyAbsoluteTimestamps(nextPane);
+        measureAndSetTileHeight();
         refreshEntryPaneRefs();
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
@@ -4244,6 +4526,9 @@
     }
 
     applyLocalTimestamps();
+    applyRelativeTimestamps();
+    applyAbsoluteTimestamps();
+    measureAndSetTileHeight();
     bindEntryTagInteractions();
 
     window.addEventListener('click', hideAllContextMenus);
@@ -4262,7 +4547,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');
@@ -4378,6 +4663,12 @@
       if (key === 't') {
         event.preventDefault();
         toggleEntryTagsPanel();
+        return;
+      }
+
+      if (key === 'd') {
+        event.preventDefault();
+        document.getElementById('folders-collapse-btn')?.click();
         return;
       }
 

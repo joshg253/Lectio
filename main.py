@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Iterable, Sequence, cast
-from urllib.parse import quote_plus, urlparse
+from typing import Annotated, Sequence, cast
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -22,9 +22,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from readability import Document
-from reader import make_reader
+
+from services.feed_refresh import FeedRefreshService
+from services.lead_images import LeadImageService
+from services.reader_api import ReaderApi
+from services.youtube import YouTubeDurationService
 
 BASE_DIR = Path(__file__).resolve().parent
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 class _ReaderNonFatalParseWarningFilter(logging.Filter):
@@ -84,6 +89,7 @@ def _load_local_env(env_path: str | Path | None = None) -> None:
         except Exception:
             continue
 
+
 # Load local .env early so os.getenv() below can pick up values provided by the developer
 _load_local_env()
 META_DB_PATH = BASE_DIR / "lectio_meta.sqlite3"
@@ -92,10 +98,13 @@ ROOT_FOLDER_NAME = "All Feeds"
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 15
 MANUAL_REFRESH_COOLDOWN_SECONDS = 60
+FAILED_FEED_BACKOFF_BASE_SECONDS = 60
+FAILED_FEED_BACKOFF_MAX_SECONDS = 60 * 60 * 24
 AUTO_REFRESH_SETTING_KEY = "auto_refresh_minutes"
 SORT_BY_SETTING_KEY = "sort_by"
 SORT_DIR_SETTING_KEY = "sort_dir"
 GLOBAL_NOTE_SETTING_KEY = "global_note"
+PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
 AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -107,21 +116,15 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260418a")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260420m")
+REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "1") == "1"
 
-_configured_refresh_minutes = int(
-    os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES))
-)
-AUTO_REFRESH_MINUTES = (
-    0
-    if _configured_refresh_minutes <= 0
-    else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
-)
+_configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
+AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
 updating_feeds_lock = threading.Lock()
 updating_feeds: set[str] = set()
-youtube_duration_cache: dict[str, tuple[int | None, str | None]] = {}
 feed_tag_suggestion_cache_lock = threading.Lock()
 feed_tag_suggestion_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
 
@@ -133,6 +136,7 @@ def is_async_action_request(request: Request, expected_header: str | None = None
     if expected_header is None:
         return requested_with.startswith("lectio-")
     return requested_with == expected_header
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -148,9 +152,10 @@ async def lifespan(app: FastAPI):
         pass
 
     # Warm YouTube duration in-memory cache from DB so first renders are instant.
-    with get_meta_connection() as conn:
-        for row in conn.execute("SELECT video_id, duration_seconds, duration_display FROM youtube_video_duration").fetchall():
-            youtube_duration_cache[str(row["video_id"])] = (row["duration_seconds"], row["duration_display"])
+    youtube_duration_service.warm_cache_from_db()
+
+    # Warm lead image cache from DB so thumbnails are available on first render.
+    lead_image_service.warm_cache_from_db()
 
     stop_event = threading.Event()
     thread = threading.Thread(
@@ -169,8 +174,18 @@ async def lifespan(app: FastAPI):
                 "SELECT DISTINCT feed_url FROM folder_feeds WHERE feed_url LIKE '%youtube.com/feeds/videos.xml%'"
             ).fetchall()
         for row in rows:
-            _fetch_and_store_youtube_durations(str(row["feed_url"]))
+            youtube_duration_service.fetch_and_store_durations_for_feed(str(row["feed_url"]))
+
     threading.Thread(target=_backfill, daemon=True).start()
+
+    # Backfill lead images for all feeds whose entries haven't been checked yet.
+    def _backfill_lead_images() -> None:
+        with get_meta_connection() as conn:
+            rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
+        for row in rows:
+            lead_image_service.fetch_and_store_lead_images_for_feed(str(row["feed_url"]), force_retry_negative=True)
+
+    threading.Thread(target=_backfill_lead_images, daemon=True).start()
 
     try:
         yield
@@ -271,6 +286,29 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_failure_state (
+                feed_url TEXT PRIMARY KEY,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                next_retry_at REAL,
+                last_error TEXT,
+                last_failure_at REAL,
+                last_success_at REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_lead_images (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                image_url TEXT,
+                fetched_at REAL NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -319,6 +357,18 @@ def normalize_auto_refresh_minutes(value: int) -> int:
     if value <= 0:
         return 0
     return max(value, MIN_AUTO_REFRESH_MINUTES)
+
+
+def parse_epoch_setting(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except TypeError, ValueError:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
 
 
 def get_auto_refresh_minutes(conn: sqlite3.Connection) -> int:
@@ -429,8 +479,7 @@ def get_folder_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             SELECT id FROM folders WHERE name = ? AND parent_id IS NULL
         )
         ORDER BY path
-        """
-        ,
+        """,
         (ROOT_FOLDER_NAME,),
     ).fetchall()
 
@@ -452,16 +501,11 @@ def get_folder_options(conn: sqlite3.Connection) -> list[FolderOption]:
         """,
         (ROOT_FOLDER_NAME,),
     ).fetchall()
-    return [
-        FolderOption(id=int(r["id"]), name=r["name"], path=r["path"], depth=int(r["depth"]))
-        for r in rows
-    ]
+    return [FolderOption(id=int(r["id"]), name=r["name"], path=r["path"], depth=int(r["depth"])) for r in rows]
 
 
 def get_direct_feed_urls_by_folder(conn: sqlite3.Connection) -> dict[int, list[str]]:
-    rows = conn.execute(
-        "SELECT folder_id, feed_url FROM folder_feeds ORDER BY feed_url"
-    ).fetchall()
+    rows = conn.execute("SELECT folder_id, feed_url FROM folder_feeds ORDER BY feed_url").fetchall()
     by_folder: dict[int, list[str]] = {}
     for row in rows:
         folder_id = int(row["folder_id"])
@@ -497,10 +541,7 @@ def get_unread_counts_by_folder(
     for row in folder_rows:
         folder_id = int(cast(int, row["id"]))
         depth = int(cast(int, row["depth"]))
-        direct_count = sum(
-            unread_counts_by_feed.get(feed_url, 0)
-            for feed_url in direct_feed_urls_by_folder.get(folder_id, [])
-        )
+        direct_count = sum(unread_counts_by_feed.get(feed_url, 0) for feed_url in direct_feed_urls_by_folder.get(folder_id, []))
         counts[folder_id] = direct_count
         if depth == 0:
             root_folder_id = folder_id
@@ -522,7 +563,24 @@ def get_unread_counts_by_feed() -> dict[str, int]:
 
 
 def get_reader():
-    return make_reader(str(READER_DB_PATH))
+    return reader_api.client()
+
+
+reader_api = ReaderApi(READER_DB_PATH)
+
+
+youtube_duration_service = YouTubeDurationService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    user_agent=READABILITY_USER_AGENT,
+)
+
+lead_image_service = LeadImageService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    user_agent=READABILITY_USER_AGENT,
+    extract_video_id=youtube_duration_service.extract_video_id,
+)
 
 
 def normalize_tag_value(value: str | None) -> str | None:
@@ -755,14 +813,14 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
                 for tag in get_manual_tags_for_resource(reader, entry.resource_id):
                     counts[tag] = counts.get(tag, 0) + 1
 
-    return [
-        {"name": tag, "count": counts[tag]}
-        for tag in sorted(counts)
-    ]
+    return [{"name": tag, "count": counts[tag]} for tag in sorted(counts)]
 
 
-def get_favicon_url(feed_url: str) -> str | None:
-    host = urlparse(feed_url).hostname
+def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
+    url_for_host = site_url or feed_url
+    host = urlparse(url_for_host).hostname
+    if not host:
+        host = urlparse(feed_url).hostname
     if not host:
         return None
     return f"https://www.google.com/s2/favicons?domain={quote_plus(host)}&sz=32"
@@ -774,36 +832,6 @@ def get_feed_title_map() -> dict[str, str]:
         for feed in reader.get_feeds():
             titles[feed.url] = feed.resolved_title or feed.title or feed.url
     return titles
-
-
-def humanize_feed_exception(last_exception: object) -> str:
-    raw_detail = str(getattr(last_exception, "value_str", None) or str(last_exception))
-    detail = " ".join(raw_detail.split())
-    lowered = detail.lower()
-
-    if "connecttimeout" in lowered or "timed out" in lowered:
-        return (
-            "Connection timed out while contacting this feed server. "
-            "The feed host may be down or slow, or the network path may be blocked."
-        )
-    if "name or service not known" in lowered or "temporary failure in name resolution" in lowered:
-        return "Could not resolve the feed host name (DNS lookup failed)."
-    if "certificate" in lowered or "ssl" in lowered or "tls" in lowered:
-        return "TLS/SSL handshake failed while connecting to the feed URL."
-    if "403" in lowered or "forbidden" in lowered:
-        return "The feed server denied access (HTTP 403 Forbidden)."
-    if "404" in lowered or "not found" in lowered:
-        return "The feed URL returned not found (HTTP 404)."
-    if "401" in lowered or "unauthorized" in lowered:
-        return "The feed requires authentication (HTTP 401 Unauthorized)."
-    if "429" in lowered or "too many requests" in lowered:
-        return "The feed server is rate-limiting requests (HTTP 429)."
-    if "parseerror" in lowered or "xml" in lowered or "invalid" in lowered:
-        return "The feed response could not be parsed as a valid RSS/Atom document."
-
-    if len(detail) > 260:
-        return f"{detail[:257]}..."
-    return detail or "An unknown feed retrieval error occurred."
 
 
 def get_feed_properties(feed_url: str) -> dict:
@@ -842,7 +870,7 @@ def get_feed_properties(feed_url: str) -> dict:
         last_exception = getattr(feed_obj, "last_exception", None)
         if last_exception:
             health = "error"
-            health_detail = humanize_feed_exception(last_exception)
+            health_detail = feed_refresh_service.humanize_feed_exception(last_exception)
         elif getattr(feed_obj, "updates_enabled", True):
             health = "ok"
             health_detail = "No known errors."
@@ -870,7 +898,7 @@ def get_feed_properties(feed_url: str) -> dict:
         # try a short metadata fetch of the feed to get a human-friendly title.
         try:
             current_title = str(props.get("title") or "")
-            if (current_title == feed_url or current_title.startswith("http")):
+            if current_title == feed_url or current_title.startswith("http"):
                 try:
                     resp = httpx.get(feed_url, timeout=3.0, follow_redirects=True)
                     if resp.status_code == 200 and resp.content:
@@ -907,11 +935,7 @@ def get_feed_properties(feed_url: str) -> dict:
         # known feed error, start a background update so the UI can show posts
         # shortly after the request. We don't block the request on the update.
         try:
-            should_queue_update = (
-                total_posts == 0
-                and health != "error"
-                and bool(getattr(feed_obj, "updates_enabled", True))
-            )
+            should_queue_update = total_posts == 0 and health != "error" and bool(getattr(feed_obj, "updates_enabled", True))
         except Exception:
             should_queue_update = False
 
@@ -1025,84 +1049,7 @@ def delete_entry_read_state(feed_url: str, entry_id: str) -> None:
         )
 
 
-def get_youtube_duration_db(video_id: str) -> tuple[int | None, str | None] | None:
-    """Return (seconds, display) from DB, or None if not yet stored."""
-    with get_meta_connection() as conn:
-        row = conn.execute(
-            "SELECT duration_seconds, duration_display FROM youtube_video_duration WHERE video_id = ?",
-            (video_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    return (row["duration_seconds"], row["duration_display"])
-
-
-def upsert_youtube_duration_db(video_id: str, duration_seconds: int | None, duration_display: str | None) -> None:
-    """Persist fetched duration for a video_id."""
-    with get_meta_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO youtube_video_duration (video_id, duration_seconds, duration_display, fetched_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(video_id) DO UPDATE SET
-                duration_seconds = excluded.duration_seconds,
-                duration_display = excluded.duration_display,
-                fetched_at = excluded.fetched_at
-            """,
-            (video_id, duration_seconds, duration_display),
-        )
-
-
-_YT_VID_PATTERN = re.compile(r"[?&]v=([\w-]{11})|youtu\.be/([\w-]{11})|/shorts/([\w-]{11})")
-
-
-def _extract_youtube_video_id(link: str) -> str | None:
-    m = _YT_VID_PATTERN.search(link)
-    if not m:
-        return None
-    return m.group(1) or m.group(2) or m.group(3)
-
-
-def _get_youtube_duration_cached(video_id: str) -> tuple[int | None, str | None]:
-    """Return duration from in-memory cache, then DB, then None (no network here)."""
-    cached = youtube_duration_cache.get(video_id)
-    if cached is not None:
-        return cached
-    db = get_youtube_duration_db(video_id)
-    if db is not None:
-        youtube_duration_cache[video_id] = db
-        return db
-    return (None, None)
-
-
-def _fetch_and_store_youtube_durations(feed_url: str) -> None:
-    """After a YouTube feed update, fetch and persist durations for entries not yet stored."""
-    if "youtube.com/feeds/videos.xml" not in feed_url:
-        return
-    try:
-        with get_reader() as reader:
-            entries = list(reader.get_entries(feed=feed_url, limit=50))
-    except Exception:
-        return
-    for entry in entries:
-        if not entry.link:
-            continue
-        vid = _extract_youtube_video_id(entry.link)
-        if not vid:
-            continue
-        if vid in youtube_duration_cache:
-            continue
-        db_result = get_youtube_duration_db(vid)
-        if db_result is not None:
-            youtube_duration_cache[vid] = db_result
-            continue
-        # Not stored yet — fetch and persist.
-        try:
-            result = get_youtube_video_duration(vid)
-        except Exception:
-            result = (None, None)
-        youtube_duration_cache[vid] = result
-        upsert_youtube_duration_db(vid, result[0], result[1])
+_IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["\']([^"\']+)["\']')
 
 
 def sanitize_readability_html(content: str) -> str:
@@ -1126,80 +1073,71 @@ def sanitize_source_html(content: str) -> str:
     return cleaned
 
 
-def _parse_iso8601_duration_to_seconds(d: str) -> int | None:
-    # Parse ISO 8601 duration like PT1H2M3S into seconds
-    try:
-        m = re.match(r"P(?:T(?:(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?)", d)
-        if not m:
-            return None
-        hours = int(m.group(1)) if m.group(1) else 0
-        minutes = int(m.group(2)) if m.group(2) else 0
-        seconds = int(m.group(3)) if m.group(3) else 0
-        return hours * 3600 + minutes * 60 + seconds
-    except Exception:
-        return None
+def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
+    attr_re = re.compile(rf'\b{re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
+    attr_literal = f'{attr_name}="{html.escape(value, quote=True)}"'
+    if attr_re.search(tag_html):
+        return attr_re.sub(attr_literal, tag_html, count=1)
+    insert_at = tag_html.rfind("/>")
+    if insert_at != -1:
+        return f"{tag_html[:insert_at]} {attr_literal}{tag_html[insert_at:]}"
+    insert_at = tag_html.rfind(">")
+    if insert_at != -1:
+        return f"{tag_html[:insert_at]} {attr_literal}{tag_html[insert_at:]}"
+    return f"{tag_html} {attr_literal}"
 
 
-def _format_seconds_hms(sec: int | None) -> str | None:
-    if sec is None:
-        return None
-    try:
-        h = sec // 3600
-        m = (sec % 3600) // 60
-        s = sec % 60
-        if h:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-    except Exception:
-        return None
+def normalize_proxy_lazy_media(content: str) -> str:
+    """Promote common lazy-loading attrs so media renders without site scripts."""
+
+    def _normalize_tag(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        attrs: dict[str, str] = {}
+        for attr_match in _IMG_ATTR_RE.finditer(tag):
+            key = attr_match.group(1).strip().lower()
+            value = html.unescape(attr_match.group(2).strip())
+            if key and value:
+                attrs[key] = value
+
+        lower_tag = tag.lower()
+        is_img = lower_tag.startswith("<img")
+        is_source = lower_tag.startswith("<source")
+        if not (is_img or is_source):
+            return tag
+
+        lazy_src = attrs.get("data-src") or attrs.get("data-lazy-src") or attrs.get("data-original") or attrs.get("data-image")
+        lazy_srcset = attrs.get("data-srcset") or attrs.get("data-lazy-srcset")
+        current_src = attrs.get("src", "")
+        current_srcset = attrs.get("srcset", "")
+
+        # Common placeholders are 1x1 data URIs or empty src; replace with lazy attrs.
+        placeholder_src = (not current_src) or current_src.startswith("data:")
+
+        if is_img and lazy_src and placeholder_src:
+            tag = _set_or_replace_tag_attr(tag, "src", lazy_src)
+
+        if lazy_srcset and not current_srcset:
+            tag = _set_or_replace_tag_attr(tag, "srcset", lazy_srcset)
+
+        if is_source and lazy_src and (not current_src):
+            tag = _set_or_replace_tag_attr(tag, "src", lazy_src)
+
+        return tag
+
+    return re.sub(r"<(?:img|source)\b[^>]*>", _normalize_tag, content, flags=re.IGNORECASE)
 
 
-def get_youtube_video_duration(video_id: str) -> tuple[int | None, str | None]:
-    """Return (seconds, display) for a YouTube `video_id`.
-
-    Tries YouTube Data API if `YOUTUBE_API_KEY` env var is set, otherwise falls
-    back to scraping the video page for `lengthSeconds` or meta duration.
-    """
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    # API-first
-    if api_key:
-        try:
-            url = (
-                "https://www.googleapis.com/youtube/v3/videos"
-                f"?part=contentDetails&id={video_id}&key={api_key}"
-            )
-            resp = httpx.get(url, timeout=6.0)
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("items") or []
-            if items:
-                cd = items[0].get("contentDetails", {})
-                duration_iso = cd.get("duration")
-                secs = _parse_iso8601_duration_to_seconds(duration_iso) if duration_iso else None
-                return secs, _format_seconds_hms(secs)
-        except Exception:
-            pass
-
-    # Fallback: fetch video page and look for lengthSeconds or meta duration
-    try:
-        vid_url = f"https://www.youtube.com/watch?v={video_id}"
-        resp = httpx.get(vid_url, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT})
-        resp.raise_for_status()
-        text = resp.text
-        # Try JSON lengthSeconds
-        m = re.search(r'"lengthSeconds"\s*:\s*"?(\d+)"?', text)
-        if m:
-            secs = int(m.group(1))
-            return secs, _format_seconds_hms(secs)
-        # Try meta itemprop duration (ISO8601)
-        m = re.search(r'<meta\s+itemprop=["\']duration["\']\s+content=["\'](PT[0-9HMS]+)["\']', text)
-        if m:
-            secs = _parse_iso8601_duration_to_seconds(m.group(1))
-            return secs, _format_seconds_hms(secs)
-    except Exception:
-        pass
-
-    return None, None
+feed_refresh_service = FeedRefreshService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    fetch_and_store_youtube_durations=youtube_duration_service.fetch_and_store_durations_for_feed,
+    fetch_and_store_lead_images=lead_image_service.fetch_and_store_lead_images_for_feed,
+    format_datetime_for_ui=format_datetime_for_ui,
+    logger=LOGGER,
+    refresh_debug_enabled=REFRESH_DEBUG_ENABLED,
+    failed_feed_backoff_base_seconds=FAILED_FEED_BACKOFF_BASE_SECONDS,
+    failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
+)
 
 
 def build_source_proxy_response(source_url: str) -> HTMLResponse:
@@ -1227,25 +1165,81 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
 
     raw_html = response.text
     sanitized = sanitize_source_html(raw_html)
+
+    # Detect common paywall patterns before rendering, and return a clear
+    # inline notice so the user knows to open in their browser.
+    _PAYWALL_PATTERNS = re.compile(
+        r"(?:"
+        r"subscribe\s+to\s+(?:read|continue|access)"
+        r"|subscriber[- ]only"
+        r"|subscription\s+required"
+        r"|create\s+a\s+(?:free\s+)?account\s+to\s+(?:read|continue)"
+        r"|sign\s+in\s+to\s+(?:read|continue)"
+        r"|this\s+article\s+is\s+(?:for\s+)?(?:subscribers|members)"
+        r"|already\s+a\s+subscriber"
+        r"|you(?:'ve|\s+have)\s+reached\s+your\s+(?:free\s+)?(?:article|story)\s+limit"
+        r"|metered.paywall"
+        r"|data-paywall"
+        r")",
+        re.IGNORECASE,
+    )
+    # Only check the first ~8 KB to avoid scanning whole articles.
+    _probe_text = sanitized[:8192]
+    if _PAYWALL_PATTERNS.search(_probe_text):
+        escaped_url = html.escape(source_url)
+        escaped_display = html.escape(parsed.netloc or source_url)
+        return HTMLResponse(
+            (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Subscription required</title>"
+                "<style>"
+                "html,body{margin:0;padding:0;height:100%;background:transparent;}"
+                "body{display:flex;align-items:center;justify-content:center;"
+                "font-family:Segoe UI,system-ui,Arial,sans-serif;}"
+                ".wall{text-align:center;padding:2rem 1.5rem;max-width:340px;}"
+                ".wall-icon{font-size:2.2rem;margin-bottom:.6rem;opacity:.6;}"
+                ".wall-title{font-size:1rem;font-weight:600;margin:0 0 .4rem;}"
+                ".wall-body{font-size:.85rem;color:#666;margin:0 0 1.2rem;}"
+                ".wall-btn{"
+                "display:inline-block;padding:.5rem 1.1rem;background:#1a73e8;"
+                "color:#fff;text-decoration:none;border-radius:6px;"
+                "font-size:.85rem;font-weight:500;}"
+                ".wall-btn:hover{background:#1558b0;}"
+                "</style></head>"
+                "<body><div class='wall'>"
+                "<div class='wall-icon'>🔒</div>"
+                f"<div class='wall-title'>Subscription required</div>"
+                f"<div class='wall-body'>{escaped_display} requires a subscription. "
+                "Open in your browser to read with your account.</div>"
+                f"<a class='wall-btn' href='{escaped_url}' target='_blank' rel='noopener noreferrer'>"
+                "Open in new tab</a>"
+                "</div></body></html>"
+            ),
+            status_code=200,
+        )
+
+    sanitized = normalize_proxy_lazy_media(sanitized)
     escaped_source = html.escape(str(response.url))
+    proxy_style = (
+        "<style>"
+        "img[alt*='image unavailable' i],"
+        "img[src*='grey-placeholder'],"
+        "img[src*='placeholder']{display:none!important;}"
+        "img[data-src],img[data-lazy-src],img[loading='lazy']{"
+        "opacity:1!important;visibility:visible!important;filter:none!important;}"
+        "</style>"
+    )
 
     # Ensure relative links and assets resolve against the fetched document URL.
     if "<head" in sanitized.lower():
         sanitized = re.sub(
             r"(<head\b[^>]*>)",
-            r"\1" + f"<base href=\"{escaped_source}\">",
+            r"\1" + f'<base href="{escaped_source}">{proxy_style}',
             sanitized,
             count=1,
             flags=re.IGNORECASE,
         )
     else:
-        sanitized = (
-            "<!DOCTYPE html><html><head>"
-            f"<base href=\"{escaped_source}\">"
-            "<meta charset='utf-8'></head><body>"
-            f"{sanitized}"
-            "</body></html>"
-        )
+        sanitized = f"<!DOCTYPE html><html><head><base href=\"{escaped_source}\"><meta charset='utf-8'>{proxy_style}</head><body>{sanitized}</body></html>"
 
     return HTMLResponse(sanitized, status_code=200)
 
@@ -1400,6 +1394,16 @@ def list_entries_for_feeds(
                     continue
 
     with get_reader() as reader:
+        # Build a map of feed_url → site homepage URL so favicons use the
+        # actual site domain rather than the feed host (e.g. hnrss.org).
+        feed_site_map: dict[str, str | None] = {}
+        for feed_url in feed_urls:
+            try:
+                feed_obj = reader.get_feed(feed_url, None)
+                feed_site_map[feed_url] = getattr(feed_obj, "link", None) if feed_obj else None
+            except Exception:
+                feed_site_map[feed_url] = None
+
         # Fetch entries from only the specified feeds to avoid limit issues
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
@@ -1407,9 +1411,7 @@ def list_entries_for_feeds(
             # Search should operate over the whole feed slice to keep ordering
             # and result inclusion consistent with the selected sort controls.
             search_fetch_limit = None if search_terms else fetch_limit
-            all_feed_entries.extend(
-                reader.get_entries(feed=feed_url, read=reader_read_filter, limit=search_fetch_limit)
-            )
+            all_feed_entries.extend(reader.get_entries(feed=feed_url, read=reader_read_filter, limit=search_fetch_limit))
 
         for entry in all_feed_entries:
             is_read = bool(entry.read)
@@ -1438,9 +1440,9 @@ def list_entries_for_feeds(
             title_text = entry.title
             try:
                 if isinstance(entry.feed_url, str) and "youtube.com/feeds/videos.xml" in entry.feed_url and entry.link:
-                    vid = _extract_youtube_video_id(entry.link)
+                    vid = youtube_duration_service.extract_video_id(entry.link)
                     if vid:
-                        duration_seconds, duration_display = _get_youtube_duration_cached(vid)
+                        duration_seconds, duration_display = youtube_duration_service.get_cached_duration(vid)
                         if duration_display:
                             title_text = f"[{duration_display}] {title_text}"
             except Exception:
@@ -1466,11 +1468,12 @@ def list_entries_for_feeds(
                     "id": entry.id,
                     "title": title_text,
                     "link": entry.link,
+                    "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=True),
                     "feed_title": entry.feed_resolved_title or entry.feed_url,
-                    "feed_icon_url": get_favicon_url(entry.feed_url),
+                    "feed_icon_url": get_favicon_url(entry.feed_url, feed_site_map.get(entry.feed_url)),
+                    "manual_tags": manual_tags,
                     "read": is_read,
                     "saved": is_saved,
-                    "manual_tags": manual_tags,
                     "post_sort_value": datetime_sort_value(published_dt),
                     "received_sort_value": datetime_sort_value(entry.added),
                     "history_sort_value": datetime_sort_value(read_dt),
@@ -1495,6 +1498,22 @@ def list_entries_for_feeds(
         key=lambda item: item[sort_key],
         reverse=sort_desc,
     )
+
+    # Deduplicate by normalized link URL (strips fragment; keeps first occurrence
+    # after sort, so the newest/most-relevant version wins). Entries without a
+    # link are never considered duplicates of each other.
+    seen_links: set[str] = set()
+    deduped: list[dict] = []
+    for entry in entries:
+        link = entry.get("link")
+        if link:
+            normalized_link = link.split("#")[0].rstrip("/")
+            if normalized_link in seen_links:
+                continue
+            seen_links.add(normalized_link)
+        deduped.append(entry)
+    entries = deduped
+
     entries = entries[:limit]
 
     for entry in entries:
@@ -1503,7 +1522,6 @@ def list_entries_for_feeds(
         entry.pop("history_sort_value", None)
 
     return entries
-
 
 
 def filter_feed_urls(feed_urls: set[str], list_feed_url: str | None) -> set[str]:
@@ -1534,9 +1552,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         duration_display = None
         video_id = None
         if feed_url.startswith("https://www.youtube.com/feeds/videos.xml?") and entry.link:
-            video_id = _extract_youtube_video_id(entry.link)
+            video_id = youtube_duration_service.extract_video_id(entry.link)
             if video_id:
-                duration_seconds, duration_display = _get_youtube_duration_cached(video_id)
+                duration_seconds, duration_display = youtube_duration_service.get_cached_duration(video_id)
 
             # Determine base HTML to attach embed to (use existing content_html or fallback to summary)
             base_html = content_html if isinstance(content_html, str) and content_html.strip() else (entry.summary or "")
@@ -1551,7 +1569,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     f'<iframe width="100%" height="315" src="{embed_src}" '
                     'frameborder="0" allowfullscreen loading="lazy" '
                     'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
-                    '></iframe></div>'
+                    "></iframe></div>"
                 )
                 # Ensure base_html is wrapped as HTML
                 if not isinstance(base_html, str):
@@ -1566,11 +1584,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             entry_title=entry.title,
         )
         manual_tag_set = {tag.lower() for tag in manual_tags}
-        feed_tag_suggestions = [
-            tag
-            for tag in feed_tag_suggestions
-            if tag.strip().lower() not in manual_tag_set
-        ]
+        feed_tag_suggestions = [tag for tag in feed_tag_suggestions if tag.strip().lower() not in manual_tag_set]
 
         # Check if entry is saved
         is_saved = False
@@ -1581,6 +1595,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             ).fetchone()
             is_saved = bool(row)
 
+        lead_image_url = lead_image_service.resolve_entry_lead_image_url(entry, content_html, entry.summary)
+        lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
@@ -1588,6 +1605,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "link": entry.link,
             "summary": entry.summary,
             "content_html": content_html,
+            "lead_image_url": lead_image_url,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
             "feed_title": entry.feed_resolved_title or entry.feed_url,
@@ -1601,7 +1619,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags": manual_tags,
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
-            "feed_icon_url": get_favicon_url(entry.feed_url),
+            "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
         }
 
 
@@ -1673,25 +1691,24 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
     """
     try:
         parsed = urlparse(feed_url)
-        host = (parsed.netloc or '').lower()
+        host = (parsed.netloc or "").lower()
 
         # Already a YouTube feed
-        if 'youtube.com' in host and parsed.path and 'feeds/videos.xml' in parsed.path:
+        if "youtube.com" in host and parsed.path and "feeds/videos.xml" in parsed.path:
             return feed_url
 
         # Direct /channel/UC... path
-        m = re.search(r'/channel/(UC[0-9A-Za-z_-]+)', parsed.path or '')
+        m = re.search(r"/channel/(UC[0-9A-Za-z_-]+)", parsed.path or "")
         if m:
             channel_id = m.group(1)
-            normalized = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
-            logging.info('Normalized YouTube channel URL %s -> %s', feed_url, normalized)
+            normalized = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+            logging.info("Normalized YouTube channel URL %s -> %s", feed_url, normalized)
             return normalized
 
         # If it's any youtube domain (including youtu.be), try fetching page and extracting channelId
-        if 'youtube.com' in host or 'youtu.be' in host:
+        if "youtube.com" in host or "youtu.be" in host:
             try:
-                resp = httpx.get(feed_url, timeout=6.0, follow_redirects=True,
-                                  headers={'User-Agent': 'Lectio/1.0'})
+                resp = httpx.get(feed_url, timeout=6.0, follow_redirects=True, headers={"User-Agent": "Lectio/1.0"})
                 text = resp.text
             except Exception:
                 return feed_url
@@ -1704,15 +1721,15 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
 
             if m:
                 channel_id = m.group(1)
-                normalized = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
-                logging.info('Resolved YouTube %s -> channel id %s', feed_url, channel_id)
+                normalized = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+                logging.info("Resolved YouTube %s -> channel id %s", feed_url, channel_id)
                 return normalized
             # Fallback: look for any /channel/UC... path in the HTML (appears in some pages)
-            m = re.search(r'/channel/(UC[0-9A-Za-z_-]+)', text)
+            m = re.search(r"/channel/(UC[0-9A-Za-z_-]+)", text)
             if m:
                 channel_id = m.group(1)
-                normalized = f'https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}'
-                logging.info('Resolved YouTube %s -> channel id %s (from /channel/ in HTML)', feed_url, channel_id)
+                normalized = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+                logging.info("Resolved YouTube %s -> channel id %s (from /channel/ in HTML)", feed_url, channel_id)
                 return normalized
     except Exception:
         return feed_url
@@ -1819,20 +1836,6 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
     return (len(descendant_ids), removed_feed_count)
 
 
-def update_feeds(feed_urls: Iterable[str]) -> None:
-    feed_url_list = list(feed_urls)
-    with get_reader() as reader:
-        for feed_url in feed_url_list:
-            try:
-                reader.update_feed(feed_url)
-            except Exception:
-                # Ignore per-feed errors for now and keep refreshing the rest.
-                continue
-    # After updating, store durations for any new YouTube entries.
-    for feed_url in feed_url_list:
-        _fetch_and_store_youtube_durations(feed_url)
-
-
 def _start_background_update(feed_url: str) -> None:
     def _run() -> None:
         with updating_feeds_lock:
@@ -1840,7 +1843,7 @@ def _start_background_update(feed_url: str) -> None:
                 return
             updating_feeds.add(feed_url)
         try:
-            update_feeds([feed_url])
+            feed_refresh_service.update_feeds([feed_url])
         finally:
             with updating_feeds_lock:
                 updating_feeds.discard(feed_url)
@@ -1861,8 +1864,14 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
 
         with get_meta_connection() as conn:
             feed_urls = get_all_feed_urls(conn)
+        if REFRESH_DEBUG_ENABLED:
+            LOGGER.info(
+                "[refresh] scheduled run triggered: interval_minutes=%d feed_count=%d",
+                auto_refresh_minutes,
+                len(feed_urls),
+            )
         app.state.last_scheduled_refresh_started_at = time.monotonic()
-        update_feeds(feed_urls)
+        feed_refresh_service.update_feeds(feed_urls)
 
 
 def check_and_mark_manual_refresh() -> int:
@@ -1978,6 +1987,7 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
         return int(cursor.lastrowid)
 
     with get_reader() as reader:
+
         def walk(outline: ET.Element, target_folder_id: int, may_create_folder: bool) -> None:
             nonlocal imported
             feed_url = outline.attrib.get("xmlUrl")
@@ -2047,7 +2057,7 @@ def home(
     # Use it only when no explicit `read_filter` was supplied in the URL/form.
     # Explicit query/form state must win to avoid client preference overriding
     # an intentional filter selection during navigation.
-    header_rf = request.headers.get('X-Lectio-Read-Filter')
+    header_rf = request.headers.get("X-Lectio-Read-Filter")
     if read_filter is None and header_rf:
         read_filter = header_rf
 
@@ -2059,13 +2069,14 @@ def home(
     # If still no explicit/read-resume value, fall back to cookie-based
     # persisted preference for full navigations.
     if read_filter is None:
-        cookie_rf = request.cookies.get('lectio_read_filter')
+        cookie_rf = request.cookies.get("lectio_read_filter")
         if cookie_rf:
             read_filter = cookie_rf
 
     with get_meta_connection() as conn:
         preferred_sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
         preferred_sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+        problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
         selected_sort_by = normalize_sort_by(sort_by or preferred_sort_by)
         selected_sort_dir = normalize_sort_dir(sort_dir or preferred_sort_dir)
         set_setting(conn, SORT_BY_SETTING_KEY, selected_sort_by)
@@ -2089,6 +2100,7 @@ def home(
             folder_rows.append(folder_dict)
         folder_options = get_folder_options(conn)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
+        problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=50)
         feed_urls = get_folder_feed_urls(conn, selected_folder_id)
         all_feed_urls = get_all_feed_urls(conn)
 
@@ -2115,6 +2127,15 @@ def home(
     tag_rows = get_tag_counts_for_feeds(filtered_feed_urls)
 
     feed_title_map = get_feed_title_map()
+    problematic_unseen_count = 0
+    for problematic_feed in problematic_feeds:
+        pf_url = cast(str, problematic_feed["feed_url"])
+        problematic_feed["feed_title"] = feed_title_map.get(pf_url, pf_url)
+        pf_last_failure_at = problematic_feed.get("last_failure_at")
+        if not isinstance(pf_last_failure_at, (int, float)):
+            continue
+        if problematic_feeds_last_viewed_at is None or float(pf_last_failure_at) > problematic_feeds_last_viewed_at:
+            problematic_unseen_count += 1
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     for row in folder_rows:
         folder_row_id = int(row["id"])
@@ -2194,6 +2215,9 @@ def home(
             "selected_feed_url": selected_feed_url,
             "selected_tag": selected_tag,
             "selected_query": selected_query,
+            "problematic_feeds": problematic_feeds,
+            "problematic_feed_count": len(problematic_feeds),
+            "problematic_unseen_count": problematic_unseen_count,
             "selected_sort_by": selected_sort_by,
             "selected_sort_dir": selected_sort_dir,
             "selected_read_filter": selected_read_filter,
@@ -2234,10 +2258,7 @@ def delete_folder_route(folder_id: int = Form(...)):
         with get_meta_connection() as conn:
             root_id = get_root_folder_id(conn)
         deleted_folders, deleted_feeds = delete_folder(folder_id)
-        message = (
-            f"Deleted {deleted_folders} folder(s). "
-            f"Removed {deleted_feeds} feed subscription(s)."
-        )
+        message = f"Deleted {deleted_folders} folder(s). Removed {deleted_feeds} feed subscription(s)."
     except ValueError as exc:
         message = str(exc)
         if root_id is None:
@@ -2261,7 +2282,7 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         add_feed_to_folder(feed_url, folder_id)
         normalized_feed_url = feed_url.strip()
         if normalized_feed_url:
-            update_feeds([normalized_feed_url])
+            feed_refresh_service.update_feeds([normalized_feed_url])
     except Exception as exc:
         message = f"Feed add failed: {exc}"
     return RedirectResponse(
@@ -2396,9 +2417,7 @@ def refresh(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     sort_query = (
         f"&sort_by={quote_plus(normalized_sort_by)}"
         f"&sort_dir={quote_plus(normalized_sort_dir)}"
@@ -2421,12 +2440,17 @@ def refresh(
 
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
-    update_feeds(feed_urls)
+    if REFRESH_DEBUG_ENABLED:
+        LOGGER.info(
+            "[refresh] manual folder refresh: folder_id=%s feed_count=%d list_feed_url=%s tag=%s",
+            folder_id,
+            len(feed_urls),
+            list_feed_url,
+            normalized_tag,
+        )
+    feed_refresh_service.update_feeds(feed_urls)
     return RedirectResponse(
-        url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}"
-            f"&message={quote_plus('Refresh complete.')}"
-        ),
+        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"),
         status_code=303,
     )
 
@@ -2451,9 +2475,7 @@ def refresh_feed(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
     retry_after_seconds = check_and_mark_manual_refresh()
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = (
         f"&sort_by={quote_plus(normalized_sort_by)}"
@@ -2472,11 +2494,18 @@ def refresh_feed(
             status_code=303,
         )
 
-    update_feeds([feed_url])
+    if REFRESH_DEBUG_ENABLED:
+        LOGGER.info(
+            "[refresh] manual single-feed refresh: folder_id=%s feed_url=%s list_feed_url=%s tag=%s",
+            folder_id,
+            feed_url,
+            list_feed_url,
+            normalized_tag,
+        )
+    feed_refresh_service.update_feeds([feed_url])
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}"
-            f"&message={quote_plus('Feed refresh complete.')}"
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Feed refresh complete.')}"
         ),
         status_code=303,
     )
@@ -2506,16 +2535,11 @@ def mark_feed_as_read(
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count = mark_feeds_as_read({feed_url})
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     return RedirectResponse(
-        url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}"
-            f"&message={quote_plus(message)}"
-        ),
+        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}"),
         status_code=303,
     )
 
@@ -2545,28 +2569,17 @@ def mark_entry_read(
             reader.mark_entry_as_unread((feed_url, entry_id))
             delete_entry_read_state(feed_url, entry_id)
 
-    if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(
-        request, "lectio-entry-read-toggle"
-    ):
+    if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
 
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}"
-        f"&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    )
+    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
     read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
 
-    entry_query = (
-        f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
-        if select_entry
-        else ""
-    )
+    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
 
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
@@ -2610,23 +2623,14 @@ def toggle_entry_saved(
     if is_async_action_request(request, "lectio-entry-save-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
 
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}"
-        f"&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    )
+    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
     read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
 
-    entry_query = (
-        f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
-        if select_entry
-        else ""
-    )
+    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
 
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
@@ -2668,23 +2672,14 @@ def set_entry_manual_tags(
         tags = set_manual_tags_for_entry(feed_url, entry_id, tags_text)
     normalized_tag = normalize_tag_value(tag)
 
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}"
-        f"&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    )
+    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
     read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
 
-    entry_query = (
-        f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
-        if select_entry
-        else ""
-    )
+    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
     message = "Tags updated." if tags else "Tags cleared."
 
     return RedirectResponse(
@@ -2731,11 +2726,7 @@ def mark_entries_range_read(
     )
 
     anchor_index = next(
-        (
-            index
-            for index, post in enumerate(posts)
-            if post["feed_url"] == feed_url and post["id"] == entry_id
-        ),
+        (index for index, post in enumerate(posts) if post["feed_url"] == feed_url and post["id"] == entry_id),
         None,
     )
 
@@ -2752,11 +2743,7 @@ def mark_entries_range_read(
             selected_tag=normalized_tag,
         )
         anchor_index = next(
-            (
-                index
-                for index, post in enumerate(posts)
-                if post["feed_url"] == feed_url and post["id"] == entry_id
-            ),
+            (index for index, post in enumerate(posts) if post["feed_url"] == feed_url and post["id"] == entry_id),
             None,
         )
 
@@ -2791,14 +2778,9 @@ def mark_entries_range_read(
             range_label = "above" if direction == "above" else "below"
             message = f"Marked {marked_count} posts {range_label} as read."
 
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalized_sort_by)}"
-        f"&sort_dir={quote_plus(normalized_sort_dir)}"
-    )
+    sort_query = f"&sort_by={quote_plus(normalized_sort_by)}&sort_dir={quote_plus(normalized_sort_dir)}"
     read_filter_query = f"&read_filter={quote_plus(normalized_read_filter)}"
     star_only_query = build_star_only_query(normalized_star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
@@ -2837,15 +2819,10 @@ def update_auto_refresh_setting(
         else:
             message = f"Auto-refresh set to {normalized_minutes // 60}h."
 
-    list_feed_query = (
-        f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
-    )
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     return RedirectResponse(
-        url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}"
-            f"&message={quote_plus(message)}"
-        ),
+        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}"),
         status_code=303,
     )
 
@@ -2903,6 +2880,18 @@ def update_global_note_setting(
         ),
         status_code=303,
     )
+
+
+@app.post("/settings/problematic-feeds/viewed")
+def mark_problematic_feeds_viewed(request: Request):
+    viewed_at = time.time()
+    with get_meta_connection() as conn:
+        set_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY, str(viewed_at))
+
+    if is_async_action_request(request, "lectio-problematic-feeds-viewed"):
+        return JSONResponse({"ok": True, "viewed_at": viewed_at})
+
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/opml/import")
