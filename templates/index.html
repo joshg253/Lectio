@@ -70,6 +70,7 @@
             </div>
           </div>
           <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
+          <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -1759,6 +1760,7 @@
     const tagsTreeBlock = document.getElementById('tags-tree-block');
     const tagsToggleButton = document.getElementById('folders-tags-toggle');
     const problematicFeedsToggle = document.getElementById('folders-problematic-toggle');
+    const problematicFeedsMenuToggle = document.getElementById('menu-problematic-toggle');
     const problematicFeedsBadge = document.getElementById('folders-problematic-badge');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
 
@@ -1804,6 +1806,10 @@
     }
 
     problematicFeedsToggle?.addEventListener('click', () => {
+      void markProblematicFeedsViewed();
+    });
+
+    problematicFeedsMenuToggle?.addEventListener('click', () => {
       void markProblematicFeedsViewed();
     });
 
