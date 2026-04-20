@@ -186,11 +186,11 @@
         if (!touching) return; const t = ev.changedTouches[0]; dx = t.clientX - sx; dy = t.clientY - sy; }, { passive: true });
       postItem.addEventListener('touchend', (ev) => {
         if (!touching) return; touching = false; if (Math.abs(dx) < Math.abs(dy)) return; if (Math.abs(dx) < threshold) return;
-        // Right swipe -> toggle saved, Left swipe -> toggle read/unread
+        // Right swipe -> toggle read/unread, Left swipe -> toggle saved
         if (dx > 0) {
-          const btn = postItem.querySelector('.post-save-toggle'); if (btn) btn.click();
-        } else {
           const btn = postItem.querySelector('.post-read-toggle'); if (btn) btn.click();
+        } else {
+          const btn = postItem.querySelector('.post-save-toggle'); if (btn) btn.click();
         }
       }, { passive: true });
     }
