@@ -8,12 +8,15 @@
         data-post-entry-id="{{ selected_entry.id }}"
         data-post-read="{{ 1 if selected_entry.read else 0 }}"
         data-post-link="{{ selected_entry.link or '' }}"
+        data-post-lead-image-url="{{ selected_entry.lead_image_url or '' }}"
       >
         {% if selected_entry.link %}<a
           class="entry-pane-title-link"
           href="{{ selected_entry.link }}"
+          title="{{ selected_entry.title or '(untitled)' }}"
           >{{ selected_entry.title or "(untitled)" }}</a
         >{% else %}<span class="entry-pane-title-link"
+          title="{{ selected_entry.title or '(untitled)' }}"
           >{{ selected_entry.title or "(untitled)" }}</span
         >{% endif %}
       </h2>

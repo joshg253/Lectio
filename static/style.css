@@ -493,7 +493,9 @@ body[data-single-mode="1"] .folders-pane-footer {
   color: var(--ink);
   text-decoration: none;
   font-weight: 600;
-  display: block;
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin-bottom: 0.22rem;
 }
 
@@ -1147,6 +1149,144 @@ button:hover, .button-link:hover {
   min-width: 0;
 }
 
+.mark-read-group {
+  position: relative;
+}
+
+.mark-read-menu {
+  position: relative;
+}
+
+.mark-read-menu > summary {
+  list-style: none;
+}
+
+.mark-read-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mark-read-summary {
+  /* auto-width to fit both glyphs; sort-pill provides height and border */
+  width: auto;
+  min-width: unset;
+  padding: 0 0.35rem;
+  gap: 0;
+  color: var(--ink) !important;
+  background: var(--accent-soft) !important;
+  border-color: var(--active-border) !important;
+  cursor: pointer;
+}
+
+.mark-read-trigger-icon {
+  font-size: 1.06rem;
+  line-height: 1;
+  font-variation-settings: "FILL" 1, "wght" 650, "GRAD" 0, "opsz" 24;
+}
+
+.mark-read-trigger-caret {
+  font-size: 1.1rem;
+  line-height: 1;
+  margin-left: -0.1rem;
+  transition: transform 140ms ease;
+}
+
+.mark-read-menu[open] .mark-read-summary {
+  background: var(--accent-soft);
+  border-color: var(--active-border) !important;
+}
+
+.mark-read-menu[open] .mark-read-trigger-caret {
+  transform: rotate(180deg);
+}
+
+.mark-read-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 200px;
+  z-index: 60;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.mark-read-divider {
+  height: 1px;
+  margin: 0.18rem 0.2rem 0.08rem;
+  background: var(--line);
+}
+
+.mark-read-header-label {
+  margin: 0 0.1rem 0.08rem;
+  padding: 0.1rem 0.4rem 0.08rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.mark-read-section-label {
+  margin: 0 0.1rem 0.05rem;
+  padding: 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.mark-read-action-form {
+  margin: 0;
+}
+
+.mark-read-action {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--ink);
+  padding: 0.36rem 0.45rem;
+  text-align: left;
+  font: inherit;
+  font-size: 0.83rem;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  cursor: pointer;
+}
+
+.mark-read-action-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+  transition: color 100ms;
+}
+
+.mark-read-action:hover {
+  background: var(--accent-soft);
+  border-color: var(--active-border);
+}
+
+.mark-read-action:hover .mark-read-action-icon {
+  color: var(--ink);
+}
+
+.mark-read-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .sort-pill,
 .sort-arrow {
   color: var(--muted);
@@ -1774,7 +1914,8 @@ button:hover, .button-link:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
   color: inherit;
   font-size: 0.83rem;

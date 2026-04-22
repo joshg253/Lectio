@@ -10,7 +10,7 @@ import time
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Sequence, cast
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -554,12 +554,116 @@ def get_unread_counts_by_folder(
 
 def get_unread_counts_by_feed() -> dict[str, int]:
     counts: dict[str, int] = {}
+    seen_keys: set[str] = set()
     with get_reader() as reader:
         for entry in reader.get_entries():
             if entry.read:
                 continue
+            dedupe_key = build_entry_dedupe_key(entry.link, entry.title)
+            if dedupe_key:
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
             counts[entry.feed_url] = counts.get(entry.feed_url, 0) + 1
     return counts
+
+
+def get_unread_dedupe_log(limit: int = 100) -> list[dict[str, object]]:
+    seen_keys: set[str] = set()
+    first_seen_by_key: dict[str, dict[str, str]] = {}
+    duplicate_groups: dict[str, dict[str, object]] = {}
+
+    with get_reader() as reader:
+        for entry in reader.get_entries():
+            if entry.read:
+                continue
+
+            dedupe_key = build_entry_dedupe_key(entry.link, entry.title)
+            if not dedupe_key:
+                continue
+
+            normalized_link = normalize_entry_link_for_dedupe(entry.link)
+            if dedupe_key in seen_keys:
+                group = duplicate_groups.setdefault(
+                    dedupe_key,
+                    {
+                        "link": normalized_link,
+                        "collapsed_count": 0,
+                        "feed_urls": set(),
+                        "sample_titles": [],
+                    },
+                )
+
+                group["collapsed_count"] = int(group["collapsed_count"]) + 1
+
+                feed_urls = cast(set[str], group["feed_urls"])
+                if entry.feed_url:
+                    feed_urls.add(entry.feed_url)
+
+                first_seen = first_seen_by_key.get(dedupe_key)
+                if first_seen:
+                    first_feed_url = first_seen.get("feed_url")
+                    if first_feed_url:
+                        feed_urls.add(first_feed_url)
+
+                sample_titles = cast(list[str], group["sample_titles"])
+                if first_seen:
+                    first_title = first_seen.get("title")
+                    if first_title and first_title not in sample_titles and len(sample_titles) < 3:
+                        sample_titles.append(first_title)
+                current_title = str(entry.title or "")
+                if current_title and current_title not in sample_titles and len(sample_titles) < 3:
+                    sample_titles.append(current_title)
+
+                continue
+
+            seen_keys.add(dedupe_key)
+            first_seen_by_key[dedupe_key] = {
+                "feed_url": str(entry.feed_url or ""),
+                "title": str(entry.title or ""),
+            }
+
+    rows: list[dict[str, object]] = []
+    for group in duplicate_groups.values():
+        collapsed_count = int(group["collapsed_count"])
+        rows.append(
+            {
+                "link": cast(str, group["link"]),
+                "collapsed_count": collapsed_count,
+                "total_occurrences": collapsed_count + 1,
+                "feed_urls": sorted(cast(set[str], group["feed_urls"])),
+                "sample_titles": cast(list[str], group["sample_titles"]),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -int(cast(int, row["collapsed_count"])),
+            str(cast(str, row["link"])),
+        )
+    )
+    return rows[: max(1, int(limit))]
+
+
+def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
+    if not link:
+        return None
+    normalized_link = str(link).split("#")[0].rstrip("/")
+    return normalized_link or None
+
+
+def normalize_entry_title_for_dedupe(title: str | None) -> str:
+    if not title:
+        return ""
+    return " ".join(str(title).strip().lower().split())
+
+
+def build_entry_dedupe_key(link: str | None, title: str | None) -> str | None:
+    normalized_link = normalize_entry_link_for_dedupe(link)
+    if not normalized_link:
+        return None
+    normalized_title = normalize_entry_title_for_dedupe(title)
+    return f"{normalized_link}::{normalized_title}"
 
 
 def get_reader():
@@ -1499,25 +1603,26 @@ def list_entries_for_feeds(
     else:
         sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
         sort_desc = normalized_sort_dir == "desc"
+    # Deduplicate by normalized link + normalized title (strips fragment and
+    # normalizes title whitespace/case). Always keep the newest entry by the
+    # active timeline key, then apply sort direction for display.
+    best_by_key: dict[str, dict] = {}
+    passthrough: list[dict] = []
+    for entry in entries:
+        dedupe_key = build_entry_dedupe_key(cast(str | None, entry.get("link")), cast(str | None, entry.get("title")))
+        if not dedupe_key:
+            passthrough.append(entry)
+            continue
+
+        existing = best_by_key.get(dedupe_key)
+        if existing is None or entry[sort_key] > existing[sort_key]:
+            best_by_key[dedupe_key] = entry
+
+    entries = passthrough + list(best_by_key.values())
     entries.sort(
         key=lambda item: item[sort_key],
         reverse=sort_desc,
     )
-
-    # Deduplicate by normalized link URL (strips fragment; keeps first occurrence
-    # after sort, so the newest/most-relevant version wins). Entries without a
-    # link are never considered duplicates of each other.
-    seen_links: set[str] = set()
-    deduped: list[dict] = []
-    for entry in entries:
-        link = entry.get("link")
-        if link:
-            normalized_link = link.split("#")[0].rstrip("/")
-            if normalized_link in seen_links:
-                continue
-            seen_links.add(normalized_link)
-        deduped.append(entry)
-    entries = deduped
 
     entries = entries[:limit]
 
@@ -2093,6 +2198,7 @@ def home(
         raw_folder_rows = get_folder_rows(conn)
         direct_feed_urls_by_folder = get_direct_feed_urls_by_folder(conn)
         unread_counts_by_feed = get_unread_counts_by_feed()
+        dedupe_log_rows = get_unread_dedupe_log(limit=80)
         unread_counts_by_folder = get_unread_counts_by_folder(
             raw_folder_rows,
             unread_counts_by_feed,
@@ -2132,6 +2238,9 @@ def home(
     tag_rows = get_tag_counts_for_feeds(filtered_feed_urls)
 
     feed_title_map = get_feed_title_map()
+    for dedupe_row in dedupe_log_rows:
+        feed_urls = cast(list[str], dedupe_row.get("feed_urls", []))
+        dedupe_row["feed_titles"] = [feed_title_map.get(url, url) for url in feed_urls]
     problematic_unseen_count = 0
     for problematic_feed in problematic_feeds:
         pf_url = cast(str, problematic_feed["feed_url"])
@@ -2223,6 +2332,8 @@ def home(
             "problematic_feeds": problematic_feeds,
             "problematic_feed_count": len(problematic_feeds),
             "problematic_unseen_count": problematic_unseen_count,
+            "dedupe_log_rows": dedupe_log_rows,
+            "dedupe_log_count": len(dedupe_log_rows),
             "selected_sort_by": selected_sort_by,
             "selected_sort_dir": selected_sort_dir,
             "selected_read_filter": selected_read_filter,
@@ -2517,16 +2628,30 @@ def refresh_feed(
 
 
 @app.post("/folders/mark-read")
-def mark_folder_as_read(folder_id: int = Form(...), tag: str | None = Form(default=None)):
+def mark_folder_as_read(
+    folder_id: int = Form(...),
+    tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
+):
     normalized_tag = normalize_tag_value(tag)
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
+    sort_query = ""
+    if sort_by is not None or sort_dir is not None:
+        sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
+    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
+    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
     marked_count = mark_feeds_as_read(feed_urls)
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{tag_query}&message={quote_plus(message)}",
+        url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
     )
 
@@ -2537,14 +2662,28 @@ def mark_feed_as_read(
     feed_url: str = Form(...),
     list_feed_url: str | None = Form(default=None),
     tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count = mark_feeds_as_read({feed_url})
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
+    sort_query = ""
+    if sort_by is not None or sort_dir is not None:
+        sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
+    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
+    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     return RedirectResponse(
-        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}"),
+        url=(
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
+            f"{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 
@@ -2799,6 +2938,59 @@ def mark_entries_range_read(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
             f"&message={quote_plus(message)}"
         ),
+        status_code=303,
+    )
+
+
+@app.post("/entries/mark-older-than-read")
+def mark_entries_older_than_read(
+    folder_id: int = Form(...),
+    max_age_days: int = Form(...),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
+):
+    normalized_tag = normalize_tag_value(tag)
+    with get_meta_connection() as conn:
+        feed_urls = get_folder_feed_urls(conn, folder_id)
+    filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    marked_count = 0
+    with get_reader() as reader:
+        for fu in filtered_feed_urls:
+            for entry in reader.get_entries(feed=fu, read=False):
+                date = entry.published or entry.updated
+                if date is None:
+                    continue
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=timezone.utc)
+                if date >= cutoff:
+                    continue
+                try:
+                    reader.mark_entry_as_read((entry.feed_url, entry.id))
+                except Exception:
+                    continue
+                upsert_entry_read_state(entry.feed_url, entry.id)
+                marked_count += 1
+
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
+    tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
+    sort_query = (
+        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
+        if sort_by is not None or sort_dir is not None
+        else ""
+    )
+    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
+    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
+    return RedirectResponse(
+        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
     )
 

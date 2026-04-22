@@ -6,52 +6,10 @@ Lectio is a local-first browser feed reader with a three-pane layout:
 2. Recursive post list for the selected folder
 3. Post detail view
 
-The app is built in this folder only and currently targets local development first.
-
 ## Stack
 
 - [FastAPI](https://fastapi.tiangolo.com/) (web app)
-- [reader](https://reader.readthedocs.io/en/stable/) (feed retrieval/storage engine)
-- [SQLite](https://www.sqlite.org/) (reader database + small metadata database for folder mapping)
-- [uv](https://docs.astral.sh/uv/) (environment and dependency management)
-
-## How reader is linked into Lectio
-
-Lectio uses `reader` as the primary feed backend:
-
-- Feed ingestion and persistence: `reader.add_feed()`, `reader.update_feed()`
-- Entry retrieval: `reader.get_entries()` and `reader.get_entry()`
-- Read state: `reader.mark_entry_as_read()` and `reader.mark_entry_as_unread()`
-- Saved/starred state (currently app-managed, planned migration to reader important): `/entries/saved`
-- Resource tags for manual entry tags: `reader.get_tags()`, `reader.set_tag()`, `reader.delete_tag()`
-
-`feedparser` is used in a limited helper role for feed tag suggestion parsing.
-
-Lectio keeps folder taxonomy separately in `lectio_meta.sqlite3` and maps feeds to folders there.
-This separation lets us keep reader's feed/entry lifecycle intact while supporting custom folder UX and OPML import/export behavior.
-
-## Run locally
-
-```powershell
-$env:LECTIO_REFRESH_DEBUG = '1'
-uv run uvicorn main:app --reload
-```
-
-Open http://127.0.0.1:8000
-
-## Current features
-
-- Three-pane browser UI
-- Responsive pane modes:
-	- Wide: 3-pane layout with adjustable pane widths and a folders collapse/strip control.
-	- Medium: 2-pane posts+detail layout with folders as a flyout strip; when resizing from wide to medium, the posts (middle) width is preserved and the detail pane fills remaining space.
-	- Narrow: single-pane drill-in navigation (folders -> posts -> entry).
-- Folder creation
-- Folder deletion
-- Add feed URL to folder
-- Move feed between folders
-- Unsubscribe feed from folder/app
-- Recursive post listing for selected folder
+- Dedupe Log (hamburger menu): lists duplicate unread post links collapsed by list deduplication, including copy counts and example feeds/titles
 - Entry detail display
 - Mark read/unread
 - In 1-pane mobile mode, swipe post tiles left-to-right to toggle read/unread and right-to-left to toggle save/star, with the tile sliding over the action lane
@@ -59,6 +17,7 @@ Open http://127.0.0.1:8000
 - Mark all read for folder subtree
 - Mark all read for one feed
 - Mark read above/below an anchor post
+- Posts toolbar includes a centered `Mark Read` menu (between filters and sort controls) with quick actions for current scope and older/newer-than-open ranges
 - Save/unsave (star) posts
 - Post filters: unread toggle (all <-> unread) plus a star-only override
 - Star filter behavior: turning star on shows saved items regardless of read state; turning it off restores the previous all/unread view
@@ -82,6 +41,7 @@ Open http://127.0.0.1:8000
 - Entry content media guardrails: oversized inline images are constrained to fit the viewport
 - For short blurb-style posts, Lectio attempts to pull a lead image from the source page (for example via og:image/twitter:image) when the feed payload has no inline image
 - Standard Ebooks entries prefer canonical `/downloads/cover.jpg` as lead image via site plugin fallback
+- Cached source-derived thumbnails are periodically revalidated so updated hero images on source sites can replace stale thumbs over time
 - Entry body images are left intact; lead-image selection does not remove in-article image placements
 - Background auto-refresh of all feeds (default every 60 minutes)
 - Per-feed manual refresh endpoint

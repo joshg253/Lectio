@@ -58,11 +58,17 @@ class LeadImageService:
         r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics)",
         re.IGNORECASE,
     )
+    _AVATAR_HINT_PATTERNS = re.compile(
+        r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar)",
+        re.IGNORECASE,
+    )
     _IMAGE_PATH_SUFFIX_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif|bmp)$", re.IGNORECASE)
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
     _NEGATIVE_RETRY_SECONDS = 24 * 60 * 60
+    _POSITIVE_REVALIDATE_SECONDS = 12 * 60 * 60
+    _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
 
     def __init__(
         self,
@@ -129,6 +135,10 @@ class LeadImageService:
         except Exception:
             pass
 
+    def _is_cache_key_stale(self, cache_key: tuple[str, str], *, max_age_seconds: int) -> bool:
+        fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
+        return time.time() - fetched_at >= max_age_seconds
+
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url = str(getattr(entry, "feed_url", "") or "")
@@ -188,6 +198,7 @@ class LeadImageService:
 
         cached_negative = False
         if feed_url_str and entry_id_str and (feed_url_str, entry_id_str) in self._cache:
+            cache_key = (feed_url_str, entry_id_str)
             cached = self._cache[(feed_url_str, entry_id_str)]
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
@@ -195,6 +206,15 @@ class LeadImageService:
                 elif not self._is_image_url_acceptable(cached, None, None):
                     cached = None
                 else:
+                    should_revalidate = (
+                        bool(entry_link)
+                        and self._is_short_entry_blurb(content_html, summary)
+                        and self._is_cache_key_stale(cache_key, max_age_seconds=self._POSITIVE_REVALIDATE_SECONDS)
+                    )
+                    if should_revalidate:
+                        source_image = self._fetch_source_lead_image(entry_link)
+                        if source_image and source_image != cached:
+                            return source_image
                     inline_candidate = None
                     if isinstance(content_html, str) and content_html.strip():
                         inline_candidate = self._extract_first_image_url_from_html(content_html, base_url)
@@ -240,7 +260,19 @@ class LeadImageService:
         except Exception:
             return
 
+        saved_entry_ids: set[str] = set()
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(
+                    "SELECT entry_id FROM saved_entries WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchall()
+            saved_entry_ids = {str(row["entry_id"]) for row in rows}
+        except Exception:
+            saved_entry_ids = set()
+
         now = time.time()
+        positive_revalidated = 0
 
         for entry in entries:
             feed_url_str = str(getattr(entry, "feed_url", "") or "")
@@ -248,12 +280,45 @@ class LeadImageService:
             if not feed_url_str or not entry_id_str:
                 continue
 
+            is_unread = not bool(getattr(entry, "read", False))
+            is_saved = entry_id_str in saved_entry_ids
+            is_manual_tagged = False
+            if not is_unread and not is_saved:
+                is_manual_tagged = self._entry_has_manual_tags(reader, entry)
+
+            # Restrict background thumbnail refresh to entries users still care
+            # about in active views: unread, saved, or manually tagged.
+            if not (is_unread or is_saved or is_manual_tagged):
+                continue
+
             cache_key = (feed_url_str, entry_id_str)
 
             if cache_key in self._cache:
                 cached = self._cache[cache_key]
                 if cached:
-                    continue
+                    if self._should_bypass_cached_url(entry_link=str(getattr(entry, "link", "") or ""), cached_url=cached):
+                        pass
+                    elif not self._is_image_url_acceptable(cached, None, None):
+                        pass
+                    elif positive_revalidated >= self._POSITIVE_REVALIDATE_PER_FEED_LIMIT:
+                        continue
+                    elif (not force_retry_negative) and now - self._fetched_at_cache.get(
+                        cache_key, 0.0
+                    ) < self._POSITIVE_REVALIDATE_SECONDS:
+                        continue
+                    else:
+                        entry_link = str(getattr(entry, "link", "") or "")
+                        if not entry_link:
+                            continue
+                        source_image = self._fetch_source_lead_image(entry_link)
+                        if source_image:
+                            self.store_entry_lead_image(feed_url_str, entry_id_str, source_image)
+                        else:
+                            # Keep existing image but advance fetch time to avoid repeated stale retries.
+                            self.store_entry_lead_image(feed_url_str, entry_id_str, cached)
+                        positive_revalidated += 1
+                        time.sleep(0.15)
+                        continue
                 fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
                 if (not force_retry_negative) and now - fetched_at < self._NEGATIVE_RETRY_SECONDS:
                     continue
@@ -270,6 +335,33 @@ class LeadImageService:
             self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
             time.sleep(0.15)
 
+    def _extract_tag_key(self, tag_record: object) -> str | None:
+        if isinstance(tag_record, tuple):
+            if len(tag_record) == 0:
+                return None
+            return str(tag_record[0])
+        if isinstance(tag_record, str):
+            return tag_record
+        key = getattr(tag_record, "key", None)
+        if key is None:
+            return None
+        return str(key)
+
+    def _entry_has_manual_tags(self, reader: Any, entry: object) -> bool:
+        manual_prefix = "tag:lectio:"
+        resource_id = getattr(entry, "resource_id", None)
+        if not resource_id:
+            return False
+        try:
+            tags = reader.get_tags(resource_id)
+        except Exception:
+            return False
+        for tag_record in tags:
+            key = self._extract_tag_key(tag_record)
+            if key and key.startswith(manual_prefix):
+                return True
+        return False
+
     def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
@@ -284,6 +376,8 @@ class LeadImageService:
                 if not image_url or image_url.startswith("data:"):
                     continue
                 resolved = urljoin(base_url, image_url)
+                if source_url and not self._is_source_image_tag_acceptable(attrs, resolved):
+                    continue
                 if self._is_image_url_acceptable(resolved, None, None):
                     return resolved
         return None
@@ -352,6 +446,43 @@ class LeadImageService:
             deduped.append(normalized)
         return deduped
 
+    def _parse_positive_int_attr(self, attrs: dict[str, str], key: str) -> int | None:
+        raw = (attrs.get(key) or "").strip()
+        if not raw:
+            return None
+        m = re.match(r"^([0-9]{1,4})", raw)
+        if not m:
+            return None
+        try:
+            value = int(m.group(1))
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    def _is_source_image_tag_acceptable(self, attrs: dict[str, str], resolved_url: str) -> bool:
+        combined_hint_text = " ".join(
+            [
+                attrs.get("class", ""),
+                attrs.get("id", ""),
+                attrs.get("alt", ""),
+                attrs.get("title", ""),
+                attrs.get("aria-label", ""),
+                attrs.get("data-testid", ""),
+                resolved_url,
+            ]
+        )
+        if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
+            return False
+
+        width_attr = self._parse_positive_int_attr(attrs, "width")
+        height_attr = self._parse_positive_int_attr(attrs, "height")
+        if width_attr is not None and width_attr < self._LEAD_IMAGE_MIN_WIDTH:
+            return False
+        if height_attr is not None and height_attr < self._LEAD_IMAGE_MIN_HEIGHT:
+            return False
+
+        return True
+
     def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str) -> int:
         score = 0
         class_attr = (attrs.get("class") or "").lower()
@@ -396,6 +527,8 @@ class LeadImageService:
                 if not image_url or image_url.startswith("data:"):
                     continue
                 resolved = urljoin(base_url, image_url)
+                if not self._is_source_image_tag_acceptable(attrs, resolved):
+                    continue
                 if not self._is_image_url_acceptable(resolved, None, None):
                     continue
 
@@ -515,6 +648,8 @@ class LeadImageService:
             return False
         if self._TRACKER_URL_PATTERNS.search(parsed.netloc) or self._TRACKER_URL_PATTERNS.search(parsed.path):
             return False
+        if self._AVATAR_HINT_PATTERNS.search(image_url):
+            return False
 
         if self._LOGO_URL_PATTERNS.search(image_url):
             return False
@@ -527,6 +662,26 @@ class LeadImageService:
         has_image_hint_in_query = any(marker in query for marker in ("format=", "fm=", "image=", "img=", "ext="))
         if not looks_like_image_url and not has_image_hint_in_query and width is None and height is None:
             return False
+
+        if width is None or height is None:
+            query_w: int | None = None
+            query_h: int | None = None
+            for m in re.finditer(r"(?:^|&)(?:w|width)=([0-9]{1,4})(?:&|$)", query):
+                try:
+                    query_w = int(m.group(1))
+                except ValueError:
+                    continue
+                break
+            for m in re.finditer(r"(?:^|&)(?:h|height)=([0-9]{1,4})(?:&|$)", query):
+                try:
+                    query_h = int(m.group(1))
+                except ValueError:
+                    continue
+                break
+            if query_w is not None and query_w < self._LEAD_IMAGE_MIN_WIDTH:
+                return False
+            if query_h is not None and query_h < self._LEAD_IMAGE_MIN_HEIGHT:
+                return False
 
         if width is None or height is None:
             for m in self._URL_DIMENSION_RE.finditer(image_url.split("?")[0]):

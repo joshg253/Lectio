@@ -71,6 +71,7 @@
           </div>
           <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
+          <button type="button" class="menu-item" data-toggle-panel="dedupe-log-modal"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span> Dedupe Log{% if dedupe_log_count > 0 %} ({{ dedupe_log_count }}){% endif %}</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -311,6 +312,78 @@
           {% set star_href = rf_base ~ 'all&star_only=1&resume_read_filter=' ~ resume_filter %}
           {% endif %}
           <a class="sort-pill filter-pill {% if selected_star_only %}active{% endif %}" href="{{ star_href }}" title="Toggle star filter" aria-label="Toggle star filter"><span class="material-symbols-rounded filter-icon" aria-hidden="true">star</span></a>
+        </div>
+        <div class="sort-group mark-read-group" role="group" aria-label="Mark posts read options">
+          <details class="mark-read-menu">
+            <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
+              <span class="material-symbols-rounded mark-read-trigger-icon" aria-hidden="true">done_all</span>
+              <span class="material-symbols-rounded mark-read-trigger-caret" aria-hidden="true">arrow_drop_down</span>
+            </summary>
+            <div class="mark-read-popover" role="menu" aria-label="Mark read actions">
+              <p class="mark-read-header-label">Mark as read:</p>
+              {% set _mr_hidden %}
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+              {% endset %}
+              {% if selected_feed_url %}
+              <form method="post" action="/feeds/mark-read" class="mark-read-action-form">
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                <input type="hidden" name="feed_url" value="{{ selected_feed_url }}" />
+                <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                <button type="submit" class="mark-read-action" role="menuitem">
+                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">rss_feed</span>
+                  <span>This feed</span>
+                </button>
+              </form>
+              {% else %}
+              <form method="post" action="/folders/mark-read" class="mark-read-action-form">
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                <button type="submit" class="mark-read-action" role="menuitem">
+                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">folder</span>
+                  <span>This folder</span>
+                </button>
+              </form>
+              {% endif %}
+
+              <p class="mark-read-section-label">Older than:</p>
+
+              {% for age_days, age_label in [(1, '1 day'), (2, '2 days'), (7, '1 week'), (14, '2 weeks'), (30, '1 month')] %}
+              <form method="post" action="/entries/mark-older-than-read" class="mark-read-action-form">
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                <input type="hidden" name="max_age_days" value="{{ age_days }}" />
+                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                <button type="submit" class="mark-read-action" role="menuitem">
+                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
+                  <span>{{ age_label }}</span>
+                </button>
+              </form>
+              {% endfor %}
+            </div>
+          </details>
         </div>
         <div class="sort-group" role="group" aria-label="Sort posts">
           <a
@@ -1119,6 +1192,35 @@
     </div>
   </div>
 
+  <div id="dedupe-log-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dedupe-log-modal-title">
+      <div class="modal-header-row">
+        <h3 id="dedupe-log-modal-title" class="action-modal-title">Dedupe Log</h3>
+        <button type="button" class="modal-close" data-close-modal="dedupe-log-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      {% if dedupe_log_rows %}
+      <ul class="problem-feed-list">
+        {% for row in dedupe_log_rows %}
+        <li class="problem-feed-item">
+          <a class="problem-feed-link" href="{{ row.link }}" target="_blank" rel="noopener noreferrer" title="{{ row.link }}">{{ row.link }}</a>
+          <div class="problem-feed-meta">
+            <span>{{ row.total_occurrences }} cop{{ 'y' if row.total_occurrences == 1 else 'ies' }}</span>
+            <span>{{ row.collapsed_count }} hidden by dedupe</span>
+          </div>
+          {% if row.feed_titles %}<div class="problem-feed-error">Feeds: {{ row.feed_titles | join(', ') }}</div>{% endif %}
+          {% if row.sample_titles %}<div class="problem-feed-error">Examples: {{ row.sample_titles | join(' | ') }}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No duplicate unread links detected right now.</p>
+      {% endif %}
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="dedupe-log-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="action-input-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
       <h3 id="action-modal-title" class="action-modal-title">Add</h3>
@@ -1591,7 +1693,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal, #dedupe-log-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2459,6 +2561,7 @@
         bindEntryTagInteractions();
         bindPostListInteractions();
         markActivePostByUrl(url);
+        syncActivePostThumbnailFromEntryPane();
         // If running in single-pane mode, ensure we switch to the entry pane
         try {
           if (window.isSingleMode && window.isSingleMode()) {
@@ -2476,6 +2579,62 @@
         window.location.href = url;
         throw _error;
       }
+    }
+
+    function syncActivePostThumbnailFromEntryPane() {
+      const title = document.querySelector('.entry-pane-title');
+      if (!(title instanceof HTMLElement)) {
+        return;
+      }
+
+      const feedUrl = title.getAttribute('data-post-feed-url') || '';
+      const entryId = title.getAttribute('data-post-entry-id') || '';
+      if (!feedUrl || !entryId) {
+        return;
+      }
+
+      const postItem = document.querySelector(
+        `.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"][data-post-entry-id="${CSS.escape(entryId)}"]`
+      );
+      if (!(postItem instanceof HTMLElement)) {
+        return;
+      }
+
+      const thumbnail = postItem.querySelector('.post-thumbnail');
+      if (!(thumbnail instanceof HTMLElement)) {
+        return;
+      }
+
+      const leadImageUrl = (title.getAttribute('data-post-lead-image-url') || '').trim();
+      const existingImage = thumbnail.querySelector('.post-thumbnail-image');
+
+      if (!leadImageUrl) {
+        if (existingImage instanceof HTMLImageElement) {
+          existingImage.remove();
+        }
+        thumbnail.classList.add('is-empty');
+        return;
+      }
+
+      if (existingImage instanceof HTMLImageElement) {
+        if (existingImage.getAttribute('src') !== leadImageUrl) {
+          existingImage.setAttribute('src', leadImageUrl);
+        }
+        existingImage.style.display = '';
+      } else {
+        const image = document.createElement('img');
+        image.className = 'post-thumbnail-image';
+        image.alt = '';
+        image.loading = 'lazy';
+        image.src = leadImageUrl;
+        image.onerror = () => {
+          thumbnail.classList.add('is-empty');
+          image.style.display = 'none';
+        };
+        thumbnail.insertBefore(image, thumbnail.firstChild);
+      }
+
+      thumbnail.classList.remove('is-empty');
     }
 
     function setSourceModeIndicator(mode) {
@@ -4645,7 +4804,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');
