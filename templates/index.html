@@ -439,7 +439,7 @@
                       title="Mark as {{ 'Unread' if post.read else 'Read' }} (m)"
                       aria-label="Mark as {{ 'Unread' if post.read else 'Read' }}"
                     >
-                      <span class="post-read-indicator" aria-hidden="true"></span>
+                      <span class="post-read-indicator material-symbols-rounded" aria-hidden="true">circle</span>
                     </button>
                   </form>
                 </div>
@@ -1078,7 +1078,6 @@
         <button type="button" class="modal-close" data-close-modal="global-note-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <form id="global-note-form" method="post" action="/settings/global-note" class="action-modal-form">
-        <label for="global-note-text" class="action-modal-label">Shared notepad</label>
         <textarea id="global-note-text" name="note_text" class="action-modal-textarea" placeholder="Write anything...">{{ global_note or '' }}</textarea>
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="global-note-modal">Cancel</button>
@@ -2458,6 +2457,7 @@
         refreshEntryPaneRefs();
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
+        bindPostListInteractions();
         markActivePostByUrl(url);
         // If running in single-pane mode, ensure we switch to the entry pane
         try {
@@ -3369,6 +3369,78 @@
           }
         });
       }
+
+      for (const entryReadForm of document.querySelectorAll('.entry-read-toggle-form')) {
+        if (entryReadForm.dataset.boundAsyncSubmit) {
+          continue;
+        }
+        entryReadForm.dataset.boundAsyncSubmit = '1';
+        entryReadForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const readInput = entryReadForm.querySelector('input[name="read"]');
+          const feedInput = entryReadForm.querySelector('input[name="feed_url"]');
+          const entryInput = entryReadForm.querySelector('input[name="entry_id"]');
+          if (
+            !(readInput instanceof HTMLInputElement)
+            || !(feedInput instanceof HTMLInputElement)
+            || !(entryInput instanceof HTMLInputElement)
+          ) {
+            entryReadForm.submit();
+            return;
+          }
+
+          const nextIsRead = readInput.value === '1';
+          const entryTitle = document.querySelector('.entry-pane-title');
+          const wasRead = entryTitle?.getAttribute('data-post-read') === '1';
+
+          try {
+            const formData = new FormData(entryReadForm);
+            const body = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+              body.append(key, String(value));
+            }
+
+            const response = await fetch(entryReadForm.action, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'lectio-post-read-toggle',
+              },
+              body: body.toString(),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+
+            applyEntryPaneReadState(nextIsRead);
+
+            const matchingPostItem = document.querySelector(
+              `.post-item[data-post-feed-url="${CSS.escape(feedInput.value)}"][data-post-entry-id="${CSS.escape(entryInput.value)}"]`
+            );
+            if (matchingPostItem) {
+              applyPostItemReadState(matchingPostItem, nextIsRead);
+            }
+
+            if (nextIsRead && !wasRead) {
+              const fallbackBase = getUnreadCountFallback();
+              const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+              appUnreadCount = Math.max(0, current - 1);
+              updateDynamicFavicon();
+            } else if (!nextIsRead && wasRead) {
+              const fallbackBase = getUnreadCountFallback();
+              const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+              appUnreadCount = Math.max(0, current + 1);
+              updateDynamicFavicon();
+            }
+          } catch (_error) {
+            entryReadForm.submit();
+          }
+        });
+      }
     }
 
     bindPostListInteractions();
@@ -3467,6 +3539,26 @@
       }
       if (entrySaveIndicator instanceof HTMLElement) {
         entrySaveIndicator.textContent = isSaved ? 'star' : 'star_outline';
+      }
+    }
+
+    function applyEntryPaneReadState(isRead) {
+      const entryReadForm = document.querySelector('.entry-read-toggle-form');
+      const entryReadInput = entryReadForm?.querySelector('input[name="read"]');
+      const entryReadButton = entryReadForm?.querySelector('.entry-read-toggle');
+      const entryTitle = document.querySelector('.entry-pane-title');
+
+      if (entryReadInput instanceof HTMLInputElement) {
+        entryReadInput.value = isRead ? '0' : '1';
+      }
+      if (entryReadButton instanceof HTMLElement) {
+        const label = isRead ? 'Mark as Unread' : 'Mark as Read';
+        entryReadButton.title = label;
+        entryReadButton.setAttribute('aria-label', label);
+        entryReadButton.setAttribute('data-read-state', isRead ? '1' : '0');
+      }
+      if (entryTitle instanceof HTMLElement) {
+        entryTitle.setAttribute('data-post-read', isRead ? '1' : '0');
       }
     }
 

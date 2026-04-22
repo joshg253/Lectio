@@ -25,4 +25,9 @@
   --link: #0f5f8f;
   --link-hover: #0a476a;
   --folder-name-ink: #1f252c;
+  --field-bg: #f8f6f0;
+  --field-elevated-bg: #f4f0e7;
+  --field-border: #d7cfbf;
+  --field-focus-border: #7ea8bc;
+  --field-focus-ring: color-mix(in srgb, var(--field-focus-border) 34%, transparent);
 }

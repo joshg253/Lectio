@@ -116,7 +116,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260420m")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260421r")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "1") == "1"
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
@@ -1410,7 +1410,12 @@ def list_entries_for_feeds(
         for feed_url in feed_urls:
             # Search should operate over the whole feed slice to keep ordering
             # and result inclusion consistent with the selected sort controls.
-            search_fetch_limit = None if search_terms else fetch_limit
+            # For ascending sort (oldest-first), avoid per-feed truncation so
+            # global oldest ordering remains stable after read/unread actions.
+            if search_terms or normalized_sort_dir == "asc":
+                search_fetch_limit = None
+            else:
+                search_fetch_limit = fetch_limit
             all_feed_entries.extend(reader.get_entries(feed=feed_url, read=reader_read_filter, limit=search_fetch_limit))
 
         for entry in all_feed_entries:

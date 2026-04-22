@@ -66,6 +66,7 @@ Open http://127.0.0.1:8000
 - Post search (top bar): case-insensitive term matching across title/feed/source text within the current folder/feed/tag scope, ordered by the active sort controls
 - Global History view (hamburger menu): ignores folder/feed/star constraints and forces read-most-recent-first ordering with read timestamp display
 - Sort by published vs received + ascending/descending toggle
+- Oldest-first sorting is stabilized for unread/all views by evaluating complete per-feed slices before global ordering, avoiding surprising jumps to older items after read actions
 - Global Note (hamburger menu): a shared plain-text notepad saved in app settings
 - Post list chunking in batches of 10 with auto-fill-to-viewport and scroll-to-load
 - Manual entry tags with suggestions
@@ -77,8 +78,11 @@ Open http://127.0.0.1:8000
 - Feed properties/status endpoint and panel data
 - Source/readability/frame-check entry endpoints for source loading modes
 - Entry header quick actions for save + read/unread, with Reader/Web/Open controls moved into the lower tag/action row
+- Entry header read/unread toggles update in place (no full page reload) and keep list/header state synchronized
 - Entry content media guardrails: oversized inline images are constrained to fit the viewport
 - For short blurb-style posts, Lectio attempts to pull a lead image from the source page (for example via og:image/twitter:image) when the feed payload has no inline image
+- Standard Ebooks entries prefer canonical `/downloads/cover.jpg` as lead image via site plugin fallback
+- Entry body images are left intact; lead-image selection does not remove in-article image placements
 - Background auto-refresh of all feeds (default every 60 minutes)
 - Per-feed manual refresh endpoint
 - OPML import/export

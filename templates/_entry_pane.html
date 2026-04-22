@@ -97,15 +97,11 @@
         <button
           type="submit"
           class="entry-read-toggle"
+          data-read-state="{{ 1 if selected_entry.read else 0 }}"
           title="Mark as {{ 'Unread' if selected_entry.read else 'Read' }}"
           aria-label="Mark as {{ 'Unread' if selected_entry.read else 'Read' }}"
         >
-          <span
-            class="material-symbols-rounded entry-read-toggle-icon"
-            aria-hidden="true"
-            >{{ 'mark_email_read' if selected_entry.read else
-            'mark_email_unread' }}</span
-          >
+          <span class="entry-read-indicator material-symbols-rounded" aria-hidden="true">circle</span>
         </button>
       </form>
       <form
