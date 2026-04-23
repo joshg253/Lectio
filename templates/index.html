@@ -14,6 +14,12 @@
   </script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
+  <style>
+    body[data-single-mode="1"][data-single-pane-level="0"] .pane-folders { display: flex !important; flex-direction: column !important; }
+    body[data-single-mode="1"] .folders-pane-footer { display: flex !important; }
+    body[data-single-mode="1"] #folders-collapse-btn { display: none !important; }
+    .entry-pane-title-link { -webkit-line-clamp: 5 !important; }
+  </style>
 </head>
 <body>
   <header class="topbar" role="banner">
@@ -43,6 +49,14 @@
       <details class="hamburger-menu app-menu topbar-menu">
         <summary title="Menu" aria-label="Open menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
         <div class="menu-popover">
+          <div class="flyout-item">
+            <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+            <div class="flyout-panel">
+              <button type="button" class="menu-item" data-toggle-panel="add-folder-modal">Folder</button>
+              <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
+            </div>
+          </div>
+          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           <a
             class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
             href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
@@ -62,14 +76,6 @@
               </form>
             </div>
           </div>
-          <div class="flyout-item">
-            <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
-            <div class="flyout-panel">
-              <button type="button" class="menu-item" data-toggle-panel="add-folder-modal">Folder</button>
-              <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
-            </div>
-          </div>
-          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
           <button type="button" class="menu-item" data-toggle-panel="dedupe-log-modal"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span> Dedupe Log{% if dedupe_log_count > 0 %} ({{ dedupe_log_count }}){% endif %}</button>
           <div class="flyout-item">
@@ -95,10 +101,11 @@
     <section class="pane pane-folders">
       <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
         {% if root_folder_row %}
+        {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
         <div class="tree-block root-tree-block">
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -136,7 +143,7 @@
                 <span class="tree-toggle-spacer"></span>
                 {% endif %}
                 <a
-                  href="/?folder_id={{ row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  href="/?folder_id={{ row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
                   class="tree-item child-item {% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
                   data-folder-name="{{ row.name }}"
@@ -153,7 +160,7 @@
                 <li>
                   <a
                     class="feed-link {% if selected_feed_url == feed.url %}active{% endif %}"
-                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
                     data-feed-url="{{ feed.url }}"
                     data-folder-id="{{ row.id }}"
                     title="{{ feed.url }}"
@@ -180,7 +187,7 @@
               <li>
                 <a
                   class="feed-link {% if selected_feed_url == feed.url and selected_folder_id == root_folder_row.id %}active{% endif %}"
-                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
                   data-feed-url="{{ feed.url }}"
                   data-folder-id="{{ root_folder_row.id }}"
                   title="{{ feed.url }}"
@@ -275,6 +282,13 @@
             <span id="folders-problematic-badge" class="folders-utility-badge" aria-hidden="true">{{ problematic_unseen_count }}</span>
             {% endif %}
           </button>
+
+          <a
+            href="{{ scope_base }}history&star_only=0&resume_read_filter={{ resume_filter }}"
+            class="folders-utility-btn{% if selected_read_filter == 'history' %} active{% endif %}"
+            title="View history"
+            aria-label="View history"
+          ><span class="material-symbols-rounded" aria-hidden="true">history</span></a>
 
           <button id="folders-collapse-btn" class="folders-collapse-btn folders-utility-btn" type="button"
             aria-label="Collapse folders pane" title="Collapse folders pane">
@@ -556,6 +570,7 @@
     const SINGLE_THRESHOLD = 720;
     const MEDIUM_THRESHOLD = 1100;
     const WIDE_LEFT_COLLAPSED_KEY = 'lectio-wide-left-collapsed';
+    const SINGLE_PANE_RESTORE_KEY = 'lectio-single-pane-restore-level';
     let singleMode = window.innerWidth <= SINGLE_THRESHOLD;
     let layoutMode = 'wide';
     const bodyEl = document.body;
@@ -600,7 +615,20 @@
       if (!singleMode) {
         bodyEl.removeAttribute('data-single-pane-level');
       } else if (!bodyEl.getAttribute('data-single-pane-level')) {
-        setSinglePaneLevel(0);
+        let restoredLevel = null;
+        try {
+          const raw = window.sessionStorage.getItem(SINGLE_PANE_RESTORE_KEY);
+          if (raw !== null) {
+            const parsed = Number.parseInt(raw, 10);
+            if (Number.isInteger(parsed)) {
+              restoredLevel = parsed;
+            }
+            window.sessionStorage.removeItem(SINGLE_PANE_RESTORE_KEY);
+          }
+        } catch (_e) {
+          restoredLevel = null;
+        }
+        setSinglePaneLevel(restoredLevel ?? 0);
       }
 
       if (layoutMode === 'wide') {
@@ -624,6 +652,7 @@
           inset = 0;
         }
         document.documentElement.style.setProperty('--vv-bottom-inset', inset + 'px');
+        bodyEl.setAttribute('data-keyboard-open', inset > 120 ? '1' : '0');
       } catch (e) {
         // ignore
       }
@@ -690,6 +719,10 @@
     function bindSwipeGestures() {
       // post list swipe for toggles
       function attachPostSwipe(postItem) {
+        if (postItem.dataset.boundPaneSwipeNav === '1') {
+          return;
+        }
+        postItem.dataset.boundPaneSwipeNav = '1';
         let sx = 0, sy = 0, dx = 0, dy = 0, touching = false;
         const threshold = 40;
         postItem.addEventListener('touchstart', (ev) => {
@@ -715,11 +748,36 @@
       // entry pane swipe for next/previous
       const entryPaneEl = document.querySelector('.pane-entry');
       if (entryPaneEl) {
-        let sx=0, sy=0, dx=0, dy=0, touching=false;
-        entryPaneEl.addEventListener('touchstart', (ev)=>{ const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; }, { passive: true });
-        entryPaneEl.addEventListener('touchmove', (ev)=>{ if(!touching) return; const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy; }, { passive: true });
+        if (entryPaneEl.dataset.boundEntrySwipeNav === '1') {
+          return;
+        }
+        entryPaneEl.dataset.boundEntrySwipeNav = '1';
+        let sx=0, sy=0, dx=0, dy=0, touching=false, lockHorizontal=false;
+        entryPaneEl.addEventListener('touchstart', (ev)=>{ const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; lockHorizontal=false; }, { passive: true });
+        entryPaneEl.addEventListener('touchmove', (ev)=>{
+          if(!touching) return;
+          const liveEntryBody = document.getElementById('entry-body');
+          if (liveEntryBody && liveEntryBody.classList.contains('zoomed')) {
+            return;
+          }
+          const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy;
+          if (!lockHorizontal && Math.abs(dx) > 18 && Math.abs(dx) > Math.abs(dy)) {
+            lockHorizontal = true;
+          }
+          if (lockHorizontal) {
+            ev.preventDefault();
+          }
+        }, { passive: false });
         entryPaneEl.addEventListener('touchend', (ev)=>{
-          if(!touching) return; touching=false; if(Math.abs(dx) < Math.abs(dy)) return; const threshold=60; if(Math.abs(dx) < threshold) return;
+          if(!touching) return;
+          touching=false;
+          if (!window.isSingleMode || !window.isSingleMode()) return;
+          if (entryPaneEl.querySelector('.entry.source-active')) return;
+          const liveEntryBody = document.getElementById('entry-body');
+          if (liveEntryBody && liveEntryBody.classList.contains('zoomed')) return;
+          if(Math.abs(dx) < Math.abs(dy)) return;
+          const threshold=52;
+          if(Math.abs(dx) < threshold) return;
           if (dx < 0) { // swipe left -> next
             navigateEntry(1);
           } else { // swipe right -> prev
@@ -727,6 +785,122 @@
           }
         }, { passive: true });
       }
+    }
+
+    function bindSinglePanePullToRefresh() {
+      function attachPTR(paneEl, scrollEl, touchEl = scrollEl) {
+        if (!paneEl || !scrollEl || !touchEl || paneEl.dataset.ptrBound === '1') return;
+        paneEl.dataset.ptrBound = '1';
+
+        const START_PULL = 12;
+        const THRESHOLD = 70;
+        const MAX_PULL = 100;
+        let startY = 0;
+        let pulling = false;
+        let loading = false;
+        let currentDy = 0;
+
+        const indicator = document.createElement('div');
+        indicator.className = 'ptr-indicator';
+        indicator.innerHTML = '<div class="ptr-icon"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></div>';
+        indicator.style.display = 'none';
+        if (getComputedStyle(paneEl).position === 'static') paneEl.style.position = 'relative';
+        paneEl.insertBefore(indicator, paneEl.firstChild);
+
+        function showAt(dy) {
+          const travel = Math.min(Math.max(dy, 0), MAX_PULL);
+          indicator.style.display = 'flex';
+          indicator.style.transition = 'none';
+          indicator.style.transform = `translateY(calc(-56px + ${travel}px))`;
+          indicator.classList.toggle('ptr-armed', travel >= THRESHOLD);
+        }
+
+        function hide() {
+          indicator.style.transition = 'transform 180ms ease';
+          indicator.style.transform = 'translateY(-56px)';
+          setTimeout(() => {
+            indicator.style.display = 'none';
+            indicator.classList.remove('ptr-armed');
+            indicator.classList.remove('ptr-loading');
+            loading = false;
+          }, 190);
+        }
+
+        function isAtTop() {
+          const paneTop = typeof paneEl.scrollTop === 'number' ? paneEl.scrollTop : 0;
+          const scrollTop = typeof scrollEl.scrollTop === 'number' ? scrollEl.scrollTop : 0;
+          return paneTop <= 2 && scrollTop <= 2;
+        }
+
+        const targets = [];
+        for (const el of [touchEl, scrollEl, paneEl]) {
+          if (el && !targets.includes(el)) targets.push(el);
+        }
+
+        function onTouchStart(e) {
+          if (!window.isSingleMode || !window.isSingleMode()) return;
+          if (loading) return;
+          if (!isAtTop()) return;
+          if (e.touches.length !== 1) return;
+          startY = e.touches[0].clientY;
+          currentDy = 0;
+          pulling = true;
+        }
+
+        function onTouchMove(e) {
+          if (!pulling || loading) return;
+          const dy = e.touches[0].clientY - startY;
+          if (dy <= START_PULL) {
+            if (dy < 0) {
+              pulling = false;
+              hide();
+            }
+            return;
+          }
+          currentDy = dy;
+          showAt(dy);
+          e.preventDefault();
+        }
+
+        function onTouchEnd() {
+          if (!pulling || loading) return;
+          pulling = false;
+          if (currentDy >= THRESHOLD) {
+            loading = true;
+            indicator.classList.add('ptr-loading');
+            Promise.resolve()
+              .then(() => {
+                if (typeof window.refreshCurrentFeedOrFolder === 'function') {
+                  return window.refreshCurrentFeedOrFolder();
+                }
+                window.location.reload();
+              })
+              .finally(() => hide());
+          } else {
+            hide();
+          }
+        }
+
+        function onTouchCancel() {
+          pulling = false;
+          if (!loading) hide();
+        }
+
+        for (const target of targets) {
+          target.addEventListener('touchstart', onTouchStart, { passive: true });
+          target.addEventListener('touchmove', onTouchMove, { passive: false });
+          target.addEventListener('touchend', onTouchEnd, { passive: true });
+          target.addEventListener('touchcancel', onTouchCancel, { passive: true });
+        }
+      }
+
+      const foldersPane = document.querySelector('.pane-folders');
+      const treeScroller = document.querySelector('.pane-folders .tree') || foldersPane;
+      const postsPane = document.querySelector('.pane-posts');
+      const postsScroller = document.querySelector('.posts') || postsPane;
+
+      attachPTR(foldersPane, treeScroller, treeScroller);
+      attachPTR(postsPane, postsScroller, postsScroller);
     }
 
     function navigateEntry(direction) {
@@ -747,6 +921,8 @@
     // Expose for debugging
     window.setSinglePaneLevel = setSinglePaneLevel;
     window.isSingleMode = () => singleMode;
+    window.bindSinglePanePullToRefresh = bindSinglePanePullToRefresh;
+    window.bindSwipeGestures = bindSwipeGestures;
 
     window.addEventListener('resize', () => updateSingleMode());
 
@@ -945,6 +1121,7 @@
     // bind single-pane niceties
     bindSinglePaneScrollBehavior();
     bindSwipeGestures();
+    bindSinglePanePullToRefresh();
 
     // Leave the brand/logo as a normal bare link to `/` (no interception).
   })();
@@ -969,17 +1146,15 @@
 
   <form id="context-refresh-folder-form" method="post" action="/refresh" hidden>
     <input type="hidden" name="folder_id" id="context-refresh-folder-id" />
-    {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-    {% if selected_entry %}
-    <input type="hidden" name="feed_url" value="{{ selected_entry.feed_url }}" />
-    <input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />
-    {% endif %}
-    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+    <input type="hidden" name="list_feed_url" id="context-refresh-folder-list-feed-url" value="" />
+    <input type="hidden" name="feed_url" id="context-refresh-folder-feed-url" value="" />
+    <input type="hidden" name="entry_id" id="context-refresh-folder-entry-id" value="" />
+    <input type="hidden" name="sort_by" id="context-refresh-folder-sort-by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" id="context-refresh-folder-sort-dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" id="context-refresh-folder-read-filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" id="context-refresh-folder-star-only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" id="context-refresh-folder-resume-read-filter" value="{{ selected_resume_read_filter }}" />
+    <input type="hidden" name="tag" id="context-refresh-folder-tag" value="{{ selected_tag or '' }}" />
   </form>
 
   <form id="context-mark-read-folder-form" method="post" action="/folders/mark-read" hidden>
@@ -991,13 +1166,13 @@
     <input type="hidden" name="folder_id" id="context-refresh-feed-folder-id" />
     <input type="hidden" name="feed_url" id="context-refresh-feed-url" />
     <input type="hidden" name="list_feed_url" id="context-refresh-list-feed-url" />
-    {% if selected_entry %}<input type="hidden" name="entry_id" value="{{ selected_entry.id }}" />{% endif %}
-    <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-    <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-    <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-    <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-    <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+    <input type="hidden" name="entry_id" id="context-refresh-feed-entry-id" value="" />
+    <input type="hidden" name="sort_by" id="context-refresh-feed-sort-by" value="{{ selected_sort_by }}" />
+    <input type="hidden" name="sort_dir" id="context-refresh-feed-sort-dir" value="{{ selected_sort_dir }}" />
+    <input type="hidden" name="read_filter" id="context-refresh-feed-read-filter" value="{{ selected_read_filter }}" />
+    <input type="hidden" name="star_only" id="context-refresh-feed-star-only" value="{{ 1 if selected_star_only else 0 }}" />
+    <input type="hidden" name="resume_read_filter" id="context-refresh-feed-resume-read-filter" value="{{ selected_resume_read_filter }}" />
+    <input type="hidden" name="tag" id="context-refresh-feed-tag" value="{{ selected_tag or '' }}" />
   </form>
 
   <form id="context-mark-read-feed-form" method="post" action="/feeds/mark-read" hidden>
@@ -1783,6 +1958,39 @@
       scheduleToastFade(nextToast, 3800);
     }
 
+    async function copyTextToClipboard(text) {
+      if (!text) {
+        return false;
+      }
+
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_clipboardError) {
+        // Fall back to legacy copy path.
+      }
+
+      try {
+        const scratch = document.createElement('textarea');
+        scratch.value = text;
+        scratch.setAttribute('readonly', '');
+        scratch.style.position = 'fixed';
+        scratch.style.opacity = '0';
+        scratch.style.pointerEvents = 'none';
+        document.body.appendChild(scratch);
+        scratch.focus();
+        scratch.select();
+        scratch.setSelectionRange(0, scratch.value.length);
+        const copied = document.execCommand('copy');
+        scratch.remove();
+        return copied;
+      } catch (_legacyCopyError) {
+        return false;
+      }
+    }
+
     if (toast) {
       scheduleToastFade(toast, 3200);
     }
@@ -2065,10 +2273,26 @@
     const contextFeedUrlInput = document.getElementById('context-feed-url');
     const deleteFolderIdInput = document.getElementById('context-delete-folder-id');
     const refreshFolderIdInput = document.getElementById('context-refresh-folder-id');
+    const refreshFolderListFeedUrlInput = document.getElementById('context-refresh-folder-list-feed-url');
+    const refreshFolderFeedUrlInput = document.getElementById('context-refresh-folder-feed-url');
+    const refreshFolderEntryIdInput = document.getElementById('context-refresh-folder-entry-id');
+    const refreshFolderSortByInput = document.getElementById('context-refresh-folder-sort-by');
+    const refreshFolderSortDirInput = document.getElementById('context-refresh-folder-sort-dir');
+    const refreshFolderReadFilterInput = document.getElementById('context-refresh-folder-read-filter');
+    const refreshFolderStarOnlyInput = document.getElementById('context-refresh-folder-star-only');
+    const refreshFolderResumeReadFilterInput = document.getElementById('context-refresh-folder-resume-read-filter');
+    const refreshFolderTagInput = document.getElementById('context-refresh-folder-tag');
     const markReadFolderIdInput = document.getElementById('context-mark-read-folder-id');
     const refreshFeedFolderIdInput = document.getElementById('context-refresh-feed-folder-id');
     const refreshFeedUrlInput = document.getElementById('context-refresh-feed-url');
     const refreshListFeedUrlInput = document.getElementById('context-refresh-list-feed-url');
+    const refreshFeedEntryIdInput = document.getElementById('context-refresh-feed-entry-id');
+    const refreshFeedSortByInput = document.getElementById('context-refresh-feed-sort-by');
+    const refreshFeedSortDirInput = document.getElementById('context-refresh-feed-sort-dir');
+    const refreshFeedReadFilterInput = document.getElementById('context-refresh-feed-read-filter');
+    const refreshFeedStarOnlyInput = document.getElementById('context-refresh-feed-star-only');
+    const refreshFeedResumeReadFilterInput = document.getElementById('context-refresh-feed-resume-read-filter');
+    const refreshFeedTagInput = document.getElementById('context-refresh-feed-tag');
     const markReadFeedFolderIdInput = document.getElementById('context-mark-read-feed-folder-id');
     const markReadFeedUrlInput = document.getElementById('context-mark-read-feed-url');
     const markReadListFeedUrlInput = document.getElementById('context-mark-read-list-feed-url');
@@ -2114,6 +2338,7 @@
     let entryArticle = document.querySelector('.entry');
     let entryPaneTitle = document.querySelector('.entry-pane-title');
     let entryBody = document.getElementById('entry-body');
+    let entryZoomTarget = entryBody ? entryBody.querySelector('.entry-zoom-target') : null;
     let entryReadabilityButton = document.getElementById('entry-readability-button');
     let entrySourceButton = document.getElementById('entry-source-button');
     let entrySourceFrame = document.getElementById('entry-source-frame');
@@ -2122,6 +2347,8 @@
     let entrySourceDismiss = document.getElementById('entry-source-dismiss');
     let entrySourceModeIndicator = document.getElementById('entry-source-mode-indicator');
     let entryPaneObserver = null;
+    let entryZoomScale = 1;
+    let entryZoomBaseHeight = null;
 
     let contextFolderId = null;
     let contextFeedUrl = null;
@@ -2159,6 +2386,8 @@
       entryArticle = document.querySelector('.entry');
       entryPaneTitle = document.querySelector('.entry-pane-title');
       entryBody = document.getElementById('entry-body');
+      entryZoomTarget = entryBody ? entryBody.querySelector('.entry-zoom-target') : null;
+      entryZoomBaseHeight = null;
       entryReadabilityButton = document.getElementById('entry-readability-button');
       entrySourceButton = document.getElementById('entry-source-button');
       entrySourceFrame = document.getElementById('entry-source-frame');
@@ -2260,14 +2489,36 @@
 
     function updateScopeActiveState(url) {
       const nextUrl = new URL(url, window.location.origin);
-      const nextFolderId = nextUrl.searchParams.get('folder_id');
-      const nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
+      let nextFolderId = nextUrl.searchParams.get('folder_id');
+      let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
       const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
       const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
       const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
       const nextSortDir = nextUrl.searchParams.get('sort_dir') || 'desc';
+
+      // Bare URLs are ambiguous in SPA/popstate flows. Prefer preserving
+      // current visible selection to avoid active-state flicker/clearing.
+      if (!nextFolderId && !nextFeedUrl && !nextTag) {
+        const activeFeed = document.querySelector('.feed-link.active[data-feed-url]');
+        if (activeFeed instanceof HTMLElement) {
+          nextFeedUrl = activeFeed.getAttribute('data-feed-url') || null;
+          nextFolderId = activeFeed.getAttribute('data-folder-id') || nextFolderId;
+        } else {
+          const activeFolder = document.querySelector('.tree-item.active[data-folder-id]');
+          if (activeFolder instanceof HTMLElement) {
+            nextFolderId = activeFolder.getAttribute('data-folder-id') || nextFolderId;
+          }
+        }
+      }
+
+      if (!nextFolderId && !nextFeedUrl && !nextTag) {
+        const rootTree = document.querySelector('.tree[data-root-folder-id]');
+        if (rootTree instanceof HTMLElement) {
+          nextFolderId = rootTree.getAttribute('data-root-folder-id') || null;
+        }
+      }
 
       const foldersStarToggle = document.getElementById('folders-star-toggle');
       if (foldersStarToggle) {
@@ -2331,7 +2582,13 @@
         }
 
         const currentParams = new URL(window.location.href, window.location.origin).searchParams;
-        const keysToSync = ['read_filter', 'resume_read_filter', 'star_only', 'sort_by', 'sort_dir'];
+        const currentReadFilter = currentParams.get('read_filter') || '';
+        const shouldKeepTargetReadFilter =
+          currentReadFilter === 'history' && linkEl.matches('.tree-item, .feed-link');
+        const keysToSync = ['resume_read_filter', 'star_only', 'sort_by', 'sort_dir'];
+        if (!shouldKeepTargetReadFilter) {
+          keysToSync.unshift('read_filter');
+        }
         for (const key of keysToSync) {
           if (currentParams.has(key)) {
             targetUrl.searchParams.set(key, currentParams.get(key) || '');
@@ -2415,7 +2672,7 @@
           maybeUrl = null;
         }
 
-        if (maybeUrl && maybeUrl.searchParams.has('chunk') && pushHistory === false) {
+        if (maybeUrl && maybeUrl.searchParams.has('chunk') && maybeUrl.searchParams.has('chunk_delta') && pushHistory === false) {
           const appended = Array.from(nextPostsPane.querySelectorAll('.post-item'));
           if (appended.length === 0) {
             // nothing new; avoid replacing pane which would scroll to top
@@ -2502,7 +2759,13 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
+        if (typeof window.bindSwipeGestures === 'function') {
+          window.bindSwipeGestures();
+        }
         setupPostChunks();
+        if (typeof window.bindSinglePanePullToRefresh === 'function') {
+          window.bindSinglePanePullToRefresh();
+        }
         centerActivePostInView();
         updateScopeActiveState(url);
 
@@ -2517,6 +2780,14 @@
 
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
       const token = ++entryPaneRequestToken;
+      let currentUrlHasEntry = false;
+
+      try {
+        const currentUrl = new URL(window.location.href, window.location.origin);
+        currentUrlHasEntry = currentUrl.searchParams.has('feed_url') && currentUrl.searchParams.has('entry_id');
+      } catch (_e) {
+        currentUrlHasEntry = false;
+      }
 
       try {
         const headers = { 'X-Requested-With': 'lectio-entry-pane' };
@@ -2560,6 +2831,9 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
+        if (typeof window.bindSwipeGestures === 'function') {
+          window.bindSwipeGestures();
+        }
         markActivePostByUrl(url);
         syncActivePostThumbnailFromEntryPane();
         // If running in single-pane mode, ensure we switch to the entry pane
@@ -2573,7 +2847,15 @@
           // ignore
         }
         if (pushHistory) {
-          history.pushState({ lectioEntryPane: true, lectioPaneLevel: (window.isSingleMode && window.isSingleMode()) ? 2 : 0 }, '', url);
+          const isSinglePaneMode = Boolean(window.isSingleMode && window.isSingleMode());
+          const nextState = { lectioEntryPane: true, lectioPaneLevel: isSinglePaneMode ? 2 : 0 };
+          // In 1-pane mode, keep only one "entry" history state so browser back
+          // returns to posts list instead of stepping through prior entry swipes.
+          if (isSinglePaneMode && currentUrlHasEntry) {
+            history.replaceState(nextState, '', url);
+          } else {
+            history.pushState(nextState, '', url);
+          }
         }
       } catch (_error) {
         window.location.href = url;
@@ -3113,6 +3395,171 @@
     });
 
     function bindEntryPaneInteractions() {
+      function applyEntryZoom(scale) {
+        const clamped = Math.min(2.5, Math.max(1, Number(scale) || 1));
+        entryZoomScale = clamped;
+        document.documentElement.style.setProperty('--entry-content-zoom', clamped.toFixed(2));
+        if (entryBody) {
+          entryBody.classList.toggle('zoomed', clamped > 1.01);
+        }
+
+        if (entryZoomTarget) {
+          if (clamped <= 1.01) {
+            entryZoomTarget.style.transform = '';
+            entryZoomTarget.style.transformOrigin = '';
+            entryZoomTarget.style.width = '';
+            entryZoomTarget.style.marginBottom = '';
+            entryZoomTarget.style.willChange = '';
+            entryZoomBaseHeight = null;
+          } else {
+            if (!Number.isFinite(entryZoomBaseHeight) || entryZoomBaseHeight <= 0) {
+              const prevTransform = entryZoomTarget.style.transform;
+              const prevOrigin = entryZoomTarget.style.transformOrigin;
+              const prevWidth = entryZoomTarget.style.width;
+              const prevMarginBottom = entryZoomTarget.style.marginBottom;
+
+              entryZoomTarget.style.transform = 'none';
+              entryZoomTarget.style.transformOrigin = 'top left';
+              entryZoomTarget.style.width = '100%';
+              entryZoomTarget.style.marginBottom = '';
+              entryZoomBaseHeight = entryZoomTarget.getBoundingClientRect().height;
+
+              entryZoomTarget.style.transform = prevTransform;
+              entryZoomTarget.style.transformOrigin = prevOrigin;
+              entryZoomTarget.style.width = prevWidth;
+              entryZoomTarget.style.marginBottom = prevMarginBottom;
+            }
+
+            const safeBaseHeight = Number.isFinite(entryZoomBaseHeight) ? entryZoomBaseHeight : 0;
+            entryZoomTarget.style.width = '100%';
+            entryZoomTarget.style.transformOrigin = 'top left';
+            entryZoomTarget.style.transform = `scale(${clamped.toFixed(4)})`;
+            entryZoomTarget.style.marginBottom = `${Math.max(0, safeBaseHeight * (clamped - 1)).toFixed(2)}px`;
+            entryZoomTarget.style.willChange = 'transform';
+          }
+        }
+
+        try { window.localStorage.setItem('lectio-entry-zoom', clamped.toFixed(2)); } catch (_e) {}
+      }
+
+      function bindEntryPinchZoom() {
+        if (!entryBody || entryBody.dataset.boundPinchZoom) return;
+        entryBody.dataset.boundPinchZoom = '1';
+        let pinchStartDistance = 0;
+        let pinchStartScale = entryZoomScale;
+        let pinching = false;
+        let pinchAnchorBodyY = 0;
+        let pinchAnchorBodyX = 0;
+        let pinchScrollHost = null;
+
+        function isScrollableElement(el) {
+          return Boolean(el) && (el.scrollHeight > (el.clientHeight + 1) || el.scrollTop > 0);
+        }
+
+        function getPinchScrollHost() {
+          let current = entryBody;
+          while (current) {
+            if (isScrollableElement(current)) {
+              return current;
+            }
+            current = current.parentElement;
+          }
+
+          const paneEntry = document.querySelector('.pane-entry');
+          return paneEntry || entryBody || document.scrollingElement || document.documentElement;
+        }
+
+        function getHostContentScrollTop(scrollHost) {
+          return scrollHost === entryBody ? scrollHost.scrollTop : 0;
+        }
+
+        function getHostContentScrollLeft(scrollHost) {
+          return scrollHost === entryBody ? scrollHost.scrollLeft : 0;
+        }
+
+        function clamp(value, min, max) {
+          return Math.min(max, Math.max(min, value));
+        }
+
+        entryBody.addEventListener('touchstart', (ev) => {
+          if (!window.isSingleMode || !window.isSingleMode()) return;
+          if (ev.touches.length !== 2) return;
+          const [t1, t2] = ev.touches;
+          const midY = (t1.clientY + t2.clientY) / 2;
+          const midX = (t1.clientX + t2.clientX) / 2;
+          pinchStartDistance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          if (pinchStartDistance <= 0) {
+            pinching = false;
+            return;
+          }
+          pinchStartScale = entryZoomScale;
+          pinchScrollHost = getPinchScrollHost();
+          const bodyRect = entryBody.getBoundingClientRect();
+          const hostScrollTop = getHostContentScrollTop(pinchScrollHost);
+          const hostScrollLeft = getHostContentScrollLeft(pinchScrollHost);
+          pinchAnchorBodyY = (hostScrollTop + (midY - bodyRect.top)) / Math.max(0.001, pinchStartScale);
+          pinchAnchorBodyX = (hostScrollLeft + (midX - bodyRect.left)) / Math.max(0.001, pinchStartScale);
+          pinching = Number.isFinite(pinchAnchorBodyY);
+        }, { passive: true });
+
+        entryBody.addEventListener('touchmove', (ev) => {
+          if (!pinching || ev.touches.length !== 2) return;
+          const [t1, t2] = ev.touches;
+          const midY = (t1.clientY + t2.clientY) / 2;
+          const midX = (t1.clientX + t2.clientX) / 2;
+          const distance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          if (distance <= 0 || pinchStartDistance <= 0) return;
+          const next = pinchStartScale * (distance / pinchStartDistance);
+          applyEntryZoom(next);
+
+          const scrollHost = pinchScrollHost || getPinchScrollHost();
+          if (scrollHost) {
+            const bodyRect = entryBody.getBoundingClientRect();
+            const bodyTop = bodyRect.top;
+            const bodyLeft = bodyRect.left;
+            const hostScrollTop = getHostContentScrollTop(scrollHost);
+            const hostScrollLeft = getHostContentScrollLeft(scrollHost);
+            const anchorScreenY = bodyTop + (pinchAnchorBodyY * entryZoomScale) - hostScrollTop;
+            const anchorScreenX = bodyLeft + (pinchAnchorBodyX * entryZoomScale) - hostScrollLeft;
+            const scrollDelta = anchorScreenY - midY;
+            const scrollDeltaX = anchorScreenX - midX;
+            const maxScrollTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+            const maxScrollLeft = Math.max(0, scrollHost.scrollWidth - scrollHost.clientWidth);
+            if (Number.isFinite(scrollDelta) && Math.abs(scrollDelta) > 0.25) {
+              const targetScrollTop = clamp(scrollHost.scrollTop + scrollDelta, 0, maxScrollTop);
+              scrollHost.scrollTop = targetScrollTop;
+            }
+            if (Number.isFinite(scrollDeltaX) && Math.abs(scrollDeltaX) > 0.25) {
+              const targetScrollLeft = clamp(scrollHost.scrollLeft + scrollDeltaX, 0, maxScrollLeft);
+              scrollHost.scrollLeft = targetScrollLeft;
+            }
+          }
+
+          ev.preventDefault();
+        }, { passive: false });
+
+        entryBody.addEventListener('touchend', () => {
+          pinching = false;
+          pinchScrollHost = null;
+        }, { passive: true });
+
+        entryBody.addEventListener('touchcancel', () => {
+          pinching = false;
+          pinchScrollHost = null;
+        }, { passive: true });
+      }
+
+      if (entryZoomScale > 1.01) {
+        applyEntryZoom(entryZoomScale);
+      } else {
+        try {
+          const savedZoom = Number(window.localStorage.getItem('lectio-entry-zoom') || '1');
+          if (savedZoom > 1) {
+            applyEntryZoom(savedZoom);
+          }
+        } catch (_e) {}
+      }
+
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
         entrySaveForm.dataset.boundAsyncSubmit = '1';
@@ -3312,6 +3759,8 @@
           setEntrySourceFallbackVisible(false);
         });
       }
+
+      bindEntryPinchZoom();
     }
 
     bindEntryPaneInteractions();
@@ -4444,11 +4893,38 @@
 
     window.addEventListener('popstate', (event) => {
       const state = event.state || {};
-      if (window.isSingleMode && window.isSingleMode() && Number.isInteger(state.lectioPaneLevel)) {
-        setSinglePaneLevel(state.lectioPaneLevel);
-      }
       const currentUrl = window.location.href;
       const currentParams = new URL(currentUrl).searchParams;
+      if (window.isSingleMode && window.isSingleMode()) {
+        let paneLevel = Number.isInteger(state.lectioPaneLevel) ? state.lectioPaneLevel : null;
+        if (paneLevel === null) {
+          try {
+            const popUrl = new URL(currentUrl, window.location.origin);
+            const hasEntry = popUrl.searchParams.has('feed_url') && popUrl.searchParams.has('entry_id');
+            const hasScope = popUrl.searchParams.has('folder_id')
+              || popUrl.searchParams.has('list_feed_url')
+              || popUrl.searchParams.has('tag')
+              || popUrl.searchParams.has('q');
+            paneLevel = hasEntry ? 2 : (hasScope ? 1 : 0);
+          } catch (_e) {
+            paneLevel = 0;
+          }
+        }
+        setSinglePaneLevel(paneLevel);
+      }
+
+      if (!currentParams.has('feed_url') && !currentParams.has('entry_id')) {
+        const hasNoScopeQuery = currentParams.toString() === '';
+        const normalizedCurrent = normalizeScopeUrl(currentUrl);
+        const normalizedActive = normalizeScopeUrl(activeScopeUrl || currentUrl);
+        const isSameScopeAsCurrentDom = normalizedCurrent === normalizedActive;
+        const scopeStateNoReload = Boolean(state.lectioScopePane) && isSameScopeAsCurrentDom;
+        if (hasNoScopeQuery || scopeStateNoReload) {
+          updateScopeActiveState(currentUrl);
+          return;
+        }
+      }
+
       if (currentParams.has('feed_url') && currentParams.has('entry_id')) {
         loadEntryPaneWithoutFullRefresh(currentUrl, false);
         return;
@@ -4721,31 +5197,96 @@
       }
     }
 
-    function refreshCurrentFeedOrFolder() {
-      const searchParams = new URLSearchParams(window.location.search);
-      let folderId = contextFolderId || searchParams.get('folder_id') || null;
-      let feedUrl = contextFeedUrl || searchParams.get('list_feed_url') || null;
+    async function submitRefreshFormAsync(form) {
+      const response = await fetch(form.action, {
+        method: 'POST',
+        body: new FormData(form),
+        credentials: 'same-origin',
+        redirect: 'follow',
+      });
 
-      const postItem = getActivePostItem();
-      if (postItem) {
-        setContextFromPostItem(postItem);
-        feedUrl = postItem.getAttribute('data-post-feed-url') || feedUrl;
-        const folderInput = postItem.querySelector('.post-read-toggle-form input[name="folder_id"], .post-save-toggle-form input[name="folder_id"]');
-        if (folderInput instanceof HTMLInputElement && folderInput.value) {
-          folderId = folderInput.value;
+      if (!response.ok) {
+        throw new Error(`Refresh failed (${response.status})`);
+      }
+
+      const finalUrl = response.url || window.location.href;
+      try {
+        const finalParams = new URL(finalUrl, window.location.origin).searchParams;
+        const message = finalParams.get('message');
+        if (message && typeof showToastMessage === 'function') {
+          showToastMessage(message);
         }
+      } catch (_e) {
+        // ignore URL parse issues
+      }
+
+      if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+        await loadScopePanesWithoutFullRefresh(finalUrl, false);
+        return;
+      }
+
+      window.location.href = finalUrl;
+    }
+
+    async function refreshCurrentFeedOrFolder() {
+      const searchParams = new URLSearchParams(window.location.search);
+      let folderId = searchParams.get('folder_id') || contextFolderId || null;
+      const scopeListFeedUrl = searchParams.get('list_feed_url') || null;
+      const entryFeedUrl = searchParams.get('feed_url') || null;
+      const isEntryScope = searchParams.has('entry_id');
+      let feedUrl = scopeListFeedUrl || (isEntryScope ? entryFeedUrl : null);
+      const entryId = searchParams.get('entry_id') || '';
+      const sortBy = searchParams.get('sort_by') || 'post';
+      const sortDir = searchParams.get('sort_dir') || 'desc';
+      const readFilter = searchParams.get('read_filter') || 'unread';
+      const starOnly = searchParams.get('star_only') || '0';
+      const resumeReadFilter = searchParams.get('resume_read_filter') || readFilter;
+      const tag = searchParams.get('tag') || '';
+
+      if (!folderId) {
+        const rootTree = document.querySelector('.tree[data-root-folder-id]');
+        if (rootTree instanceof HTMLElement) {
+          folderId = rootTree.getAttribute('data-root-folder-id') || null;
+        }
+      }
+
+      try {
+        if (window.isSingleMode && window.isSingleMode()) {
+          const currentPaneLevel = Number.parseInt(document.body.getAttribute('data-single-pane-level') || '0', 10);
+          window.sessionStorage.setItem('lectio-single-pane-restore-level', String(Number.isInteger(currentPaneLevel) ? currentPaneLevel : 0));
+        }
+      } catch (_e) {
+        // ignore storage failures
       }
 
       if (feedUrl && folderId && refreshFeedFolderIdInput && refreshFeedUrlInput && refreshListFeedUrlInput && refreshFeedForm) {
         refreshFeedFolderIdInput.value = folderId;
         refreshFeedUrlInput.value = feedUrl;
         refreshListFeedUrlInput.value = feedUrl;
-        refreshFeedForm.submit();
+        if (refreshFeedEntryIdInput) refreshFeedEntryIdInput.value = entryId;
+        if (refreshFeedSortByInput) refreshFeedSortByInput.value = sortBy;
+        if (refreshFeedSortDirInput) refreshFeedSortDirInput.value = sortDir;
+        if (refreshFeedReadFilterInput) refreshFeedReadFilterInput.value = readFilter;
+        if (refreshFeedStarOnlyInput) refreshFeedStarOnlyInput.value = starOnly;
+        if (refreshFeedResumeReadFilterInput) refreshFeedResumeReadFilterInput.value = resumeReadFilter;
+        if (refreshFeedTagInput) refreshFeedTagInput.value = tag;
+        await submitRefreshFormAsync(refreshFeedForm);
       } else if (folderId && refreshFolderIdInput && refreshFolderForm) {
         refreshFolderIdInput.value = folderId;
-        refreshFolderForm.submit();
+        if (refreshFolderListFeedUrlInput) refreshFolderListFeedUrlInput.value = '';
+        if (refreshFolderFeedUrlInput) refreshFolderFeedUrlInput.value = '';
+        if (refreshFolderEntryIdInput) refreshFolderEntryIdInput.value = '';
+        if (refreshFolderSortByInput) refreshFolderSortByInput.value = sortBy;
+        if (refreshFolderSortDirInput) refreshFolderSortDirInput.value = sortDir;
+        if (refreshFolderReadFilterInput) refreshFolderReadFilterInput.value = readFilter;
+        if (refreshFolderStarOnlyInput) refreshFolderStarOnlyInput.value = starOnly;
+        if (refreshFolderResumeReadFilterInput) refreshFolderResumeReadFilterInput.value = resumeReadFilter;
+        if (refreshFolderTagInput) refreshFolderTagInput.value = tag;
+        await submitRefreshFormAsync(refreshFolderForm);
       }
     }
+
+    window.refreshCurrentFeedOrFolder = refreshCurrentFeedOrFolder;
 
     function toggleEntryTagsPanel() {
       if (entryTagsForm instanceof HTMLFormElement) {

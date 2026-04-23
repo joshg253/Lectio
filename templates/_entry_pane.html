@@ -311,21 +311,23 @@
   </div>
   <article class="entry">
     <div id="entry-body" class="entry-body">
-      {% if selected_entry.lead_image_url %}
-      <img
-        class="entry-lead-image"
-        src="{{ selected_entry.lead_image_url }}"
-        alt=""
-        loading="lazy"
-      />
-      {% endif %}
-      {% if selected_entry.content_html %}
-      <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
-      {% elif selected_entry.summary %}
-      <pre class="entry-text">{{ selected_entry.summary }}</pre>
-      {% else %}
-      <div class="muted">No content available.</div>
-      {% endif %}
+      <div class="entry-zoom-target">
+        {% if selected_entry.lead_image_url %}
+        <img
+          class="entry-lead-image"
+          src="{{ selected_entry.lead_image_url }}"
+          alt=""
+          loading="lazy"
+        />
+        {% endif %}
+        {% if selected_entry.content_html %}
+        <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
+        {% elif selected_entry.summary %}
+        <pre class="entry-text">{{ selected_entry.summary }}</pre>
+        {% else %}
+        <div class="muted">No content available.</div>
+        {% endif %}
+      </div>
     </div>
     <iframe
       id="entry-source-frame"

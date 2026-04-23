@@ -38,6 +38,8 @@ Lectio is a local-first browser feed reader with a three-pane layout:
 - Source/readability/frame-check entry endpoints for source loading modes
 - Entry header quick actions for save + read/unread, with Reader/Web/Open controls moved into the lower tag/action row
 - Entry header read/unread toggles update in place (no full page reload) and keep list/header state synchronized
+- In 1-pane mobile entry view, swipe left/right in the post content area to open next/previous posts in the current list scope
+- In 1-pane mobile entry view, pinch/spread zoom adjusts entry content zoom (text/images) without scaling the app chrome
 - Entry content media guardrails: oversized inline images are constrained to fit the viewport
 - For short blurb-style posts, Lectio attempts to pull a lead image from the source page (for example via og:image/twitter:image) when the feed payload has no inline image
 - Standard Ebooks entries prefer canonical `/downloads/cover.jpg` as lead image via site plugin fallback
@@ -46,6 +48,24 @@ Lectio is a local-first browser feed reader with a three-pane layout:
 - Background auto-refresh of all feeds (default every 60 minutes)
 - Per-feed manual refresh endpoint
 - OPML import/export
+
+## Running Lectio
+
+PowerShell (local machine only):
+
+```powershell
+$env:LECTIO_REFRESH_DEBUG = '1'
+uv run uvicorn main:app --reload
+```
+
+PowerShell (LAN access from phone/tablet):
+
+```powershell
+$env:LECTIO_REFRESH_DEBUG = '1'
+uv run uvicorn main:app --reload --reload-exclude .venv --host 0.0.0.0 --port 8000
+```
+
+Then open `http://<YOUR_LAN_IP>:8000` from another device on the same network.
 
 ## YouTube Video Embeds
 
@@ -75,6 +95,7 @@ If `YOUTUBE_API_KEY` is not set, Lectio falls back to scraping the YouTube video
 - Manual refresh: use the `Refresh Selected` button to update feeds in the current folder subtree.
 - Manual refresh keeps your current scope/filter context (and selected entry when available) instead of resetting view state.
 - In 1-pane mobile mode, pull-to-refresh on Folders or Posts updates counts/posts in place without a full page reload.
+- Mobile action modals are keyboard-aware and shift upward when the virtual keyboard is open.
 - Repeatedly failing feeds are automatically retried with exponential backoff (up to 24h), then resume normal cadence once healthy.
 - Scheduled refresh: Lectio refreshes all subscribed feeds in the background every 60 minutes by default.
 - To change the interval, set `LECTIO_AUTO_REFRESH_MINUTES` before starting the app; values lower than 15 are clamped to 15.
