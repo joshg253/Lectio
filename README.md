@@ -142,3 +142,21 @@ The project workflow and tooling choices in this repo were informed by:
 2. reader project/docs and release notes:
 	- https://death.andgravity.com/reader-3-22
 	- https://reader.readthedocs.io/en/stable/
+
+	## Icons / Glyphs
+
+	- **Source:** Icons used in Lectio come from Google Fonts Icons (Material Symbols) — https://fonts.google.com/icons
+	- **Variant used:** Material Symbols Rounded. The app includes the stylesheet in the main template so glyphs render correctly.
+
+	- **Where it's loaded:** the Material Symbols stylesheet is included in the app shell at [templates/index.html](templates/index.html#L15).
+
+	- **How to use in templates:** add a span with the `material-symbols-rounded` class and the symbol name as the text content. Example:
+
+	```html
+	<span class="material-symbols-rounded" aria-hidden="true">menu</span>
+	```
+
+	- **Notes:**
+		- CSS in `static/style.css` already contains rules targeting `.material-symbols-rounded` and various icon helper classes.
+		- Where an icon is appropriate, prefer the Material Symbols glyph over custom inline SVGs to keep visual consistency (see `.github/copilot-instructions.md` guidance).
+

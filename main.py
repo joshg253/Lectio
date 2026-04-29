@@ -1634,6 +1634,23 @@ def list_entries_for_feeds(
     return entries
 
 
+@app.post("/internal/warm-lead-image-cache")
+def internal_warm_lead_image_cache():
+    """Reload the lead-image cache from the meta DB.
+
+    Useful for forcing the running process to pick up lead images that
+    were backfilled or modified on disk without restarting the server.
+    """
+    try:
+        lead_image_service.warm_cache_from_db()
+        # Expose how many entries are now cached for quick verification.
+        cached = getattr(lead_image_service, "_cache", {})
+        sample_keys = list(cached.keys())[:5]
+        return JSONResponse({"status": "ok", "cached": len(cached), "sample": sample_keys})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
 def filter_feed_urls(feed_urls: set[str], list_feed_url: str | None) -> set[str]:
     if not list_feed_url:
         return feed_urls
@@ -1706,6 +1723,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             is_saved = bool(row)
 
         lead_image_url = lead_image_service.resolve_entry_lead_image_url(entry, content_html, entry.summary)
+        # If we injected a YouTube embed for this entry, avoid showing a
+        # separate lead image (typically the video thumbnail) above the
+        # embedded player — it looks redundant and visually noisy.
+        if video_id:
+            lead_image_url = None
+
         lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
 
         return {
@@ -2096,6 +2119,9 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
             raise RuntimeError("Could not determine id for inserted folder.")
         return int(cursor.lastrowid)
 
+    # Track feeds already assigned to a folder (including existing subscriptions)
+    feeds_with_folder = set(row["feed_url"] for row in conn.execute("SELECT feed_url FROM folder_feeds"))
+
     with get_reader() as reader:
 
         def walk(outline: ET.Element, target_folder_id: int, may_create_folder: bool) -> None:
@@ -2104,11 +2130,15 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
             if feed_url:
                 feed_url = feed_url.strip()
                 if feed_url:
+                    if feed_url in feeds_with_folder:
+                        # Already assigned to a folder, skip
+                        return
                     reader.add_feed(feed_url, exist_ok=True)
                     conn.execute(
                         "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                         (target_folder_id, feed_url),
                     )
+                    feeds_with_folder.add(feed_url)
                     imported += 1
                 return
 

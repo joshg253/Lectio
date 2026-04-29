@@ -13,7 +13,11 @@
         "reveal": "always",
         "panel": "dedicated"
       },
-      "problemMatcher": []
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
     }
   ]
 }

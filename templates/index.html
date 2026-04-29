@@ -2891,10 +2891,10 @@
       const existingImage = thumbnail.querySelector('.post-thumbnail-image');
 
       if (!leadImageUrl) {
-        if (existingImage instanceof HTMLImageElement) {
-          existingImage.remove();
-        }
-        thumbnail.classList.add('is-empty');
+        // If there is no lead image for the entry (for example we suppressed
+        // the video thumbnail when injecting a YouTube player), do not
+        // remove or clear the thumbnail shown in the posts list — keep the
+        // list thumbnail generated from `post.thumbnail_url` intact.
         return;
       }
 

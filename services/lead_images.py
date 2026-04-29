@@ -159,6 +159,58 @@ class LeadImageService:
                 else:
                     return cached
 
+        # Some feeds (for example NYTimes) expose media thumbnail fields or
+        # image enclosures on the entry object. Check common locations before
+        # parsing HTML so we can surface thumbnails reliably in the posts list.
+        try:
+            # media_thumbnail may be a list of dicts or a single dict
+            media_thumb = getattr(entry, "media_thumbnail", None)
+            if media_thumb:
+                # normalize list/dict
+                candidates = media_thumb if isinstance(media_thumb, (list, tuple)) else [media_thumb]
+                for item in candidates:
+                    url = None
+                    if isinstance(item, dict):
+                        url = item.get("url") or item.get("href")
+                    elif isinstance(item, str):
+                        url = item
+                    if url:
+                        resolved = url
+                        if self._is_image_url_acceptable(resolved, None, None):
+                            return resolved
+
+            # media_content is often a list of dicts with 'url' and 'type'
+            media_content = getattr(entry, "media_content", None)
+            if media_content:
+                candidates = media_content if isinstance(media_content, (list, tuple)) else [media_content]
+                for item in candidates:
+                    if isinstance(item, dict):
+                        url = item.get("url")
+                        mtype = item.get("type", "")
+                        if url and (mtype.startswith("image") or self._is_image_url_acceptable(url, None, None)):
+                            return url
+
+            # Some parsers expose enclosure/link entries on `links`.
+            links = getattr(entry, "links", None)
+            if links and isinstance(links, (list, tuple)):
+                for l in links:
+                    try:
+                        href = l.get("href") if isinstance(l, dict) else getattr(l, "href", None)
+                        rel = (l.get("rel") if isinstance(l, dict) else getattr(l, "rel", None)) or ""
+                        ltype = (l.get("type") if isinstance(l, dict) else getattr(l, "type", None)) or ""
+                    except Exception:
+                        continue
+                    if not href:
+                        continue
+                    if rel == "enclosure" and ltype.startswith("image"):
+                        if self._is_image_url_acceptable(href, None, None):
+                            return href
+                    # fallback: if link looks like an image URL
+                    if self._is_image_url_acceptable(href, None, None):
+                        return href
+        except Exception:
+            pass
+
         html_candidates: list[str] = []
         content_html: str | None = None
 
@@ -184,9 +236,21 @@ class LeadImageService:
                 return linked_image
 
         if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
+            # First try plugin-provided fallback (fast). If none, attempt a
+            # lightweight source-page lookup to extract a better thumbnail so
+            # the posts list shows the same hero image users see when opening
+            # the entry (helps sites like PC Gamer which provide poor feed
+            # thumbnails).
             plugin_fallback = self._plugin_fallback_lead_image_url(entry_link=entry_link, content_html=content_html, summary=summary)
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
+
+            try:
+                source_image = self._fetch_source_lead_image(entry_link)
+                if source_image and self._is_image_url_acceptable(source_image, None, None):
+                    return source_image
+            except Exception:
+                pass
 
         return None
 
