@@ -39,6 +39,25 @@ Non-native behavior goes through plugin/adapter patterns rather than hardwired b
 - `ty` for type checking
 - Justify any alternative before introducing it
 
+### uv enforcement rules
+
+Never invoke `python` or `python3` directly. Always use `uv` as the entrypoint:
+
+| Task | Command |
+|---|---|
+| Run a script | `uv run path/to/script.py` |
+| Run a module | `uv run -m package.module` |
+| Run a one-liner | `uv run python -c "..."` |
+| Run a tool | `uv run tool-name` (e.g. `uv run pytest`) |
+| Add a dep to a standalone script | `uv add --script path/to/script.py <package>` |
+| Remove a dep from a standalone script | `uv remove --script path/to/script.py <package>` |
+
+Using `python` inside `uv run ...` is fine — `uv` is still the entrypoint.
+
+For new standalone scripts (not part of the main project): use `uv init --script script.py` to create it, then `uv add --script` / `uv remove --script` to manage its inline dependencies. Never hand-edit PEP 723 metadata blocks.
+
+If docs or examples use `python`/`python3` directly, translate to the nearest `uv` form before running.
+
 ## View state model
 
 Three distinct categories — keep them separate:
