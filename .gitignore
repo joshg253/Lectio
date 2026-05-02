@@ -12,3 +12,4 @@ __pycache__/
 .uv-cache/
 .history
 .uvcache/
+thumb_cache/

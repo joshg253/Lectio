@@ -46,6 +46,7 @@
           data-received-iso="{{ selected_entry.received_timestamp or '' }}"
           data-post-display="{{ selected_entry.post_display or '' }}"
           data-received-display="{{ selected_entry.received_display or '' }}"
+          data-time-format="long"
           datetime="{{ selected_entry.post_timestamp or '' }}"
           >{{ selected_entry.post_display }}</time
         >
@@ -316,9 +317,13 @@
         <img
           class="entry-lead-image"
           src="{{ selected_entry.lead_image_url }}"
-          alt=""
+          alt="{{ selected_entry.image_title_text or '' }}"
+          {% if selected_entry.image_title_text %}title="{{ selected_entry.image_title_text }}"{% endif %}
           loading="lazy"
         />
+        {% if selected_entry.image_title_text %}
+        <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
+        {% endif %}
         {% endif %}
         {% if selected_entry.content_html %}
         <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
@@ -326,6 +331,9 @@
         <pre class="entry-text">{{ selected_entry.summary }}</pre>
         {% else %}
         <div class="muted">No content available.</div>
+        {% endif %}
+        {% if not selected_entry.lead_image_url and selected_entry.image_title_text %}
+        <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
         {% endif %}
       </div>
     </div>

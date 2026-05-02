@@ -6,6 +6,15 @@ import time
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any, cast
+from urllib.parse import urlparse
+
+
+def _feed_domain(feed_url: str) -> str:
+    """Return the netloc (host[:port]) of a feed URL, lower-cased."""
+    try:
+        return urlparse(feed_url).netloc.lower()
+    except Exception:
+        return ""
 
 
 class FeedRefreshService:
@@ -129,6 +138,7 @@ class FeedRefreshService:
         now_ts = time.time()
 
         feed_state_map: dict[str, dict[str, object]] = {}
+        domain_state_map: dict[str, dict[str, object]] = {}
         with self._get_meta_connection() as conn:
             placeholders = ",".join("?" for _ in feed_url_list)
             rows = conn.execute(
@@ -141,20 +151,48 @@ class FeedRefreshService:
                     "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
                 }
 
+            # Load domain-level failure state for all domains in this batch.
+            domains = list({_feed_domain(u) for u in feed_url_list if _feed_domain(u)})
+            if domains:
+                domain_placeholders = ",".join("?" for _ in domains)
+                domain_rows = conn.execute(
+                    f"SELECT domain, consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
+                    domains,
+                ).fetchall()
+                for row in domain_rows:
+                    domain_state_map[str(row["domain"])] = {
+                        "consecutive_failures": int(row["consecutive_failures"] or 0),
+                        "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
+                    }
+
             with self._get_reader() as reader:
                 for idx, feed_url in enumerate(feed_url_list, start=1):
                     feed_started_at = time.perf_counter()
                     feed_state = feed_state_map.get(feed_url) or {}
-                    next_retry_at = cast(float | None, feed_state.get("next_retry_at"))
-                    if next_retry_at is not None and next_retry_at > now_ts:
+                    domain = _feed_domain(feed_url)
+                    domain_state = domain_state_map.get(domain) or {}
+
+                    # Skip if either the feed-level or domain-level backoff is active.
+                    feed_next_retry = cast(float | None, feed_state.get("next_retry_at"))
+                    domain_next_retry = cast(float | None, domain_state.get("next_retry_at"))
+                    effective_next_retry = (
+                        max(
+                            feed_next_retry if feed_next_retry is not None else 0.0,
+                            domain_next_retry if domain_next_retry is not None else 0.0,
+                        )
+                        or None
+                    )
+                    if effective_next_retry is not None and effective_next_retry > now_ts:
                         skipped_count += 1
                         if self._refresh_debug_enabled:
-                            retry_in_seconds = int(max(1, next_retry_at - now_ts))
+                            retry_in_seconds = int(max(1, effective_next_retry - now_ts))
+                            source = "domain" if (domain_next_retry or 0) >= (feed_next_retry or 0) else "feed"
                             self._logger.info(
-                                "[refresh] skipping %d/%d for %ds backoff: %s",
+                                "[refresh] skipping %d/%d for %ds %s-backoff: %s",
                                 idx,
                                 len(feed_url_list),
                                 retry_in_seconds,
+                                source,
                                 feed_url,
                             )
                         continue
@@ -186,10 +224,14 @@ class FeedRefreshService:
                             """,
                             (feed_url, now_ts),
                         )
-                        feed_state_map[feed_url] = {
-                            "consecutive_failures": 0,
-                            "next_retry_at": None,
-                        }
+                        feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                        # A successful connection to the domain clears the domain-level backoff.
+                        if domain:
+                            conn.execute(
+                                "DELETE FROM domain_failure_state WHERE domain = ?",
+                                (domain,),
+                            )
+                            domain_state_map.pop(domain, None)
                     except Exception as exc:
                         error_count += 1
                         raw_failures = feed_state.get("consecutive_failures")
@@ -225,6 +267,30 @@ class FeedRefreshService:
                             "consecutive_failures": consecutive_failures,
                             "next_retry_at": next_retry,
                         }
+
+                        # Update domain-level backoff: use the max consecutive_failures
+                        # seen from any feed on this domain so far in this cycle.
+                        if domain:
+                            prev_domain = domain_state_map.get(domain) or {}
+                            prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
+                            domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
+                            domain_backoff = self.compute_failed_feed_backoff_seconds(domain_consecutive)
+                            domain_next_retry_new = now_ts + domain_backoff
+                            conn.execute(
+                                """
+                                INSERT INTO domain_failure_state (domain, consecutive_failures, next_retry_at, last_failure_at)
+                                VALUES (?, ?, ?, ?)
+                                ON CONFLICT(domain) DO UPDATE SET
+                                    consecutive_failures = excluded.consecutive_failures,
+                                    next_retry_at = excluded.next_retry_at,
+                                    last_failure_at = excluded.last_failure_at
+                                """,
+                                (domain, domain_consecutive, domain_next_retry_new, now_ts),
+                            )
+                            domain_state_map[domain] = {
+                                "consecutive_failures": domain_consecutive,
+                                "next_retry_at": domain_next_retry_new,
+                            }
 
                         if self._refresh_debug_enabled:
                             elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)

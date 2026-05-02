@@ -16,12 +16,18 @@ from typing import Annotated, Sequence, cast
 from urllib.parse import quote_plus, urljoin, urlparse
 
 import feedparser
+import hashlib
 import httpx
-from fastapi import FastAPI, File, Form, Request, UploadFile
+import io
+import secrets
+from PIL import Image as _PILImage
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from readability import Document
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
@@ -94,6 +100,7 @@ def _load_local_env(env_path: str | Path | None = None) -> None:
 _load_local_env()
 META_DB_PATH = BASE_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = BASE_DIR / "lectio_reader.sqlite"
+THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
 ROOT_FOLDER_NAME = "All Feeds"
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 15
@@ -116,8 +123,30 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260422c")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260502h")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "1") == "1"
+DEBUG_MODE = os.getenv("LECTIO_DEBUG", "1") == "1"
+
+# --- Auth config ---
+# Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
+# If either is absent, auth is disabled (safe for local-only use).
+# LECTIO_SECRET_KEY is used to sign session cookies; generate one with:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# If not set a random key is generated at startup (sessions won't survive restarts).
+AUTH_USERNAME = os.getenv("LECTIO_USERNAME", "")
+AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
+AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
+if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
+    LOGGER.warning(
+        "LECTIO_SECRET_KEY is not set — using a random key. Sessions will not survive server restarts. Set a stable key in your .env."
+    )
+# Cookie lifetime: 1 year. Changing this requires users to log in again.
+SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 * 3600)))
+# Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
+_HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
+# Paths that are always public (no login required)
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -127,6 +156,19 @@ updating_feeds_lock = threading.Lock()
 updating_feeds: set[str] = set()
 feed_tag_suggestion_cache_lock = threading.Lock()
 feed_tag_suggestion_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
+# Short in-memory TTL cache for tag counts to avoid repeatedly scanning
+# reader entries on every request. Small TTL keeps counts fresh while
+# preventing repeated expensive work during rapid navigation.
+TAG_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_TAG_COUNTS_CACHE_TTL", "5"))
+tag_counts_cache_lock = threading.Lock()
+tag_counts_cache: dict[tuple[str, ...], tuple[float, list[dict[str, int | str]]]] = {}
+
+# Short in-memory TTL cache for unread counts so the UI doesn't scan the
+# entire reader DB on every load. TTL is small to stay responsive to new
+# incoming posts.
+UNREAD_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_UNREAD_COUNTS_CACHE_TTL", "5"))
+unread_counts_cache_lock = threading.Lock()
+unread_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
 
 
 def is_async_action_request(request: Request, expected_header: str | None = None) -> bool:
@@ -198,6 +240,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Lectio", lifespan=lifespan)
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not AUTH_ENABLED:
+            return await call_next(request)
+        path = request.url.path
+        if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
+            return await call_next(request)
+        if request.session.get("authenticated"):
+            return await call_next(request)
+        next_url = str(request.url)
+        return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
+
+
+# SessionMiddleware must be added before AuthMiddleware so request.session is available.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    max_age=SESSION_MAX_AGE_SECONDS,
+    https_only=_HTTPS_ONLY,
+    same_site="lax",
+)
+# When running behind Traefik/nginx/Caddy, trust forwarded headers so
+# uvicorn sees the real scheme and client IP.
+if _HTTPS_ONLY:
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+app.add_middleware(_AuthMiddleware)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["urlencode"] = lambda value: quote_plus(str(value))
@@ -306,6 +379,25 @@ def ensure_meta_schema() -> None:
                 image_url TEXT,
                 fetched_at REAL NOT NULL,
                 PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS domain_failure_state (
+                domain TEXT PRIMARY KEY,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                next_retry_at REAL,
+                last_failure_at REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_lead_image_strategy (
+                feed_url TEXT PRIMARY KEY,
+                strategy TEXT NOT NULL DEFAULT 'unknown',
+                detected_at REAL NOT NULL
             )
             """
         )
@@ -553,6 +645,16 @@ def get_unread_counts_by_folder(
 
 
 def get_unread_counts_by_feed() -> dict[str, int]:
+    # Use a short-lived in-memory cache to avoid scanning the entire
+    # reader DB on every page render. Cache TTL is configurable.
+    now = time.time()
+    with unread_counts_cache_lock:
+        cached = unread_counts_cache.get("unread_counts")
+        if cached:
+            ts, value = cached
+            if now - ts < UNREAD_COUNTS_CACHE_TTL_SECONDS:
+                return value.copy()
+
     counts: dict[str, int] = {}
     seen_keys: set[str] = set()
     with get_reader() as reader:
@@ -565,6 +667,10 @@ def get_unread_counts_by_feed() -> dict[str, int]:
                     continue
                 seen_keys.add(dedupe_key)
             counts[entry.feed_url] = counts.get(entry.feed_url, 0) + 1
+
+    with unread_counts_cache_lock:
+        unread_counts_cache["unread_counts"] = (now, counts.copy())
+
     return counts
 
 
@@ -910,6 +1016,15 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     if not feed_urls:
         return []
 
+    key = tuple(sorted(feed_urls))
+    now = time.time()
+    with tag_counts_cache_lock:
+        cached = tag_counts_cache.get(key)
+        if cached:
+            ts, value = cached
+            if now - ts < TAG_COUNTS_CACHE_TTL_SECONDS:
+                return value
+
     counts: dict[str, int] = {}
     with get_reader() as reader:
         for feed_url in feed_urls:
@@ -917,7 +1032,10 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
                 for tag in get_manual_tags_for_resource(reader, entry.resource_id):
                     counts[tag] = counts.get(tag, 0) + 1
 
-    return [{"name": tag, "count": counts[tag]} for tag in sorted(counts)]
+    result = [{"name": tag, "count": counts[tag]} for tag in sorted(counts)]
+    with tag_counts_cache_lock:
+        tag_counts_cache[key] = (now, result)
+    return result
 
 
 def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
@@ -1500,28 +1618,37 @@ def list_entries_for_feeds(
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
         # actual site domain rather than the feed host (e.g. hnrss.org).
-        feed_site_map: dict[str, str | None] = {}
-        for feed_url in feed_urls:
-            try:
-                feed_obj = reader.get_feed(feed_url, None)
-                feed_site_map[feed_url] = getattr(feed_obj, "link", None) if feed_obj else None
-            except Exception:
-                feed_site_map[feed_url] = None
+        # Single get_feeds() call instead of one get_feed() per feed.
+        fetch_start = time.perf_counter()
+        feed_site_map: dict[str, str | None] = {url: None for url in feed_urls}
+        for feed_obj in reader.get_feeds():
+            if feed_obj.url in feed_site_map:
+                feed_site_map[feed_obj.url] = getattr(feed_obj, "link", None) or None
 
-        # Fetch entries from only the specified feeds to avoid limit issues
+        # Fetch entries with a single global query then filter in Python.
+        # This replaces N per-feed get_entries() calls (one per feed URL) with
+        # one query, which is dramatically faster with 100+ feeds.
+        # For descending sort we stop collecting once we have fetch_limit entries
+        # (early exit). For ascending sort or search we must see all matches.
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
-        for feed_url in feed_urls:
-            # Search should operate over the whole feed slice to keep ordering
-            # and result inclusion consistent with the selected sort controls.
-            # For ascending sort (oldest-first), avoid per-feed truncation so
-            # global oldest ordering remains stable after read/unread actions.
-            if search_terms or normalized_sort_dir == "asc":
-                search_fetch_limit = None
-            else:
-                search_fetch_limit = fetch_limit
-            all_feed_entries.extend(reader.get_entries(feed=feed_url, read=reader_read_filter, limit=search_fetch_limit))
+        need_all = bool(search_terms or normalized_sort_dir == "asc")
+        for entry in reader.get_entries(read=reader_read_filter):
+            if entry.feed_url not in feed_urls:
+                continue
+            all_feed_entries.append(entry)
+            if not need_all and len(all_feed_entries) >= fetch_limit:
+                break
 
+        fetch_ms = int((time.perf_counter() - fetch_start) * 1000)
+        LOGGER.info(
+            "[perf] list_entries: feeds=%d entries_fetched=%d fetch_ms=%d",
+            len(feed_urls),
+            len(all_feed_entries),
+            fetch_ms,
+        )
+
+        process_start = time.perf_counter()
         for entry in all_feed_entries:
             is_read = bool(entry.read)
             is_saved = (entry.feed_url, entry.id) in saved_entries_set
@@ -1577,7 +1704,7 @@ def list_entries_for_feeds(
                     "id": entry.id,
                     "title": title_text,
                     "link": entry.link,
-                    "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=True),
+                    "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False),
                     "feed_title": entry.feed_resolved_title or entry.feed_url,
                     "feed_icon_url": get_favicon_url(entry.feed_url, feed_site_map.get(entry.feed_url)),
                     "manual_tags": manual_tags,
@@ -1625,6 +1752,9 @@ def list_entries_for_feeds(
     )
 
     entries = entries[:limit]
+
+    process_ms = int((time.perf_counter() - process_start) * 1000)
+    LOGGER.info("[perf] list_entries: entries_processed=%d process_ms=%d", len(entries), process_ms)
 
     for entry in entries:
         entry.pop("post_sort_value", None)
@@ -1729,6 +1859,80 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if video_id:
             lead_image_url = None
 
+        # If the lead image URL appears verbatim in content_html, suppress it
+        # so the same image doesn't render both above and inside the content.
+        if lead_image_url and isinstance(content_html, str) and lead_image_url in content_html:
+            lead_image_url = None
+
+        # If we still have a lead image, strip the first <img> from content_html
+        # when it appears as the very first element (possibly inside a bare <p>,
+        # <a>, <figure>, or <div> wrapper).  Many feeds embed a thumbnail at the
+        # top; we've already promoted a better/full-size image as the lead hero,
+        # so the inline thumbnail below it is a visual duplicate.
+        _LEAD_IMG_OPENER_RE = re.compile(
+            r"^\s*(?:<(?:p|a|figure|div)\b[^>]*>\s*)?"
+            r"<img\b[^>]*/?>",
+            re.IGNORECASE,
+        )
+        if lead_image_url and isinstance(content_html, str):
+            _m = _LEAD_IMG_OPENER_RE.match(content_html)
+            if _m:
+                content_html = content_html[_m.end() :].lstrip() or None
+
+        # If lead_image_url came from source scraping and the remaining content
+        # is essentially just a thumbnail wrapper (minimal text after stripping
+        # all imgs), strip the inline img tags so thumbnails don't appear below
+        # the full-size lead image.
+        if lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
+            _no_imgs = re.sub(r"<img\b[^>]*/?>", "", content_html, flags=re.IGNORECASE)
+            _text_only = re.sub(r"<[^>]+>", " ", _no_imgs)
+            _text_only = html.unescape(re.sub(r"\s+", " ", _text_only)).strip()
+            if len(_text_only) < 120:
+                content_html = _no_imgs.strip() or None
+
+        # Extract img title/alt text from content_html for caption display.
+        # Useful for comics (xkcd etc.) where the hover text is the punchline.
+        image_title_text: str | None = None
+        if isinstance(content_html, str):
+            _img_title_match = re.search(
+                r'<img\b[^>]+\btitle=(?:"([^"]*)"|\x27([^\x27]*)\x27)',
+                content_html,
+                re.IGNORECASE,
+            )
+            if _img_title_match:
+                _candidate = html.unescape((_img_title_match.group(1) or _img_title_match.group(2) or "")).strip()
+                if _candidate:
+                    image_title_text = _candidate
+
+        # Fallback: check the alt text on the main image on the source page.
+        # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
+        # where the alt text lives on the full-size img on the article page.
+        # Uses the source HTML cache from lead image resolution — no extra HTTP call
+        # when the entry was just opened for the first time.
+        if image_title_text is None and lead_image_url and entry.link:
+            image_title_text = lead_image_service.fetch_entry_image_alt(entry.link) or None
+
+        # Inject image_title_text as alt attribute on the first <img> in content_html
+        # when the image is inline (no separate lead_image_url, e.g. xkcd).
+        if image_title_text and not lead_image_url and isinstance(content_html, str):
+
+            def _inject_alt(m: re.Match) -> str:
+                tag = m.group(0)
+                if re.search(r"\balt\s*=", tag, re.IGNORECASE):
+                    # Replace existing (possibly empty) alt value
+                    tag = re.sub(
+                        r'(\balt\s*=\s*)(?:"[^"]*"|\x27[^\x27]*\x27)',
+                        lambda a: a.group(1) + '"' + image_title_text.replace('"', "&quot;") + '"',
+                        tag,
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    tag = tag[:-1] + ' alt="' + image_title_text.replace('"', "&quot;") + '"' + tag[-1]
+                return tag
+
+            content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
+
         lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
 
         return {
@@ -1739,6 +1943,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "summary": entry.summary,
             "content_html": content_html,
             "lead_image_url": lead_image_url,
+            "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
             "feed_title": entry.feed_resolved_title or entry.feed_url,
@@ -2175,6 +2380,43 @@ def entry_frame_check(url: str):
     return JSONResponse(probe_frameability(url))
 
 
+# ---------------------------------------------------------------------------
+# Auth routes (/login, /logout)
+# These are only active when LECTIO_USERNAME + LECTIO_PASSWORD are set.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/login")
+def login_page(request: Request, next: str = "/"):
+    if not AUTH_ENABLED or request.session.get("authenticated"):
+        return RedirectResponse(url=next or "/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "next": next, "error": None, "static_asset_version": STATIC_ASSET_VERSION},
+    )
+
+
+@app.post("/login")
+async def login_submit(request: Request, next: str = "/"):
+    form = await request.form()
+    username = str(form.get("username") or "")
+    password = str(form.get("password") or "")
+    if AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
+        request.session["authenticated"] = True
+        return RedirectResponse(url=next or "/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "next": next, "error": "Invalid username or password.", "static_asset_version": STATIC_ASSET_VERSION},
+        status_code=401,
+    )
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
 @app.get("/")
 def home(
     request: Request,
@@ -2213,6 +2455,7 @@ def home(
         if cookie_rf:
             read_filter = cookie_rf
 
+    start_req = time.perf_counter()
     with get_meta_connection() as conn:
         preferred_sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
         preferred_sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
@@ -2245,6 +2488,9 @@ def home(
         feed_urls = get_folder_feed_urls(conn, selected_folder_id)
         all_feed_urls = get_all_feed_urls(conn)
 
+    meta_block_ms = int((time.perf_counter() - start_req) * 1000)
+    LOGGER.info("[perf] home: meta_block=%dms", meta_block_ms)
+
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
     selected_feed_url = list_feed_url
     selected_tag = normalize_tag_value(tag)
@@ -2265,7 +2511,10 @@ def home(
         selected_tag = None
         selected_star_only = False
 
+    tag_start = time.perf_counter()
     tag_rows = get_tag_counts_for_feeds(filtered_feed_urls)
+    tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
+    LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
     feed_title_map = get_feed_title_map()
     for dedupe_row in dedupe_log_rows:
@@ -2308,6 +2557,7 @@ def home(
     except Exception:
         limit = 250
 
+    posts_start = time.perf_counter()
     posts = list_entries_for_feeds(
         filtered_feed_urls,
         limit=limit,
@@ -2318,6 +2568,18 @@ def home(
         selected_tag=selected_tag,
         search_query=selected_query,
     )
+    posts_block_ms = int((time.perf_counter() - posts_start) * 1000)
+    LOGGER.info("[perf] home: posts_block=%dms", posts_block_ms)
+
+    # Prioritize lead-image backfill for entries currently visible in this chunk.
+    # Fire-and-forget: returns immediately; semaphore prevents concurrent pile-up.
+    uncached_posts = [p for p in posts if not p.get("thumbnail_url")]
+    if uncached_posts:
+        threading.Thread(
+            target=lead_image_service.backfill_entry_list,
+            args=(uncached_posts,),
+            daemon=True,
+        ).start()
 
     # If the client requested a delta chunk (incremental load), return only
     # the slice for that chunk rather than the cumulative list up to limit.
@@ -2377,7 +2639,125 @@ def home(
             "auto_refresh_minutes": getattr(app.state, "auto_refresh_minutes", 0),
             "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
             "static_asset_version": STATIC_ASSET_VERSION,
+            "debug_mode": DEBUG_MODE,
         },
+    )
+
+
+@app.post("/debug/clear-lead-image-cache")
+def debug_clear_lead_image_cache(
+    request: Request,
+    feed_url: str | None = Form(default=None),
+):
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    deleted, evicted_urls = lead_image_service.clear_lead_image_cache(feed_url or None)
+    _purge_thumb_cache_for_urls(evicted_urls)
+    return JSONResponse({"ok": True, "deleted": deleted, "feed_url": feed_url})
+
+
+def _purge_thumb_cache_for_urls(urls: list[str]) -> None:
+    """Delete /thumb disk-cache files for the given image URLs."""
+    for url in urls:
+        if not url:
+            continue
+        cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
+        cache_path = THUMB_CACHE_DIR / f"{cache_key}.jpg"
+        try:
+            cache_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+@app.post("/debug/clear-entry-lead-image-cache")
+def debug_clear_entry_lead_image_cache(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    old_url = lead_image_service.clear_entry_lead_image_cache(feed_url, entry_id)
+    if old_url:
+        _purge_thumb_cache_for_urls([old_url])
+    return JSONResponse({"ok": True, "cleared": old_url is not None})
+
+
+@app.get("/debug/feed-bypass-state")
+def debug_feed_bypass_state(request: Request, feed_url: str = Query(...)):
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    return JSONResponse({"ok": True, "bypassed": feed_url in lead_image_service.get_bypassed_feeds()})
+
+
+@app.post("/debug/toggle-feed-bypass")
+def debug_toggle_feed_bypass(request: Request, feed_url: str = Form(...)):
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    new_state = lead_image_service.toggle_feed_bypass(feed_url)
+    return JSONResponse({"ok": True, "bypassed": new_state})
+
+
+# Thumbnail dimensions: 2× the CSS slot (4.5rem ≈ 72px, tile height ≈ 84px) for retina.
+_THUMB_W = 144
+_THUMB_H = 168
+
+
+@app.get("/thumb")
+def thumbnail_proxy(url: str = Query(...)) -> Response:
+    """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
+    return a cached JPEG.  This eliminates the progressive-load flicker caused by
+    downloading full-size hero images into the small post-list thumbnail slot."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return Response(status_code=400)
+
+    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
+    cache_path = THUMB_CACHE_DIR / f"{cache_key}.jpg"
+
+    if cache_path.exists():
+        return Response(
+            content=cache_path.read_bytes(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
+        )
+
+    try:
+        with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            raw = resp.content
+            src_content_type = resp.headers.get("content-type", "")
+    except Exception:
+        return Response(status_code=502)
+
+    try:
+        img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
+        iw, ih = img.size
+        scale = max(_THUMB_W / iw, _THUMB_H / ih)
+        new_w = max(1, round(iw * scale))
+        new_h = max(1, round(ih * scale))
+        img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+        left = (new_w - _THUMB_W) // 2
+        top = (new_h - _THUMB_H) // 2
+        img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        jpeg_bytes = buf.getvalue()
+        THUMB_CACHE_DIR.mkdir(exist_ok=True)
+        cache_path.write_bytes(jpeg_bytes)
+    except Exception:
+        # Pillow failed (corrupt image, unsupported format, etc.) — serve original.
+        return Response(
+            content=raw,
+            media_type=src_content_type or "image/jpeg",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    return Response(
+        content=jpeg_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
     )
 
 
@@ -2679,6 +3059,8 @@ def mark_folder_as_read(
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
     marked_count = mark_feeds_as_read(feed_urls)
+    with unread_counts_cache_lock:
+        unread_counts_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
@@ -2700,6 +3082,8 @@ def mark_feed_as_read(
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count = mark_feeds_as_read({feed_url})
+    with unread_counts_cache_lock:
+        unread_counts_cache.clear()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = ""
@@ -2742,6 +3126,8 @@ def mark_entry_read(
         else:
             reader.mark_entry_as_unread((feed_url, entry_id))
             delete_entry_read_state(feed_url, entry_id)
+    with unread_counts_cache_lock:
+        unread_counts_cache.clear()
 
     if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
@@ -3142,6 +3528,48 @@ def opml_export():
         content=text,
         media_type="application/xml",
         headers={"Content-Disposition": "attachment; filename=lectio-export.opml"},
+    )
+
+
+@app.get("/stats")
+def get_stats():
+    def _db_bytes(*paths: Path) -> int:
+        total = 0
+        for p in paths:
+            for f in p.parent.glob(p.name + "*"):
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+        return total
+
+    with get_meta_connection() as conn:
+        feed_count = conn.execute("SELECT COUNT(DISTINCT feed_url) FROM folder_feeds").fetchone()[0]
+        # Exclude the root folder from the folder count
+        root_id = get_root_folder_id(conn)
+        folder_count = conn.execute("SELECT COUNT(*) FROM folders WHERE id != ?", (root_id,)).fetchone()[0]
+        saved_count = conn.execute("SELECT COUNT(*) FROM saved_entries").fetchone()[0]
+
+    with get_reader() as reader:
+        counts = reader.get_entry_counts()
+        entry_total = counts.total
+        entry_read = counts.read
+        entry_unread = entry_total - entry_read
+
+    reader_db_bytes = _db_bytes(READER_DB_PATH)
+    meta_db_bytes = _db_bytes(META_DB_PATH)
+
+    return JSONResponse(
+        {
+            "feed_count": feed_count,
+            "folder_count": folder_count,
+            "entry_total": entry_total,
+            "entry_unread": entry_unread,
+            "entry_read": entry_read,
+            "entry_saved": saved_count,
+            "reader_db_bytes": reader_db_bytes,
+            "meta_db_bytes": meta_db_bytes,
+        }
     )
 
 

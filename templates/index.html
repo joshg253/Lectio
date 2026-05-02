@@ -24,6 +24,14 @@
 <body>
   <header class="topbar" role="banner">
   <a class="menu-brand topbar-brand" href="/">Lectio</a>
+  {% if debug_mode %}
+  <div class="topbar-debug" id="topbar-debug">
+    <button type="button" class="topbar-debug-btn" id="debug-bypass-cache-btn" title="Toggle cache bypass for current feed">
+      <span class="material-symbols-rounded" aria-hidden="true">no_photography</span>
+      <span class="topbar-debug-btn-label">Bypass Cache</span>
+    </button>
+  </div>
+  {% endif %}
     <div class="topbar-actions">
       <form method="get" action="/" class="topbar-search-form" role="search" aria-label="Search posts">
         <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
@@ -78,6 +86,7 @@
           </div>
           <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
           <button type="button" class="menu-item" data-toggle-panel="dedupe-log-modal"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span> Dedupe Log{% if dedupe_log_count > 0 %} ({{ dedupe_log_count }}){% endif %}</button>
+          <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -430,7 +439,7 @@
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="{{ post.thumbnail_url }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
             <span class="post-thumbnail-fallback material-symbols-rounded" aria-hidden="true">image</span>
           </div>
@@ -1243,6 +1252,9 @@
   <div id="folder-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-refresh" class="context-menu-item">Refresh</button>
     <button type="button" id="ctx-mark-read" class="context-menu-item">Mark as read</button>
+    {% if debug_mode %}
+    <button type="button" id="ctx-clear-cache" class="context-menu-item debug-item">Clear image cache</button>
+    {% endif %}
     <div id="ctx-add-to-folder-wrap" class="context-submenu-wrap" hidden>
       <button type="button" id="ctx-add-to-folder" class="context-menu-item context-submenu-trigger">Move to Folder <span class="submenu-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
       <div id="ctx-folder-submenu" class="context-submenu" hidden>
@@ -1273,6 +1285,21 @@
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
+    {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
+  </div>
+
+  <div id="debug-confirm-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">
+      <div class="modal-header-row">
+        <h3 id="debug-confirm-title" class="action-modal-title">Clear Image Cache</h3>
+        <button type="button" class="modal-close" data-close-modal="debug-confirm-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p id="debug-confirm-message" class="action-modal-label"></p>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="debug-confirm-modal">Cancel</button>
+        <button type="button" id="debug-confirm-ok" class="danger">Clear</button>
+      </div>
+    </div>
   </div>
 
   <div id="add-folder-modal" class="action-modal" hidden>
@@ -1432,6 +1459,28 @@
     </div>
   </div>
 
+  <div id="stats-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="stats-modal-title">
+      <div class="modal-header-row">
+        <h3 id="stats-modal-title" class="action-modal-title">Library Stats</h3>
+        <button type="button" class="modal-close" data-close-modal="stats-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <dl class="feed-properties-grid">
+        <dt>Feeds</dt><dd id="stat-feed-count">—</dd>
+        <dt>Folders</dt><dd id="stat-folder-count">—</dd>
+        <dt>Total articles</dt><dd id="stat-entry-total">—</dd>
+        <dt>Unread</dt><dd id="stat-entry-unread">—</dd>
+        <dt>Read</dt><dd id="stat-entry-read">—</dd>
+        <dt>Saved</dt><dd id="stat-entry-saved">—</dd>
+        <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
+        <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
+      </dl>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="stats-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const themeToggle = document.getElementById('theme-toggle');
     const themeStylesheet = document.getElementById('theme-stylesheet');
@@ -1473,6 +1522,14 @@
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+    });
+    const localTimeFormatterLong = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
     });
 
     function formatRelativeDate(date) {
@@ -1574,18 +1631,23 @@
         }
         
         // Format the post date
+        const useLong = node.getAttribute('data-time-format') === 'long';
         const now = new Date();
         const isCurrentYear = postDate.getFullYear() === now.getFullYear();
-        const formatted = isCurrentYear
-          ? localTimeFormatterShort.format(postDate)
-          : localTimeFormatterShortWithYear.format(postDate);
+        const formatted = useLong
+          ? localTimeFormatterLong.format(postDate)
+          : isCurrentYear
+            ? localTimeFormatterShort.format(postDate)
+            : localTimeFormatterShortWithYear.format(postDate);
         
         node.textContent = formatted;
         if (node instanceof HTMLTimeElement) node.dateTime = postDate.toISOString();
         
         // Tooltip shows received date if available
         if (receivedDisplay) {
-          node.title = `Article: ${postDisplay || formatted} · Received: ${receivedDisplay}`;
+          node.title = useLong
+            ? `Received: ${receivedDisplay}`
+            : `Article: ${postDisplay || formatted} · Received: ${receivedDisplay}`;
         }
       }
     }
@@ -1868,10 +1930,45 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal, #dedupe-log-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
+        }
+      });
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    const statsModalTrigger = document.querySelector('[data-toggle-panel="stats-modal"]');
+    if (statsModalTrigger) {
+      statsModalTrigger.addEventListener('click', async () => {
+        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-entry-saved', 'stat-reader-db-size', 'stat-meta-db-size'];
+        for (const id of statIds) {
+          const el = document.getElementById(id);
+          if (el) el.textContent = '…';
+        }
+        try {
+          const resp = await fetch('/stats');
+          if (!resp.ok) throw new Error('stats request failed');
+          const data = await resp.json();
+          document.getElementById('stat-feed-count').textContent = data.feed_count.toLocaleString();
+          document.getElementById('stat-folder-count').textContent = data.folder_count.toLocaleString();
+          document.getElementById('stat-entry-total').textContent = data.entry_total.toLocaleString();
+          document.getElementById('stat-entry-unread').textContent = data.entry_unread.toLocaleString();
+          document.getElementById('stat-entry-read').textContent = data.entry_read.toLocaleString();
+          document.getElementById('stat-entry-saved').textContent = data.entry_saved.toLocaleString();
+          document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
+          document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
+        } catch (_e) {
+          for (const id of statIds) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = 'Error';
+          }
         }
       });
     }
@@ -2305,6 +2402,7 @@
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
+    const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
     const postReadFeedUrlInput = document.getElementById('context-post-read-feed-url');
@@ -2898,9 +2996,14 @@
         return;
       }
 
+      const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl);
       if (existingImage instanceof HTMLImageElement) {
-        if (existingImage.getAttribute('src') !== leadImageUrl) {
-          existingImage.setAttribute('src', leadImageUrl);
+        if (existingImage.getAttribute('src') !== thumbedLeadUrl) {
+          existingImage.onerror = () => {
+            thumbnail.classList.add('is-empty');
+            existingImage.style.display = 'none';
+          };
+          existingImage.setAttribute('src', thumbedLeadUrl);
         }
         existingImage.style.display = '';
       } else {
@@ -2908,7 +3011,7 @@
         image.className = 'post-thumbnail-image';
         image.alt = '';
         image.loading = 'lazy';
-        image.src = leadImageUrl;
+        image.src = thumbedLeadUrl;
         image.onerror = () => {
           thumbnail.classList.add('is-empty');
           image.style.display = 'none';
@@ -3629,6 +3732,8 @@
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+          setMenuItemVisible(postMarkAboveReadButton, false);
+          setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
         });
       }
@@ -3831,6 +3936,9 @@
               postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
             }
             setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+            setMenuItemVisible(postMarkAboveReadButton, true);
+            setMenuItemVisible(postMarkBelowReadButton, true);
+            setMenuItemVisible(postClearImgCacheButton, true);
             showPostContextMenu(event);
           });
         }
@@ -3914,16 +4022,19 @@
 
             const changed = applyPostItemReadState(postItem, nextIsRead);
             if (changed) {
+              const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
               if (nextIsRead && wasUnread) {
                 const fallbackBase = getUnreadCountFallback();
                 const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
                 appUnreadCount = Math.max(0, current - 1);
                 updateDynamicFavicon();
+                if (feedUrl) adjustSidebarUnreadCount(feedUrl, -1);
               } else if (!nextIsRead && !wasUnread) {
                 const fallbackBase = getUnreadCountFallback();
                 const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
                 appUnreadCount = Math.max(0, current + 1);
                 updateDynamicFavicon();
+                if (feedUrl) adjustSidebarUnreadCount(feedUrl, +1);
               }
             }
           } catch (_error) {
@@ -4038,11 +4149,13 @@
               const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
               appUnreadCount = Math.max(0, current - 1);
               updateDynamicFavicon();
+              adjustSidebarUnreadCount(feedInput.value, -1);
             } else if (!nextIsRead && wasRead) {
               const fallbackBase = getUnreadCountFallback();
               const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
               appUnreadCount = Math.max(0, current + 1);
               updateDynamicFavicon();
+              adjustSidebarUnreadCount(feedInput.value, +1);
             }
           } catch (_error) {
             entryReadForm.submit();
@@ -4073,6 +4186,43 @@
       hideAllContextMenus();
       postReadForm.submit();
     });
+
+    function adjustCountBadge(containerEl, delta) {
+      let badge = containerEl.querySelector(':scope > .count');
+      const current = badge ? Number(badge.textContent) : 0;
+      const next = Math.max(0, current + delta);
+      if (next === 0) {
+        if (badge) badge.remove();
+      } else {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'count';
+          containerEl.appendChild(badge);
+        }
+        badge.textContent = String(next);
+      }
+    }
+
+    function adjustSidebarUnreadCount(feedUrl, delta) {
+      const feedLink = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`);
+      if (feedLink) {
+        adjustCountBadge(feedLink, delta);
+        const folderId = feedLink.getAttribute('data-folder-id');
+        if (folderId) {
+          const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item)`);
+          if (folderItem) {
+            adjustCountBadge(folderItem, delta);
+            const folderGroup = folderItem.closest('.tree-folder-group');
+            if (folderGroup) {
+              const cur = Number(folderGroup.getAttribute('data-unread-count') || '0');
+              folderGroup.setAttribute('data-unread-count', String(Math.max(0, cur + delta)));
+            }
+          }
+        }
+      }
+      const rootItem = document.querySelector('.root-item.tree-item');
+      if (rootItem) adjustCountBadge(rootItem, delta);
+    }
 
     function applyPostItemReadState(postItem, isRead) {
       if (!postItem) {
@@ -4198,6 +4348,7 @@
         const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
         appUnreadCount = Math.max(0, current - changedUnreadToRead);
         updateDynamicFavicon();
+        if (contextPostFeedUrl) adjustSidebarUnreadCount(contextPostFeedUrl, -changedUnreadToRead);
       }
     }
 
@@ -4279,6 +4430,32 @@
       hideAllContextMenus();
       if (!copied) {
         window.alert('Could not copy URL to clipboard.');
+      }
+    });
+
+    postClearImgCacheButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAllContextMenus();
+      if (!contextPostFeedUrl || !contextPostEntryId) return;
+      const body = new URLSearchParams({ feed_url: contextPostFeedUrl, entry_id: contextPostEntryId });
+      try {
+        const resp = await fetch('/debug/clear-entry-lead-image-cache', { method: 'POST', body });
+        const data = await resp.json();
+        if (data.ok) {
+          // Reset the thumbnail on the post-list item to fallback icon.
+          const postItem = document.querySelector(`.post-item[data-entry-id="${CSS.escape(contextPostEntryId)}"]`);
+          if (postItem) {
+            const thumb = postItem.querySelector('.post-thumbnail img');
+            if (thumb) {
+              thumb.src = '';
+              thumb.closest('.post-thumbnail')?.classList.add('is-empty');
+            }
+          }
+          showToast('Image cache cleared');
+        }
+      } catch (e) {
+        // ignore
       }
     });
 
@@ -5329,6 +5506,106 @@
     measureAndSetTileHeight();
     bindEntryTagInteractions();
 
+    // --- Debug panel ---
+    const debugConfirmModal = document.getElementById('debug-confirm-modal');
+    const debugConfirmMessage = document.getElementById('debug-confirm-message');
+    const debugConfirmOk = document.getElementById('debug-confirm-ok');
+    let _debugConfirmCallback = null;
+
+    function showDebugConfirm(message, onConfirm) {
+      if (!debugConfirmModal || !debugConfirmMessage || !debugConfirmOk) return;
+      debugConfirmMessage.textContent = message;
+      _debugConfirmCallback = onConfirm;
+      debugConfirmModal.removeAttribute('hidden');
+    }
+
+    debugConfirmOk?.addEventListener('click', async () => {
+      if (!debugConfirmModal) return;
+      debugConfirmModal.setAttribute('hidden', '');
+      if (typeof _debugConfirmCallback === 'function') {
+        await _debugConfirmCallback();
+        _debugConfirmCallback = null;
+      }
+    });
+
+    async function debugClearCache(feedUrl) {
+      if (!feedUrl) return;
+      const body = new URLSearchParams();
+      body.append('feed_url', feedUrl);
+      try {
+        const resp = await fetch('/debug/clear-lead-image-cache', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body.toString(),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          // Reset all visible thumbnails for this feed in the post list.
+          document.querySelectorAll(`.post-item[data-feed-url="${CSS.escape(feedUrl)}"] .post-thumbnail img`).forEach(img => {
+            img.src = '';
+            img.closest('.post-thumbnail')?.classList.add('is-empty');
+          });
+          showToastMessage(`Cleared ${data.deleted} cached image${data.deleted === 1 ? '' : 's'}.`);
+        } else {
+          showToastMessage('Cache clear failed: ' + (data.error || 'unknown error'));
+        }
+      } catch (e) {
+        showToastMessage('Cache clear request failed.');
+      }
+    }
+
+    // --- Bypass-cache toggle ---
+    function _debugGetCurrentFeedUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('list_feed_url') || params.get('feed_url') || null;
+    }
+
+    async function _debugRefreshBypassBtn() {
+      const btn = document.getElementById('debug-bypass-cache-btn');
+      if (!btn) return;
+      const feedUrl = _debugGetCurrentFeedUrl();
+      if (!feedUrl) { btn.classList.remove('active'); return; }
+      try {
+        const resp = await fetch('/debug/feed-bypass-state?feed_url=' + encodeURIComponent(feedUrl), { credentials: 'same-origin' });
+        const data = await resp.json();
+        btn.classList.toggle('active', !!data.bypassed);
+      } catch (e) { /* ignore */ }
+    }
+
+    document.getElementById('debug-bypass-cache-btn')?.addEventListener('click', async () => {
+      const feedUrl = _debugGetCurrentFeedUrl();
+      if (!feedUrl) { showToastMessage('No feed selected.'); return; }
+      const body = new URLSearchParams();
+      body.append('feed_url', feedUrl);
+      try {
+        const resp = await fetch('/debug/toggle-feed-bypass', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body.toString(),
+        });
+        const data = await resp.json();
+        const btn = document.getElementById('debug-bypass-cache-btn');
+        btn?.classList.toggle('active', !!data.bypassed);
+        showToastMessage(data.bypassed ? 'Cache bypass ON — images will be re-fetched.' : 'Cache bypass OFF.');
+      } catch (e) {
+        showToastMessage('Bypass toggle failed.');
+      }
+    });
+
+    window.addEventListener('popstate', _debugRefreshBypassBtn);
+    _debugRefreshBypassBtn();
+    // --- End bypass-cache toggle ---
+
+    document.getElementById('ctx-clear-cache')?.addEventListener('click', () => {
+      hideAllContextMenus();
+      if (contextTargetType === 'feed' && contextFeedUrl) {
+        showDebugConfirm(`Clear image cache for:\n${contextFeedUrl}?`, () => debugClearCache(contextFeedUrl));
+      }
+    });
+    // --- End debug panel ---
+
     window.addEventListener('click', hideAllContextMenus);
     window.addEventListener('scroll', (event) => {
       const target = event.target;
@@ -5345,7 +5622,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

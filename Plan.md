@@ -42,12 +42,15 @@ Living backlog and staging area for future work. Use for feature ideas, deferred
 - Rules engine (keyword/author auto-tag/mark-read/highlight)
 - Keyword highlighters + smart folders
 - Web scraping/non-RSS monitoring
-- Read-later and sharing integrations (for example Instapaper save)
-- VPS deployment hardening (auth, reverse proxy, sessions)
+- Read-later and sharing integrations (Instapaper save, Pocket, etc.)
+- VPS deployment: HTTP basic auth (single-user, pre-multi-user gate) + reverse proxy docs (nginx/Caddy)
 - Docker packaging
+- Per-feed-type display tweaks (e.g. comics: larger image, minimal text chrome)
+- Cloudflare free-tier integrations: Workers (e.g. lightweight proxy/cache layer), R2, or Cache API where useful
 
 ## Maybe
 - YunoHost packaging
-- Multi-user support
+- Multi-user support (starts after basic auth lands; auth refactor is the gate)
 - Richer plugin system
 - Mobile web PWA features
+- Cloudflare Tunnel for VPS ingress (avoids open port, free tier)

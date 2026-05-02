@@ -139,10 +139,60 @@ a:hover {
   white-space: nowrap;
 }
 
+.topbar-debug {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.topbar-debug-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--warn, #f90) 60%, transparent);
+  background: color-mix(in srgb, var(--warn, #f90) 12%, transparent);
+  color: var(--warn, #f90);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.topbar-debug-btn:hover {
+  background: color-mix(in srgb, var(--warn, #f90) 22%, transparent);
+}
+
+.topbar-debug-btn.active {
+  background: color-mix(in srgb, var(--warn, #f90) 30%, transparent);
+  border-color: var(--warn, #f90);
+  font-weight: 600;
+}
+
+.topbar-debug-btn .material-symbols-rounded {
+  font-size: 1rem;
+}
+
+body[data-single-mode="1"] .topbar-debug-btn-label {
+  display: none;
+}
+
+.context-menu-item.debug-item {
+  color: var(--warn, #f90);
+}
+
 .topbar-search-form {
   flex: 0 1 auto;
-  min-width: 200px;
+  min-width: 0;
   max-width: 420px;
+  width: calc(12ch + 1.8rem);
+  transition: width 0.2s ease;
+}
+
+.topbar-search-form:focus-within {
   width: min(42vw, 420px);
 }
 
@@ -2562,8 +2612,6 @@ button:hover, .button-link:hover {
   max-width: 100%;
   width: auto;
   height: auto;
-  max-height: min(78vh, 60rem);
-  object-fit: contain;
   margin: 0 0 0.85rem;
   border-radius: 8px;
 }
@@ -2573,13 +2621,32 @@ button:hover, .button-link:hover {
   max-width: 100%;
   width: auto;
   height: auto;
-  max-height: min(78vh, 60rem);
-  object-fit: contain;
+}
+
+/* PCGamer (and similar Future Publishing sites) use an aspect-ratio placeholder
+   pattern: <p class="vanilla-image-block" style="padding-top: 56.27%"> with the
+   image NOT absolutely positioned in our reader context. Strip the inline padding
+   so the whitespace before the image disappears. */
+.entry-content .vanilla-image-block {
+  padding-top: 0 !important;
+}
+.entry-content .vanilla-image-block img {
+  position: static !important;
 }
 
 .entry-text {
   white-space: pre-wrap;
   font-family: "Source Sans 3", sans-serif;
+}
+
+.entry-image-title-text {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  font-style: italic;
+  color: var(--ink-mid, color-mix(in srgb, var(--ink) 75%, transparent));
+  border-left: 3px solid var(--line);
+  line-height: 1.5;
 }
 
 .action-modal-textarea {
@@ -3065,14 +3132,20 @@ body[data-keyboard-open="1"] .action-modal-panel {
   }
 
   .topbar-search-form {
-    min-width: 120px;
+    width: calc(12ch + 1.8rem);
+  }
+
+  .topbar-search-form:focus-within {
     width: min(48vw, 260px);
   }
 }
 
 @media (max-width: 640px) {
   .topbar-search-form {
-    min-width: 90px;
+    width: calc(12ch + 1.8rem);
+  }
+
+  .topbar-search-form:focus-within {
     width: min(52vw, 180px);
   }
 
@@ -3081,3 +3154,93 @@ body[data-keyboard-open="1"] .action-modal-panel {
     font-size: 0.86rem;
   }
 }
+
+/* -------------------------------------------------------------------------
+   Login page
+   ------------------------------------------------------------------------- */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.login-card {
+  width: min(22rem, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 2rem 2rem 2.25rem;
+  box-shadow: 0 4px 24px color-mix(in srgb, #000 32%, transparent);
+}
+
+.login-title {
+  margin: 0 0 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: center;
+  color: var(--ink);
+}
+
+.login-error {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.75rem;
+  background: color-mix(in srgb, #c0392b 18%, transparent);
+  border: 1px solid color-mix(in srgb, #c0392b 45%, transparent);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-mid, var(--ink));
+  margin-top: 0.5rem;
+}
+
+.login-input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  background: var(--field-elevated-bg, var(--field-bg));
+  border: 1px solid var(--field-border);
+  border-radius: 7px;
+  color: var(--ink);
+  caret-color: var(--ink);
+  font-size: 1rem;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.login-input:focus {
+  border-color: var(--field-focus-border, var(--accent));
+  box-shadow: 0 0 0 1px var(--field-focus-ring, color-mix(in srgb, var(--accent) 38%, transparent));
+}
+
+.login-button {
+  margin-top: 1.1rem;
+  padding: 0.6rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.login-button:hover {
+  opacity: 0.88;
+}
+

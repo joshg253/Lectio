@@ -10,5 +10,8 @@
   },
   "[jinja-html]": {
     "editor.formatOnSave": false
+  },
+  "chat.tools.terminal.autoApprove": {
+    "uv": true
   }
 }

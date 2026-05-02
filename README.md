@@ -101,6 +101,28 @@ If `YOUTUBE_API_KEY` is not set, Lectio falls back to scraping the YouTube video
 - To change the interval, set `LECTIO_AUTO_REFRESH_MINUTES` before starting the app; values lower than 15 are clamped to 15.
 - To disable scheduled refresh, set `LECTIO_AUTO_REFRESH_MINUTES=0`.
 
+## Authentication
+
+Authentication is **disabled by default** (safe for local use). To enable it, set these environment variables (in a `.env` file or your shell):
+
+```
+LECTIO_USERNAME=your-username
+LECTIO_PASSWORD=your-password
+LECTIO_SECRET_KEY=<random hex string>   # generate: python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+A login page is shown on first visit. The session cookie lasts 1 year — you only log in once per browser.
+
+**When running behind a reverse proxy (Traefik, nginx, Caddy) with TLS termination**, also set:
+
+```
+LECTIO_HTTPS_ONLY=1
+```
+
+This marks the session cookie `Secure` (HTTPS-only) and enables proxy header trust (`X-Forwarded-For`, `X-Forwarded-Proto`).
+
+To sign out, navigate to `/logout`.
+
 ## Keyboard shortcuts
 
 These shortcuts are active when focus is not inside an input/textarea/select field.

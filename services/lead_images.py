@@ -3,11 +3,14 @@ from __future__ import annotations
 import html
 import re
 import sqlite3
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+import feedparser
 import httpx
 
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
@@ -18,7 +21,7 @@ class LeadImageService:
 
     _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
     _LINK_TAG_RE = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
-    _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["\']([^"\']+)["\']')
+    _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"' + r"|'([^']*)')")
     _OG_IMAGE_RE = re.compile(
         r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::url)?|twitter:image(?::src)?)["\'][^>]+content=["\']([^"\']+)["\']',
         re.IGNORECASE,
@@ -69,6 +72,8 @@ class LeadImageService:
     _NEGATIVE_RETRY_SECONDS = 24 * 60 * 60
     _POSITIVE_REVALIDATE_SECONDS = 12 * 60 * 60
     _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
+    # Re-detect feed strategy weekly (or when still 'unknown')
+    _STRATEGY_REDETECT_AFTER_SECONDS = 7 * 24 * 3600
 
     def __init__(
         self,
@@ -88,6 +93,50 @@ class LeadImageService:
         self._cache = cache if cache is not None else {}
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
+        # Semaphore ensures at most one chunk-backfill thread runs at a time;
+        # subsequent chunk requests skip rather than pile up.
+        self._chunk_backfill_sem = threading.Semaphore(1)
+        # In-memory set of feed URLs whose cache should be bypassed (debug only).
+        self._debug_bypass_feeds: set[str] = set()
+        # Small bounded cache of recently-fetched source HTML (entry_link → (final_url, html)).
+        # Avoids a second HTTP request when extracting img alt text after lead image resolution.
+        self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
+        self._SOURCE_HTML_CACHE_MAX = 8
+
+    # ------------------------------------------------------------------
+    # Feed lead-image strategy helpers
+    # ------------------------------------------------------------------
+
+    def get_feed_strategy(self, feed_url: str) -> tuple[str, float]:
+        """Return (strategy, detected_at) from DB, or ('unknown', 0.0)."""
+        try:
+            with self._get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT strategy, detected_at FROM feed_lead_image_strategy WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchone()
+            if row:
+                return str(row["strategy"]), float(row["detected_at"])
+        except Exception:
+            pass
+        return "unknown", 0.0
+
+    def store_feed_strategy(self, feed_url: str, strategy: str) -> None:
+        """Persist a detected lead-image strategy for a feed."""
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(feed_url) DO UPDATE SET
+                        strategy = excluded.strategy,
+                        detected_at = excluded.detected_at
+                    """,
+                    (feed_url, strategy, time.time()),
+                )
+        except Exception:
+            pass
 
     def warm_cache_from_db(self) -> None:
         """Load stored lead-image records into in-memory caches."""
@@ -135,6 +184,64 @@ class LeadImageService:
         except Exception:
             pass
 
+    def toggle_feed_bypass(self, feed_url: str) -> bool:
+        """Toggle debug cache bypass for a feed. Returns the new bypass state."""
+        if feed_url in self._debug_bypass_feeds:
+            self._debug_bypass_feeds.discard(feed_url)
+            return False
+        self._debug_bypass_feeds.add(feed_url)
+        return True
+
+    def get_bypassed_feeds(self) -> frozenset[str]:
+        return frozenset(self._debug_bypass_feeds)
+
+    def clear_lead_image_cache(self, feed_url: str | None = None) -> tuple[int, list[str]]:
+        """Delete lead image cache entries from DB and in-memory cache.
+
+        If feed_url is given, clears only that feed. Otherwise clears all.
+        Returns (rows_deleted, list_of_image_urls_that_were_cached).
+        """
+        # Collect URLs that are being evicted (for thumb-file purge by the caller).
+        if feed_url:
+            keys_to_drop = [k for k in self._cache if k[0] == feed_url]
+        else:
+            keys_to_drop = list(self._cache.keys())
+        evicted_urls = [self._cache[k] for k in keys_to_drop if self._cache.get(k)]
+
+        try:
+            with self._get_meta_connection() as conn:
+                if feed_url:
+                    deleted = conn.execute("DELETE FROM entry_lead_images WHERE feed_url = ?", (feed_url,)).rowcount
+                else:
+                    deleted = conn.execute("DELETE FROM entry_lead_images").rowcount
+        except Exception:
+            deleted = 0
+
+        for k in keys_to_drop:
+            self._cache.pop(k, None)
+            self._fetched_at_cache.pop(k, None)
+
+        return deleted, evicted_urls
+
+    def clear_entry_lead_image_cache(self, feed_url: str, entry_id: str) -> str | None:
+        """Delete the lead image cache entry for a single (feed_url, entry_id).
+
+        Returns the image URL that was cached (for thumb-file purge), or None.
+        """
+        key = (feed_url, entry_id)
+        old_url = self._cache.get(key)
+        self._cache.pop(key, None)
+        self._fetched_at_cache.pop(key, None)
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    "DELETE FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+        except Exception:
+            pass
+        return old_url
+
     def _is_cache_key_stale(self, cache_key: tuple[str, str], *, max_age_seconds: int) -> bool:
         fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
         return time.time() - fetched_at >= max_age_seconds
@@ -149,7 +256,7 @@ class LeadImageService:
                 return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
         entry_id = str(getattr(entry, "id", "") or "")
-        if entry_id and (feed_url, entry_id) in self._cache:
+        if entry_id and feed_url not in self._debug_bypass_feeds and (feed_url, entry_id) in self._cache:
             cached = self._cache[(feed_url, entry_id)]
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
@@ -176,7 +283,9 @@ class LeadImageService:
                         url = item
                     if url:
                         resolved = url
-                        if self._is_image_url_acceptable(resolved, None, None):
+                        if self._is_image_url_acceptable(resolved, None, None) and not self._should_bypass_cached_url(
+                            entry_link=entry_link, cached_url=resolved
+                        ):
                             return resolved
 
             # media_content is often a list of dicts with 'url' and 'type'
@@ -188,7 +297,8 @@ class LeadImageService:
                         url = item.get("url")
                         mtype = item.get("type", "")
                         if url and (mtype.startswith("image") or self._is_image_url_acceptable(url, None, None)):
-                            return url
+                            if not self._should_bypass_cached_url(entry_link=entry_link, cached_url=url):
+                                return url
 
             # Some parsers expose enclosure/link entries on `links`.
             links = getattr(entry, "links", None)
@@ -203,10 +313,14 @@ class LeadImageService:
                     if not href:
                         continue
                     if rel == "enclosure" and ltype.startswith("image"):
-                        if self._is_image_url_acceptable(href, None, None):
+                        if self._is_image_url_acceptable(href, None, None) and not self._should_bypass_cached_url(
+                            entry_link=entry_link, cached_url=href
+                        ):
                             return href
                     # fallback: if link looks like an image URL
-                    if self._is_image_url_acceptable(href, None, None):
+                    if self._is_image_url_acceptable(href, None, None) and not self._should_bypass_cached_url(
+                        entry_link=entry_link, cached_url=href
+                    ):
                         return href
         except Exception:
             pass
@@ -229,18 +343,18 @@ class LeadImageService:
         base_url = entry_link or feed_url
         for html_candidate in html_candidates:
             inline_image = self._extract_first_image_url_from_html(html_candidate, base_url)
-            if inline_image:
+            # Skip plugin-flagged wrapper URLs (e.g. PCGamer /flexiimages/) so
+            # the background job falls through to a proper source-page fetch
+            # rather than being satisfied with an inferior feed thumbnail.
+            if inline_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image):
                 return inline_image
             linked_image = self._extract_linked_image_url_from_html(html_candidate, base_url)
-            if linked_image:
+            if linked_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image):
                 return linked_image
 
         if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
             # First try plugin-provided fallback (fast). If none, attempt a
-            # lightweight source-page lookup to extract a better thumbnail so
-            # the posts list shows the same hero image users see when opening
-            # the entry (helps sites like PC Gamer which provide poor feed
-            # thumbnails).
+            # lightweight source-page lookup to extract a better thumbnail.
             plugin_fallback = self._plugin_fallback_lead_image_url(entry_link=entry_link, content_html=content_html, summary=summary)
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
@@ -261,14 +375,14 @@ class LeadImageService:
         base_url = entry_link or feed_url_str
 
         cached_negative = False
-        if feed_url_str and entry_id_str and (feed_url_str, entry_id_str) in self._cache:
+        if feed_url_str and entry_id_str and feed_url_str not in self._debug_bypass_feeds and (feed_url_str, entry_id_str) in self._cache:
             cache_key = (feed_url_str, entry_id_str)
             cached = self._cache[(feed_url_str, entry_id_str)]
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
-                    cached = None
+                    pass  # stale/wrong URL — re-run full resolution (plugin fallback first)
                 elif not self._is_image_url_acceptable(cached, None, None):
-                    cached = None
+                    cached_negative = True
                 else:
                     should_revalidate = (
                         bool(entry_link)
@@ -276,18 +390,37 @@ class LeadImageService:
                         and self._is_cache_key_stale(cache_key, max_age_seconds=self._POSITIVE_REVALIDATE_SECONDS)
                     )
                     if should_revalidate:
-                        source_image = self._fetch_source_lead_image(entry_link)
-                        if source_image and source_image != cached:
-                            return source_image
+                        # Plugin takes priority: if it provides a preferred URL, trust it
+                        # over generic source-page scraping (prevents SE cover → OG churn).
+                        plugin_preferred = self._plugin_fallback_lead_image_url(
+                            entry_link=entry_link, content_html=content_html, summary=summary
+                        )
+                        if plugin_preferred:
+                            if plugin_preferred != cached:
+                                return plugin_preferred
+                            # plugin confirms cached value — skip source fetch
+                        else:
+                            source_image = self._fetch_source_lead_image(entry_link)
+                            if source_image and source_image != cached:
+                                return source_image
                     inline_candidate = None
                     if isinstance(content_html, str) and content_html.strip():
                         inline_candidate = self._extract_first_image_url_from_html(content_html, base_url)
                     if entry_link and inline_candidate and inline_candidate == cached:
-                        source_image = self._fetch_source_lead_image(entry_link)
-                        if source_image and source_image != cached:
-                            return source_image
+                        plugin_preferred = self._plugin_fallback_lead_image_url(
+                            entry_link=entry_link, content_html=content_html, summary=summary
+                        )
+                        if plugin_preferred:
+                            if plugin_preferred != cached:
+                                return plugin_preferred
+                            # plugin confirms cached value — skip source fetch
+                        else:
+                            source_image = self._fetch_source_lead_image(entry_link)
+                            if source_image and source_image != cached:
+                                return source_image
                     return cached
-            cached_negative = True
+            else:
+                cached_negative = True
 
         # Prefer source-page metadata/image selection when available.
         # This usually picks a truer hero image than the first inline body image.
@@ -304,7 +437,7 @@ class LeadImageService:
             if not isinstance(candidate_html, str) or not candidate_html.strip():
                 continue
             image_url = self._extract_first_image_url_from_html(candidate_html, base_url)
-            if image_url:
+            if image_url and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=image_url):
                 return image_url
 
         if entry_link:
@@ -337,6 +470,18 @@ class LeadImageService:
 
         now = time.time()
         positive_revalidated = 0
+        feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
+
+        # Load stored strategy; skip YouTube feeds entirely (thumbnail from video ID).
+        strategy, detected_at = self.get_feed_strategy(feed_url)
+        need_redetect = strategy == "unknown" or now - detected_at > self._STRATEGY_REDETECT_AFTER_SECONDS
+        if strategy == "youtube":
+            return
+
+        # Track which methods actually yield images so we can store/update strategy.
+        _found_inline = False
+        _found_media_rss = False
+        _found_og_scrape = False
 
         for entry in entries:
             feed_url_str = str(getattr(entry, "feed_url", "") or "")
@@ -357,7 +502,7 @@ class LeadImageService:
 
             cache_key = (feed_url_str, entry_id_str)
 
-            if cache_key in self._cache:
+            if cache_key in self._cache and feed_url not in self._debug_bypass_feeds:
                 cached = self._cache[cache_key]
                 if cached:
                     if self._should_bypass_cached_url(entry_link=str(getattr(entry, "link", "") or ""), cached_url=cached):
@@ -389,15 +534,134 @@ class LeadImageService:
 
             inline = self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
             if inline:
+                _found_inline = True
                 continue
 
             entry_link = str(getattr(entry, "link", "") or "")
             if not entry_link:
                 continue
 
+            # Check feed-level media thumbnails (e.g. NYT's media:thumbnail) before
+            # doing a source-page fetch.  These are unavailable on reader Entry objects
+            # but are present in the raw RSS XML.
+            if feed_media_thumbs is None:
+                feed_media_thumbs = self._fetch_feed_media_thumbnails(feed_url)
+                # Piggyback strategy detection: if the feedparser parse returned any
+                # media thumbnails we know this is a media_rss feed.
+                if need_redetect and feed_media_thumbs:
+                    strategy = "media_rss"
+                    need_redetect = False
+            feed_thumb = feed_media_thumbs.get(entry_link)
+            if feed_thumb:
+                _found_media_rss = True
+                self.store_entry_lead_image(feed_url_str, entry_id_str, feed_thumb)
+                time.sleep(0.05)
+                continue
+
             image_url = self._fetch_source_lead_image(entry_link)
+            if image_url:
+                _found_og_scrape = True
             self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
             time.sleep(0.15)
+
+        # Store detected strategy based on what actually worked this cycle.
+        if need_redetect:
+            if _found_media_rss:
+                self.store_feed_strategy(feed_url, "media_rss")
+            elif _found_og_scrape:
+                self.store_feed_strategy(feed_url, "og_scrape")
+            elif _found_inline:
+                self.store_feed_strategy(feed_url, "inline")
+            # else: leave as 'unknown' — feed may have no images at all
+
+    # ------------------------------------------------------------------
+    # Chunk-level visible-entry backfill
+    # ------------------------------------------------------------------
+
+    def backfill_entry_list(self, posts: list[dict]) -> None:
+        """Fire-and-forget: fetch lead images for a specific list of entries.
+
+        Designed for chunk-level prioritization — call this with entries
+        currently visible that have no cached thumbnail.  Uses a non-blocking
+        semaphore so concurrent chunk requests simply skip rather than queue.
+        """
+        if not self._chunk_backfill_sem.acquire(blocking=False):
+            return
+        try:
+            self._do_backfill_entry_list(posts)
+        finally:
+            self._chunk_backfill_sem.release()
+
+    def _do_backfill_entry_list(self, posts: list[dict]) -> None:
+        # Group (entry_id, entry_link) by feed_url, skipping already-cached entries.
+        by_feed: dict[str, list[tuple[str, str]]] = {}
+        for post in posts:
+            feed_url = str(post.get("feed_url") or "")
+            entry_id = str(post.get("id") or "")
+            entry_link = str(post.get("link") or "")
+            if not feed_url or not entry_id:
+                continue
+            cached = self._cache.get((feed_url, entry_id))
+            if (
+                cached
+                and feed_url not in self._debug_bypass_feeds
+                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
+            ):
+                continue
+            by_feed.setdefault(feed_url, []).append((entry_id, entry_link))
+
+        if not by_feed:
+            return
+
+        # Load all feed strategies in one query.
+        feed_urls = list(by_feed.keys())
+        strategies: dict[str, str] = {}
+        try:
+            placeholders = ",".join("?" for _ in feed_urls)
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(
+                    f"SELECT feed_url, strategy FROM feed_lead_image_strategy WHERE feed_url IN ({placeholders})",
+                    feed_urls,
+                ).fetchall()
+            strategies = {str(row["feed_url"]): str(row["strategy"]) for row in rows}
+        except Exception:
+            pass
+
+        for feed_url, entry_pairs in by_feed.items():
+            strategy = strategies.get(feed_url, "unknown")
+            if strategy == "youtube":
+                continue
+
+            # One feedparser call per feed to grab any media:thumbnail/content.
+            feed_media = self._fetch_feed_media_thumbnails(feed_url)
+
+            for entry_id, entry_link in entry_pairs:
+                if not entry_link:
+                    continue
+                # Re-check cache — may have been populated by the regular backfill.
+                cached = self._cache.get((feed_url, entry_id))
+                if (
+                    cached
+                    and feed_url not in self._debug_bypass_feeds
+                    and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached)
+                ):
+                    continue
+
+                feed_thumb = feed_media.get(entry_link)
+                if feed_thumb:
+                    self.store_entry_lead_image(feed_url, entry_id, feed_thumb)
+                    time.sleep(0.05)
+                    continue
+
+                # For inline-classified feeds, trust that source scraping won't
+                # improve on the inline extraction that already returned nothing.
+                # For og_scrape / unknown, fetch the source page.
+                if strategy == "inline":
+                    continue
+
+                image_url = self._fetch_source_lead_image(entry_link)
+                self.store_entry_lead_image(feed_url, entry_id, image_url)
+                time.sleep(0.15)
 
     def _extract_tag_key(self, tag_record: object) -> str | None:
         if isinstance(tag_record, tuple):
@@ -432,7 +696,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape(attr_match.group(2).strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
                 if key and value:
                     attrs[key] = value
 
@@ -575,7 +839,13 @@ class LeadImageService:
         return score
 
     def _extract_preferred_source_image_url(self, html_text: str, base_url: str, source_url: str) -> str | None:
+        url, _ = self._extract_preferred_source_image_data(html_text, base_url, source_url)
+        return url
+
+    def _extract_preferred_source_image_data(self, html_text: str, base_url: str, source_url: str) -> tuple[str | None, str | None]:
+        """Like _extract_preferred_source_image_url but also returns the winning img's alt text."""
         best_url: str | None = None
+        best_alt: str | None = None
         best_score = -1
 
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
@@ -583,7 +853,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape(attr_match.group(2).strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
                 if key and value:
                     attrs[key] = value
 
@@ -600,10 +870,12 @@ class LeadImageService:
                 if score > best_score:
                     best_score = score
                     best_url = resolved
+                    _alt = (attrs.get("alt") or attrs.get("title") or "").strip()
+                    best_alt = _alt if _alt else None
 
         if best_url and best_score >= 30:
-            return best_url
-        return None
+            return best_url, best_alt
+        return None, None
 
     def _extract_preloaded_image_url(self, html_text: str, base_url: str) -> str | None:
         for tag_match in self._LINK_TAG_RE.finditer(html_text):
@@ -611,7 +883,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape(attr_match.group(2).strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
                 if key and value:
                     attrs[key] = value
 
@@ -804,6 +1076,74 @@ class LeadImageService:
         text_content = html.unescape(re.sub(r"\s+", " ", text_content)).strip()
         return len(text_content) <= 420
 
+    def _fetch_feed_media_thumbnails(self, feed_url: str) -> dict[str, str]:
+        """Fetch the RSS/Atom feed and return {entry_link: best_thumbnail_url} from
+        media:thumbnail / media:content elements.  These fields are not stored by
+        python-reader on the Entry object so we parse the live feed once per
+        background cycle to recover them."""
+        try:
+            parsed = feedparser.parse(
+                feed_url,
+                agent=self._user_agent,
+                request_headers={"User-Agent": self._user_agent},
+            )
+        except Exception:
+            return {}
+
+        result: dict[str, str] = {}
+        for fp_entry in getattr(parsed, "entries", []):
+            link = str(getattr(fp_entry, "link", "") or "")
+            if not link:
+                continue
+
+            best_url: str | None = None
+            best_area = -1  # -1 so zero-dimension entries still get selected
+
+            # media:thumbnail — list of dicts with 'url', optional 'width'/'height'
+            for thumb in getattr(fp_entry, "media_thumbnail", []) or []:
+                url = (thumb.get("url") if isinstance(thumb, dict) else None) or ""
+                if not url or not self._is_image_url_acceptable(url, None, None):
+                    continue
+                try:
+                    w = int(thumb.get("width", 0) or 0)
+                    h = int(thumb.get("height", 0) or 0)
+                except ValueError, TypeError:
+                    w = h = 0
+                if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
+                    continue
+                area = w * h
+                if area > best_area:
+                    best_area = area
+                    best_url = url
+
+            # media:content — may contain images too
+            if best_url is None:
+                for mc in getattr(fp_entry, "media_content", []) or []:
+                    if not isinstance(mc, dict):
+                        continue
+                    mtype = (mc.get("medium") or mc.get("type") or "").lower()
+                    if "image" not in mtype and not mc.get("url", "").lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        continue
+                    url = mc.get("url") or ""
+                    if not url or not self._is_image_url_acceptable(url, None, None):
+                        continue
+                    try:
+                        w = int(mc.get("width", 0) or 0)
+                        h = int(mc.get("height", 0) or 0)
+                    except ValueError, TypeError:
+                        w = h = 0
+                    if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
+                        continue
+                    area = w * h
+                    if area > best_area:
+                        best_area = area
+                        best_url = url
+
+            if best_url and not self._should_bypass_cached_url(entry_link=link, cached_url=best_url):
+                result[link] = best_url
+
+        return result
+
     def _fetch_source_lead_image(self, entry_link: str) -> str | None:
         parsed = urlparse(entry_link)
         if parsed.scheme not in {"http", "https"}:
@@ -818,6 +1158,12 @@ class LeadImageService:
 
         source_html = response.text
         final_url = str(response.url)
+        # Cache for alt-text lookup without a second HTTP fetch.
+        self._source_html_cache[entry_link] = (final_url, source_html)
+        self._source_html_cache.move_to_end(entry_link)
+        if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+            self._source_html_cache.popitem(last=False)
+
         preload_image = self._extract_preloaded_image_url(source_html, final_url)
         if preload_image:
             return preload_image
@@ -831,3 +1177,59 @@ class LeadImageService:
         if meta_image:
             return meta_image
         return self._extract_linked_image_url_from_html(source_html, final_url)
+
+    def fetch_entry_image_alt(self, entry_link: str) -> str | None:
+        """Return alt/title text of the main scored image on the source page.
+
+        Uses the in-memory source HTML cache populated by _fetch_source_lead_image
+        so there is no extra HTTP request when called shortly after lead image
+        resolution for the same entry.
+        """
+        cached = self._source_html_cache.get(entry_link)
+        if cached is not None:
+            final_url, source_html = cached
+        else:
+            parsed = urlparse(entry_link)
+            if parsed.scheme not in {"http", "https"}:
+                return None
+            try:
+                with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
+                    response = client.get(entry_link)
+                response.raise_for_status()
+            except Exception:
+                return None
+            source_html = response.text
+            final_url = str(response.url)
+            self._source_html_cache[entry_link] = (final_url, source_html)
+            self._source_html_cache.move_to_end(entry_link)
+            if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                self._source_html_cache.popitem(last=False)
+
+        # Try the scored path first (high confidence).
+        _, alt_text = self._extract_preferred_source_image_data(source_html, final_url, entry_link)
+        if alt_text:
+            return alt_text
+
+        # Fallback: take the alt/title from the first acceptable img on the page.
+        # Useful for simple comic pages where the img has no hero/featured class.
+        for tag_match in self._IMG_TAG_RE.finditer(source_html):
+            tag = tag_match.group(0)
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                key = attr_match.group(1).strip().lower()
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                if key and value:
+                    attrs[key] = value
+            for image_url in self._collect_img_candidate_urls(attrs):
+                if not image_url or image_url.startswith("data:"):
+                    continue
+                resolved = urljoin(final_url, image_url)
+                if not self._is_source_image_tag_acceptable(attrs, resolved):
+                    continue
+                if not self._is_image_url_acceptable(resolved, None, None):
+                    continue
+                candidate = (attrs.get("alt") or attrs.get("title") or "").strip()
+                if candidate:
+                    return candidate
+                break  # first acceptable img found but no alt text — stop
+        return None
