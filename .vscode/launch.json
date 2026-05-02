@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Lectio (local)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["main:app", "--reload", "--reload-exclude", ".venv"],
+      "env": {
+        "LECTIO_REFRESH_DEBUG": "1",
+        "LECTIO_DEBUG": "1"
+      },
+      "jinja": true
+    },
+    {
+      "name": "Lectio (LAN)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "main:app",
+        "--reload",
+        "--reload-exclude", ".venv",
+        "--host", "0.0.0.0",
+        "--port", "8000"
+      ],
+      "env": {
+        "LECTIO_REFRESH_DEBUG": "1",
+        "LECTIO_DEBUG": "1"
+      },
+      "jinja": true
+    }
+  ]
+}

@@ -13,7 +13,7 @@ types:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ty check .
 
 run:
-	LECTIO_REFRESH_DEBUG=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn main:app --reload --host 0.0.0.0
+	LECTIO_REFRESH_DEBUG=1 LECTIO_DEBUG=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn main:app --reload --reload-exclude .venv --host 0.0.0.0 --port 8000
 
 test:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest -q
