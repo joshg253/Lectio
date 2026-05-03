@@ -2580,6 +2580,8 @@
             const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
             appUnreadCount = Math.max(0, current - 1);
             updateDynamicFavicon();
+            const postFeedUrl = postItem.getAttribute('data-post-feed-url') || '';
+            if (postFeedUrl) adjustSidebarUnreadCount(postFeedUrl, -1);
           }
         }
       }
@@ -4824,6 +4826,7 @@
       }
 
       postsContainer.addEventListener('scroll', maybeRevealOnScroll);
+      postsContainer._revealNextChunk = revealNextChunk;
 
       // If items are removed from the top (e.g., unread view interactions), keep the window filled.
       const mutationObserver = new MutationObserver(() => {
@@ -5272,6 +5275,34 @@
 
       const activePost = document.querySelector('.posts .post-item.active:not(.post-item-hidden)');
       let nextIndex = activePost ? visiblePosts.indexOf(activePost) + delta : 0;
+
+      if (delta > 0 && nextIndex >= visiblePosts.length) {
+        // Past the end of the visible chunk — reveal or fetch the next chunk,
+        // then navigate to the first newly visible post and scroll it to the top.
+        const postsPane = document.querySelector('.posts');
+        const revealFn = postsPane && postsPane._revealNextChunk;
+        if (!revealFn) return;
+        const beforeCount = visiblePosts.length;
+        const result = revealFn();
+        const selectFirstNew = () => {
+          const newVisible = getVisiblePostItems();
+          const target = newVisible[beforeCount];
+          if (!target || target === activePost) return;
+          if (postsPane instanceof HTMLElement) {
+            const itemRect = target.getBoundingClientRect();
+            const paneRect = postsPane.getBoundingClientRect();
+            postsPane.scrollTop += itemRect.top - paneRect.top - 8;
+          }
+          openPostItemInPane(target);
+        };
+        if (result && typeof result.then === 'function') {
+          result.then(() => window.requestAnimationFrame(selectFirstNew)).catch(() => {});
+        } else {
+          window.requestAnimationFrame(selectFirstNew);
+        }
+        return;
+      }
+
       nextIndex = Math.max(0, Math.min(visiblePosts.length - 1, nextIndex));
       openPostItemInPane(visiblePosts[nextIndex]);
     }

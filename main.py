@@ -1859,9 +1859,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if video_id:
             lead_image_url = None
 
-        # If the lead image URL appears verbatim in content_html, suppress it
-        # so the same image doesn't render both above and inside the content.
-        if lead_image_url and isinstance(content_html, str) and lead_image_url in content_html:
+        # If the lead image URL appears in content_html, suppress it so the same
+        # image doesn't render both above and inside the content.
+        # Check both raw and HTML-unescaped content to catch feeds that encode
+        # query-string ampersands as &amp; (e.g. Jetpack CDN URLs).
+        if (
+            lead_image_url
+            and isinstance(content_html, str)
+            and (lead_image_url in content_html or lead_image_url in html.unescape(content_html))
+        ):
             lead_image_url = None
 
         # If we still have a lead image, strip the first <img> from content_html

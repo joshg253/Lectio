@@ -352,13 +352,14 @@ class LeadImageService:
             if linked_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image):
                 return linked_image
 
-        if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
-            # First try plugin-provided fallback (fast). If none, attempt a
-            # lightweight source-page lookup to extract a better thumbnail.
+        # Plugin fallbacks run regardless of include_source_lookup — they handle
+        # site-specific logic and may do their own targeted HTTP fetch.
+        if entry_link:
             plugin_fallback = self._plugin_fallback_lead_image_url(entry_link=entry_link, content_html=content_html, summary=summary)
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
 
+        if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
             try:
                 source_image = self._fetch_source_lead_image(entry_link)
                 if source_image and self._is_image_url_acceptable(source_image, None, None):
