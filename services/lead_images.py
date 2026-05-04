@@ -14,6 +14,7 @@ import feedparser
 import httpx
 
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
+from services.url_guard import is_safe_outbound_url
 
 
 class LeadImageService:
@@ -1149,6 +1150,8 @@ class LeadImageService:
         parsed = urlparse(entry_link)
         if parsed.scheme not in {"http", "https"}:
             return None
+        if not is_safe_outbound_url(entry_link):
+            return None
 
         try:
             with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
@@ -1192,6 +1195,8 @@ class LeadImageService:
         else:
             parsed = urlparse(entry_link)
             if parsed.scheme not in {"http", "https"}:
+                return None
+            if not is_safe_outbound_url(entry_link):
                 return None
             try:
                 with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:

@@ -29,7 +29,14 @@ Living backlog and staging area for future work. Use for feature ideas, deferred
 _(empty — pull from Soon)_
 
 ## Completed Recently
-- Pre-VPS prep batch:
+- Pre-VPS prep batch (round 2):
+  - Login brute-force protection: per-IP rate limit on `POST /login` (default 5 failures / 5 min → 429). `LECTIO_DEBUG=1` bypasses. Also fixed latent `TemplateResponse` signature bug in login routes that newer Starlette mishandles.
+  - SSRF guardrail (`services/url_guard.py`): DNS-resolves URLs and refuses private/loopback/link-local addresses. Applied to `_fetch_source_lead_image` + WordPressComic/PennyArcade og:image fetches. `LECTIO_DEBUG=1` bypasses for LAN test feeds.
+  - Persistent logging: `RotatingFileHandler` attached to root logger when `LECTIO_LOG_DIR` is set (5 MB × 5 backups by default; tunable). No-op when env unset, so dev workflows unchanged.
+  - Graceful shutdown: bumped lifespan join timeout from 2s to 30s (`LECTIO_SHUTDOWN_TIMEOUT_SECONDS`); logs warning if refresh worker abandons.
+  - SQLite backup script: `scripts/backup_databases.py` uses `VACUUM INTO` for online consistent backups; `--keep N` retains rolling history. Schedule with cron / Task Scheduler.
+  - Deploy guide added to README: required env vars, Traefik labels example, first-run bootstrap.
+- Pre-VPS prep batch (round 1):
   - Flipped `LECTIO_DEBUG` / `LECTIO_REFRESH_DEBUG` defaults from `1` to `0` so VPS deploys are safe-by-default; local dev (`make run`, VS Code launch config) already passes them explicitly.
   - Added `GET /healthz` endpoint (DB ping; auth-exempt) for Traefik probes.
   - Added long-lived `Cache-Control` headers on `/static/*` via subclassed `StaticFiles` (safe: `STATIC_ASSET_VERSION` query param invalidates on changes).
@@ -40,24 +47,17 @@ _(empty — pull from Soon)_
 - Active post tile auto-scrolls into view in the post list when navigating between entries (j/k, click, etc.)
 
 ## Soon
-- Clarify/complete "Stronger archive/saved views" scope
-- View state persistence hardening (durable preferences across restarts)
+### Pre-VPS hardening (gate items for exposing Lectio on the public internet)
+- **CSRF protection** on all state-changing POST endpoints (`/entries/saved`, `/entries/read`, `/entries/tags`, folder/feed CRUD, refresh, OPML import). Thread a token through Jinja forms and the SPA async submit handlers. Largest remaining lift of this batch; transparent in normal use once wired.
+
+- **VPS deployment**: roll out to existing Traefik setup once CSRF lands.
+
+## Later
+- Stronger archive/saved views — scope as actual gaps surface during use
+- View state persistence hardening (durable preferences across restarts) — same; revisit when a concrete preference loses state in a way that bothers
 - Topbar: additional action buttons (beyond current set)
 - Entry header: additional metadata/actions beyond title/feed
 - More feed-specific display tweaks (webcomics, etc.)
-
-### Pre-VPS hardening (gate items for exposing Lectio on the public internet)
-- **Login brute-force protection**: per-IP rate limit on `POST /login` (e.g. 5 failures / 5 min). Bypass when `LECTIO_DEBUG=1` so dev iteration isn't blocked.
-- **CSRF protection** on all state-changing POST endpoints (`/entries/saved`, `/entries/read`, `/entries/tags`, folder/feed CRUD, refresh, OPML import). Thread a token through Jinja forms and the SPA async submit handlers. Largest implementation lift of this batch; transparent in normal use once wired.
-- **SSRF guardrail** on user-triggered URL fetches: block private IP ranges (10/8, 172.16/12, 192.168/16, 127/8, link-local, IPv6 equivalents) in lead-image source scraping and the WordPress/Penny Arcade plugin og:image fetches. Bypass when `LECTIO_DEBUG=1` for LAN test feeds.
-- **SQLite backup strategy**: documented procedure including `.sqlite-wal`/`-shm`; ideally a scheduled `VACUUM INTO` to a backup directory.
-- **Persistent logging**: add a rotating file handler alongside stdout so post-mortem is possible after VPS issues.
-- **Graceful shutdown**: wait for in-flight refresh jobs to finish on SIGTERM.
-- **Deploy guide**: required/optional env vars, Traefik labels example, first-run bootstrap (create user, import OPML).
-
-- **VPS deployment**: roll out to existing Traefik setup once the items above land.
-
-## Later
 - Rules engine (keyword/author auto-tag/mark-read/highlight)
 - Keyword highlighters + smart folders
 - Web scraping/non-RSS monitoring

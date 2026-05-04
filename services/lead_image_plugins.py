@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from services.url_guard import is_safe_outbound_url
+
 _WP_COMIC_UPLOAD_RE = re.compile(
     r'https?://[^"\'<>\s]+/wp-content/uploads/[^"\'<>\s]+\.(?:jpe?g|png|webp|gif)',
     re.IGNORECASE,
@@ -159,6 +161,8 @@ class WordPressComicPlugin:
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
         if not self._is_target(entry_link):
             return None
+        if not is_safe_outbound_url(entry_link):
+            return None
         # Feed carries no inline images; fetch og:image from the source page directly.
         # This avoids _fetch_source_lead_image picking up site-chrome images
         # (title banners, nav buttons) that appear before the comic in the DOM.
@@ -234,6 +238,8 @@ class PennyArcadePlugin:
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
         if not self._is_comic_entry(entry_link):
+            return None
+        if not is_safe_outbound_url(entry_link):
             return None
         try:
             with httpx.Client(follow_redirects=True, timeout=8.0) as client:

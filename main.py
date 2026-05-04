@@ -59,7 +59,38 @@ def _configure_reader_logging() -> None:
     logging.getLogger("reader").addFilter(_ReaderNonFatalParseWarningFilter())
 
 
+def _configure_persistent_logging() -> None:
+    """Attach a rotating file handler when LECTIO_LOG_DIR is set.
+
+    Defaults: 5 MB per file, 5 backups (LECTIO_LOG_MAX_BYTES, LECTIO_LOG_BACKUPS).
+    Stdout logging is left untouched so local dev (and uvicorn defaults) keep
+    working. Without LECTIO_LOG_DIR the app behaves exactly as before.
+    """
+    log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
+    if not log_dir_str:
+        return
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = Path(log_dir_str)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    max_bytes = int(os.getenv("LECTIO_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+    backup_count = int(os.getenv("LECTIO_LOG_BACKUPS", "5"))
+    handler = RotatingFileHandler(
+        log_dir / "lectio.log",
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    # Attach to the root logger so it captures everything (uvicorn, reader, app).
+    root = logging.getLogger()
+    if root.level > logging.INFO or root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+
 _configure_reader_logging()
+_configure_persistent_logging()
 
 
 def _load_local_env(env_path: str | Path | None = None) -> None:
@@ -123,7 +154,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260503a")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260504a")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -236,7 +267,17 @@ async def lifespan(app: FastAPI):
         thread = getattr(app.state, "refresh_thread", None)
         if stop_event and thread:
             stop_event.set()
-            thread.join(timeout=2)
+            # A scheduled refresh in flight can take tens of seconds (one HTTP
+            # timeout per feed). Wait long enough to let it finish cleanly so
+            # we don't leave the meta DB in a partial-write state.
+            shutdown_timeout = float(os.getenv("LECTIO_SHUTDOWN_TIMEOUT_SECONDS", "30"))
+            thread.join(timeout=shutdown_timeout)
+            if thread.is_alive():
+                LOGGER.warning(
+                    "[shutdown] refresh worker did not finish within %.0fs; "
+                    "abandoning (daemon thread will be killed by interpreter exit)",
+                    shutdown_timeout,
+                )
 
 
 app = FastAPI(title="Lectio", lifespan=lifespan)
@@ -2413,22 +2454,76 @@ def login_page(request: Request, next: str = "/"):
     if not AUTH_ENABLED or request.session.get("authenticated"):
         return RedirectResponse(url=next or "/", status_code=303)
     return templates.TemplateResponse(
+        request,
         "login.html",
-        {"request": request, "next": next, "error": None, "static_asset_version": STATIC_ASSET_VERSION},
+        {"next": next, "error": None, "static_asset_version": STATIC_ASSET_VERSION},
     )
+
+
+_LOGIN_RATE_LIMIT_MAX = int(os.getenv("LECTIO_LOGIN_MAX_FAILURES", "5"))
+_LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LECTIO_LOGIN_WINDOW_SECONDS", "300"))
+_login_failures: dict[str, list[float]] = {}
+_login_failures_lock = threading.Lock()
+
+
+def _client_ip_for_rate_limit(request: Request) -> str:
+    """Best-effort client identifier for rate limiting.
+
+    Uses request.client.host directly. When behind Traefik with
+    LECTIO_HTTPS_ONLY=1, ProxyHeadersMiddleware rewrites client.host to the
+    real client IP via X-Forwarded-For — see app.add_middleware setup above.
+    """
+    return request.client.host if request.client else "unknown"
+
+
+def _login_attempt_blocked(ip: str, now: float) -> bool:
+    if DEBUG_MODE:
+        return False
+    cutoff = now - _LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    with _login_failures_lock:
+        timestamps = [t for t in _login_failures.get(ip, []) if t >= cutoff]
+        _login_failures[ip] = timestamps
+        return len(timestamps) >= _LOGIN_RATE_LIMIT_MAX
+
+
+def _record_login_failure(ip: str, now: float) -> None:
+    with _login_failures_lock:
+        _login_failures.setdefault(ip, []).append(now)
+
+
+def _clear_login_failures(ip: str) -> None:
+    with _login_failures_lock:
+        _login_failures.pop(ip, None)
 
 
 @app.post("/login")
 async def login_submit(request: Request, next: str = "/"):
+    now = time.time()
+    ip = _client_ip_for_rate_limit(request)
+    if _login_attempt_blocked(ip, now):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {
+                "next": next,
+                "error": f"Too many failed login attempts. Try again in {_LOGIN_RATE_LIMIT_WINDOW_SECONDS // 60} minutes.",
+                "static_asset_version": STATIC_ASSET_VERSION,
+            },
+            status_code=429,
+        )
+
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
     if AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
+        _clear_login_failures(ip)
         request.session["authenticated"] = True
         return RedirectResponse(url=next or "/", status_code=303)
+    _record_login_failure(ip, now)
     return templates.TemplateResponse(
+        request,
         "login.html",
-        {"request": request, "next": next, "error": "Invalid username or password.", "static_asset_version": STATIC_ASSET_VERSION},
+        {"next": next, "error": "Invalid username or password.", "static_asset_version": STATIC_ASSET_VERSION},
         status_code=401,
     )
 

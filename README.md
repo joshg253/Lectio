@@ -136,6 +136,68 @@ This marks the session cookie `Secure` (HTTPS-only) and enables proxy header tru
 
 To sign out, navigate to `/logout`.
 
+### Login brute-force protection
+
+The `POST /login` endpoint is rate-limited per client IP: by default 5 failed attempts within a 5-minute window will return HTTP 429 until the window elapses. A successful login clears the counter for that IP. Tunable via `LECTIO_LOGIN_MAX_FAILURES` and `LECTIO_LOGIN_WINDOW_SECONDS`. Disabled when `LECTIO_DEBUG=1` so dev iteration isn't blocked.
+
+## Outbound URL safety (SSRF guard)
+
+Lead-image source scraping and webcomic plugin fetches resolve their target URL via DNS and refuse to connect if any resolved address is in private / loopback / link-local / multicast IP space. This prevents a malicious feed entry from probing internal services on the host's network. Bypassed when `LECTIO_DEBUG=1` so LAN test feeds remain reachable in dev.
+
+## Persistent logging
+
+Set `LECTIO_LOG_DIR=/var/log/lectio` (or any writable directory) to attach a `RotatingFileHandler` that writes everything from the root logger to `<dir>/lectio.log`. Defaults: 5 MB per file, 5 backups. Tunable via `LECTIO_LOG_MAX_BYTES` and `LECTIO_LOG_BACKUPS`. Stdout logging is unchanged. When `LECTIO_LOG_DIR` is unset, no file is written.
+
+## SQLite backups
+
+Use `scripts/backup_databases.py` to produce a consistent online backup of both databases via `VACUUM INTO` (works while the app is running — no need to copy WAL/SHM sidecar files):
+
+```powershell
+uv run scripts/backup_databases.py --dest C:\Backups\Lectio --keep 14
+```
+
+`--keep N` retains the N most recent backup pairs (default 7). Schedule with cron / Task Scheduler / a systemd timer for periodic backups.
+
+To restore, stop the app and replace `lectio_reader.sqlite` and `lectio_meta.sqlite3` in the project root with the desired backup files (rename them back to those filenames).
+
+## Graceful shutdown
+
+On shutdown the lifespan handler signals the scheduled-refresh worker to stop and waits up to `LECTIO_SHUTDOWN_TIMEOUT_SECONDS` (default 30) for any in-flight refresh to finish before exiting. If the timeout elapses a warning is logged and the daemon thread is abandoned.
+
+## Deploying behind Traefik
+
+Minimum required env on the deploy host:
+
+```
+LECTIO_USERNAME=...
+LECTIO_PASSWORD=...
+LECTIO_SECRET_KEY=...        # 64+ hex chars
+LECTIO_HTTPS_ONLY=1          # secure cookies + trust forwarded headers
+LECTIO_AUTO_REFRESH_MINUTES=60
+LECTIO_LOG_DIR=/var/log/lectio
+```
+
+Health check endpoint for Traefik: `GET /healthz` (auth-exempt; returns 200 when meta DB is reachable, 503 otherwise).
+
+Example Traefik labels (Docker compose snippet):
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.lectio.rule=Host(`lectio.example.com`)
+  - traefik.http.routers.lectio.entrypoints=websecure
+  - traefik.http.routers.lectio.tls.certresolver=letsencrypt
+  - traefik.http.services.lectio.loadbalancer.server.port=8000
+  - traefik.http.services.lectio.loadbalancer.healthcheck.path=/healthz
+  - traefik.http.services.lectio.loadbalancer.healthcheck.interval=30s
+```
+
+First-run bootstrap:
+
+1. Set the env vars above and start the app.
+2. Browse to `https://lectio.example.com` → login with `LECTIO_USERNAME` / `LECTIO_PASSWORD`.
+3. Import your OPML via the hamburger menu.
+
 ## Keyboard shortcuts
 
 These shortcuts are active when focus is not inside an input/textarea/select field.
