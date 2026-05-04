@@ -31,7 +31,14 @@ from pathlib import Path
 import pytest
 
 from services.lead_images import LeadImageService
-from services.lead_image_plugins import FutureSiteLeadImagePlugin, StandardEbooksLeadImagePlugin
+from services.lead_image_plugins import (
+    FutureSiteLeadImagePlugin,
+    GunnerkriggPlugin,
+    PennyArcadePlugin,
+    SMBCPlugin,
+    StandardEbooksLeadImagePlugin,
+    WordPressComicPlugin,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +491,277 @@ def test_standard_ebooks_cover_url_preferred():
         entry_link=link,
         cached_url="https://standardebooks.org/some/other/image.jpg",
     )
+
+
+# ---------------------------------------------------------------------------
+# Gunnerkrigg plugin tests
+# ---------------------------------------------------------------------------
+
+
+def test_gunnerkrigg_derives_comic_url_from_p_param():
+    """The plugin derives the comic image URL directly from ?p=N — no HTTP."""
+    plugin = GunnerkriggPlugin()
+    fallback = plugin.fallback_lead_image_url(
+        entry_link="https://www.gunnerkrigg.com/?p=42",
+        content_html=None,
+        summary=None,
+    )
+    assert fallback == "https://www.gunnerkrigg.com/comics/00000042.jpg"
+
+
+def test_gunnerkrigg_returns_none_for_other_hosts():
+    plugin = GunnerkriggPlugin()
+    assert plugin.fallback_lead_image_url(
+        entry_link="https://example.com/?p=42",
+        content_html=None,
+        summary=None,
+    ) is None
+
+
+def test_gunnerkrigg_returns_none_when_no_page_param():
+    plugin = GunnerkriggPlugin()
+    assert plugin.fallback_lead_image_url(
+        entry_link="https://www.gunnerkrigg.com/some/other/page",
+        content_html=None,
+        summary=None,
+    ) is None
+
+
+def test_gunnerkrigg_bypasses_stale_cache():
+    """Any cached URL that doesn't match the derived comic URL must be bypassed."""
+    plugin = GunnerkriggPlugin()
+    link = "https://www.gunnerkrigg.com/?p=42"
+    derived = "https://www.gunnerkrigg.com/comics/00000042.jpg"
+    assert not plugin.should_bypass_cached_url(entry_link=link, cached_url=derived)
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="https://www.gunnerkrigg.com/static/img/logo.png",
+    )
+
+
+# ---------------------------------------------------------------------------
+# SMBC plugin tests
+# ---------------------------------------------------------------------------
+
+
+def test_smbc_extracts_comic_url_from_content_html():
+    """SMBC's source page is JS-rendered, so the comic URL is pulled from the
+    feed's content_html instead — no HTTP fetch."""
+    plugin = SMBCPlugin()
+    content = (
+        '<p>Some intro</p>'
+        '<img src="https://www.smbc-comics.com/comics/1700000000-comic.png" />'
+        '<p>And after-text.</p>'
+    )
+    fallback = plugin.fallback_lead_image_url(
+        entry_link="https://www.smbc-comics.com/comic/example",
+        content_html=content,
+        summary=None,
+    )
+    assert fallback == "https://www.smbc-comics.com/comics/1700000000-comic.png"
+
+
+def test_smbc_falls_back_to_summary_when_content_lacks_comic():
+    plugin = SMBCPlugin()
+    summary = '<img src="https://www.smbc-comics.com/comics/abc.jpg" />'
+    fallback = plugin.fallback_lead_image_url(
+        entry_link="https://www.smbc-comics.com/comic/example",
+        content_html=None,
+        summary=summary,
+    )
+    assert fallback == "https://www.smbc-comics.com/comics/abc.jpg"
+
+
+def test_smbc_returns_none_for_other_hosts():
+    plugin = SMBCPlugin()
+    content = '<img src="https://www.smbc-comics.com/comics/abc.jpg" />'
+    assert plugin.fallback_lead_image_url(
+        entry_link="https://example.com/post",
+        content_html=content,
+        summary=None,
+    ) is None
+
+
+def test_smbc_bypasses_logo_or_chrome_cache():
+    """If the cached URL is anything other than a /comics/ image, bypass it
+    (typically site logo picked up by source scraping)."""
+    plugin = SMBCPlugin()
+    link = "https://www.smbc-comics.com/comic/example"
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="https://www.smbc-comics.com/static/moblogo.webp",
+    )
+    assert not plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="https://www.smbc-comics.com/comics/abc.png",
+    )
+
+
+# ---------------------------------------------------------------------------
+# WordPressComicPlugin tests
+# ---------------------------------------------------------------------------
+
+
+def test_wordpress_comic_bypasses_mature_gate_url():
+    """Cached URLs that look like a mature-content gate image must be bypassed
+    so the real comic image gets re-fetched."""
+    plugin = WordPressComicPlugin()
+    link = "http://monstersoupcomic.com/?comic=princess-jelly"
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/Mature-Warning.jpg",
+    )
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/age-gate.png",
+    )
+
+
+def test_wordpress_comic_does_not_bypass_safe_comic_url():
+    """A normal comic URL should not be flagged as a mature gate image."""
+    plugin = WordPressComicPlugin()
+    link = "http://monstersoupcomic.com/?comic=princess-jelly"
+    assert not plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/2026/04/princess-jelly-blood.jpg",
+    )
+
+
+def test_wordpress_comic_18_in_filename_is_not_mature_gate():
+    """Regression: '18-' in a filename (e.g. '18-Trusty-Steeds') must NOT be
+    treated as a mature gate. The pattern requires '18' followed by separator
+    and 'plus' or 'only'."""
+    plugin = WordPressComicPlugin()
+    link = "http://monstersoupcomic.com/?comic=toadie-comics-18-trusty-steeds"
+    assert not plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/Toadie-Comic-18-Trusty-Steeds.jpg",
+    )
+
+
+def test_wordpress_comic_18_plus_is_mature_gate():
+    """Conversely, '18-plus' / '18+only' patterns SHOULD trigger bypass."""
+    plugin = WordPressComicPlugin()
+    link = "http://monstersoupcomic.com/?comic=test"
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/18-plus-warning.jpg",
+    )
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="http://monstersoupcomic.com/wp-content/uploads/18_only_gate.png",
+    )
+
+
+def test_wordpress_comic_does_not_apply_to_other_hosts():
+    """Mature-gate detection only fires for configured webcomic hosts so other
+    feeds aren't affected by accidental keyword matches."""
+    plugin = WordPressComicPlugin()
+    assert not plugin.should_bypass_cached_url(
+        entry_link="https://example.com/post",
+        cached_url="https://example.com/wp-content/uploads/mature-content.jpg",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Penny Arcade plugin tests
+# ---------------------------------------------------------------------------
+
+
+def test_penny_arcade_bypasses_panel_only_cache():
+    """Cached /panels/ URLs only show one panel; bypass to fetch the full comic."""
+    plugin = PennyArcadePlugin()
+    link = "https://www.penny-arcade.com/comic/2026/05/01/example"
+    assert plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="https://www.penny-arcade.com/static/panels/2026/05/01/p1.jpg",
+    )
+    assert not plugin.should_bypass_cached_url(
+        entry_link=link,
+        cached_url="https://www.penny-arcade.com/static/comics/2026/05/01/full.jpg",
+    )
+
+
+def test_penny_arcade_only_applies_to_comic_entries():
+    """Non-comic Penny Arcade entries (e.g. news posts) should not be touched."""
+    plugin = PennyArcadePlugin()
+    assert not plugin.should_bypass_cached_url(
+        entry_link="https://www.penny-arcade.com/news/post/2026/05/01/example",
+        cached_url="https://www.penny-arcade.com/static/panels/something.jpg",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plugin fallback runs without include_source_lookup
+#
+# Regression: previously the plugin fallback only ran when
+# include_source_lookup=True (i.e. entry-pane view). In list view the gate
+# blocked it, so feeds relying on a plugin fallback (Gunnerkrigg, SMBC, etc.)
+# never got their thumbnail extracted. The fix moved the plugin fallback call
+# in services/lead_images.py outside that gate.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_fallback_runs_when_include_source_lookup_disabled(tmp_path: Path):
+    """Plugin-provided fallbacks must work in list view, where source lookup
+    is disabled to keep listing fast."""
+    service = _build_service(
+        tmp_path / "meta.sqlite",
+        [],
+        plugins=(GunnerkriggPlugin(),),
+    )
+    entry = _FakeEntry(
+        feed_url="https://www.gunnerkrigg.com/rss.xml",
+        entry_id="gk-42",
+        link="https://www.gunnerkrigg.com/?p=42",
+        content_html="<p>No inline images here.</p>",
+    )
+
+    thumb = service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+
+    assert thumb == "https://www.gunnerkrigg.com/comics/00000042.jpg"
+
+
+# ---------------------------------------------------------------------------
+# HTML-entity-aware lead image dedup (main.py)
+#
+# Regression: the lead image dedup check in main.py originally compared the
+# extracted lead image URL against content_html verbatim. Feeds that store
+# query-string ampersands as &amp; (Jetpack CDN, etc.) escaped the check and
+# the same image rendered twice. Fix: also compare against html.unescape().
+# ---------------------------------------------------------------------------
+
+
+def test_lead_image_dedup_handles_html_encoded_ampersand():
+    """Mirrors the dedup expression from main.py get_entry_detail.
+    The extracted lead_image_url has its ampersands decoded (e.g. parsed from
+    an img src), but the same URL inside content_html is HTML-escaped.
+    The verbatim `in` check misses it; the unescaped check catches it."""
+    import html as _html
+
+    # Decoded form (as parsed/extracted from the feed)
+    lead_image_url = "https://i0.wp.com/badmachinery.com/comics/strip.jpg?w=600&ssl=1"
+    # Same URL inside content_html with &amp; encoding
+    content_html = (
+        '<p>Hello.</p>'
+        '<img src="https://i0.wp.com/badmachinery.com/comics/strip.jpg?w=600&amp;ssl=1" />'
+    )
+
+    # Verbatim check fails (content has &amp;, URL has &)
+    assert lead_image_url not in content_html
+    # But unescaped check catches it
+    assert lead_image_url in _html.unescape(content_html)
+
+
+def test_lead_image_dedup_does_not_match_unrelated_url():
+    """Unescaped check must still only match real duplicates, not coincidences."""
+    import html as _html
+
+    lead_image_url = "https://cdn.example.com/hero.jpg"
+    content_html = '<p>No images here, just text & symbols.</p>'
+
+    assert lead_image_url not in content_html
+    assert lead_image_url not in _html.unescape(content_html)
 
 
 # ---------------------------------------------------------------------------

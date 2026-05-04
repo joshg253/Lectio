@@ -27,7 +27,9 @@ Lectio is a local-first browser feed reader with a three-pane layout:
 - Sort by published vs received + ascending/descending toggle
 - Oldest-first sorting is stabilized for unread/all views by evaluating complete per-feed slices before global ordering, avoiding surprising jumps to older items after read actions
 - Global Note (hamburger menu): a shared plain-text notepad saved in app settings
-- Post list chunking in batches of 10 with auto-fill-to-viewport and scroll-to-load
+- Post list chunking in batches of 10 with auto-fill-to-viewport, scroll-to-load, and `j`-key load-next-chunk at the bottom of the visible window
+- When opening an entry (click, `j`/`k`, etc.), the active post tile auto-scrolls into view in the list if it isn't fully visible
+- Sidebar feed/folder/global unread counters update in real time as posts are marked read (including auto-mark-on-open)
 - Manual entry tags with suggestions
 - Left pane tags card with counts and click-to-filter
 - Left pane quick-action utility strip (Saved toggle, Tags toggle, Global Note, Problem Feeds, Pin/Unpin)
@@ -39,10 +41,11 @@ Lectio is a local-first browser feed reader with a three-pane layout:
 - Entry header quick actions for save + read/unread, with Reader/Web/Open controls moved into the lower tag/action row
 - Entry header read/unread toggles update in place (no full page reload) and keep list/header state synchronized
 - In 1-pane mobile entry view, swipe left/right in the post content area to open next/previous posts in the current list scope
-- In 1-pane mobile entry view, pinch/spread zoom adjusts entry content zoom (text/images) without scaling the app chrome
+- In 1-pane mobile entry view, pinch/spread zoom uses the browser's native viewport zoom (smooth, GPU-accelerated)
 - Entry content media guardrails: oversized inline images are constrained to fit the viewport
 - For short blurb-style posts, Lectio attempts to pull a lead image from the source page (for example via og:image/twitter:image) when the feed payload has no inline image
 - Standard Ebooks entries prefer canonical `/downloads/cover.jpg` as lead image via site plugin fallback
+- Per-site lead-image plugins handle webcomics that need special handling: Gunnerkrigg (URL derived from page number), SMBC (extracted from feed content since the source page is JS-rendered), Penny Arcade (full comic via og:image instead of single panel), Monster Soup / Bad Machinery (skip mature-content gate images and re-fetch the real comic)
 - Cached source-derived thumbnails are periodically revalidated so updated hero images on source sites can replace stale thumbs over time
 - Entry body images are left intact; lead-image selection does not remove in-article image placements
 - Background auto-refresh of all feeds (default every 60 minutes)

@@ -762,13 +762,13 @@
         }
         entryPaneEl.dataset.boundEntrySwipeNav = '1';
         let sx=0, sy=0, dx=0, dy=0, touching=false, lockHorizontal=false;
-        entryPaneEl.addEventListener('touchstart', (ev)=>{ const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; lockHorizontal=false; }, { passive: true });
+        entryPaneEl.addEventListener('touchstart', (ev)=>{
+          if (ev.touches.length !== 1) { touching = false; return; }
+          const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; lockHorizontal=false;
+        }, { passive: true });
         entryPaneEl.addEventListener('touchmove', (ev)=>{
           if(!touching) return;
-          const liveEntryBody = document.getElementById('entry-body');
-          if (liveEntryBody && liveEntryBody.classList.contains('zoomed')) {
-            return;
-          }
+          if (ev.touches.length !== 1) { touching = false; return; }
           const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy;
           if (!lockHorizontal && Math.abs(dx) > 18 && Math.abs(dx) > Math.abs(dy)) {
             lockHorizontal = true;
@@ -782,8 +782,7 @@
           touching=false;
           if (!window.isSingleMode || !window.isSingleMode()) return;
           if (entryPaneEl.querySelector('.entry.source-active')) return;
-          const liveEntryBody = document.getElementById('entry-body');
-          if (liveEntryBody && liveEntryBody.classList.contains('zoomed')) return;
+          if (window.visualViewport && window.visualViewport.scale > 1.05) return;
           if(Math.abs(dx) < Math.abs(dy)) return;
           const threshold=52;
           if(Math.abs(dx) < threshold) return;
@@ -2436,7 +2435,6 @@
     let entryArticle = document.querySelector('.entry');
     let entryPaneTitle = document.querySelector('.entry-pane-title');
     let entryBody = document.getElementById('entry-body');
-    let entryZoomTarget = entryBody ? entryBody.querySelector('.entry-zoom-target') : null;
     let entryReadabilityButton = document.getElementById('entry-readability-button');
     let entrySourceButton = document.getElementById('entry-source-button');
     let entrySourceFrame = document.getElementById('entry-source-frame');
@@ -2445,8 +2443,6 @@
     let entrySourceDismiss = document.getElementById('entry-source-dismiss');
     let entrySourceModeIndicator = document.getElementById('entry-source-mode-indicator');
     let entryPaneObserver = null;
-    let entryZoomScale = 1;
-    let entryZoomBaseHeight = null;
 
     let contextFolderId = null;
     let contextFeedUrl = null;
@@ -2484,8 +2480,6 @@
       entryArticle = document.querySelector('.entry');
       entryPaneTitle = document.querySelector('.entry-pane-title');
       entryBody = document.getElementById('entry-body');
-      entryZoomTarget = entryBody ? entryBody.querySelector('.entry-zoom-target') : null;
-      entryZoomBaseHeight = null;
       entryReadabilityButton = document.getElementById('entry-readability-button');
       entrySourceButton = document.getElementById('entry-source-button');
       entrySourceFrame = document.getElementById('entry-source-frame');
@@ -2936,6 +2930,7 @@
         }
         markActivePostByUrl(url);
         syncActivePostThumbnailFromEntryPane();
+        centerActivePostInView();
         // If running in single-pane mode, ensure we switch to the entry pane
         try {
           if (window.isSingleMode && window.isSingleMode()) {
@@ -3500,171 +3495,6 @@
     });
 
     function bindEntryPaneInteractions() {
-      function applyEntryZoom(scale) {
-        const clamped = Math.min(2.5, Math.max(1, Number(scale) || 1));
-        entryZoomScale = clamped;
-        document.documentElement.style.setProperty('--entry-content-zoom', clamped.toFixed(2));
-        if (entryBody) {
-          entryBody.classList.toggle('zoomed', clamped > 1.01);
-        }
-
-        if (entryZoomTarget) {
-          if (clamped <= 1.01) {
-            entryZoomTarget.style.transform = '';
-            entryZoomTarget.style.transformOrigin = '';
-            entryZoomTarget.style.width = '';
-            entryZoomTarget.style.marginBottom = '';
-            entryZoomTarget.style.willChange = '';
-            entryZoomBaseHeight = null;
-          } else {
-            if (!Number.isFinite(entryZoomBaseHeight) || entryZoomBaseHeight <= 0) {
-              const prevTransform = entryZoomTarget.style.transform;
-              const prevOrigin = entryZoomTarget.style.transformOrigin;
-              const prevWidth = entryZoomTarget.style.width;
-              const prevMarginBottom = entryZoomTarget.style.marginBottom;
-
-              entryZoomTarget.style.transform = 'none';
-              entryZoomTarget.style.transformOrigin = 'top left';
-              entryZoomTarget.style.width = '100%';
-              entryZoomTarget.style.marginBottom = '';
-              entryZoomBaseHeight = entryZoomTarget.getBoundingClientRect().height;
-
-              entryZoomTarget.style.transform = prevTransform;
-              entryZoomTarget.style.transformOrigin = prevOrigin;
-              entryZoomTarget.style.width = prevWidth;
-              entryZoomTarget.style.marginBottom = prevMarginBottom;
-            }
-
-            const safeBaseHeight = Number.isFinite(entryZoomBaseHeight) ? entryZoomBaseHeight : 0;
-            entryZoomTarget.style.width = '100%';
-            entryZoomTarget.style.transformOrigin = 'top left';
-            entryZoomTarget.style.transform = `scale(${clamped.toFixed(4)})`;
-            entryZoomTarget.style.marginBottom = `${Math.max(0, safeBaseHeight * (clamped - 1)).toFixed(2)}px`;
-            entryZoomTarget.style.willChange = 'transform';
-          }
-        }
-
-        try { window.localStorage.setItem('lectio-entry-zoom', clamped.toFixed(2)); } catch (_e) {}
-      }
-
-      function bindEntryPinchZoom() {
-        if (!entryBody || entryBody.dataset.boundPinchZoom) return;
-        entryBody.dataset.boundPinchZoom = '1';
-        let pinchStartDistance = 0;
-        let pinchStartScale = entryZoomScale;
-        let pinching = false;
-        let pinchAnchorBodyY = 0;
-        let pinchAnchorBodyX = 0;
-        let pinchScrollHost = null;
-
-        function isScrollableElement(el) {
-          return Boolean(el) && (el.scrollHeight > (el.clientHeight + 1) || el.scrollTop > 0);
-        }
-
-        function getPinchScrollHost() {
-          let current = entryBody;
-          while (current) {
-            if (isScrollableElement(current)) {
-              return current;
-            }
-            current = current.parentElement;
-          }
-
-          const paneEntry = document.querySelector('.pane-entry');
-          return paneEntry || entryBody || document.scrollingElement || document.documentElement;
-        }
-
-        function getHostContentScrollTop(scrollHost) {
-          return scrollHost === entryBody ? scrollHost.scrollTop : 0;
-        }
-
-        function getHostContentScrollLeft(scrollHost) {
-          return scrollHost === entryBody ? scrollHost.scrollLeft : 0;
-        }
-
-        function clamp(value, min, max) {
-          return Math.min(max, Math.max(min, value));
-        }
-
-        entryBody.addEventListener('touchstart', (ev) => {
-          if (!window.isSingleMode || !window.isSingleMode()) return;
-          if (ev.touches.length !== 2) return;
-          const [t1, t2] = ev.touches;
-          const midY = (t1.clientY + t2.clientY) / 2;
-          const midX = (t1.clientX + t2.clientX) / 2;
-          pinchStartDistance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-          if (pinchStartDistance <= 0) {
-            pinching = false;
-            return;
-          }
-          pinchStartScale = entryZoomScale;
-          pinchScrollHost = getPinchScrollHost();
-          const bodyRect = entryBody.getBoundingClientRect();
-          const hostScrollTop = getHostContentScrollTop(pinchScrollHost);
-          const hostScrollLeft = getHostContentScrollLeft(pinchScrollHost);
-          pinchAnchorBodyY = (hostScrollTop + (midY - bodyRect.top)) / Math.max(0.001, pinchStartScale);
-          pinchAnchorBodyX = (hostScrollLeft + (midX - bodyRect.left)) / Math.max(0.001, pinchStartScale);
-          pinching = Number.isFinite(pinchAnchorBodyY);
-        }, { passive: true });
-
-        entryBody.addEventListener('touchmove', (ev) => {
-          if (!pinching || ev.touches.length !== 2) return;
-          const [t1, t2] = ev.touches;
-          const midY = (t1.clientY + t2.clientY) / 2;
-          const midX = (t1.clientX + t2.clientX) / 2;
-          const distance = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-          if (distance <= 0 || pinchStartDistance <= 0) return;
-          const next = pinchStartScale * (distance / pinchStartDistance);
-          applyEntryZoom(next);
-
-          const scrollHost = pinchScrollHost || getPinchScrollHost();
-          if (scrollHost) {
-            const bodyRect = entryBody.getBoundingClientRect();
-            const bodyTop = bodyRect.top;
-            const bodyLeft = bodyRect.left;
-            const hostScrollTop = getHostContentScrollTop(scrollHost);
-            const hostScrollLeft = getHostContentScrollLeft(scrollHost);
-            const anchorScreenY = bodyTop + (pinchAnchorBodyY * entryZoomScale) - hostScrollTop;
-            const anchorScreenX = bodyLeft + (pinchAnchorBodyX * entryZoomScale) - hostScrollLeft;
-            const scrollDelta = anchorScreenY - midY;
-            const scrollDeltaX = anchorScreenX - midX;
-            const maxScrollTop = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
-            const maxScrollLeft = Math.max(0, scrollHost.scrollWidth - scrollHost.clientWidth);
-            if (Number.isFinite(scrollDelta) && Math.abs(scrollDelta) > 0.25) {
-              const targetScrollTop = clamp(scrollHost.scrollTop + scrollDelta, 0, maxScrollTop);
-              scrollHost.scrollTop = targetScrollTop;
-            }
-            if (Number.isFinite(scrollDeltaX) && Math.abs(scrollDeltaX) > 0.25) {
-              const targetScrollLeft = clamp(scrollHost.scrollLeft + scrollDeltaX, 0, maxScrollLeft);
-              scrollHost.scrollLeft = targetScrollLeft;
-            }
-          }
-
-          ev.preventDefault();
-        }, { passive: false });
-
-        entryBody.addEventListener('touchend', () => {
-          pinching = false;
-          pinchScrollHost = null;
-        }, { passive: true });
-
-        entryBody.addEventListener('touchcancel', () => {
-          pinching = false;
-          pinchScrollHost = null;
-        }, { passive: true });
-      }
-
-      if (entryZoomScale > 1.01) {
-        applyEntryZoom(entryZoomScale);
-      } else {
-        try {
-          const savedZoom = Number(window.localStorage.getItem('lectio-entry-zoom') || '1');
-          if (savedZoom > 1) {
-            applyEntryZoom(savedZoom);
-          }
-        } catch (_e) {}
-      }
-
       const entrySaveForm = document.querySelector('.entry-save-toggle-form');
       if (entrySaveForm && !entrySaveForm.dataset.boundAsyncSubmit) {
         entrySaveForm.dataset.boundAsyncSubmit = '1';
@@ -3680,6 +3510,15 @@
           }
 
           const nextIsSaved = savedInput.value === '1';
+
+          // Capture the body before the optimistic update — the update flips
+          // savedInput.value, so FormData collected after would send the wrong value.
+          const formData = new FormData(entrySaveForm);
+          const body = new URLSearchParams();
+          for (const [key, value] of formData.entries()) {
+            body.append(key, String(value));
+          }
+
           applyEntryPaneSavedState(nextIsSaved);
 
           const linkedPostItem = document.querySelector(`.post-item[data-post-feed-url="${CSS.escape(feedUrlInput.value)}"][data-post-entry-id="${CSS.escape(entryIdInput.value)}"]`);
@@ -3688,12 +3527,6 @@
           }
 
           try {
-            const formData = new FormData(entrySaveForm);
-            const body = new URLSearchParams();
-            for (const [key, value] of formData.entries()) {
-              body.append(key, String(value));
-            }
-
             const response = await fetch(entrySaveForm.action, {
               method: 'POST',
               credentials: 'same-origin',
@@ -3866,8 +3699,6 @@
           setEntrySourceFallbackVisible(false);
         });
       }
-
-      bindEntryPinchZoom();
     }
 
     bindEntryPaneInteractions();
@@ -4062,15 +3893,18 @@
           }
 
           const nextIsSaved = savedInput.value === '1';
+
+          // Capture the body before the optimistic update — the update flips
+          // savedInput.value, so FormData collected after would send the wrong value.
+          const formData = new FormData(saveForm);
+          const body = new URLSearchParams();
+          for (const [key, value] of formData.entries()) {
+            body.append(key, String(value));
+          }
+
           applyPostItemSavedState(postItem, nextIsSaved);
 
           try {
-            const formData = new FormData(saveForm);
-            const body = new URLSearchParams();
-            for (const [key, value] of formData.entries()) {
-              body.append(key, String(value));
-            }
-
             const response = await fetch(saveForm.action, {
               method: 'POST',
               credentials: 'same-origin',

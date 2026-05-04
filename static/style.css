@@ -592,7 +592,7 @@ body[data-single-mode="1"] #folders-collapse-btn {
 body[data-single-mode="1"] .pane-posts,
 body[data-single-mode="1"] .pane-entry {
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
   overflow: auto;
   overscroll-behavior-y: contain;
   /* Use dynamic --vh to represent 1% of the current visual viewport height */
@@ -2600,11 +2600,6 @@ button:hover, .button-link:hover {
 
 .entry-content {
   line-height: 1.45;
-}
-
-.entry-body.zoomed .entry-zoom-target {
-  transform-origin: top left;
-  will-change: transform;
 }
 
 .entry-lead-image {

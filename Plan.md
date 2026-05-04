@@ -24,31 +24,35 @@ Living backlog and staging area for future work. Use for feature ideas, deferred
 - **Maybe**: Speculative/revisit
 
 ## Now
-- Stronger archive/saved views
-- View state persistence hardening
+_(empty — pull from Soon)_
 
 ## Completed Recently
+- Pinch zoom on mobile entry pane: removed custom handler in favor of native browser pinch (was blocked by `touch-action: pan-y` on `.pane-entry`)
+- Star status persistence bug: FormData was captured after the optimistic flip of `savedInput.value`, so the server received the opposite value — fixed in both entry-pane and post-list save toggles
+- Active post tile auto-scrolls into view in the post list when navigating between entries (j/k, click, etc.)
 - Keyboard shortcut baseline finalized for now (navigation/actions, source view toggles, refresh, add feed/tags, Escape close behavior)
 - 1-pane/tablet polish: state consistency + feedback visibility
 - Unread/all persistence consistency across folder/scope navigation
 - Active state styling fix for Saved Items vs All Feeds navigation (CSS color + JavaScript star_only logic)
 
 ## Soon
-- Per-feed preferences (refresh interval, readability default, sort)
 - Clarify/complete "Stronger archive/saved views" scope
 - View state persistence hardening (durable preferences across restarts)
+- Topbar: additional action buttons (beyond current set)
+- Entry header: additional metadata/actions beyond title/feed
+- More feed-specific display tweaks (webcomics, etc.)
+- VPS deployment: HTTP basic auth (single-user, pre-multi-user gate) + integrate with existing Traefik setup
 
 ## Later
 - Rules engine (keyword/author auto-tag/mark-read/highlight)
 - Keyword highlighters + smart folders
 - Web scraping/non-RSS monitoring
-- Read-later and sharing integrations (Instapaper save, Pocket, etc.)
-- VPS deployment: HTTP basic auth (single-user, pre-multi-user gate) + reverse proxy docs (nginx/Caddy)
-- Docker packaging
-- Per-feed-type display tweaks (e.g. comics: larger image, minimal text chrome)
+- Read-later and sharing integrations (Instapaper save, Pocket, Fediverse, etc.)
+- Per-feed preferences (refresh interval, readability default, sort)
 - Cloudflare free-tier integrations: Workers (e.g. lightweight proxy/cache layer), R2, or Cache API where useful
 
 ## Maybe
+- Docker packaging
 - YunoHost packaging
 - Multi-user support (starts after basic auth lands; auth refactor is the gate)
 - Richer plugin system

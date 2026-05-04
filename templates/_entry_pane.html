@@ -312,30 +312,28 @@
   </div>
   <article class="entry">
     <div id="entry-body" class="entry-body">
-      <div class="entry-zoom-target">
-        {% if selected_entry.lead_image_url %}
-        <img
-          class="entry-lead-image"
-          src="{{ selected_entry.lead_image_url }}"
-          alt="{{ selected_entry.image_title_text or '' }}"
-          {% if selected_entry.image_title_text %}title="{{ selected_entry.image_title_text }}"{% endif %}
-          loading="lazy"
-        />
-        {% if selected_entry.image_title_text %}
-        <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
-        {% endif %}
-        {% endif %}
-        {% if selected_entry.content_html %}
-        <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
-        {% elif selected_entry.summary %}
-        <pre class="entry-text">{{ selected_entry.summary }}</pre>
-        {% else %}
-        <div class="muted">No content available.</div>
-        {% endif %}
-        {% if not selected_entry.lead_image_url and selected_entry.image_title_text %}
-        <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
-        {% endif %}
-      </div>
+      {% if selected_entry.lead_image_url %}
+      <img
+        class="entry-lead-image"
+        src="{{ selected_entry.lead_image_url }}"
+        alt="{{ selected_entry.image_title_text or '' }}"
+        {% if selected_entry.image_title_text %}title="{{ selected_entry.image_title_text }}"{% endif %}
+        loading="lazy"
+      />
+      {% if selected_entry.image_title_text %}
+      <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
+      {% endif %}
+      {% endif %}
+      {% if selected_entry.content_html %}
+      <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
+      {% elif selected_entry.summary %}
+      <pre class="entry-text">{{ selected_entry.summary }}</pre>
+      {% else %}
+      <div class="muted">No content available.</div>
+      {% endif %}
+      {% if not selected_entry.lead_image_url and selected_entry.image_title_text %}
+      <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
+      {% endif %}
     </div>
     <iframe
       id="entry-source-frame"
