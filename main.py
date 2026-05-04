@@ -124,8 +124,8 @@ MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260503a")
-REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "1") == "1"
-DEBUG_MODE = os.getenv("LECTIO_DEBUG", "1") == "1"
+REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
+DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
 # --- Auth config ---
 # Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
@@ -146,7 +146,7 @@ SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 *
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -271,7 +271,23 @@ if _HTTPS_ONLY:
 
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 app.add_middleware(_AuthMiddleware)
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+class _CachedStaticFiles(StaticFiles):
+    """StaticFiles that sends a long-lived Cache-Control header.
+
+    Safe because every <link>/<script> URL includes a `?v={STATIC_ASSET_VERSION}`
+    cache-buster — bump the version to invalidate.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+app.mount("/static", _CachedStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["urlencode"] = lambda value: quote_plus(str(value))
 
@@ -3535,6 +3551,19 @@ def opml_export():
         media_type="application/xml",
         headers={"Content-Disposition": "attachment; filename=lectio-export.opml"},
     )
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness/readiness probe for reverse proxies (Traefik, etc.).
+    Returns 200 if the meta DB is reachable, 503 otherwise.
+    Auth-exempt so probes don't need credentials."""
+    try:
+        with get_meta_connection() as conn:
+            conn.execute("SELECT 1").fetchone()
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=503)
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/stats")

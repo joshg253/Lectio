@@ -47,6 +47,16 @@ def _make_conn(db_path: Path):
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS domain_failure_state (
+            domain TEXT PRIMARY KEY,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            next_retry_at REAL,
+            last_failure_at REAL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS folder_feeds (
             folder_id INTEGER NOT NULL,
             feed_url TEXT NOT NULL,

@@ -104,6 +104,16 @@ If `YOUTUBE_API_KEY` is not set, Lectio falls back to scraping the YouTube video
 - To change the interval, set `LECTIO_AUTO_REFRESH_MINUTES` before starting the app; values lower than 15 are clamped to 15.
 - To disable scheduled refresh, set `LECTIO_AUTO_REFRESH_MINUTES=0`.
 
+## Health check
+
+`GET /healthz` returns `{"status": "ok"}` (HTTP 200) when the meta DB is reachable, or `{"status": "error", "error": "..."}` (HTTP 503) otherwise. Auth-exempt so reverse-proxy probes (Traefik, etc.) don't need credentials.
+
+## Debug mode
+
+`LECTIO_DEBUG=1` enables the `/debug/*` endpoints (lead-image cache clear, feed bypass toggle, etc.) and the topbar debug controls. Defaults to **off** so VPS deploys are safe by default. Local dev workflows (Makefile `run` target, VS Code launch config) already pass it explicitly.
+
+`LECTIO_REFRESH_DEBUG=1` enables verbose refresh logging. Same default-off behavior.
+
 ## Authentication
 
 Authentication is **disabled by default** (safe for local use). To enable it, set these environment variables (in a `.env` file or your shell):
