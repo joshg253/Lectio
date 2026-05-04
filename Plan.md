@@ -29,6 +29,11 @@ Living backlog and staging area for future work. Use for feature ideas, deferred
 _(empty — pull from Soon)_
 
 ## Completed Recently
+- CSRF protection landed (last Pre-VPS gate):
+  - Pure-ASGI `_CSRFMiddleware` validates `X-CSRF-Token` header or `_csrf` form field on all unsafe HTTP methods. Token is per-session, generated on first request, stored in the signed/HttpOnly session cookie.
+  - `<meta name="csrf-token">` tag rendered in `index.html`; small JS shim wraps `fetch()` to add the header for same-origin POST/PUT/PATCH/DELETE and a capture-phase submit listener injects a hidden `_csrf` input into native form submits — so all 24 existing forms / SPA fetches get CSRF transparently with zero per-form edits.
+  - `/login` is exempt (rate-limit is the auth-attempt protection); `/static/*` and `/healthz` are GET-only or otherwise safe.
+  - Also fixed a latent middleware-ordering bug: `add_middleware(SessionMiddleware)` was being added FIRST, which (per Starlette's add-then-reverse-build semantics) made it INNERMOST → would have caused `request.session` to be missing inside `_AuthMiddleware` had auth ever been turned on. Reordered to: Auth (innermost) → CSRF → Session → ProxyHeaders (outermost).
 - Pre-VPS prep batch (round 2):
   - Login brute-force protection: per-IP rate limit on `POST /login` (default 5 failures / 5 min → 429). `LECTIO_DEBUG=1` bypasses. Also fixed latent `TemplateResponse` signature bug in login routes that newer Starlette mishandles.
   - SSRF guardrail (`services/url_guard.py`): DNS-resolves URLs and refuses private/loopback/link-local addresses. Applied to `_fetch_source_lead_image` + WordPressComic/PennyArcade og:image fetches. `LECTIO_DEBUG=1` bypasses for LAN test feeds.
@@ -47,10 +52,7 @@ _(empty — pull from Soon)_
 - Active post tile auto-scrolls into view in the post list when navigating between entries (j/k, click, etc.)
 
 ## Soon
-### Pre-VPS hardening (gate items for exposing Lectio on the public internet)
-- **CSRF protection** on all state-changing POST endpoints (`/entries/saved`, `/entries/read`, `/entries/tags`, folder/feed CRUD, refresh, OPML import). Thread a token through Jinja forms and the SPA async submit handlers. Largest remaining lift of this batch; transparent in normal use once wired.
-
-- **VPS deployment**: roll out to existing Traefik setup once CSRF lands.
+- **VPS deployment**: roll out to existing Traefik setup. All Pre-VPS hardening items are done.
 
 ## Later
 - Stronger archive/saved views — scope as actual gaps surface during use

@@ -3,11 +3,61 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token_for(request) }}" />
   <title>Lectio</title>
   <script>
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
     window.__lectioTheme = window.localStorage.getItem('lectio-theme') || 'dark';
+  </script>
+  <script>
+    // CSRF shim — installs BEFORE any other handler registers.
+    // Reads the token from the <meta name="csrf-token"> tag and:
+    //   1) Wraps fetch() to add X-CSRF-Token header for same-origin
+    //      POST/PUT/PATCH/DELETE (covers all SPA async submits).
+    //   2) Adds a capture-phase submit listener that injects a hidden
+    //      `_csrf` input into POST forms that don't already have one
+    //      (covers native form submits with no JS interception).
+    (function setupCsrf() {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      const token = meta ? meta.content : '';
+      if (!token) return;
+      const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+      const _origFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        init = init || {};
+        let method = (init.method || '').toUpperCase();
+        if (!method && input && typeof input === 'object' && input.method) {
+          method = String(input.method).toUpperCase();
+        }
+        if (!method) method = 'GET';
+        if (UNSAFE.has(method)) {
+          let sameOrigin = true;
+          try {
+            const url = new URL(typeof input === 'string' ? input : input.url, window.location.origin);
+            sameOrigin = url.origin === window.location.origin;
+          } catch (e) { sameOrigin = true; }
+          if (sameOrigin) {
+            const h = new Headers(init.headers || {});
+            if (!h.has('X-CSRF-Token')) h.set('X-CSRF-Token', token);
+            init.headers = h;
+          }
+        }
+        return _origFetch(input, init);
+      };
+      document.addEventListener('submit', function (ev) {
+        const form = ev.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        if ((form.method || '').toLowerCase() !== 'post') return;
+        if (!form.querySelector('input[name="_csrf"]')) {
+          const inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = '_csrf';
+          inp.value = token;
+          form.appendChild(inp);
+        }
+      }, true);
+    })();
   </script>
   <script>
     document.write(`<link id="theme-stylesheet" rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v=${window.STATIC_ASSET_VERSION}" />`);

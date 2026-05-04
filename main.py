@@ -154,7 +154,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260504a")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260504b")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -296,7 +296,154 @@ class _AuthMiddleware(BaseHTTPMiddleware):
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
 
 
-# SessionMiddleware must be added before AuthMiddleware so request.session is available.
+# Paths exempt from CSRF validation. /login is the auth gate itself (rate-
+# limited separately). /static and /healthz are GET-only anyway, but listing
+# explicitly documents intent.
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz")
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CSRF_SESSION_KEY = "csrf_token"
+_CSRF_HEADER_NAME = "x-csrf-token"
+_CSRF_FORM_FIELD = "_csrf"
+
+
+def _ensure_csrf_token(session: dict) -> str:
+    """Return the session's CSRF token, generating one on first use.
+
+    Token is per-session (rotated whenever the session itself rotates, e.g.
+    on logout/login). Stored in the session cookie which is HttpOnly + signed
+    so attackers on other origins can neither read nor forge it.
+    """
+    token = session.get(_CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[_CSRF_SESSION_KEY] = token
+    return token
+
+
+class _CSRFMiddleware:
+    """Pure-ASGI CSRF protection.
+
+    On unsafe methods (POST/PUT/PATCH/DELETE) requires a token that matches
+    the session's stored token. Token is supplied either via:
+      - X-CSRF-Token header (used by SPA fetch handlers), or
+      - `_csrf` form field (for plain HTML form submits / multipart uploads).
+
+    Read-only methods are allowed through unchanged. The body is buffered and
+    re-streamed to downstream handlers via a replay receive callable so route
+    handlers can still parse it normally.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Ensure every request has a CSRF token in its session so templates
+        # can render it and SPA fetches can read it from a meta tag. The
+        # token is created lazily on first request after a fresh session.
+        session = scope.get("session")
+        if session is not None and not session.get(_CSRF_SESSION_KEY):
+            session[_CSRF_SESSION_KEY] = secrets.token_urlsafe(32)
+
+        method = scope.get("method", "GET").upper()
+        path = scope.get("path", "")
+
+        if method in _CSRF_SAFE_METHODS or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        # Buffer the request body so downstream handlers can still read it.
+        body_chunks: list[bytes] = []
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] != "http.request":
+                # Unexpected (e.g. http.disconnect); pass through unchanged.
+                await self.app(scope, receive, send)
+                return
+            body_chunks.append(message.get("body", b""))
+            more_body = bool(message.get("more_body", False))
+        body = b"".join(body_chunks)
+
+        # Token from header (preferred for SPA fetches).
+        submitted: str | None = None
+        for header_name, header_value in scope.get("headers") or []:
+            if header_name.decode("latin-1").lower() == _CSRF_HEADER_NAME:
+                submitted = header_value.decode("latin-1")
+                break
+
+        # Fall back to a `_csrf` field in form-encoded bodies.
+        if not submitted and body:
+            content_type = b""
+            for header_name, header_value in scope.get("headers") or []:
+                if header_name.decode("latin-1").lower() == "content-type":
+                    content_type = header_value
+                    break
+            ctype = content_type.decode("latin-1", errors="ignore").lower()
+            if ctype.startswith("application/x-www-form-urlencoded"):
+                from urllib.parse import parse_qs
+
+                try:
+                    form = parse_qs(body.decode("utf-8", errors="ignore"))
+                    values = form.get(_CSRF_FORM_FIELD, [])
+                    if values:
+                        submitted = values[0]
+                except Exception:
+                    submitted = None
+            elif ctype.startswith("multipart/form-data"):
+                # Cheap multipart probe: scan the raw body for the field name.
+                # Avoids pulling in a streaming parser for the one OPML form.
+                marker = b'name="' + _CSRF_FORM_FIELD.encode() + b'"'
+                idx = body.find(marker)
+                if idx >= 0:
+                    # The value sits two CRLFs after the disposition line.
+                    sep = b"\r\n\r\n"
+                    val_start = body.find(sep, idx)
+                    if val_start >= 0:
+                        val_start += len(sep)
+                        val_end = body.find(b"\r\n", val_start)
+                        if val_end >= 0:
+                            try:
+                                submitted = body[val_start:val_end].decode("utf-8", errors="ignore")
+                            except Exception:
+                                submitted = None
+
+        expected = (scope.get("session") or {}).get(_CSRF_SESSION_KEY)
+        if not expected or not submitted or not secrets.compare_digest(str(submitted), str(expected)):
+            response = JSONResponse(
+                {"detail": "CSRF token missing or invalid."},
+                status_code=403,
+            )
+            await response(scope, receive, send)
+            return
+
+        # Replay the buffered body to downstream handlers.
+        replayed = False
+
+        async def replay_receive():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        await self.app(scope, replay_receive, send)
+
+
+# Middleware order matters. Starlette's add_middleware does insert(0) and the
+# stack-builder reverses, so LAST add_middleware = OUTERMOST = runs FIRST
+# inbound. We need this inbound chain:
+#   ProxyHeaders (rewrite client IP / scheme from X-Forwarded-*)
+#   → SessionMiddleware (parse signed session cookie → scope["session"])
+#   → _CSRFMiddleware (validate POST tokens; needs scope["session"])
+#   → _AuthMiddleware (gate on session["authenticated"]; needs scope["session"])
+#   → app
+# Therefore add Auth FIRST (innermost) and outer middlewares LAST.
+app.add_middleware(_AuthMiddleware)
+app.add_middleware(_CSRFMiddleware)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET_KEY,
@@ -311,7 +458,6 @@ if _HTTPS_ONLY:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-app.add_middleware(_AuthMiddleware)
 
 
 class _CachedStaticFiles(StaticFiles):
@@ -331,6 +477,24 @@ class _CachedStaticFiles(StaticFiles):
 app.mount("/static", _CachedStaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.filters["urlencode"] = lambda value: quote_plus(str(value))
+
+
+def _csrf_token_for(request: Request) -> str:
+    """Read the request's CSRF token; ensure one exists if the session lacks it."""
+    return _ensure_csrf_token(request.session)
+
+
+def _csrf_input(request: Request) -> str:
+    """Render a hidden CSRF input for inclusion in <form> blocks."""
+    token = _csrf_token_for(request)
+    return f'<input type="hidden" name="{_CSRF_FORM_FIELD}" value="{token}" />'
+
+
+# Expose helpers as Jinja globals so templates can call csrf_input(request).
+# ty's strict view of globals' value-type doesn't accept arbitrary callables;
+# Jinja itself does. Suppress the false positives.
+templates.env.globals["csrf_input"] = _csrf_input  # ty: ignore[invalid-assignment]
+templates.env.globals["csrf_token_for"] = _csrf_token_for  # ty: ignore[invalid-assignment]
 
 
 @dataclass

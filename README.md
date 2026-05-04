@@ -140,6 +140,15 @@ To sign out, navigate to `/logout`.
 
 The `POST /login` endpoint is rate-limited per client IP: by default 5 failed attempts within a 5-minute window will return HTTP 429 until the window elapses. A successful login clears the counter for that IP. Tunable via `LECTIO_LOGIN_MAX_FAILURES` and `LECTIO_LOGIN_WINDOW_SECONDS`. Disabled when `LECTIO_DEBUG=1` so dev iteration isn't blocked.
 
+## CSRF protection
+
+All state-changing HTTP methods (`POST`, `PUT`, `PATCH`, `DELETE`) require a per-session CSRF token. The token is generated on first request, stored in the signed session cookie, and rendered into the page via `<meta name="csrf-token">`. A small JS shim handles delivery automatically:
+
+- **SPA async fetches**: a wrapped `window.fetch` adds an `X-CSRF-Token` header to same-origin unsafe-method requests.
+- **Native form submits**: a capture-phase `submit` listener injects a hidden `_csrf` input into POST forms before the browser sends them.
+
+`POST /login` is exempt (the rate limit + auth check are the protection there). Browser-driven dev (including LAN access from the phone) and the test suite both work transparently. To submit a POST manually via `curl` / `Invoke-WebRequest`, first GET any page to establish the session, extract the token from the `<meta>` tag, and include it as either the `X-CSRF-Token` header or a `_csrf` form field.
+
 ## Outbound URL safety (SSRF guard)
 
 Lead-image source scraping and webcomic plugin fetches resolve their target URL via DNS and refuse to connect if any resolved address is in private / loopback / link-local / multicast IP space. This prevents a malicious feed entry from probing internal services on the host's network. Bypassed when `LECTIO_DEBUG=1` so LAN test feeds remain reachable in dev.
