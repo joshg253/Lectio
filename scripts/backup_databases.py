@@ -21,19 +21,22 @@ Restoring: replace `lectio_reader.sqlite`, `lectio_meta.sqlite3`, and
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(ROOT))).resolve()
 DEFAULT_DBS = (
-    ROOT / "lectio_reader.sqlite",
-    ROOT / "lectio_meta.sqlite3",
+    DATA_DIR / "lectio_reader.sqlite",
+    DATA_DIR / "lectio_meta.sqlite3",
     # Starred archive holds offline copies of starred entries (HTML + assets).
     # Source-of-truth content if origins go down — must be backed up.
-    ROOT / "lectio_starred_archive.sqlite",
+    DATA_DIR / "lectio_starred_archive.sqlite",
 )
+DEFAULT_DEST = DATA_DIR / "backups"
 
 
 def backup_one(src: Path, dest_dir: Path, stamp: str) -> Path | None:
@@ -64,7 +67,7 @@ def prune_old(dest_dir: Path, db_stems: list[str], keep: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backup Lectio databases via VACUUM INTO.")
-    parser.add_argument("--dest", default=str(ROOT / "backups"), help="Backup directory.")
+    parser.add_argument("--dest", default=str(DEFAULT_DEST), help="Backup directory.")
     parser.add_argument("--keep", type=int, default=7, help="Keep N most recent backup pairs.")
     args = parser.parse_args()
 

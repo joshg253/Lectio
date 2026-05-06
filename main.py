@@ -130,11 +130,13 @@ def _load_local_env(env_path: str | Path | None = None) -> None:
 
 # Load local .env early so os.getenv() below can pick up values provided by the developer
 _load_local_env()
-META_DB_PATH = BASE_DIR / "lectio_meta.sqlite3"
-READER_DB_PATH = BASE_DIR / "lectio_reader.sqlite"
-THUMB_DB_PATH = BASE_DIR / "lectio_thumb_cache.sqlite"
-STARRED_ARCHIVE_DB_PATH = BASE_DIR / "lectio_starred_archive.sqlite"
-THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
+DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(BASE_DIR))).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
+READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
+THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
+STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
+THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
 ROOT_FOLDER_NAME = "All Feeds"
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 15

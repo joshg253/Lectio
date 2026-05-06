@@ -3,9 +3,7 @@
 This file is the backlog and staging area for future work.
 
 ## Now
-- Starred entry archive offline durability.
-- Thumbnail cache migration and cleanup.
-- CSRF hardening follow-ups if needed.
+- Deploy to VPS (Traefik + Cloudflare Origin certs at `lectio.${BASE_URL}`).
 
 ## Soon
 - Stronger saved/archive view state persistence.

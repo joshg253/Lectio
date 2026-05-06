@@ -1,0 +1,39 @@
+services:
+  lectio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lectio:latest
+    container_name: lectio
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-UTC}
+      LECTIO_DATA_DIR: /data
+      LECTIO_HTTPS_ONLY: "1"
+      LECTIO_LOG_DIR: /data/logs
+    volumes:
+      - ./data:/data
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.lectio.rule=Host(`lectio.${BASE_URL}`)
+      - traefik.http.routers.lectio.service=lectio-svc
+      - traefik.http.services.lectio-svc.loadbalancer.server.port=8000
+      - traefik.http.routers.lectio.middlewares=lectioCompress,lectioSec
+      - traefik.http.middlewares.lectioCompress.compress=true
+      - traefik.http.middlewares.lectioSec.headers.browserXssFilter=true
+      - traefik.http.middlewares.lectioSec.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.lectioSec.headers.frameDeny=true
+      - traefik.http.middlewares.lectioSec.headers.referrerPolicy=no-referrer-when-downgrade
+      - traefik.http.middlewares.lectioSec.headers.forceSTSHeader=true
+      - traefik.http.middlewares.lectioSec.headers.stsSeconds=31536000
+      - traefik.http.middlewares.lectioSec.headers.stsIncludeSubdomains=true
+
+networks:
+  proxy:
+    name: proxy
+    external: true
