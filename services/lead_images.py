@@ -304,11 +304,11 @@ class LeadImageService:
             # Some parsers expose enclosure/link entries on `links`.
             links = getattr(entry, "links", None)
             if links and isinstance(links, (list, tuple)):
-                for l in links:
+                for link_obj in links:
                     try:
-                        href = l.get("href") if isinstance(l, dict) else getattr(l, "href", None)
-                        rel = (l.get("rel") if isinstance(l, dict) else getattr(l, "rel", None)) or ""
-                        ltype = (l.get("type") if isinstance(l, dict) else getattr(l, "type", None)) or ""
+                        href = link_obj.get("href") if isinstance(link_obj, dict) else getattr(link_obj, "href", None)
+                        rel = (link_obj.get("rel") if isinstance(link_obj, dict) else getattr(link_obj, "rel", None)) or ""
+                        ltype = (link_obj.get("type") if isinstance(link_obj, dict) else getattr(link_obj, "type", None)) or ""
                     except Exception:
                         continue
                     if not href:

@@ -1,76 +1,32 @@
 # Lectio Plan
 
-## Purpose
-Living backlog and staging area for future work. Use for feature ideas, deferred items, prioritization, and "add this later" requests.
-
-## Current Status
-**Strong foundation already built:**
-- 3-pane desktop UI (Folders/Tags → Posts → Post View)  
-- Working 1-pane mobile drill-in (select folder → posts → post), with state consistency + feedback visibility on tablet/mobile
-- Folder/feed CRUD + orphan handling
-- Read/unread + bulk actions (folder/feed/range)
-- Saved/starred + filtering, with consistent active-state styling across Saved Items / All Feeds navigation
-- Manual tagging w/ suggestions + tag counts
-- Sorting/filtering (read-state, published/received, direction)
-- Persistent filter/sort state across folder/feed/tag/search navigation (unread/all + star)
-- Comprehensive keyboard navigation/actions (`j`/`k`, `n`/`p`, `m`, `f`/`s`, `b`/`o`, `w`/`v`, `a`, `d`, `r`, `t`, `/`, `Escape`)
-- Manual + scheduled refresh
-- Source/readability views
-- OPML import/export
-- UX hardening (context menus, async races, viewport clamping)
-
-## Priority Buckets
-- **Now**: Active/polished work
-- **Soon**: Next after current
-- **Later**: Desirable, not urgent  
-- **Maybe**: Speculative/revisit
+This file is the backlog and staging area for future work.
 
 ## Now
-_(empty — pull from Soon)_
-
-## Completed Recently
-- CSRF protection landed (last Pre-VPS gate):
-  - Pure-ASGI `_CSRFMiddleware` validates `X-CSRF-Token` header or `_csrf` form field on all unsafe HTTP methods. Token is per-session, generated on first request, stored in the signed/HttpOnly session cookie.
-  - `<meta name="csrf-token">` tag rendered in `index.html`; small JS shim wraps `fetch()` to add the header for same-origin POST/PUT/PATCH/DELETE and a capture-phase submit listener injects a hidden `_csrf` input into native form submits — so all 24 existing forms / SPA fetches get CSRF transparently with zero per-form edits.
-  - `/login` is exempt (rate-limit is the auth-attempt protection); `/static/*` and `/healthz` are GET-only or otherwise safe.
-  - Also fixed a latent middleware-ordering bug: `add_middleware(SessionMiddleware)` was being added FIRST, which (per Starlette's add-then-reverse-build semantics) made it INNERMOST → would have caused `request.session` to be missing inside `_AuthMiddleware` had auth ever been turned on. Reordered to: Auth (innermost) → CSRF → Session → ProxyHeaders (outermost).
-- Pre-VPS prep batch (round 2):
-  - Login brute-force protection: per-IP rate limit on `POST /login` (default 5 failures / 5 min → 429). `LECTIO_DEBUG=1` bypasses. Also fixed latent `TemplateResponse` signature bug in login routes that newer Starlette mishandles.
-  - SSRF guardrail (`services/url_guard.py`): DNS-resolves URLs and refuses private/loopback/link-local addresses. Applied to `_fetch_source_lead_image` + WordPressComic/PennyArcade og:image fetches. `LECTIO_DEBUG=1` bypasses for LAN test feeds.
-  - Persistent logging: `RotatingFileHandler` attached to root logger when `LECTIO_LOG_DIR` is set (5 MB × 5 backups by default; tunable). No-op when env unset, so dev workflows unchanged.
-  - Graceful shutdown: bumped lifespan join timeout from 2s to 30s (`LECTIO_SHUTDOWN_TIMEOUT_SECONDS`); logs warning if refresh worker abandons.
-  - SQLite backup script: `scripts/backup_databases.py` uses `VACUUM INTO` for online consistent backups; `--keep N` retains rolling history. Schedule with cron / Task Scheduler.
-  - Deploy guide added to README: required env vars, Traefik labels example, first-run bootstrap.
-- Pre-VPS prep batch (round 1):
-  - Flipped `LECTIO_DEBUG` / `LECTIO_REFRESH_DEBUG` defaults from `1` to `0` so VPS deploys are safe-by-default; local dev (`make run`, VS Code launch config) already passes them explicitly.
-  - Added `GET /healthz` endpoint (DB ping; auth-exempt) for Traefik probes.
-  - Added long-lived `Cache-Control` headers on `/static/*` via subclassed `StaticFiles` (safe: `STATIC_ASSET_VERSION` query param invalidates on changes).
-  - Confirmed all `/debug/*` endpoints already gate on `DEBUG_MODE` — audit done, no changes needed beyond the default flip.
-  - Fixed 2 pre-existing failing tests in `test_feed_refresh_service.py` (fixture was missing the `domain_failure_state` table).
-- Pinch zoom on mobile entry pane: removed custom handler in favor of native browser pinch (was blocked by `touch-action: pan-y` on `.pane-entry`)
-- Star status persistence bug: FormData was captured after the optimistic flip of `savedInput.value`, so the server received the opposite value — fixed in both entry-pane and post-list save toggles
-- Active post tile auto-scrolls into view in the post list when navigating between entries (j/k, click, etc.)
+- Starred entry archive offline durability.
+- Thumbnail cache migration and cleanup.
+- CSRF hardening follow-ups if needed.
 
 ## Soon
-- **VPS deployment**: roll out to existing Traefik setup. All Pre-VPS hardening items are done.
+- Stronger saved/archive view state persistence.
+- More feed-specific display tweaks.
+- Better per-feed preferences.
+- Additional topbar or entry actions.
+- More robust refresh/restore behavior.
 
 ## Later
-- Stronger archive/saved views — scope as actual gaps surface during use
-- View state persistence hardening (durable preferences across restarts) — same; revisit when a concrete preference loses state in a way that bothers
-- Topbar: additional action buttons (beyond current set)
-- Entry header: additional metadata/actions beyond title/feed
-- More feed-specific display tweaks (webcomics, etc.)
-- Rules engine (keyword/author auto-tag/mark-read/highlight)
-- Keyword highlighters + smart folders
-- Web scraping/non-RSS monitoring
-- Read-later and sharing integrations (Instapaper save, Pocket, Fediverse, etc.)
-- Per-feed preferences (refresh interval, readability default, sort)
-- Cloudflare free-tier integrations: Workers (e.g. lightweight proxy/cache layer), R2, or Cache API where useful
+- Per-user vs shared thumb cache decision.
+- Archive caps for starred entries.
+- Keyword/author auto-tagging.
+- Smart folders.
+- Non-RSS monitoring.
+- Read-later/share integrations.
+- Cloudflare integrations where useful.
 
 ## Maybe
-- Docker packaging
-- YunoHost packaging
-- Multi-user support (starts after basic auth lands; auth refactor is the gate)
-- Richer plugin system
-- Mobile web PWA features
-- Cloudflare Tunnel for VPS ingress (avoids open port, free tier)
+- Docker packaging.
+- YunoHost packaging.
+- Multi-user support after auth refactor.
+- Richer plugin system.
+- PWA features.
+- Cloudflare Tunnel for ingress.

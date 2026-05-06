@@ -3,13 +3,40 @@
 Exercises the full middleware stack via TestClient. Cookies/sessions are
 preserved across calls automatically, so a real-browser-like flow (GET a
 page → submit a POST) works.
+
+Tests in this module POST to `/entries/saved`, which writes to both the
+meta DB and the starred archive DB. The autouse `_isolate_dbs` fixture
+redirects every connection-getter to temp paths so tests can never
+contaminate the developer's real `lectio_meta.sqlite3` /
+`lectio_starred_archive.sqlite`.
 """
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 import main
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dbs(monkeypatch, tmp_path: Path):
+    """Redirect meta + thumb + starred-archive DBs at temp files for the test.
+
+    Without this, POSTs to /entries/saved leak rows into the dev DBs and
+    confuse the running app (e.g., resurrected "saved" markers for fake
+    test entries).
+    """
+    monkeypatch.setattr(main, "META_DB_PATH", tmp_path / "meta.sqlite3")
+    monkeypatch.setattr(main, "THUMB_DB_PATH", tmp_path / "thumb.sqlite")
+    monkeypatch.setattr(main, "STARRED_ARCHIVE_DB_PATH", tmp_path / "archive.sqlite")
+    main.ensure_meta_schema()
+    main.ensure_thumb_schema()
+    main.ensure_starred_archive_schema()
+    yield
 
 
 def test_post_without_token_is_rejected_with_403():

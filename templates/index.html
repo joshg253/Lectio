@@ -1521,6 +1521,8 @@
         <dt>Unread</dt><dd id="stat-entry-unread">—</dd>
         <dt>Read</dt><dd id="stat-entry-read">—</dd>
         <dt>Saved</dt><dd id="stat-entry-saved">—</dd>
+        <dt>Saved archive</dt><dd id="stat-archive-summary">—</dd>
+        <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
         <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
         <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
       </dl>
@@ -1996,7 +1998,7 @@
     const statsModalTrigger = document.querySelector('[data-toggle-panel="stats-modal"]');
     if (statsModalTrigger) {
       statsModalTrigger.addEventListener('click', async () => {
-        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-entry-saved', 'stat-reader-db-size', 'stat-meta-db-size'];
+        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-entry-saved', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
         for (const id of statIds) {
           const el = document.getElementById(id);
           if (el) el.textContent = '…';
@@ -2011,6 +2013,19 @@
           document.getElementById('stat-entry-unread').textContent = data.entry_unread.toLocaleString();
           document.getElementById('stat-entry-read').textContent = data.entry_read.toLocaleString();
           document.getElementById('stat-entry-saved').textContent = data.entry_saved.toLocaleString();
+          // "N (size)", with any non-complete states appended so the count
+          // can be reconciled against Saved without guessing.
+          const archivedComplete = data.starred_archive_complete || 0;
+          let archiveSummary = `${archivedComplete.toLocaleString()} (${formatBytes(data.starred_archive_db_bytes || 0)})`;
+          const archiveExtras = [];
+          if (data.starred_archive_pending) archiveExtras.push(`${data.starred_archive_pending.toLocaleString()} pending`);
+          if (data.starred_archive_in_progress) archiveExtras.push(`${data.starred_archive_in_progress.toLocaleString()} in progress`);
+          if (data.starred_archive_failed) archiveExtras.push(`${data.starred_archive_failed.toLocaleString()} failed`);
+          if (data.starred_archive_pending_removal) archiveExtras.push(`${data.starred_archive_pending_removal.toLocaleString()} pending removal`);
+          if (archiveExtras.length) archiveSummary += ` · ${archiveExtras.join(', ')}`;
+          document.getElementById('stat-archive-summary').textContent = archiveSummary;
+          const thumbCount = (data.thumb_count || 0).toLocaleString();
+          document.getElementById('stat-thumb-summary').textContent = `${thumbCount} (${formatBytes(data.thumb_db_bytes || 0)})`;
           document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
           document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
         } catch (_e) {
@@ -3634,7 +3649,12 @@
           if (entryReadabilityButton.classList.contains('active')) {
             deactivateSourceView();
           } else {
-            const readabilityUrl = `/entries/readability?url=${encodeURIComponent(sourceUrl)}`;
+            const feedUrl = entryReadabilityButton.getAttribute('data-feed-url') || '';
+            const entryId = entryReadabilityButton.getAttribute('data-entry-id') || '';
+            const archiveQuery = (feedUrl && entryId)
+              ? `&feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(entryId)}`
+              : '';
+            const readabilityUrl = `/entries/readability?url=${encodeURIComponent(sourceUrl)}${archiveQuery}`;
             activateSourceView(readabilityUrl, entryReadabilityButton);
           }
         });

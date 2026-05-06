@@ -1,75 +1,58 @@
 # Lectio Architecture
 
-## Overview
-Lectio follows a **local-first, single-user RSS reader** model built around the `reader` Python library with a clear 3-layer conceptual split that can deploy to VPS later without rewrite.
+Lectio is a local-first, single-user RSS reader built around the `reader` Python library. The goal is a fast triage workflow that can later grow into VPS deployment without a rewrite.
 
 ## Layering
-UI/API Layer      → web routes, handlers, presentation state
-     ↓
-Services Layer    → feed ops, tagging, filtering, refresh, readability
-     ↓  
-Storage Layer     → `reader` DB + app-data/settings
 
-Layers run in one process now but preserve boundaries for future deployment.
+- UI/API layer: web routes, handlers, presentation state.
+- Services layer: feed operations, tagging, filtering, refresh, readability.
+- Storage layer: reader DB, app-data, settings.
 
-## Reader-First Philosophy
-**`reader` is the storage/ops primitive.** It already handles:
-- Feed retrieval/storage
-- Read/important state  
-- Arbitrary tags/metadata
-- Filtering/search capabilities
-- Statistics
-- Plugin system
+The layers run in one process today, but the boundaries should stay clean.
 
-**Implementation order:**
-1. `reader` API → primary path
-2. `reader` plugin → for `reader`-adjacent behavior  
-3. Custom app logic → only when necessary
+## Reader-first philosophy
 
-**Never duplicate `reader` capabilities in app code.**
+`reader` is the primary storage/ops primitive. It already covers:
+- feed retrieval and storage,
+- read state,
+- arbitrary tags and metadata,
+- filtering and search,
+- statistics,
+- plugin support.
 
-## Adaptive Layout Model
-Lectio uses responsive/adaptive layouts rather than fixed 3-pane:
-- **Wide** (desktop): 3-pane side-by-side
-- **Medium** (tablet landscape): 2-pane (TBD: nav+detail or list+detail)
-- **Narrow** (phone portrait): 1-pane drill-in navigation
+Prefer reader API and plugin behavior first. Add custom logic only when the existing reader model cannot express the behavior cleanly.
 
-**Priority**: 3-pane desktop + 1-pane mobile developed in near tandem, 2-pane as later refinement.
+## View state model
 
-**Goal**: Fast triage workflow, not "always show 3 panes."
+Keep three kinds of state separate:
+- remembered base preferences,
+- contextual temporary overrides,
+- transient navigation state.
 
-## View State Model
-Three distinct categories that must stay separate:
+Examples:
+- remembered: sort mode, default filters, pane sizing.
+- temporary: tag-click “show all,” search result scope.
+- transient: current entry, scroll position, focus.
 
-| Type                               | Examples                                    | Persistence             | Notes                 |
-| ---------------------------------- | ------------------------------------------- | ----------------------- | --------------------- |
-| **Remembered base preferences**    | sort mode/dir, default filters, pane sizing | Durable across restarts | User explicitly chose |
-| **Contextual temporary overrides** | tag-click shows "All", search results       | Session/context only    | Navigation semantics  |
-| **Transient navigation state**     | current entry, scroll pos, focus            | Ephemeral               | Safe to lose          |
+Temporary overrides must not silently overwrite remembered preferences. Leaving the override context should restore the base preference.
 
-**Rules:**
-- Temporary overrides **never** silently overwrite remembered preferences
-- Leaving override context → restore remembered base preference  
-- Refresh/redirect/async must not promote temporary state to remembered
+## Adaptive layout model
 
-## Data Boundaries
-- **Runtime settings**: config/env driven only
-- **Mutable state**: app-data path abstraction
-- **Development data**: disposable now
+Lectio uses responsive layouts rather than a fixed three-pane assumption:
+- wide desktop: 3-pane side-by-side,
+- medium tablet landscape: 2-pane refinement,
+- narrow phone portrait: 1-pane drill-in navigation.
 
-## Deployment Path
-1. Local-first single-user (current)
-2. VPS deployment w/ basic auth + reverse proxy  
-3. Docker (optional)
-4. YunoHost (optional)
+The priority is fast triage, not always showing three panes.
 
-**Today**: Skip auth complexity. **Before VPS**: Add basic auth + secure sessions.
+## Deployment path
 
-## Extension Strategy
-Non-native behavior → plugin/adapter style over hardwired branching. Keeps features replaceable.
+Current target is local-first single-user. Later phases may add basic auth behind a reverse proxy for VPS deployment. Keep auth non-invasive so that path does not require a rewrite.
 
-## Security Direction
-No-login local-first → basic auth before VPS exposure. Avoid assumptions that make auth invasive later.
+## Extension strategy
 
-## UX Constraint
-Architecture exists to enable fast triage workflow, not fight it.
+Use plugin/adapter style for non-native behavior instead of hardwired branching. Prefer replaceable pieces and avoid duplicating `reader` capabilities in app code.
+
+## Security direction
+
+Keep the local-first path simple. Add auth only when exposing the app beyond trusted local use.

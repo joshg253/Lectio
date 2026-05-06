@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import html
+import io
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -13,18 +16,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Sequence, cast
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus, urlparse
 
 import feedparser
-import hashlib
 import httpx
-import io
-import secrets
-from PIL import Image as _PILImage
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image as _PILImage
 from readability import Document
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -32,6 +32,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
+from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -131,7 +132,9 @@ def _load_local_env(env_path: str | Path | None = None) -> None:
 _load_local_env()
 META_DB_PATH = BASE_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = BASE_DIR / "lectio_reader.sqlite"
-THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"
+THUMB_DB_PATH = BASE_DIR / "lectio_thumb_cache.sqlite"
+STARRED_ARCHIVE_DB_PATH = BASE_DIR / "lectio_starred_archive.sqlite"
+THUMB_CACHE_DIR = BASE_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
 ROOT_FOLDER_NAME = "All Feeds"
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 15
@@ -215,6 +218,8 @@ def is_async_action_request(request: Request, expected_header: str | None = None
 async def lifespan(app: FastAPI):
     # Startup
     ensure_meta_schema()
+    ensure_thumb_schema()
+    ensure_starred_archive_schema()
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
@@ -260,6 +265,23 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_backfill_lead_images, daemon=True).start()
 
+    # Start the starred archive worker, then backfill pending rows for any
+    # saved entries that don't yet have a complete archive (covers the
+    # initial rollout and any re-stars after maintenance pruning). Also
+    # one-shot metadata backfill for archive rows that completed before
+    # title/link/etc columns were added to the schema.
+    starred_archive_service.start_worker()
+
+    def _archive_backfill_task() -> None:
+        starred_archive_service.backfill_missing_archives()
+        starred_archive_service.backfill_metadata_for_complete_rows()
+
+    threading.Thread(
+        target=_archive_backfill_task,
+        daemon=True,
+        name="starred-archive-backfill",
+    ).start()
+
     try:
         yield
     finally:
@@ -278,6 +300,12 @@ async def lifespan(app: FastAPI):
                     "abandoning (daemon thread will be killed by interpreter exit)",
                     shutdown_timeout,
                 )
+        # Stop the starred archive worker — short timeout, since the only
+        # work in flight is HTTP fetches with 15s ceilings.
+        try:
+            starred_archive_service.stop_worker(timeout=5.0)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[shutdown] starred archive worker stop failed: %s", exc)
 
 
 app = FastAPI(title="Lectio", lifespan=lifespan)
@@ -454,7 +482,6 @@ app.add_middleware(
 # When running behind Traefik/nginx/Caddy, trust forwarded headers so
 # uvicorn sees the real scheme and client IP.
 if _HTTPS_ONLY:
-    from starlette.middleware.trustedhost import TrustedHostMiddleware
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
@@ -517,6 +544,106 @@ def get_meta_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(META_DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_thumb_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(THUMB_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_thumb_schema() -> None:
+    with get_thumb_connection() as conn:
+        # WAL allows concurrent readers; thumb content is regeneratable so
+        # synchronous=NORMAL is the right tradeoff (durability not critical).
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thumb_cache (
+                cache_key TEXT PRIMARY KEY,
+                jpeg BLOB NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+
+
+def get_starred_archive_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(STARRED_ARCHIVE_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_starred_archive_schema() -> None:
+    with get_starred_archive_connection() as conn:
+        # Archive content is irreplaceable if the source goes down — leave
+        # synchronous at the default FULL for durability. WAL still helps with
+        # concurrent reads from the render path.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archived_entry (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                starred_at REAL NOT NULL,
+                archived_at REAL,
+                error TEXT,
+                source_html_zlib BLOB,
+                readability_html_zlib BLOB,
+                content_html_zlib BLOB,
+                title TEXT,
+                link TEXT,
+                feed_title TEXT,
+                author TEXT,
+                published_at REAL,
+                received_at REAL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        # Migration: add columns to pre-existing tables created before the
+        # orphan-save support landed. PRAGMA table_info is the standard way
+        # to detect what's already there.
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(archived_entry)").fetchall()}
+        for col_name, col_decl in (
+            ("content_html_zlib", "BLOB"),
+            ("title", "TEXT"),
+            ("link", "TEXT"),
+            ("feed_title", "TEXT"),
+            ("author", "TEXT"),
+            ("published_at", "REAL"),
+            ("received_at", "REAL"),
+        ):
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_entry_status ON archived_entry (status)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archived_asset (
+                asset_hash TEXT PRIMARY KEY,
+                data BLOB NOT NULL,
+                content_type TEXT NOT NULL,
+                width INTEGER,
+                height INTEGER,
+                byte_size INTEGER NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archived_asset_link (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                asset_hash TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id, source_url)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_asset_link_hash ON archived_asset_link (asset_hash)")
 
 
 def ensure_meta_schema() -> None:
@@ -1011,6 +1138,16 @@ lead_image_service = LeadImageService(
     get_reader=get_reader,
     user_agent=READABILITY_USER_AGENT,
     extract_video_id=youtube_duration_service.extract_video_id,
+)
+
+# Lambda-wrapped so `sanitize_readability_html` resolves at call time (it's
+# defined further down in this module).
+starred_archive_service = StarredArchiveService(
+    get_archive_connection=get_starred_archive_connection,
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    user_agent=READABILITY_USER_AGENT,
+    sanitize_readability_html=lambda html_text: sanitize_readability_html(html_text),
 )
 
 
@@ -1682,7 +1819,11 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
             flags=re.IGNORECASE,
         )
     else:
-        sanitized = f"<!DOCTYPE html><html><head><base href=\"{escaped_source}\"><meta charset='utf-8'>{proxy_style}</head><body>{sanitized}</body></html>"
+        sanitized = (
+            f'<!DOCTYPE html><html><head><base href="{escaped_source}">'
+            f"<meta charset='utf-8'>{proxy_style}</head>"
+            f"<body>{sanitized}</body></html>"
+        )
 
     return HTMLResponse(sanitized, status_code=200)
 
@@ -1985,6 +2126,98 @@ def list_entries_for_feeds(
     return entries
 
 
+def merge_orphan_saved_entries(
+    posts: list[dict],
+    *,
+    live_feed_urls: set[str],
+    sort_by: str,
+    sort_dir: str,
+    limit: int,
+) -> list[dict]:
+    """Append archive-only saved entries (orphans), then re-sort + clip.
+
+    Orphans are starred entries whose feed is no longer in any folder; their
+    metadata comes entirely from the starred archive. Rendered alongside live
+    saved entries so unsubscribing a feed doesn't make its saves disappear.
+    """
+    orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    if not orphans:
+        return posts
+
+    sort_desc = normalize_sort_dir(sort_dir) == "desc"
+    use_post = normalize_sort_by(sort_by) == "post"
+
+    def _sort_value_from_epoch(epoch: float | None) -> str:
+        # Mirrors datetime_sort_value — ISO-format string, empty for None.
+        if epoch is None:
+            return ""
+        try:
+            return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+
+    existing_keys = {(p["feed_url"], p["id"]) for p in posts}
+    sort_key = "post_sort_value" if use_post else "received_sort_value"
+
+    additions: list[dict] = []
+    for orphan in orphans:
+        key = (orphan["feed_url"], orphan["id"])
+        if key in existing_keys:
+            continue
+        post_iso = _sort_value_from_epoch(orphan.get("published_at"))
+        recv_iso = _sort_value_from_epoch(orphan.get("received_at"))
+        additions.append(
+            {
+                "feed_url": orphan["feed_url"],
+                "id": orphan["id"],
+                "title": orphan["title"],
+                "link": orphan["link"],
+                "thumbnail_url": None,
+                "feed_title": orphan["feed_title"],
+                "feed_icon_url": None,
+                "manual_tags": [],
+                "read": True,
+                "saved": True,
+                "post_sort_value": post_iso,
+                "received_sort_value": recv_iso,
+                "history_sort_value": "",
+                "post_timestamp": post_iso or None,
+                "received_timestamp": recv_iso or None,
+                "read_timestamp": None,
+                "post_display": format_datetime_for_ui(
+                    datetime.fromtimestamp(orphan["published_at"], tz=timezone.utc) if orphan.get("published_at") else None
+                ),
+                "received_display": format_datetime_for_ui(
+                    datetime.fromtimestamp(orphan["received_at"], tz=timezone.utc) if orphan.get("received_at") else None
+                ),
+                "read_display": None,
+                "duration_seconds": None,
+                "duration_display": None,
+                "is_orphan_archive": True,
+            }
+        )
+
+    # Re-augment existing posts with sort_value strings (list_entries_for_feeds
+    # popped them before returning); use ISO strings derived from the timestamps
+    # the template path keeps around.
+    for p in posts:
+        if "post_sort_value" not in p:
+            p["post_sort_value"] = p.get("post_timestamp") or ""
+        if "received_sort_value" not in p:
+            p["received_sort_value"] = p.get("received_timestamp") or ""
+
+    combined = posts + additions
+    combined.sort(key=lambda item: item.get(sort_key) or "", reverse=sort_desc)
+    combined = combined[:limit]
+
+    for p in combined:
+        p.pop("post_sort_value", None)
+        p.pop("received_sort_value", None)
+        p.pop("history_sort_value", None)
+
+    return combined
+
+
 @app.post("/internal/warm-lead-image-cache")
 def internal_warm_lead_image_cache():
     """Reload the lead-image cache from the meta DB.
@@ -2010,11 +2243,75 @@ def filter_feed_urls(feed_urls: set[str], list_feed_url: str | None) -> set[str]
     return set()
 
 
+def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
+    """Render-shaped dict for a starred entry whose feed is gone from the reader.
+
+    Sourced entirely from the starred archive — used as the fallback when
+    `reader.get_entry()` returns None. Returns None if the archive has no
+    completed row for this entry.
+    """
+    archived = starred_archive_service.get_archived_entry_detail(feed_url, entry_id)
+    if not archived:
+        return None
+    asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
+    content_html = archived.get("content_html")
+    if isinstance(content_html, str) and content_html and asset_map:
+        content_html = starred_archive_service.rewrite_html_assets(
+            content_html, asset_map, STARRED_ASSET_URL_PREFIX
+        )
+
+    def _fmt(epoch: float | None) -> str | None:
+        if epoch is None:
+            return None
+        try:
+            dt = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+        return format_datetime_for_ui(dt)
+
+    def _iso(epoch: float | None) -> str | None:
+        if epoch is None:
+            return None
+        try:
+            return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    published_at = archived.get("published_at")
+    received_at = archived.get("received_at")
+
+    return {
+        "feed_url": feed_url,
+        "id": entry_id,
+        "title": archived.get("title") or "",
+        "link": archived.get("link") or "",
+        "summary": "",
+        "content_html": content_html,
+        "lead_image_url": None,
+        "image_title_text": None,
+        "duration_seconds": None,
+        "duration_display": None,
+        "feed_title": archived.get("feed_title") or feed_url,
+        "post_timestamp": _iso(published_at),
+        "received_timestamp": _iso(received_at),
+        "post_display": _fmt(published_at),
+        "received_display": _fmt(received_at),
+        "author": archived.get("author"),
+        "read": True,
+        "saved": True,
+        "manual_tags": [],
+        "manual_tags_text": "",
+        "feed_tag_suggestions": [],
+        "feed_icon_url": None,
+        "is_orphan_archive": True,
+    }
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
-            return None
+            return _build_orphan_entry_detail(feed_url, entry_id)
 
         published_dt = entry.published or entry.updated
         author_name = (getattr(entry, "author", None) or "").strip() or None
@@ -2161,6 +2458,19 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
 
         lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+
+        # If this entry is starred and the archive worker has captured assets,
+        # swap inline image URLs to the local /starred-asset route so the
+        # entry remains readable even if the source goes down.
+        if is_saved:
+            asset_map = starred_archive_service.get_entry_asset_map(str(entry.feed_url), str(entry.id))
+            if asset_map:
+                if isinstance(content_html, str) and content_html:
+                    content_html = starred_archive_service.rewrite_html_assets(
+                        content_html, asset_map, STARRED_ASSET_URL_PREFIX
+                    )
+                if lead_image_url and lead_image_url in asset_map:
+                    lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
 
         return {
             "feed_url": entry.feed_url,
@@ -2593,8 +2903,48 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
 
 
 @app.get("/entries/readability")
-def entry_readability(url: str):
+def entry_readability(
+    url: str,
+    feed_url: str | None = Query(default=None),
+    entry_id: str | None = Query(default=None),
+):
+    # If this entry is starred and a complete archive exists, serve the
+    # archived readability HTML so the view stays available even if the
+    # source is gone. Otherwise fall through to the live extractor.
+    if feed_url and entry_id:
+        archived_html = starred_archive_service.get_archived_readability_html(feed_url, entry_id)
+        if archived_html:
+            asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
+            if asset_map:
+                archived_html = starred_archive_service.rewrite_html_assets(
+                    archived_html, asset_map, STARRED_ASSET_URL_PREFIX
+                )
+            return _wrap_readability_html(archived_html, url)
     return build_readability_response(url)
+
+
+def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
+    escaped_source = html.escape(source_url)
+    return HTMLResponse(
+        (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            "<title>Reader view</title>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<style>body{margin:0;background:#f6f8fb;color:#1a2430;font-family:Georgia,serif;}"
+            "main{max-width:760px;margin:0 auto;padding:1.2rem 1rem 2rem;}"
+            "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
+            "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
+            "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
+            "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
+            "article pre{white-space:pre-wrap;}"
+            "</style></head>"
+            f"<body><main><header>"
+            f"<a href='{escaped_source}' target='_blank' rel='noopener noreferrer'>Open original</a>"
+            "</header>"
+            f"<article>{article_html}</article></main></body></html>"
+        ),
+        status_code=200,
+    )
 
 
 @app.get("/entries/source")
@@ -2849,6 +3199,29 @@ def home(
         selected_tag=selected_tag,
         search_query=selected_query,
     )
+
+    # Surface orphan archive entries (saved articles whose feed has been
+    # unsubscribed) only when viewing the root "All Feeds" with the saved
+    # filter on — they don't belong to any folder, so per-folder views
+    # legitimately exclude them.
+    if (
+        selected_star_only
+        and selected_folder_id == root_id
+        and not selected_feed_url
+        and not selected_tag
+        and not selected_query
+    ):
+        try:
+            posts = merge_orphan_saved_entries(
+                posts,
+                live_feed_urls=all_feed_urls,
+                sort_by=selected_sort_by,
+                sort_dir=selected_sort_dir,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("orphan saved entry merge failed: %s", exc)
+
     posts_block_ms = int((time.perf_counter() - posts_start) * 1000)
     LOGGER.info("[perf] home: posts_block=%dms", posts_block_ms)
 
@@ -2925,6 +3298,30 @@ def home(
     )
 
 
+@app.get("/debug/starred-archive/largest")
+def debug_starred_archive_largest(limit: int = Query(default=50, ge=1, le=500)):
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    rows = starred_archive_service.largest_archived_entries(limit=limit)
+    # Annotate with entry titles where we still have them in the reader DB.
+    titles: dict[tuple[str, str], str] = {}
+    try:
+        with get_reader() as reader:
+            for row in rows:
+                key = (row["feed_url"], row["entry_id"])
+                try:
+                    entry = reader.get_entry(key, None)
+                except Exception:
+                    entry = None
+                if entry is not None:
+                    titles[key] = str(getattr(entry, "title", "") or "")
+    except Exception:
+        pass
+    for row in rows:
+        row["title"] = titles.get((row["feed_url"], row["entry_id"]), "")
+    return JSONResponse({"ok": True, "rows": rows})
+
+
 @app.post("/debug/clear-lead-image-cache")
 def debug_clear_lead_image_cache(
     request: Request,
@@ -2938,14 +3335,21 @@ def debug_clear_lead_image_cache(
 
 
 def _purge_thumb_cache_for_urls(urls: list[str]) -> None:
-    """Delete /thumb disk-cache files for the given image URLs."""
+    """Delete /thumb cache entries for the given image URLs (DB + legacy files)."""
+    keys: list[str] = []
     for url in urls:
         if not url:
             continue
         cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
-        cache_path = THUMB_CACHE_DIR / f"{cache_key}.jpg"
+        keys.append(cache_key)
         try:
-            cache_path.unlink(missing_ok=True)
+            (THUMB_CACHE_DIR / f"{cache_key}.jpg").unlink(missing_ok=True)
+        except Exception:
+            pass
+    if keys:
+        try:
+            with get_thumb_connection() as conn:
+                conn.executemany("DELETE FROM thumb_cache WHERE cache_key = ?", [(k,) for k in keys])
         except Exception:
             pass
 
@@ -2994,14 +3398,33 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
         return Response(status_code=400)
 
     cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
-    cache_path = THUMB_CACHE_DIR / f"{cache_key}.jpg"
+    cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
-    if cache_path.exists():
-        return Response(
-            content=cache_path.read_bytes(),
-            media_type="image/jpeg",
-            headers={"Cache-Control": "public, max-age=604800, immutable"},
-        )
+    try:
+        with get_thumb_connection() as conn:
+            row = conn.execute(
+                "SELECT jpeg FROM thumb_cache WHERE cache_key = ?", (cache_key,)
+            ).fetchone()
+        if row is not None:
+            return Response(content=bytes(row["jpeg"]), media_type="image/jpeg", headers=cached_headers)
+    except Exception:
+        pass
+
+    # Lazy migration: legacy on-disk cache from the per-file era. Promote to DB
+    # and remove the file so the thumb_cache/ directory drains over time.
+    legacy_path = THUMB_CACHE_DIR / f"{cache_key}.jpg"
+    if legacy_path.exists():
+        try:
+            jpeg_bytes = legacy_path.read_bytes()
+        except Exception:
+            jpeg_bytes = None
+        if jpeg_bytes:
+            _store_thumb(cache_key, jpeg_bytes)
+            try:
+                legacy_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return Response(content=jpeg_bytes, media_type="image/jpeg", headers=cached_headers)
 
     try:
         with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
@@ -3025,8 +3448,7 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85, optimize=True)
         jpeg_bytes = buf.getvalue()
-        THUMB_CACHE_DIR.mkdir(exist_ok=True)
-        cache_path.write_bytes(jpeg_bytes)
+        _store_thumb(cache_key, jpeg_bytes)
     except Exception:
         # Pillow failed (corrupt image, unsupported format, etc.) — serve original.
         return Response(
@@ -3035,10 +3457,37 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
             headers={"Cache-Control": "public, max-age=3600"},
         )
 
+    return Response(content=jpeg_bytes, media_type="image/jpeg", headers=cached_headers)
+
+
+def _store_thumb(cache_key: str, jpeg_bytes: bytes) -> None:
+    try:
+        with get_thumb_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO thumb_cache (cache_key, jpeg, created_at) VALUES (?, ?, ?)",
+                (cache_key, jpeg_bytes, time.time()),
+            )
+    except Exception:
+        pass
+
+
+# 64-char hex sha256 — the only shape we issue.
+_ASSET_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+STARRED_ASSET_URL_PREFIX = "/starred-asset/"
+
+
+@app.get("/starred-asset/{asset_hash}")
+def starred_asset(asset_hash: str) -> Response:
+    if not _ASSET_HASH_RE.match(asset_hash):
+        return Response(status_code=400)
+    found = starred_archive_service.get_asset(asset_hash)
+    if found is None:
+        return Response(status_code=404)
+    data, content_type = found
     return Response(
-        content=jpeg_bytes,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
+        content=data,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
 
 
@@ -3185,6 +3634,16 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
+            # Feed is leaving the reader — give the archive worker a chance
+            # to finish capturing any saved entries from this feed before the
+            # reader-side data disappears. Otherwise saved-but-uncaptured
+            # entries become content-less archive shells.
+            try:
+                forced = starred_archive_service.force_archive_pending_for_feed(feed_url)
+                if forced:
+                    LOGGER.info("[unsubscribe] force-archived %d pending captures for %s", forced, feed_url)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("[unsubscribe] force-archive failed for %s: %s", feed_url, exc)
             with get_reader() as reader:
                 reader.delete_feed(feed_url, missing_ok=True)
     except Exception as exc:
@@ -3457,6 +3916,17 @@ def toggle_entry_saved(
                 (feed_url, entry_id),
             )
         conn.commit()
+
+    # Mirror the save state into the archive: queue a capture when starred,
+    # mark for later removal when unstarred. The archive worker handles the
+    # actual fetching off-request.
+    try:
+        if saved:
+            starred_archive_service.enqueue_archive(feed_url, entry_id)
+        else:
+            starred_archive_service.enqueue_removal(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
@@ -3852,6 +4322,17 @@ def get_stats():
 
     reader_db_bytes = _db_bytes(READER_DB_PATH)
     meta_db_bytes = _db_bytes(META_DB_PATH)
+    thumb_db_bytes = _db_bytes(THUMB_DB_PATH)
+    starred_archive_db_bytes = _db_bytes(STARRED_ARCHIVE_DB_PATH)
+    archive_stats = starred_archive_service.get_stats()
+
+    thumb_count = 0
+    try:
+        with get_thumb_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM thumb_cache").fetchone()
+            thumb_count = int(row["c"]) if row else 0
+    except Exception:
+        pass
 
     return JSONResponse(
         {
@@ -3863,6 +4344,15 @@ def get_stats():
             "entry_saved": saved_count,
             "reader_db_bytes": reader_db_bytes,
             "meta_db_bytes": meta_db_bytes,
+            "thumb_db_bytes": thumb_db_bytes,
+            "thumb_count": thumb_count,
+            "starred_archive_db_bytes": starred_archive_db_bytes,
+            "starred_archive_complete": archive_stats["complete"],
+            "starred_archive_pending": archive_stats["pending"],
+            "starred_archive_in_progress": archive_stats["in_progress"],
+            "starred_archive_failed": archive_stats["failed"],
+            "starred_archive_pending_removal": archive_stats["pending_removal"],
+            "starred_archive_asset_count": archive_stats["asset_count"],
         }
     )
 

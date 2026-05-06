@@ -13,9 +13,9 @@ Usage:
 
 Schedule with cron / Task Scheduler / systemd timer for periodic backups.
 
-Restoring: replace `lectio_reader.sqlite` and `lectio_meta.sqlite3` in the
-project root with the backup files (rename them back to those filenames).
-Stop the app before swapping the files.
+Restoring: replace `lectio_reader.sqlite`, `lectio_meta.sqlite3`, and
+`lectio_starred_archive.sqlite` in the project root with the backup files
+(rename them back to those filenames). Stop the app before swapping the files.
 """
 
 from __future__ import annotations
@@ -30,6 +30,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DBS = (
     ROOT / "lectio_reader.sqlite",
     ROOT / "lectio_meta.sqlite3",
+    # Starred archive holds offline copies of starred entries (HTML + assets).
+    # Source-of-truth content if origins go down — must be backed up.
+    ROOT / "lectio_starred_archive.sqlite",
 )
 
 
