@@ -45,8 +45,7 @@
         }
         return _origFetch(input, init);
       };
-      document.addEventListener('submit', function (ev) {
-        const form = ev.target;
+      function injectCsrfInto(form) {
         if (!(form instanceof HTMLFormElement)) return;
         if ((form.method || '').toLowerCase() !== 'post') return;
         if (!form.querySelector('input[name="_csrf"]')) {
@@ -56,7 +55,19 @@
           inp.value = token;
           form.appendChild(inp);
         }
+      }
+      // Native submit-event path (handles user-driven submits and requestSubmit()).
+      document.addEventListener('submit', function (ev) {
+        injectCsrfInto(ev.target);
       }, true);
+      // HTMLFormElement.submit() bypasses the submit event entirely, so wrap it
+      // so programmatic submits (e.g. context-menu refresh, OPML upload) still
+      // get a token before the native submit is invoked.
+      const _origFormSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = function () {
+        injectCsrfInto(this);
+        return _origFormSubmit.apply(this, arguments);
+      };
     })();
   </script>
   <script>
@@ -71,7 +82,7 @@
     .entry-pane-title-link { -webkit-line-clamp: 5 !important; }
   </style>
 </head>
-<body>
+<body data-tree-filter="{{ 'unread' if selected_read_filter == 'unread' and not selected_star_only else 'all' }}">
   <header class="topbar" role="banner">
   <a class="menu-brand topbar-brand" href="/">Lectio</a>
   {% if debug_mode %}
@@ -150,6 +161,7 @@
   </header>
 
   <form id="opml-import-form" method="post" action="/opml/import" enctype="multipart/form-data" hidden>
+    {{ csrf_input(request)|safe }}
     <input id="opml-file-input" type="file" name="opml_file" accept=".opml,.xml,text/xml,application/xml" required />
   </form>
 
@@ -216,7 +228,7 @@
               {% if folder_feeds %}
               <ul id="folder-feeds-{{ row.id }}" class="feed-list tree-feed-list" hidden>
                 {% for feed in folder_feeds %}
-                <li>
+                <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
                   <a
                     class="feed-link {% if selected_feed_url == feed.url %}active{% endif %}"
                     href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
@@ -243,7 +255,7 @@
             {% if root_feeds %}
             <ul class="feed-list tree-root-feed-list">
               {% for feed in root_feeds %}
-              <li>
+              <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
                 <a
                   class="feed-link {% if selected_feed_url == feed.url and selected_folder_id == root_folder_row.id %}active{% endif %}"
                   href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
@@ -487,9 +499,11 @@
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
         >
-          <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
+          <div class="post-thumbnail {% if not post.thumbnail_url and not post.feed_icon_url %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            {% elif post.feed_icon_url %}
+            <img class="post-thumbnail-image post-thumbnail-icon-fallback" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
             <span class="post-thumbnail-fallback material-symbols-rounded" aria-hidden="true">image</span>
           </div>
@@ -511,7 +525,13 @@
                     {% else %}
                     <span class="feed-icon material-symbols-rounded" aria-hidden="true">article</span>
                     {% endif %}
-                    <span class="feed-name">{{ post.feed_title }}</span>
+                    {% set post_feed_folder_id = feed_to_folder.get(post.feed_url, selected_folder_id) %}
+                    <a
+                      class="feed-name post-feed-link"
+                      data-feed-url="{{ post.feed_url }}"
+                      data-folder-id="{{ post_feed_folder_id }}"
+                      href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                    >{{ post.feed_title }}</a>
                   </span>
                 </div>
               </div>
@@ -526,13 +546,13 @@
                   data-read-iso="{{ post.read_timestamp or '' }}"
                   data-read-display="{{ post.read_display or '' }}"
                 >
-                  {# Server-side initial render: show the value matching selected_sort_by (or read history) #}
+                  {# Server-side initial render: show the value matching selected_sort_by (or read history). Fallback through received → received → '—' to avoid literal "None" output. #}
                   {% if selected_read_filter == 'history' and not selected_star_only and post.read_display %}
                     {{ post.read_display }}
                   {% elif selected_sort_by == 'received' and post.received_display %}
                     {{ post.received_display }}
                   {% else %}
-                    {{ post.post_display }}
+                    {{ post.post_display or '—' }}
                   {% endif %}
                 </time>
                 <div class="post-meta-actions">
@@ -1005,8 +1025,10 @@
       }
       // Don't intercept the brand/logo link
       if (a.classList && a.classList.contains('topbar-brand')) return;
-      // Only intercept app navigation (folders/feeds/tags/tree links)
-      if (!(a.matches('.feed-link, .tag-link, .tree-item') || a.closest('.tree'))) return;
+      // Only intercept app navigation (folders/feeds/tags/tree links, plus
+      // the post-list / entry-pane feed-name links that should also expand
+      // the containing folder in the sidebar).
+      if (!(a.matches('.feed-link, .tag-link, .tree-item, .post-feed-link, .entry-feed-link') || a.closest('.tree'))) return;
 
       // If this is a filter pill click (All/Unread/Star), persist the
       // `lectio-read-filter` immediately so the SPA loader can include it
@@ -1421,11 +1443,34 @@
       <ul class="problem-feed-list">
         {% for row in problematic_feeds %}
         <li class="problem-feed-item">
-          <a
-            class="problem-feed-link"
-            href="/?folder_id={{ row.folder_id or selected_folder_id }}&list_feed_url={{ row.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
-            title="{{ row.feed_url }}"
-          >{{ row.feed_title }}</a>
+          <div class="problem-feed-row">
+            <button
+              type="button"
+              class="problem-feed-link"
+              data-problem-feed-properties
+              data-feed-url="{{ row.feed_url }}"
+              title="{{ row.feed_url }}"
+            >{{ row.feed_title }}</button>
+            <div class="problem-feed-actions">
+              <a
+                class="problem-feed-action"
+                href="{{ row.feed_url }}"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open feed URL in new tab"
+                aria-label="Open feed URL in new tab"
+              ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+              <button
+                type="button"
+                class="problem-feed-action problem-feed-action-danger"
+                data-problem-feed-unsubscribe
+                data-feed-url="{{ row.feed_url }}"
+                data-folder-id="{{ row.folder_id or selected_folder_id }}"
+                title="Unsubscribe from feed"
+                aria-label="Unsubscribe from feed"
+              ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+            </div>
+          </div>
           <div class="problem-feed-meta">
             <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
             {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
@@ -1504,6 +1549,16 @@
         <dt>Last crawled</dt><dd id="feed-prop-updated">-</dd>
         <dt>Last received</dt><dd id="feed-prop-received">-</dd>
         <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
+        <dt>Thumbnails</dt>
+        <dd>
+          <select id="feed-prop-strategy" class="feed-prop-strategy-select">
+            <option value="auto">Auto-detect</option>
+            <option value="inline">Feed content only</option>
+            <option value="og_scrape">Source scraping</option>
+            <option value="none">None</option>
+          </select>
+          <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
+        </dd>
       </dl>
     </div>
   </div>
@@ -2210,6 +2265,10 @@
         const unreadCount = Number(group.getAttribute('data-unread-count') || '0');
         group.hidden = onlyUnread && unreadCount <= 0;
       }
+      for (const feed of document.querySelectorAll('.tree-feed-item')) {
+        const unreadCount = Number(feed.getAttribute('data-unread-count') || '0');
+        feed.hidden = onlyUnread && unreadCount <= 0;
+      }
 
       if (unreadFoldersOnlyToggle) {
         unreadFoldersOnlyToggle.classList.toggle('active', onlyUnread);
@@ -2497,6 +2556,8 @@
     const feedPropUpdated = document.getElementById('feed-prop-updated');
     const feedPropReceived = document.getElementById('feed-prop-received');
     const feedPropLastPost = document.getElementById('feed-prop-last-post');
+    const feedPropStrategy = document.getElementById('feed-prop-strategy');
+    const feedPropStrategyHint = document.getElementById('feed-prop-strategy-hint');
     let entryArticle = document.querySelector('.entry');
     let entryPaneTitle = document.querySelector('.entry-pane-title');
     let entryBody = document.getElementById('entry-body');
@@ -2722,6 +2783,20 @@
       for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
         const isMatch = Boolean(nextFeedUrl) && feedLink.getAttribute('data-feed-url') === nextFeedUrl;
         feedLink.classList.toggle('active', isMatch);
+        if (isMatch) {
+          // Expand the folder that contains this feed so the user sees the
+          // selected feed in the tree (e.g. when navigating from a post-list
+          // feed-name link or the entry pane's feed link).
+          const ul = feedLink.closest('ul.tree-feed-list');
+          if (ul && ul.id) {
+            ul.removeAttribute('hidden');
+            const toggle = document.querySelector(`.tree-toggle[data-tree-target="${CSS.escape(ul.id)}"]`);
+            if (toggle) {
+              toggle.classList.add('expanded');
+              toggle.setAttribute('aria-expanded', 'true');
+            }
+          }
+        }
       }
 
       for (const tagLink of document.querySelectorAll('.tag-link, .entry-tag-link')) {
@@ -2729,6 +2804,12 @@
         const tagValue = new URL(href, window.location.origin).searchParams.get('tag');
         tagLink.classList.toggle('active', Boolean(nextTag) && tagValue === nextTag);
       }
+
+      // Sidebar tree-filter state: hide sidebar feeds with 0 unread when the
+      // posts filter is set to unread. CSS drives the actual hide; we just
+      // toggle the body attribute so SPA nav doesn't lose the state.
+      const treeFilter = nextReadFilter === 'unread' && !nextStarOnly ? 'unread' : 'all';
+      document.body.setAttribute('data-tree-filter', treeFilter);
     }
 
     function applyCurrentScopeStateToScopeLink(targetUrl, linkEl) {
@@ -3347,6 +3428,8 @@
       setFeedPropText(feedPropUpdated, '-');
       setFeedPropText(feedPropReceived, '-');
       setFeedPropText(feedPropLastPost, '-');
+      if (feedPropStrategy) feedPropStrategy.value = 'auto';
+      if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
       feedPropertiesModal.removeAttribute('hidden');
 
       try {
@@ -3374,6 +3457,17 @@
         setFeedPropText(feedPropUpdated, data.last_updated);
         setFeedPropText(feedPropReceived, data.last_received);
         setFeedPropText(feedPropLastPost, data.last_post);
+
+        if (feedPropStrategy) {
+          feedPropStrategy.value = data.image_strategy || 'auto';
+          feedPropStrategy.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropStrategyHint) {
+          const detected = data.image_strategy_detected;
+          const isAuto = data.image_strategy === 'auto';
+          feedPropStrategyHint.textContent = (isAuto && detected && detected !== 'unknown')
+            ? `detected: ${detected}` : '';
+        }
       } catch (error) {
         setFeedPropText(feedPropTitle, feedUrl);
         setFeedPropText(feedPropHealth, 'error');
@@ -3449,6 +3543,23 @@
     feedPropertiesModal?.addEventListener('click', (event) => {
       if (event.target === feedPropertiesModal) {
         closeFeedPropertiesModal();
+      }
+    });
+
+    feedPropStrategy?.addEventListener('change', async () => {
+      const feedUrl = feedPropStrategy.dataset.feedUrl;
+      const strategy = feedPropStrategy.value;
+      if (!feedUrl) return;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, strategy });
+        const resp = await fetch('/feeds/strategy', { method: 'POST', body });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (feedPropStrategyHint) {
+          feedPropStrategyHint.textContent = strategy === 'auto' ? '' : 'saved';
+          if (strategy !== 'auto') setTimeout(() => { feedPropStrategyHint.textContent = ''; }, 1500);
+        }
+      } catch (e) {
+        if (feedPropStrategyHint) feedPropStrategyHint.textContent = 'error saving';
       }
     });
 
@@ -3528,6 +3639,31 @@
         showContextMenu(event);
       });
     }
+
+    // Capture-phase delegation for feed links in the posts list and entry pane.
+    // Fires before the post-item contextmenu handler so those links get the
+    // feed context menu (with Properties) instead of the post context menu.
+    document.addEventListener('contextmenu', (event) => {
+      const feedLinkTarget = event.target.closest('.post-feed-link, .entry-feed-link');
+      if (!feedLinkTarget || !contextMenu) return;
+      event.preventDefault();
+      event.stopPropagation();
+      contextFeedUrl = feedLinkTarget.getAttribute('data-feed-url');
+      contextFolderId = feedLinkTarget.getAttribute('data-folder-id');
+      contextFolderName = feedLinkTarget.textContent?.trim() || 'feed';
+      contextFolderDepth = 1;
+      contextTargetType = 'feed';
+      setMenuItemVisible(refreshButton, true);
+      setMenuItemVisible(markReadButton, true);
+      setMenuItemVisible(addToFolderWrap, true);
+      setMenuItemVisible(addFeedButton, false);
+      setMenuItemVisible(feedPropertiesButton, true);
+      setMenuItemVisible(unsubscribeFeedButton, true);
+      setMenuItemVisible(deleteFolderButton, false);
+      updateFolderSubmenuOptions();
+      hideFolderSubmenu();
+      showContextMenu(event);
+    }, true);
 
     refreshButton?.addEventListener('click', () => {
       if (contextTargetType === 'feed') {
@@ -4517,6 +4653,62 @@
 
       hideAllContextMenus();
       openFeedPropertiesModal(contextFeedUrl);
+    });
+
+    // Problematic-feeds modal: wire feed-title button to Feed Properties (stacks
+    // on top of the problem-feeds modal) and trash icon to the unsubscribe form.
+    document.addEventListener('click', (event) => {
+      const propsTrigger = event.target.closest('[data-problem-feed-properties]');
+      if (propsTrigger) {
+        event.preventDefault();
+        const url = propsTrigger.getAttribute('data-feed-url');
+        if (url) openFeedPropertiesModal(url);
+        return;
+      }
+      const unsubTrigger = event.target.closest('[data-problem-feed-unsubscribe]');
+      if (unsubTrigger) {
+        event.preventDefault();
+        const url = unsubTrigger.getAttribute('data-feed-url');
+        const folderId = unsubTrigger.getAttribute('data-folder-id');
+        if (!url || !folderId) return;
+        if (!window.confirm(`Unsubscribe from this feed?\n\n${url}`)) return;
+
+        const li = unsubTrigger.closest('.problem-feed-item');
+        if (li) li.style.opacity = '0.4';
+        unsubTrigger.disabled = true;
+
+        const body = new URLSearchParams();
+        body.set('folder_id', folderId);
+        body.set('feed_url', url);
+        fetch('/feeds/unsubscribe', {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'lectio-problem-feeds',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          credentials: 'same-origin',
+          body: body.toString(),
+        })
+          .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            // Remove the row from the modal.
+            if (li && li.parentNode) li.parentNode.removeChild(li);
+            // Update the badge counts (menu + folders panel) so they reflect
+            // the now-shorter list. Empty list → swap in the muted message.
+            const list = document.querySelector('#problematic-feeds-modal .problem-feed-list');
+            if (list && !list.querySelector('.problem-feed-item')) {
+              const empty = document.createElement('p');
+              empty.className = 'muted';
+              empty.textContent = 'No problematic feeds right now.';
+              list.parentNode.replaceChild(empty, list);
+            }
+          })
+          .catch((err) => {
+            if (li) li.style.opacity = '';
+            unsubTrigger.disabled = false;
+            window.alert(`Unsubscribe failed: ${err}`);
+          });
+      }
     });
 
     rootAddFolderButton?.addEventListener('click', (event) => {
