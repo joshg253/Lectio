@@ -89,11 +89,23 @@ def is_safe_outbound_url(url: str) -> bool:
     except (socket.gaierror, UnicodeError):
         # DNS lookup failed; refuse rather than fetch into an unknown target.
         return False
+    has_public = False
     for info in infos:
         sockaddr = info[4]
         # sockaddr is (host, port) for AF_INET or (host, port, flowinfo, scopeid)
         # for AF_INET6 — host is always a str.
         ip_str = str(sockaddr[0])
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        # Link-local IPv6 (fe80::/10) addresses are interface artifacts returned
+        # by getaddrinfo on some container networking configurations. They are not
+        # actual server addresses, so exclude them from the rebinding check.
+        if ip.is_link_local:
+            continue
         if _is_private_or_local(ip_str):
             return False
-    return True
+        has_public = True
+    # Require at least one confirmed public address (guards against all-private results).
+    return has_public

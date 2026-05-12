@@ -6,6 +6,9 @@ This file is the backlog and staging area for future work.
 - Deploy to VPS (Traefik + Cloudflare Origin certs at `lectio.${BASE_URL}`).
 
 ## Soon
+- tons of feeds with "None" for pubdate
+- problem feeds: delete refreshes whole page and opens the folder where it lived -- should just remove from list, ~queue background remove
+- FIXED? counters not updating at all while using it, (looks like they eventually did but not while I was using the app)
 - Stronger saved/archive view state persistence.
 - More feed-specific display tweaks.
 - Better per-feed preferences.

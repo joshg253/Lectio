@@ -50,12 +50,12 @@ class LeadImageService:
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|logo)",
         re.IGNORECASE,
     )
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
     _PLACEHOLDER_URL_PATTERNS = re.compile(
-        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$))",
+        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif)",
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(
@@ -66,7 +66,9 @@ class LeadImageService:
         r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar)",
         re.IGNORECASE,
     )
-    _IMAGE_PATH_SUFFIX_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif|bmp)$", re.IGNORECASE)
+    # Allow Blogger/Google CDN URLs where the extension is followed by a size
+    # param like =s1600 rather than appearing at the end of the path.
+    _IMAGE_PATH_SUFFIX_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif|bmp)(?:[=?#]|$)", re.IGNORECASE)
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
@@ -108,33 +110,37 @@ class LeadImageService:
     # Feed lead-image strategy helpers
     # ------------------------------------------------------------------
 
-    def get_feed_strategy(self, feed_url: str) -> tuple[str, float]:
-        """Return (strategy, detected_at) from DB, or ('unknown', 0.0)."""
+    def get_feed_strategy(self, feed_url: str) -> tuple[str, float, bool]:
+        """Return (strategy, detected_at, manual) from DB, or ('unknown', 0.0, False)."""
         try:
             with self._get_meta_connection() as conn:
                 row = conn.execute(
-                    "SELECT strategy, detected_at FROM feed_lead_image_strategy WHERE feed_url = ?",
+                    "SELECT strategy, detected_at, manual FROM feed_lead_image_strategy WHERE feed_url = ?",
                     (feed_url,),
                 ).fetchone()
             if row:
-                return str(row["strategy"]), float(row["detected_at"])
+                return str(row["strategy"]), float(row["detected_at"]), bool(row["manual"])
         except Exception:
             pass
-        return "unknown", 0.0
+        return "unknown", 0.0, False
 
-    def store_feed_strategy(self, feed_url: str, strategy: str) -> None:
-        """Persist a detected lead-image strategy for a feed."""
+    def store_feed_strategy(self, feed_url: str, strategy: str, *, manual: bool = False) -> None:
+        """Persist a lead-image strategy for a feed.
+
+        manual=True locks the strategy so auto-detection never overwrites it.
+        """
         try:
             with self._get_meta_connection() as conn:
                 conn.execute(
                     """
-                    INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at)
-                    VALUES (?, ?, ?)
+                    INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at, manual)
+                    VALUES (?, ?, ?, ?)
                     ON CONFLICT(feed_url) DO UPDATE SET
                         strategy = excluded.strategy,
-                        detected_at = excluded.detected_at
+                        detected_at = excluded.detected_at,
+                        manual = excluded.manual
                     """,
-                    (feed_url, strategy, time.time()),
+                    (feed_url, strategy, time.time(), int(manual)),
                 )
         except Exception:
             pass
@@ -426,14 +432,17 @@ class LeadImageService:
 
         # Prefer source-page metadata/image selection when available.
         # This usually picks a truer hero image than the first inline body image.
+        strategy_for_feed, _, _ = self.get_feed_strategy(feed_url_str)
+        skip_source = strategy_for_feed in ("inline", "youtube")
         if not cached_negative and entry_link:
             plugin_fallback = self._plugin_fallback_lead_image_url(entry_link=entry_link, content_html=content_html, summary=summary)
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
                 return plugin_fallback
 
-            source_image = self._fetch_source_lead_image(entry_link)
-            if source_image:
-                return source_image
+            if not skip_source and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
+                source_image = self._fetch_source_lead_image(entry_link)
+                if source_image:
+                    return source_image
 
         for candidate_html in (content_html, summary):
             if not isinstance(candidate_html, str) or not candidate_html.strip():
@@ -475,8 +484,8 @@ class LeadImageService:
         feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
 
         # Load stored strategy; skip YouTube feeds entirely (thumbnail from video ID).
-        strategy, detected_at = self.get_feed_strategy(feed_url)
-        need_redetect = strategy == "unknown" or now - detected_at > self._STRATEGY_REDETECT_AFTER_SECONDS
+        strategy, detected_at, manual = self.get_feed_strategy(feed_url)
+        need_redetect = not manual and (strategy == "unknown" or now - detected_at > self._STRATEGY_REDETECT_AFTER_SECONDS)
         if strategy == "youtube":
             return
 
@@ -560,6 +569,16 @@ class LeadImageService:
                 time.sleep(0.05)
                 continue
 
+            if self._plugin_should_skip_source_lookup(entry_link=entry_link):
+                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
+                time.sleep(0.05)
+                continue
+            # For feeds whose images are reliably inline, source scraping rarely
+            # improves on the feed content and frequently picks up site chrome.
+            if strategy == "inline" and not need_redetect:
+                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
+                time.sleep(0.05)
+                continue
             image_url = self._fetch_source_lead_image(entry_link)
             if image_url:
                 _found_og_scrape = True
@@ -655,10 +674,8 @@ class LeadImageService:
                     time.sleep(0.05)
                     continue
 
-                # For inline-classified feeds, trust that source scraping won't
-                # improve on the inline extraction that already returned nothing.
-                # For og_scrape / unknown, fetch the source page.
-                if strategy == "inline":
+                # For inline/none-classified feeds, source scraping won't help.
+                if strategy in ("inline", "none"):
                     continue
 
                 image_url = self._fetch_source_lead_image(entry_link)
@@ -811,6 +828,15 @@ class LeadImageService:
         if height_attr is not None and height_attr < self._LEAD_IMAGE_MIN_HEIGHT:
             return False
 
+        # Lazy-loaded site chrome (logos, nav images) uses a data: placeholder src
+        # with no srcset and no explicit dimensions. The real URL lives in data-src,
+        # but without any sizing signal we can't tell it apart from a logo.
+        src_attr = (attrs.get("src") or "").strip()
+        if src_attr.startswith("data:"):
+            has_srcset = bool(attrs.get("srcset") or attrs.get("data-srcset"))
+            if not has_srcset and width_attr is None and height_attr is None:
+                return False
+
         return True
 
     def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str) -> int:
@@ -875,7 +901,7 @@ class LeadImageService:
                     _alt = (attrs.get("alt") or attrs.get("title") or "").strip()
                     best_alt = _alt if _alt else None
 
-        if best_url and best_score >= 30:
+        if best_url and best_score >= 10:
             return best_url, best_alt
         return None, None
 
@@ -980,13 +1006,23 @@ class LeadImageService:
                 return candidate
         return None
 
+    def _plugin_should_skip_source_lookup(self, *, entry_link: str) -> bool:
+        """Returns True if any plugin requests that source-page lookup be skipped entirely."""
+        for plugin in self._plugins:
+            try:
+                if getattr(plugin, "should_skip_source_lookup", lambda **kw: False)(entry_link=entry_link):
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None) -> bool:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
         if self._TRACKER_URL_PATTERNS.search(parsed.netloc) or self._TRACKER_URL_PATTERNS.search(parsed.path):
             return False
-        if self._AVATAR_HINT_PATTERNS.search(image_url):
+        if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
 
         if self._LOGO_URL_PATTERNS.search(image_url):
@@ -1174,9 +1210,6 @@ class LeadImageService:
         preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
         if preferred_image:
             return preferred_image
-        inline_image = self._extract_first_image_url_from_html(source_html, final_url, source_url=entry_link)
-        if inline_image:
-            return inline_image
         meta_image = self._extract_meta_image_url_from_html(source_html, final_url)
         if meta_image:
             return meta_image

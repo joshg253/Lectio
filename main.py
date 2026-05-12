@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image as _PILImage
 from readability import Document
+from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -90,8 +91,20 @@ def _configure_persistent_logging() -> None:
     root.addHandler(handler)
 
 
+def _configure_access_log_filter() -> None:
+    # Kept for backward-compat with previous wiring; the actual access log is
+    # now emitted by _AccessLogMiddleware (uvicorn's --no-access-log disables
+    # the built-in one whose filters we couldn't reliably hook).
+    pass
+
+
+def _attach_pending_access_filter() -> None:
+    pass
+
+
 _configure_reader_logging()
 _configure_persistent_logging()
+_configure_access_log_filter()
 
 
 def _load_local_env(env_path: str | Path | None = None) -> None:
@@ -159,7 +172,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260504b")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260512a")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -195,16 +208,54 @@ feed_tag_suggestion_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
 # Short in-memory TTL cache for tag counts to avoid repeatedly scanning
 # reader entries on every request. Small TTL keeps counts fresh while
 # preventing repeated expensive work during rapid navigation.
-TAG_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_TAG_COUNTS_CACHE_TTL", "5"))
+TAG_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_TAG_COUNTS_CACHE_TTL", "300"))
 tag_counts_cache_lock = threading.Lock()
 tag_counts_cache: dict[tuple[str, ...], tuple[float, list[dict[str, int | str]]]] = {}
 
 # Short in-memory TTL cache for unread counts so the UI doesn't scan the
 # entire reader DB on every load. TTL is small to stay responsive to new
 # incoming posts.
-UNREAD_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_UNREAD_COUNTS_CACHE_TTL", "5"))
+UNREAD_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_UNREAD_COUNTS_CACHE_TTL", "300"))
 unread_counts_cache_lock = threading.Lock()
 unread_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
+# Stale-while-revalidate: when the cache is stale we serve the prior value and
+# spawn ONE background refresh. Concurrent renders never wait on the scan.
+unread_counts_compute_lock = threading.Lock()
+unread_counts_refresh_inflight = False
+dedupe_log_cache_lock = threading.Lock()
+dedupe_log_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
+dedupe_log_compute_lock = threading.Lock()
+dedupe_log_refresh_inflight: dict[str, bool] = {}
+DEDUPE_LOG_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_DEDUPE_LOG_CACHE_TTL", "300"))
+# Feed-title map: hits the reader DB to enumerate every feed. Cache it — feed
+# titles barely change between page renders.
+FEED_TITLE_MAP_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_FEED_TITLE_MAP_CACHE_TTL", "300"))
+feed_title_map_cache_lock = threading.Lock()
+feed_title_map_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+# Cache the meta-DB structure snapshot. Folders / folder_feeds change only on
+# explicit user actions (subscribe, unsubscribe, add/delete folder, move feed),
+# so we cache the read-side queries indefinitely and invalidate on mutation.
+# This collapses ~5 SQL roundtrips per home render to one dict lookup.
+_meta_structure_lock = threading.Lock()
+_meta_structure_cache: dict[str, object] = {}
+
+
+def invalidate_meta_structure_cache() -> None:
+    with _meta_structure_lock:
+        _meta_structure_cache.clear()
+
+
+# Cache for problematic-feeds list. Only changes when a refresh succeeds/fails,
+# so a TTL is fine — we don't need exact freshness on the home page.
+PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_PROBLEMATIC_FEEDS_CACHE_TTL", "60"))
+_problematic_feeds_cache_lock = threading.Lock()
+_problematic_feeds_cache: dict[int, tuple[float, list[dict[str, object]]]] = {}
+
+
+def invalidate_problematic_feeds_cache() -> None:
+    with _problematic_feeds_cache_lock:
+        _problematic_feeds_cache.clear()
 
 
 def is_async_action_request(request: Request, expected_header: str | None = None) -> bool:
@@ -219,6 +270,7 @@ def is_async_action_request(request: Request, expected_header: str | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    _attach_pending_access_filter()
     ensure_meta_schema()
     ensure_thumb_schema()
     ensure_starred_archive_schema()
@@ -237,15 +289,27 @@ async def lifespan(app: FastAPI):
     # Warm lead image cache from DB so thumbnails are available on first render.
     lead_image_service.warm_cache_from_db()
 
+    # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
+    # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
+    # Useful after an OPML import of hundreds of feeds: boot in a calm state,
+    # let pages render, then unset and restart once things settle.
+    backfill_disabled = os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1"
+    if backfill_disabled:
+        LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping scheduled refresh and backfill threads")
+
     stop_event = threading.Event()
-    thread = threading.Thread(
-        target=scheduled_refresh_loop,
-        args=(stop_event,),
-        daemon=True,
-    )
-    app.state.refresh_stop_event = stop_event
-    app.state.refresh_thread = thread
-    thread.start()
+    if not backfill_disabled:
+        thread = threading.Thread(
+            target=scheduled_refresh_loop,
+            args=(stop_event,),
+            daemon=True,
+        )
+        app.state.refresh_stop_event = stop_event
+        app.state.refresh_thread = thread
+        thread.start()
+    else:
+        app.state.refresh_stop_event = stop_event
+        app.state.refresh_thread = None
 
     # Backfill durations for any existing YouTube entries not yet stored.
     def _backfill() -> None:
@@ -256,16 +320,22 @@ async def lifespan(app: FastAPI):
         for row in rows:
             youtube_duration_service.fetch_and_store_durations_for_feed(str(row["feed_url"]))
 
-    threading.Thread(target=_backfill, daemon=True).start()
+    if not backfill_disabled:
+        threading.Thread(target=_backfill, daemon=True).start()
 
     # Backfill lead images for all feeds whose entries haven't been checked yet.
+    # `force_retry_negative=False` keeps this incremental: only feeds that have
+    # never been checked do work, so a startup right after an OPML import of
+    # hundreds of feeds doesn't flood the meta DB with writes and starve the
+    # request path.
     def _backfill_lead_images() -> None:
         with get_meta_connection() as conn:
             rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
         for row in rows:
-            lead_image_service.fetch_and_store_lead_images_for_feed(str(row["feed_url"]), force_retry_negative=True)
+            lead_image_service.fetch_and_store_lead_images_for_feed(str(row["feed_url"]), force_retry_negative=False)
 
-    threading.Thread(target=_backfill_lead_images, daemon=True).start()
+    if not backfill_disabled:
+        threading.Thread(target=_backfill_lead_images, daemon=True).start()
 
     # Start the starred archive worker, then backfill pending rows for any
     # saved entries that don't yet have a complete archive (covers the
@@ -348,6 +418,200 @@ def _ensure_csrf_token(session: dict) -> str:
         token = secrets.token_urlsafe(32)
         session[_CSRF_SESSION_KEY] = token
     return token
+
+
+_home_request_semaphore = threading.Semaphore(int(os.getenv("LECTIO_MAX_CONCURRENT_HOME_REQUESTS", "4")))
+_prefetch_header_log_remaining = [10]  # diagnostic: log headers of the first N suspect requests
+_prefetch_header_log_lock = threading.Lock()
+
+
+class _AccessLogMiddleware:
+    """Replaces uvicorn's built-in access log so we can suppress the prefetch
+    204/503s without wrestling with uvicorn's logger config (filters added to
+    uvicorn.access weren't taking effect in this deployment).
+
+    Format mirrors uvicorn's: ``CLIENT - "METHOD PATH HTTP/x.y" STATUS REASON``.
+    """
+
+    _SUPPRESS_STATUSES = (204, 503)
+    _STATUS_REASONS = {
+        200: "OK",
+        204: "No Content",
+        301: "Moved Permanently",
+        302: "Found",
+        303: "See Other",
+        304: "Not Modified",
+        307: "Temporary Redirect",
+        308: "Permanent Redirect",
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        405: "Method Not Allowed",
+        409: "Conflict",
+        413: "Payload Too Large",
+        429: "Too Many Requests",
+        500: "Internal Server Error",
+        502: "Bad Gateway",
+        503: "Service Unavailable",
+    }
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_holder = [0]
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                status_holder[0] = int(message.get("status", 0))
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            status = status_holder[0]
+            client = scope.get("client") or ("?", 0)
+            client_addr = f"{client[0]}:{client[1]}"
+            method = scope.get("method", "?")
+            raw_path = scope.get("raw_path", b"") or scope.get("path", "").encode()
+            qs = scope.get("query_string", b"") or b""
+            request_path = raw_path.decode("latin-1", errors="replace")
+            if qs:
+                request_path = f"{request_path}?{qs.decode('latin-1', errors='replace')}"
+            http_version = scope.get("http_version", "1.1")
+            request_line = f"{method} {request_path} HTTP/{http_version}"
+            # Suppression: prefetch 204/503 with list_feed_url= are pure noise.
+            if status in self._SUPPRESS_STATUSES and "list_feed_url=" in request_path:
+                return
+            reason = self._STATUS_REASONS.get(status, "")
+            LOGGER.info('%s - "%s" %d %s', client_addr, request_line, status, reason)
+
+
+class _RejectPrefetchMiddleware:
+    """Two-layer defense against browser link-prefetch floods.
+
+    1. **Drop prefetches outright.** Browsers tag them with one of several
+       headers (Sec-Purpose, Purpose, X-Moz, Sec-Fetch-Dest=empty for nav-style
+       prefetch). Match generously — false positives just make a prefetch miss,
+       which is fine.
+    2. **Concurrency cap on home() requests.** Backstop in case detection
+       misses a browser variant: hold a semaphore so only N home renders run
+       at once. Excess returns 503, which tells the prefetcher to stop. /healthz
+       and /static bypass both layers so probes and asset prefetches still work.
+    """
+
+    PASSTHROUGH_PREFIXES = ("/healthz", "/static", "/login")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if any(path.startswith(p) for p in self.PASSTHROUGH_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        headers = scope.get("headers") or []
+        is_prefetch = False
+        is_spa_fetch = False
+        sec_fetch_dest = b""
+        sec_fetch_mode = b""
+        sec_purpose_value = b""
+        purpose_value = b""
+        x_requested_with = b""
+        user_agent = b""
+        referer = b""
+        for header_name, header_value in headers:
+            name = header_name.decode("latin-1").lower()
+            if name == "sec-purpose":
+                sec_purpose_value = header_value
+                if b"prefetch" in header_value.lower() or b"prerender" in header_value.lower():
+                    is_prefetch = True
+            elif name == "purpose":
+                purpose_value = header_value
+                low = header_value.lower()
+                if b"prefetch" in low or b"preview" in low or b"prerender" in low:
+                    is_prefetch = True
+            elif name == "x-moz":
+                if b"prefetch" in header_value.lower() or b"prerender" in header_value.lower():
+                    is_prefetch = True
+            elif name == "sec-fetch-dest":
+                sec_fetch_dest = header_value
+            elif name == "sec-fetch-mode":
+                sec_fetch_mode = header_value
+            elif name == "x-requested-with":
+                x_requested_with = header_value
+                if b"lectio" in header_value.lower():
+                    is_spa_fetch = True
+            elif name == "user-agent":
+                user_agent = header_value
+            elif name == "referer":
+                referer = header_value
+        # Heuristic: browser-side prefetch via fetch() (Chrome NoState Prefetch
+        # and similar) doesn't always set Sec-Purpose, but it has a unique
+        # fingerprint — Sec-Fetch-Dest=empty + Sec-Fetch-Mode=cors on a path
+        # that isn't an actual API endpoint, with no X-Requested-With from our
+        # SPA. Real SPA fetches always send X-Requested-With=lectio-...; real
+        # top-level navigations send Sec-Fetch-Dest=document Sec-Fetch-Mode=navigate.
+        if (
+            not is_prefetch
+            and not is_spa_fetch
+            and sec_fetch_dest == b"empty"
+            and sec_fetch_mode == b"cors"
+            and path == "/"
+        ):
+            is_prefetch = True
+
+        # Diagnostic: dump the first few suspect-looking requests so we can
+        # see what's actually firing them. Capped to avoid log spam.
+        with _prefetch_header_log_lock:
+            remaining = _prefetch_header_log_remaining[0]
+        if remaining > 0:
+            with _prefetch_header_log_lock:
+                if _prefetch_header_log_remaining[0] > 0:
+                    _prefetch_header_log_remaining[0] -= 1
+                    LOGGER.info(
+                        "[prefetch-diag] path=%s qs=%r dest=%r mode=%r xrw=%r referer=%r ua=%r",
+                        path,
+                        scope.get("query_string", b"")[:200],
+                        sec_fetch_dest,
+                        sec_fetch_mode,
+                        x_requested_with,
+                        referer[:120],
+                        user_agent[:120],
+                    )
+
+        if is_prefetch:
+            response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+            await response(scope, receive, send)
+            return
+
+        # Backstop: concurrency cap. Non-blocking acquire — if N home renders
+        # are already in flight, drop the request with 503 + Retry-After.
+        if path == "/" or path.startswith("/?"):
+            acquired = _home_request_semaphore.acquire(blocking=False)
+            if not acquired:
+                response = Response(
+                    status_code=503,
+                    headers={"Retry-After": "2", "Cache-Control": "no-store"},
+                )
+                await response(scope, receive, send)
+                return
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _home_request_semaphore.release()
+            return
+
+        await self.app(scope, receive, send)
 
 
 class _CSRFMiddleware:
@@ -466,6 +730,7 @@ class _CSRFMiddleware:
 # Middleware order matters. Starlette's add_middleware does insert(0) and the
 # stack-builder reverses, so LAST add_middleware = OUTERMOST = runs FIRST
 # inbound. We need this inbound chain:
+#   _RejectPrefetchMiddleware (drop browser speculation-rules prefetches)
 #   ProxyHeaders (rewrite client IP / scheme from X-Forwarded-*)
 #   → SessionMiddleware (parse signed session cookie → scope["session"])
 #   → _CSRFMiddleware (validate POST tokens; needs scope["session"])
@@ -487,6 +752,11 @@ if _HTTPS_ONLY:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Drop prefetch traffic before any other middleware does work.
+app.add_middleware(_RejectPrefetchMiddleware)
+# Access log replaces uvicorn's built-in (disabled via --no-access-log) so we
+# can suppress prefetch 204/503 noise. Add LAST so it sees the final response.
+app.add_middleware(_AccessLogMiddleware)
 
 
 class _CachedStaticFiles(StaticFiles):
@@ -542,9 +812,34 @@ class FeedInFolder:
     unread_count: int
 
 
+_meta_conn_local = threading.local()
+
+
 def get_meta_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(META_DB_PATH))
+    """Per-thread persistent SQLite connection.
+
+    Opening a fresh connection per request was a measured bottleneck: simple
+    SELECTs that take 5ms standalone took 2-3s under 8-way concurrency because
+    every request paid for file open, schema load, mmap setup, and PRAGMA
+    application. Each uvicorn worker thread now opens once and reuses, so the
+    cost is paid 8-40 times total instead of N-times-per-request.
+
+    Note: sqlite3.Connection's context-manager protocol commits the transaction
+    on success but does NOT close the connection — the existing
+    `with get_meta_connection() as conn:` pattern continues to work and is
+    transaction-scoped per call site, while the underlying connection persists.
+    """
+    conn = getattr(_meta_conn_local, "conn", None)
+    if conn is not None:
+        return conn
+    conn = sqlite3.connect(str(META_DB_PATH), timeout=10.0)
     conn.row_factory = sqlite3.Row
+    # WAL + busy_timeout so overlapping writers (e.g. background refresh writing
+    # folder_feeds while a request persists a setting) wait briefly instead of
+    # immediately failing with "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    _meta_conn_local.conn = conn
     return conn
 
 
@@ -747,10 +1042,15 @@ def ensure_meta_schema() -> None:
             CREATE TABLE IF NOT EXISTS feed_lead_image_strategy (
                 feed_url TEXT PRIMARY KEY,
                 strategy TEXT NOT NULL DEFAULT 'unknown',
-                detected_at REAL NOT NULL
+                detected_at REAL NOT NULL,
+                manual INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE feed_lead_image_strategy ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass  # column already exists
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -778,17 +1078,42 @@ def ensure_meta_schema() -> None:
         )
 
 
+_app_settings_cache: dict[str, str] | None = None
+_app_settings_cache_lock = threading.Lock()
+
+
+def _load_app_settings_cache(conn: sqlite3.Connection) -> dict[str, str]:
+    rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+    return {str(r["key"]): str(r["value"]) for r in rows}
+
+
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
-    row = conn.execute(
-        "SELECT value FROM app_settings WHERE key = ?",
-        (key,),
-    ).fetchone()
-    if not row:
-        return None
-    return str(row["value"])
+    """Read a setting from the in-memory cache. Loaded once on first access,
+    kept consistent through set_setting writes. Avoids ~4 SELECTs per home
+    render that, while individually fast, queue up under concurrency."""
+    global _app_settings_cache
+    with _app_settings_cache_lock:
+        cache = _app_settings_cache
+        if cache is None:
+            cache = _load_app_settings_cache(conn)
+            _app_settings_cache = cache
+        return cache.get(key)
 
 
 def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Idempotent setting write. Updates the in-memory cache and persists only
+    when the value actually changed. The hot path (home render) calls this on
+    every request to persist sort preferences; without the no-op guard each
+    page view took a meta-DB writer lock, blocking concurrent renders."""
+    global _app_settings_cache
+    with _app_settings_cache_lock:
+        cache = _app_settings_cache
+        if cache is None:
+            cache = _load_app_settings_cache(conn)
+            _app_settings_cache = cache
+        if cache.get(key) == value:
+            return
+        cache[key] = value
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
         (key, value),
@@ -970,6 +1295,49 @@ def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     return {str(r["feed_url"]) for r in rows}
 
 
+def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
+    """Cached bundle of folder/feed structure queries.
+
+    These tables change only on explicit user mutations, so once computed the
+    snapshot stays valid until something invalidates it. Collapses ~5 SQL calls
+    per home render to a dict lookup, which is what we actually need under
+    concurrent navigation: tiny SELECTs that are fine standalone but
+    catastrophic when 8 worker threads each issue 5 of them per page render.
+
+    Also builds folder_feed_urls_by_id (root → all feeds; non-root → that
+    folder's feeds), exploiting Lectio's flat one-level-below-root hierarchy
+    so we don't need a recursive CTE per request.
+    """
+    with _meta_structure_lock:
+        if _meta_structure_cache:
+            return _meta_structure_cache  # type: ignore[return-value]
+    raw_folder_rows = get_folder_rows(conn)
+    direct_feed_urls_by_folder = get_direct_feed_urls_by_folder(conn)
+    folder_options = get_folder_options(conn)
+    all_feed_urls = get_all_feed_urls(conn)
+    root_id = get_root_folder_id(conn)
+
+    folder_feed_urls_by_id: dict[int, set[str]] = {}
+    for row in raw_folder_rows:
+        fid = int(row["id"])
+        if fid == root_id:
+            folder_feed_urls_by_id[fid] = set(all_feed_urls)
+        else:
+            folder_feed_urls_by_id[fid] = set(direct_feed_urls_by_folder.get(fid, []))
+
+    snapshot: dict[str, object] = {
+        "raw_folder_rows": [dict(r) for r in raw_folder_rows],
+        "direct_feed_urls_by_folder": {k: list(v) for k, v in direct_feed_urls_by_folder.items()},
+        "folder_options": folder_options,
+        "all_feed_urls": all_feed_urls,
+        "root_id": root_id,
+        "folder_feed_urls_by_id": folder_feed_urls_by_id,
+    }
+    with _meta_structure_lock:
+        _meta_structure_cache.update(snapshot)
+    return snapshot
+
+
 def get_unread_counts_by_folder(
     folder_rows: Sequence[sqlite3.Row],
     unread_counts_by_feed: dict[str, int],
@@ -994,37 +1362,116 @@ def get_unread_counts_by_folder(
     return counts
 
 
-def get_unread_counts_by_feed() -> dict[str, int]:
-    # Use a short-lived in-memory cache to avoid scanning the entire
-    # reader DB on every page render. Cache TTL is configurable.
-    now = time.time()
-    with unread_counts_cache_lock:
-        cached = unread_counts_cache.get("unread_counts")
-        if cached:
-            ts, value = cached
-            if now - ts < UNREAD_COUNTS_CACHE_TTL_SECONDS:
-                return value.copy()
+def _compute_unread_counts_by_feed() -> dict[str, int]:
+    """Per-feed unread count via reader's SQL-aggregate API. One COUNT(*) query
+    per feed instead of iterating every entry in Python.
 
+    Cross-feed dedupe (same article appearing in RSS+Atom mirrors of one source)
+    is intentionally dropped — it required a full Python scan of every entry on
+    every cache miss, which doesn't scale past a few thousand entries. Users
+    who run into double-counted feeds should unsubscribe one of the mirrors."""
     counts: dict[str, int] = {}
-    seen_keys: set[str] = set()
     with get_reader() as reader:
-        for entry in reader.get_entries():
-            if entry.read:
-                continue
-            dedupe_key = build_entry_dedupe_key(entry.link, entry.title)
-            if dedupe_key:
-                if dedupe_key in seen_keys:
-                    continue
-                seen_keys.add(dedupe_key)
-            counts[entry.feed_url] = counts.get(entry.feed_url, 0) + 1
-
-    with unread_counts_cache_lock:
-        unread_counts_cache["unread_counts"] = (now, counts.copy())
-
+        for feed in reader.get_feeds():
+            counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
     return counts
 
 
+def _refresh_unread_counts_async() -> None:
+    """Single-flight background scan. Updates cache when done."""
+    global unread_counts_refresh_inflight
+    try:
+        counts = _compute_unread_counts_by_feed()
+        with unread_counts_cache_lock:
+            unread_counts_cache["unread_counts"] = (time.time(), counts)
+    except Exception:
+        LOGGER.exception("background unread counts refresh failed")
+    finally:
+        with unread_counts_compute_lock:
+            unread_counts_refresh_inflight = False
+
+
+def get_unread_counts_by_feed() -> dict[str, int]:
+    """Stale-while-revalidate: never block the request on the 33k-entry scan.
+    Fresh cache → return it. Stale cache → return stale, kick off background
+    refresh. Cold cache → first caller computes synchronously, others wait."""
+    global unread_counts_refresh_inflight
+    now = time.time()
+    with unread_counts_cache_lock:
+        cached = unread_counts_cache.get("unread_counts")
+    if cached:
+        ts, value = cached
+        if now - ts < UNREAD_COUNTS_CACHE_TTL_SECONDS:
+            return value.copy()
+        # Stale — serve it, spawn one refresh.
+        with unread_counts_compute_lock:
+            if not unread_counts_refresh_inflight:
+                unread_counts_refresh_inflight = True
+                threading.Thread(target=_refresh_unread_counts_async, daemon=True).start()
+        return value.copy()
+
+    # Cold cache: first arriver computes synchronously, others wait on lock.
+    with unread_counts_compute_lock:
+        with unread_counts_cache_lock:
+            cached = unread_counts_cache.get("unread_counts")
+            if cached:
+                return cached[1].copy()
+        counts = _compute_unread_counts_by_feed()
+        with unread_counts_cache_lock:
+            unread_counts_cache["unread_counts"] = (time.time(), counts)
+        return counts.copy()
+
+
+def _refresh_dedupe_log_async(limit: int) -> None:
+    cache_key = f"limit={int(limit)}"
+    try:
+        result = _compute_unread_dedupe_log(limit)
+        with dedupe_log_cache_lock:
+            dedupe_log_cache[cache_key] = (time.time(), [dict(row) for row in result])
+    except Exception:
+        LOGGER.exception("background dedupe log refresh failed")
+    finally:
+        with dedupe_log_compute_lock:
+            dedupe_log_refresh_inflight[cache_key] = False
+
+
 def get_unread_dedupe_log(limit: int = 100) -> list[dict[str, object]]:
+    """Stale-while-revalidate, same as get_unread_counts_by_feed."""
+    cache_key = f"limit={int(limit)}"
+    now = time.time()
+    with dedupe_log_cache_lock:
+        cached = dedupe_log_cache.get(cache_key)
+    if cached:
+        ts, value = cached
+        if now - ts < DEDUPE_LOG_CACHE_TTL_SECONDS:
+            return [dict(row) for row in value]
+        with dedupe_log_compute_lock:
+            if not dedupe_log_refresh_inflight.get(cache_key):
+                dedupe_log_refresh_inflight[cache_key] = True
+                threading.Thread(target=_refresh_dedupe_log_async, args=(limit,), daemon=True).start()
+        return [dict(row) for row in value]
+
+    with dedupe_log_compute_lock:
+        with dedupe_log_cache_lock:
+            cached = dedupe_log_cache.get(cache_key)
+            if cached:
+                return [dict(row) for row in cached[1]]
+        result = _compute_unread_dedupe_log(limit)
+        with dedupe_log_cache_lock:
+            dedupe_log_cache[cache_key] = (time.time(), [dict(row) for row in result])
+        return [dict(row) for row in result]
+
+
+def _compute_unread_dedupe_log(limit: int) -> list[dict[str, object]]:
+    """Cross-feed unread dedupe report.
+
+    Disabled on the home-render path: the only way to compute this is to
+    iterate every unread entry, which is unworkable past a few thousand. The
+    feature mainly catches RSS+Atom mirrors of the same source — uncommon
+    enough to defer to an explicit user action. The dedupe modal will simply
+    be empty; future work can wire it to an on-demand compute endpoint."""
+    if os.getenv("LECTIO_ENABLE_DEDUPE_LOG", "0") != "1":
+        return []
     seen_keys: set[str] = set()
     first_seen_by_key: dict[str, dict[str, str]] = {}
     duplicate_groups: dict[str, dict[str, object]] = {}
@@ -1122,11 +1569,39 @@ def build_entry_dedupe_key(link: str | None, title: str | None) -> str | None:
     return f"{normalized_link}::{normalized_title}"
 
 
-def get_reader():
-    return reader_api.client()
-
-
 reader_api = ReaderApi(READER_DB_PATH)
+_reader_thread_local = threading.local()
+
+
+class _PersistentReaderProxy:
+    """Wraps a thread-persistent Reader so the existing
+    ``with get_reader() as r:`` pattern works without actually closing the
+    underlying connections on exit. Reader open is expensive (schema /
+    migration checks); paying it once per worker thread instead of per
+    request avoids a major source of contention under load."""
+
+    __slots__ = ("_reader",)
+
+    def __init__(self, reader):
+        self._reader = reader
+
+    def __enter__(self):
+        return self._reader
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._reader, name)
+
+
+def get_reader():
+    proxy = getattr(_reader_thread_local, "proxy", None)
+    if proxy is not None:
+        return proxy
+    proxy = _PersistentReaderProxy(reader_api.client())
+    _reader_thread_local.proxy = proxy
+    return proxy
 
 
 youtube_duration_service = YouTubeDurationService(
@@ -1235,6 +1710,7 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
             # with reader.set_tag's typed `value` parameter.
             reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
+    invalidate_has_manual_tags_cache()
     return next_tags
 
 
@@ -1372,8 +1848,49 @@ def get_feed_tag_suggestions(
     return best_tags[:MAX_FEED_TAG_SUGGESTIONS]
 
 
+_has_manual_tags_cache: dict[str, tuple[float, bool]] = {}
+_has_manual_tags_lock = threading.Lock()
+HAS_MANUAL_TAGS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_HAS_MANUAL_TAGS_CACHE_TTL", "60"))
+
+
+def has_any_manual_tags() -> bool:
+    """Single fast SQL probe of reader's entry_tags table to check whether
+    *any* entry has a manual tag. Lets us skip the per-entry tag scan entirely
+    for the common case (no manual tags). Cached for a minute; mutations can
+    invalidate via invalidate_has_manual_tags_cache()."""
+    now = time.time()
+    with _has_manual_tags_lock:
+        cached = _has_manual_tags_cache.get("any")
+        if cached and now - cached[0] < HAS_MANUAL_TAGS_CACHE_TTL_SECONDS:
+            return cached[1]
+    try:
+        conn = sqlite3.connect(str(READER_DB_PATH), timeout=2.0)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM entry_tags WHERE key LIKE ? LIMIT 1",
+                (f"{MANUAL_TAG_KEY_PREFIX}%",),
+            ).fetchone()
+            present = row is not None
+        finally:
+            conn.close()
+    except Exception:
+        present = True  # safe default — fall back to the slow path
+    with _has_manual_tags_lock:
+        _has_manual_tags_cache["any"] = (time.time(), present)
+    return present
+
+
+def invalidate_has_manual_tags_cache() -> None:
+    with _has_manual_tags_lock:
+        _has_manual_tags_cache.clear()
+
+
 def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     if not feed_urls:
+        return []
+
+    # Fast path: zero manual tags exist anywhere → no per-entry scan needed.
+    if not has_any_manual_tags():
         return []
 
     key = tuple(sorted(feed_urls))
@@ -1409,10 +1926,17 @@ def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
 
 
 def get_feed_title_map() -> dict[str, str]:
+    now = time.time()
+    with feed_title_map_cache_lock:
+        cached = feed_title_map_cache.get("titles")
+        if cached and now - cached[0] < FEED_TITLE_MAP_CACHE_TTL_SECONDS:
+            return dict(cached[1])
     titles: dict[str, str] = {}
     with get_reader() as reader:
         for feed in reader.get_feeds():
             titles[feed.url] = feed.resolved_title or feed.title or feed.url
+    with feed_title_map_cache_lock:
+        feed_title_map_cache["titles"] = (time.time(), dict(titles))
     return titles
 
 
@@ -1460,6 +1984,7 @@ def get_feed_properties(feed_url: str) -> dict:
             health = "paused"
             health_detail = "Updates are disabled for this feed."
 
+        img_strategy, _, img_strategy_manual = lead_image_service.get_feed_strategy(feed_url)
         props = {
             "feed_url": feed_url,
             "found": True,
@@ -1474,6 +1999,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "updates_enabled": bool(getattr(feed_obj, "updates_enabled", True)),
             "health": health,
             "health_detail": health_detail,
+            "image_strategy": img_strategy if img_strategy_manual else "auto",
+            "image_strategy_detected": img_strategy,
         }
 
         # If the stored title looks like a URL (often when a feed was just added),
@@ -1536,8 +2063,15 @@ def get_feed_properties(feed_url: str) -> dict:
 def format_datetime_for_ui(dt: datetime | None) -> str | None:
     if dt is None:
         return None
+    # A handful of feeds publish dates that are technically valid datetimes but
+    # outside the range Python can convert to local time (e.g. year 1 or far
+    # future). astimezone() raises OverflowError on those. Fall back to a
+    # tz-naive render rather than 500'ing the whole page on one bad entry.
     if dt.tzinfo is not None:
-        dt = dt.astimezone()
+        try:
+            dt = dt.astimezone()
+        except (OverflowError, ValueError):
+            dt = dt.replace(tzinfo=None)
     hour = dt.hour % 12 or 12
     minute = f":{dt.minute:02d}"
     am_pm = "am" if dt.hour < 12 else "pm"
@@ -1553,6 +2087,56 @@ def datetime_sort_value(dt: datetime | None) -> float:
         return dt.replace(tzinfo=None).timestamp()
     except Exception:
         return float("-inf")
+
+
+# Many feeds (web comics in particular) omit <pubDate> but encode the date in
+# the entry URL path. Sort breaks badly without it — every undated entry maps
+# to -inf and clusters at one end. This regex catches the common /YYYY/MM/DD/
+# pattern; we use it only as a sort fallback so display still shows what the
+# feed actually said (or '—').
+_URL_PUBDATE_RE = re.compile(r"/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$|\?)")
+
+
+def url_inferred_pubdate(link: str | None) -> datetime | None:
+    if not link:
+        return None
+    match = _URL_PUBDATE_RE.search(link)
+    if not match:
+        return None
+    try:
+        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    except ValueError:
+        return None
+    if not (2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+# Some feeds prefix entry titles with the date ("2024-01-15: …", "2024/01/15
+# …"). Same idea as URL-based inference — useful as a sort fallback. ISO-ish
+# only; ambiguous mm/dd/yyyy vs dd/mm/yyyy patterns intentionally ignored.
+_TITLE_PUBDATE_RE = re.compile(r"^\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b")
+
+
+def title_inferred_pubdate(title: str | None) -> datetime | None:
+    if not title:
+        return None
+    match = _TITLE_PUBDATE_RE.match(title)
+    if not match:
+        return None
+    try:
+        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    except ValueError:
+        return None
+    if not (2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
 def normalize_sort_by(sort_by: str | None) -> str:
@@ -1989,20 +2573,30 @@ def list_entries_for_feeds(
             if feed_obj.url in feed_site_map:
                 feed_site_map[feed_obj.url] = getattr(feed_obj, "link", None) or None
 
-        # Fetch entries with a single global query then filter in Python.
-        # This replaces N per-feed get_entries() calls (one per feed URL) with
-        # one query, which is dramatically faster with 100+ feeds.
-        # For descending sort we stop collecting once we have fetch_limit entries
-        # (early exit). For ascending sort or search we must see all matches.
+        # Two strategies:
+        #   - few feeds (e.g. user clicked one feed): query per feed with the
+        #     SQL feed= filter. Avoids scanning every entry across the library.
+        #   - many feeds (root / large folder): one global query and filter in
+        #     Python. Avoids 2000+ tiny queries with their per-call overhead.
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
         need_all = bool(search_terms or normalized_sort_dir == "asc")
-        for entry in reader.get_entries(read=reader_read_filter):
-            if entry.feed_url not in feed_urls:
-                continue
-            all_feed_entries.append(entry)
-            if not need_all and len(all_feed_entries) >= fetch_limit:
-                break
+        PER_FEED_QUERY_THRESHOLD = 32
+        if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
+            for feed_url in feed_urls:
+                for entry in reader.get_entries(feed=feed_url, read=reader_read_filter):
+                    all_feed_entries.append(entry)
+                    if not need_all and len(all_feed_entries) >= fetch_limit:
+                        break
+                if not need_all and len(all_feed_entries) >= fetch_limit:
+                    break
+        else:
+            for entry in reader.get_entries(read=reader_read_filter):
+                if entry.feed_url not in feed_urls:
+                    continue
+                all_feed_entries.append(entry)
+                if not need_all and len(all_feed_entries) >= fetch_limit:
+                    break
 
         fetch_ms = int((time.perf_counter() - fetch_start) * 1000)
         LOGGER.info(
@@ -2012,16 +2606,28 @@ def list_entries_for_feeds(
             fetch_ms,
         )
 
+        # Two-phase processing: build a lightweight per-entry record that has
+        # *only* what filter/sort/dedupe needs, then enrich the surviving top-N
+        # entries with display fields (thumbnails, formatted dates, favicons,
+        # YouTube duration). Avoids paying ~24ms × 2000 entries of display work
+        # for entries that won't be displayed.
         process_start = time.perf_counter()
+        if normalized_read_filter == "history" and not normalized_star_only:
+            sort_key = "history_sort_value"
+            sort_desc = True
+        else:
+            sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
+            sort_desc = normalized_sort_dir == "desc"
+
+        light_records: list[dict] = []
         for entry in all_feed_entries:
             is_read = bool(entry.read)
             is_saved = (entry.feed_url, entry.id) in saved_entries_set
-            manual_tags: list[str] = []
+            manual_tags_for_record: list[str] = []
             if normalized_selected_tag:
-                manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
-                if normalized_selected_tag not in manual_tags:
+                manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)
+                if normalized_selected_tag not in manual_tags_for_record:
                     continue
-            # Star-only is a hard override over read/history filters.
             if normalized_star_only and not is_saved:
                 continue
             if not normalized_star_only:
@@ -2033,22 +2639,8 @@ def list_entries_for_feeds(
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
-            # For YouTube channel feeds, attempt to fetch video duration and
-            # prefix the post title with the duration like Inoreader does.
-            duration_seconds = None
-            duration_display = None
-            title_text = entry.title
-            try:
-                if isinstance(entry.feed_url, str) and "youtube.com/feeds/videos.xml" in entry.feed_url and entry.link:
-                    vid = youtube_duration_service.extract_video_id(entry.link)
-                    if vid:
-                        duration_seconds, duration_display = youtube_duration_service.get_cached_duration(vid)
-                        if duration_display:
-                            title_text = f"[{duration_display}] {title_text}"
-            except Exception:
-                duration_seconds = None
-                duration_display = None
 
+            title_text = entry.title
             if search_terms:
                 search_haystack = " ".join(
                     [
@@ -2062,68 +2654,106 @@ def list_entries_for_feeds(
                 if not all(term in search_haystack for term in search_terms):
                     continue
 
-            entries.append(
+            sort_value: float
+            if sort_key == "history_sort_value":
+                sort_value = datetime_sort_value(read_dt)
+            elif sort_key == "post_sort_value":
+                # Fall back to URL-inferred (link or id) → title-inferred →
+                # received-time, so entries from feeds that don't supply
+                # <pubDate> still sort in a sensible order instead of all
+                # clustering at -inf. entry.link and entry.id can differ;
+                # the date may live in either.
+                effective_pub_dt = (
+                    published_dt
+                    or url_inferred_pubdate(entry.link)
+                    or url_inferred_pubdate(entry.id)
+                    or title_inferred_pubdate(entry.title)
+                    or entry.added
+                )
+                sort_value = datetime_sort_value(effective_pub_dt)
+            else:
+                sort_value = datetime_sort_value(entry.added)
+
+            light_records.append(
                 {
+                    "_entry": entry,
+                    "_published_dt": published_dt,
+                    "_read_dt": read_dt,
+                    "_manual_tags": manual_tags_for_record,
                     "feed_url": entry.feed_url,
                     "id": entry.id,
                     "title": title_text,
                     "link": entry.link,
-                    "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False),
-                    "feed_title": entry.feed_resolved_title or entry.feed_url,
-                    "feed_icon_url": get_favicon_url(entry.feed_url, feed_site_map.get(entry.feed_url)),
-                    "manual_tags": manual_tags,
                     "read": is_read,
                     "saved": is_saved,
-                    "post_sort_value": datetime_sort_value(published_dt),
-                    "received_sort_value": datetime_sort_value(entry.added),
-                    "history_sort_value": datetime_sort_value(read_dt),
-                    "post_timestamp": published_dt.isoformat() if published_dt else None,
-                    "received_timestamp": entry.added.isoformat() if entry.added else None,
-                    "read_timestamp": read_dt.isoformat() if read_dt else None,
-                    "post_display": format_datetime_for_ui(published_dt),
-                    "received_display": format_datetime_for_ui(entry.added),
-                    "read_display": format_datetime_for_ui(read_dt),
-                    "duration_seconds": duration_seconds,
-                    "duration_display": duration_display,
+                    sort_key: sort_value,
                 }
             )
 
-    if normalized_read_filter == "history" and not normalized_star_only:
-        sort_key = "history_sort_value"
-        sort_desc = True
-    else:
-        sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
-        sort_desc = normalized_sort_dir == "desc"
-    # Deduplicate by normalized link + normalized title (strips fragment and
-    # normalizes title whitespace/case). Always keep the newest entry by the
-    # active timeline key, then apply sort direction for display.
+    # Dedupe + sort + limit on the lightweight records.
     best_by_key: dict[str, dict] = {}
     passthrough: list[dict] = []
-    for entry in entries:
-        dedupe_key = build_entry_dedupe_key(cast(str | None, entry.get("link")), cast(str | None, entry.get("title")))
+    for rec in light_records:
+        dedupe_key = build_entry_dedupe_key(cast(str | None, rec.get("link")), cast(str | None, rec.get("title")))
         if not dedupe_key:
-            passthrough.append(entry)
+            passthrough.append(rec)
             continue
-
         existing = best_by_key.get(dedupe_key)
-        if existing is None or entry[sort_key] > existing[sort_key]:
-            best_by_key[dedupe_key] = entry
+        if existing is None or rec[sort_key] > existing[sort_key]:
+            best_by_key[dedupe_key] = rec
+    light_records = passthrough + list(best_by_key.values())
+    light_records.sort(key=lambda item: item[sort_key], reverse=sort_desc)
+    light_records = light_records[:limit]
 
-    entries = passthrough + list(best_by_key.values())
-    entries.sort(
-        key=lambda item: item[sort_key],
-        reverse=sort_desc,
-    )
+    # Enrich the surviving (top-N) records with display fields.
+    entries = []
+    for rec in light_records:
+        entry = cast(object, rec.pop("_entry"))
+        published_dt = rec.pop("_published_dt")
+        read_dt = rec.pop("_read_dt")
+        rec.pop(sort_key, None)
 
-    entries = entries[:limit]
+        feed_url_str = cast(str, rec["feed_url"])
+        title_text = cast(str, rec["title"])
+
+        duration_seconds = None
+        duration_display = None
+        try:
+            entry_feed_url = getattr(entry, "feed_url", None)
+            entry_link = getattr(entry, "link", None)
+            if isinstance(entry_feed_url, str) and "youtube.com/feeds/videos.xml" in entry_feed_url and entry_link:
+                vid = youtube_duration_service.extract_video_id(entry_link)
+                if vid:
+                    duration_seconds, duration_display = youtube_duration_service.get_cached_duration(vid)
+                    if duration_display:
+                        title_text = f"[{duration_display}] {title_text}"
+                        rec["title"] = title_text
+        except Exception:
+            duration_seconds = None
+            duration_display = None
+
+        manual_tags = cast(list[str], rec.pop("_manual_tags"))
+
+        rec.update(
+            {
+                "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False),
+                "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
+                "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
+                "manual_tags": manual_tags,
+                "post_timestamp": published_dt.isoformat() if published_dt else None,
+                "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
+                "read_timestamp": read_dt.isoformat() if read_dt else None,
+                "post_display": format_datetime_for_ui(published_dt),
+                "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
+                "read_display": format_datetime_for_ui(read_dt),
+                "duration_seconds": duration_seconds,
+                "duration_display": duration_display,
+            }
+        )
+        entries.append(rec)
 
     process_ms = int((time.perf_counter() - process_start) * 1000)
     LOGGER.info("[perf] list_entries: entries_processed=%d process_ms=%d", len(entries), process_ms)
-
-    for entry in entries:
-        entry.pop("post_sort_value", None)
-        entry.pop("received_sort_value", None)
-        entry.pop("history_sort_value", None)
 
     return entries
 
@@ -2323,6 +2953,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if content and content.value and content.is_html:
             content_html = content.value
 
+        # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
+        # of http://).  The reader library resolves these as relative paths, producing
+        # URLs like https://example.com/path/http%3A/actual-host.com/image.png.
+        # Recover the original URL by extracting and decoding the embedded scheme.
+        if isinstance(content_html, str) and "%3A/" in content_html:
+            content_html = re.sub(
+                r'https?://[^"\'<\s]+/(https?)%3A/([^"\'<\s]+)',
+                r'\1://\2',
+                content_html,
+                flags=re.IGNORECASE,
+            )
+
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
         duration_seconds = None
@@ -2379,31 +3021,30 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if video_id:
             lead_image_url = None
 
-        # If the lead image URL appears in content_html, suppress it so the same
-        # image doesn't render both above and inside the content.
-        # Check both raw and HTML-unescaped content to catch feeds that encode
-        # query-string ampersands as &amp; (e.g. Jetpack CDN URLs).
-        if (
-            lead_image_url
-            and isinstance(content_html, str)
-            and (lead_image_url in content_html or lead_image_url in html.unescape(content_html))
-        ):
-            lead_image_url = None
-
-        # If we still have a lead image, strip the first <img> from content_html
-        # when it appears as the very first element (possibly inside a bare <p>,
-        # <a>, <figure>, or <div> wrapper).  Many feeds embed a thumbnail at the
-        # top; we've already promoted a better/full-size image as the lead hero,
-        # so the inline thumbnail below it is a visual duplicate.
+        # Strip the opener thumbnail and dedup against the remaining content.
+        # Order matters: strip the leading <img> first, then check if the lead
+        # image URL still appears in what remains.  This prevents the case where
+        # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
+        # incorrectly suppressed just because it appears at the top of content.
         _LEAD_IMG_OPENER_RE = re.compile(
-            r"^\s*(?:<(?:p|a|figure|div)\b[^>]*>\s*)?"
+            r"^\s*(?:<(?:p|figure|div)\b[^>]*>\s*)?"
+            r"(?:<a\b[^>]*>\s*)?"
             r"<img\b[^>]*/?>",
             re.IGNORECASE,
         )
         if lead_image_url and isinstance(content_html, str):
             _m = _LEAD_IMG_OPENER_RE.match(content_html)
             if _m:
+                # Always strip the opener, then check if lead URL appears in the body
                 content_html = content_html[_m.end() :].lstrip() or None
+                if content_html and (
+                    lead_image_url in content_html or lead_image_url in html.unescape(content_html)
+                ):
+                    lead_image_url = None
+            elif lead_image_url in content_html or lead_image_url in html.unescape(content_html):
+                # Lead URL is in content but not at the opener position — suppress it
+                # so the same image doesn't render both above and inside the content.
+                lead_image_url = None
 
         # If lead_image_url came from source scraping and the remaining content
         # is essentially just a thumbnail wrapper (minimal text after stripping
@@ -2528,6 +3169,16 @@ def entry_pane(
         upsert_entry_read_state(feed_url, entry_id)
         selected_entry["read"] = True
 
+    # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
+    # so it lands in the feed's actual containing folder.
+    feed_to_folder: dict[str, int] = {}
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+    direct = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+    for fid, urls in direct.items():
+        for url in urls:
+            feed_to_folder[url] = fid
+
     return templates.TemplateResponse(
         request,
         "_entry_pane.html",
@@ -2541,6 +3192,7 @@ def entry_pane(
             "selected_star_only": normalized_star_only,
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
+            "feed_to_folder": feed_to_folder,
         },
     )
 
@@ -2634,6 +3286,7 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
             "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
             (folder_id, feed_url),
         )
+    invalidate_meta_structure_cache()
 
 
 def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -> None:
@@ -2659,6 +3312,7 @@ def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -
             "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
             (to_folder_id, feed_url),
         )
+    invalidate_meta_structure_cache()
 
 
 def delete_folder(folder_id: int) -> tuple[int, int]:
@@ -2710,6 +3364,7 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
                     continue
                 removed_feed_count += 1
 
+    invalidate_meta_structure_cache()
     return (len(descendant_ids), removed_feed_count)
 
 
@@ -2877,7 +3532,11 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
                     if feed_url in feeds_with_folder:
                         # Already assigned to a folder, skip
                         return
-                    reader.add_feed(feed_url, exist_ok=True)
+                    try:
+                        reader.add_feed(feed_url, exist_ok=True)
+                    except InvalidFeedURLError:
+                        LOGGER.warning("OPML import: skipping non-URL entry %r", feed_url)
+                        return
                     conn.execute(
                         "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
                         (target_folder_id, feed_url),
@@ -3089,7 +3748,16 @@ def home(
             read_filter = cookie_rf
 
     start_req = time.perf_counter()
+    _t = time.perf_counter()
+    def _tick(label: str) -> None:
+        nonlocal _t
+        ms = int((time.perf_counter() - _t) * 1000)
+        if ms >= 50:
+            LOGGER.info("[perf]   meta.%s=%dms", label, ms)
+        _t = time.perf_counter()
+
     with get_meta_connection() as conn:
+        _tick("connect")
         preferred_sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
         preferred_sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
         problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
@@ -3097,29 +3765,46 @@ def home(
         selected_sort_dir = normalize_sort_dir(sort_dir or preferred_sort_dir)
         set_setting(conn, SORT_BY_SETTING_KEY, selected_sort_by)
         set_setting(conn, SORT_DIR_SETTING_KEY, selected_sort_dir)
+        _tick("settings")
 
-        root_id = get_root_folder_id(conn)
+        snapshot = get_meta_structure_snapshot(conn)
+        raw_folder_rows = cast(list[dict], snapshot["raw_folder_rows"])
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        folder_options = cast(list[FolderOption], snapshot["folder_options"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        root_id = cast(int, snapshot["root_id"])
+        folder_feed_urls_by_id = cast(dict[int, set[str]], snapshot["folder_feed_urls_by_id"])
         selected_folder_id = folder_id or root_id
+        _tick("structure_snapshot")
 
-        raw_folder_rows = get_folder_rows(conn)
-        direct_feed_urls_by_folder = get_direct_feed_urls_by_folder(conn)
         unread_counts_by_feed = get_unread_counts_by_feed()
+        _tick("unread_counts")
         dedupe_log_rows = get_unread_dedupe_log(limit=80)
+        _tick("dedupe_log")
         unread_counts_by_folder = get_unread_counts_by_folder(
             raw_folder_rows,
             unread_counts_by_feed,
             direct_feed_urls_by_folder,
         )
+        _tick("counts_by_folder")
         folder_rows = []
         for row in raw_folder_rows:
             folder_dict = dict(row)
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
-        folder_options = get_folder_options(conn)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
-        problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=50)
-        feed_urls = get_folder_feed_urls(conn, selected_folder_id)
-        all_feed_urls = get_all_feed_urls(conn)
+        _tick("global_note")
+        now_pf = time.time()
+        with _problematic_feeds_cache_lock:
+            cached_pf = _problematic_feeds_cache.get(50)
+        if cached_pf and now_pf - cached_pf[0] < PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS:
+            problematic_feeds = [dict(r) for r in cached_pf[1]]
+        else:
+            problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=50)
+            with _problematic_feeds_cache_lock:
+                _problematic_feeds_cache[50] = (time.time(), [dict(r) for r in problematic_feeds])
+        _tick("problematic_feeds")
+        feed_urls = folder_feed_urls_by_id.get(selected_folder_id, set())
 
     meta_block_ms = int((time.perf_counter() - start_req) * 1000)
     LOGGER.info("[perf] home: meta_block=%dms", meta_block_ms)
@@ -3163,6 +3848,9 @@ def home(
         if problematic_feeds_last_viewed_at is None or float(pf_last_failure_at) > problematic_feeds_last_viewed_at:
             problematic_unseen_count += 1
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
+    # feed_url → containing_folder_id, so feed-name links in posts/entry can
+    # navigate to the feed's own folder rather than the currently-viewed one.
+    feed_to_folder: dict[str, int] = {}
     for row in folder_rows:
         folder_row_id = int(row["id"])
         urls = direct_feed_urls_by_folder.get(folder_row_id, [])
@@ -3175,6 +3863,8 @@ def home(
             )
             for url in urls
         ]
+        for url in urls:
+            feed_to_folder[url] = folder_row_id
 
     root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
@@ -3272,6 +3962,7 @@ def home(
             "child_folder_rows": child_folder_rows,
             "folder_options": folder_options,
             "feeds_by_folder": feeds_by_folder,
+            "feed_to_folder": feed_to_folder,
             "tag_rows": tag_rows,
             "selected_folder_id": selected_folder_id,
             "selected_feed_url": selected_feed_url,
@@ -3506,6 +4197,7 @@ def create_folder(name: str = Form(...)):
             (name.strip(), root_id),
         ).fetchone()
         target_id = root_id if not row else int(row["id"])
+    invalidate_meta_structure_cache()
     return RedirectResponse(url=f"/?folder_id={target_id}", status_code=303)
 
 
@@ -3552,6 +4244,27 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
 @app.get("/feeds/properties")
 def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
+
+
+_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "none"}
+
+
+@app.post("/feeds/strategy")
+def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)):
+    if strategy not in _VALID_MANUAL_STRATEGIES:
+        return JSONResponse({"error": "invalid strategy"}, status_code=400)
+    if strategy == "auto":
+        # Remove manual lock — delete so auto-detection starts fresh.
+        try:
+            with get_meta_connection() as conn:
+                conn.execute("DELETE FROM feed_lead_image_strategy WHERE feed_url = ?", (feed_url,))
+        except Exception:
+            pass
+    else:
+        lead_image_service.store_feed_strategy(feed_url, strategy, manual=True)
+    # Clear cached images so entries re-resolve under the new strategy.
+    lead_image_service.clear_lead_image_cache(feed_url)
+    return JSONResponse({"ok": True, "strategy": strategy})
 
 
 @app.post("/feeds/move")
@@ -3609,6 +4322,7 @@ def move_feed(
 
 @app.post("/feeds/unsubscribe")
 def unsubscribe_feed(
+    request: Request,
     folder_id: int = Form(...),
     feed_url: str = Form(...),
     sort_by: str | None = Form(default=None),
@@ -3623,6 +4337,7 @@ def unsubscribe_feed(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
 
+    ok = True
     message = "Feed unsubscribed."
     try:
         with get_meta_connection() as conn:
@@ -3648,8 +4363,16 @@ def unsubscribe_feed(
                 LOGGER.warning("[unsubscribe] force-archive failed for %s: %s", feed_url, exc)
             with get_reader() as reader:
                 reader.delete_feed(feed_url, missing_ok=True)
+        invalidate_meta_structure_cache()
     except Exception as exc:
+        ok = False
         message = f"Unsubscribe failed: {exc}"
+
+    # AJAX caller (e.g. problematic-feeds modal trash button) wants a JSON
+    # response so it can update the DOM in place instead of navigating away.
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": ok, "feed_url": feed_url, "message": message}, status_code=200 if ok else 500)
 
     return RedirectResponse(
         url=(
@@ -3803,6 +4526,8 @@ def mark_folder_as_read(
     marked_count = mark_feeds_as_read(feed_urls)
     with unread_counts_cache_lock:
         unread_counts_cache.clear()
+    with dedupe_log_cache_lock:
+        dedupe_log_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
@@ -3826,6 +4551,8 @@ def mark_feed_as_read(
     marked_count = mark_feeds_as_read({feed_url})
     with unread_counts_cache_lock:
         unread_counts_cache.clear()
+    with dedupe_log_cache_lock:
+        dedupe_log_cache.clear()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = ""
@@ -3870,6 +4597,8 @@ def mark_entry_read(
             delete_entry_read_state(feed_url, entry_id)
     with unread_counts_cache_lock:
         unread_counts_cache.clear()
+    with dedupe_log_cache_lock:
+        dedupe_log_cache.clear()
 
     if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
@@ -4266,6 +4995,7 @@ async def opml_import(opml_file: Annotated[UploadFile, File(...)]):
     with get_meta_connection() as conn:
         imported = import_opml(conn, data)
         root_id = get_root_folder_id(conn)
+    invalidate_meta_structure_cache()
 
     return RedirectResponse(
         url=f"/?folder_id={root_id}&message={quote_plus(f'Imported {imported} feed(s) from OPML.')}",
@@ -4286,14 +5016,11 @@ def opml_export():
 
 @app.get("/healthz")
 def healthz():
-    """Liveness/readiness probe for reverse proxies (Traefik, etc.).
-    Returns 200 if the meta DB is reachable, 503 otherwise.
-    Auth-exempt so probes don't need credentials."""
-    try:
-        with get_meta_connection() as conn:
-            conn.execute("SELECT 1").fetchone()
-    except Exception as exc:
-        return JSONResponse({"status": "error", "error": str(exc)}, status_code=503)
+    """Liveness probe for reverse proxies (Traefik, etc.). Returns 200 as long
+    as the process is serving requests. Intentionally does NOT touch the DB:
+    under bulk-refresh load the meta DB can be locked for several seconds, and
+    a probe that waits on it will time out and cause the proxy to withdraw the
+    backend even though the app is still functioning."""
     return JSONResponse({"status": "ok"})
 
 

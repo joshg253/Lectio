@@ -6,6 +6,10 @@ services:
     image: lectio:latest
     container_name: lectio
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     env_file:
       - .env
     environment:

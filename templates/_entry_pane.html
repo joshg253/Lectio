@@ -29,9 +29,12 @@
           src="{{ selected_entry.feed_icon_url }}"
           onerror="this.style.display = 'none'"
         />{% endif %}
+        {% set entry_feed_folder_id = feed_to_folder.get(selected_entry.feed_url, selected_folder_id) %}
         <a
           class="entry-feed-link"
-          href="/?folder_id={{ selected_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+          data-feed-url="{{ selected_entry.feed_url }}"
+          data-folder-id="{{ entry_feed_folder_id }}"
+          href="/?folder_id={{ entry_feed_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
           >{{ selected_entry.feed_title }}</a
         >
         {% if selected_entry.author %}
