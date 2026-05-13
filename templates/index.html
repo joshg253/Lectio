@@ -1439,49 +1439,118 @@
         <h3 id="problematic-feeds-modal-title" class="action-modal-title">Problematic Feeds</h3>
         <button type="button" class="modal-close" data-close-modal="problematic-feeds-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      {% if problematic_feeds %}
-      <ul class="problem-feed-list">
-        {% for row in problematic_feeds %}
-        <li class="problem-feed-item">
-          <div class="problem-feed-row">
-            <button
-              type="button"
-              class="problem-feed-link"
-              data-problem-feed-properties
-              data-feed-url="{{ row.feed_url }}"
-              title="{{ row.feed_url }}"
-            >{{ row.feed_title }}</button>
-            <div class="problem-feed-actions">
-              <a
-                class="problem-feed-action"
-                href="{{ row.feed_url }}"
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open feed URL in new tab"
-                aria-label="Open feed URL in new tab"
-              ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+      {% set failing_feeds = problematic_feeds | selectattr("acknowledged_at", "none") | list %}
+      {% set acked_feeds = problematic_feeds | rejectattr("acknowledged_at", "none") | list %}
+      <div class="problem-feed-tabs" role="tablist">
+        <button type="button" class="problem-tab-btn active" data-problem-tab="failing" role="tab" aria-selected="true">Failing{% if failing_feeds %} <span class="problem-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
+        <button type="button" class="problem-tab-btn" data-problem-tab="acked" role="tab" aria-selected="false">Checked OK{% if acked_feeds %} <span class="problem-tab-count">{{ acked_feeds | length }}</span>{% endif %}</button>
+      </div>
+      <div class="problem-tab-panel" data-problem-panel="failing">
+        {% if failing_feeds %}
+        <ul class="problem-feed-list">
+          {% for row in failing_feeds %}
+          <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+            <div class="problem-feed-row">
               <button
                 type="button"
-                class="problem-feed-action problem-feed-action-danger"
-                data-problem-feed-unsubscribe
+                class="problem-feed-link"
+                data-problem-feed-properties
                 data-feed-url="{{ row.feed_url }}"
-                data-folder-id="{{ row.folder_id or selected_folder_id }}"
-                title="Unsubscribe from feed"
-                aria-label="Unsubscribe from feed"
-              ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                title="{{ row.feed_url }}"
+              >{{ row.feed_title }}</button>
+              <div class="problem-feed-actions">
+                <a
+                  class="problem-feed-action"
+                  href="{{ row.feed_url }}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open feed URL in new tab"
+                  aria-label="Open feed URL in new tab"
+                ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                <button
+                  type="button"
+                  class="problem-feed-action problem-feed-action-ack"
+                  data-problem-feed-ack
+                  data-feed-url="{{ row.feed_url }}"
+                  title="Mark as manually checked OK (e.g. bot-blocked)"
+                  aria-label="Mark as checked OK"
+                ><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                <button
+                  type="button"
+                  class="problem-feed-action problem-feed-action-danger"
+                  data-problem-feed-unsubscribe
+                  data-feed-url="{{ row.feed_url }}"
+                  data-folder-id="{{ row.folder_id or selected_folder_id }}"
+                  title="Unsubscribe from feed"
+                  aria-label="Unsubscribe from feed"
+                ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+              </div>
             </div>
-          </div>
-          <div class="problem-feed-meta">
-            <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
-            {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
-          </div>
-          {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No problematic feeds right now.</p>
-      {% endif %}
+            <div class="problem-feed-meta">
+              <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
+              {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+            </div>
+            {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No failing feeds right now.</p>
+        {% endif %}
+      </div>
+      <div class="problem-tab-panel" data-problem-panel="acked" hidden>
+        {% if acked_feeds %}
+        <ul class="problem-feed-list">
+          {% for row in acked_feeds %}
+          <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+            <div class="problem-feed-row">
+              <button
+                type="button"
+                class="problem-feed-link"
+                data-problem-feed-properties
+                data-feed-url="{{ row.feed_url }}"
+                title="{{ row.feed_url }}"
+              >{{ row.feed_title }}</button>
+              <div class="problem-feed-actions">
+                <a
+                  class="problem-feed-action"
+                  href="{{ row.feed_url }}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open feed URL in new tab"
+                  aria-label="Open feed URL in new tab"
+                ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                <button
+                  type="button"
+                  class="problem-feed-action"
+                  data-problem-feed-unack
+                  data-feed-url="{{ row.feed_url }}"
+                  title="Move back to Failing"
+                  aria-label="Move back to Failing"
+                ><span class="material-symbols-rounded" aria-hidden="true">undo</span></button>
+                <button
+                  type="button"
+                  class="problem-feed-action problem-feed-action-danger"
+                  data-problem-feed-unsubscribe
+                  data-feed-url="{{ row.feed_url }}"
+                  data-folder-id="{{ row.folder_id or selected_folder_id }}"
+                  title="Unsubscribe from feed"
+                  aria-label="Unsubscribe from feed"
+                ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+              </div>
+            </div>
+            <div class="problem-feed-meta">
+              <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
+              {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+            </div>
+            {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">No feeds marked as checked OK.</p>
+        {% endif %}
+      </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="problematic-feeds-modal">Close</button>
       </div>
@@ -4655,6 +4724,70 @@
       openFeedPropertiesModal(contextFeedUrl);
     });
 
+    // Problematic-feeds modal: tab switching.
+    document.addEventListener('click', (event) => {
+      const tabBtn = event.target.closest('[data-problem-tab]');
+      if (!tabBtn) return;
+      const tab = tabBtn.getAttribute('data-problem-tab');
+      const modal = document.getElementById('problematic-feeds-modal');
+      if (!modal || !tab) return;
+      modal.querySelectorAll('.problem-tab-btn').forEach((btn) => {
+        const active = btn.getAttribute('data-problem-tab') === tab;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', String(active));
+      });
+      modal.querySelectorAll('.problem-tab-panel').forEach((panel) => {
+        panel.hidden = panel.getAttribute('data-problem-panel') !== tab;
+      });
+    });
+
+    function problemFeedAckRequest(feedUrl, endpoint, headerVal) {
+      const body = new URLSearchParams({ feed_url: feedUrl });
+      return fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': headerVal,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin',
+        body: body.toString(),
+      });
+    }
+
+    function updateProblemTabCount(modal, panel, delta) {
+      const btn = modal.querySelector(`[data-problem-tab="${panel}"]`);
+      if (!btn) return;
+      let countEl = btn.querySelector('.problem-tab-count');
+      const current = countEl ? parseInt(countEl.textContent, 10) || 0 : 0;
+      const next = current + delta;
+      if (next <= 0) {
+        if (countEl) countEl.remove();
+      } else {
+        if (!countEl) {
+          countEl = document.createElement('span');
+          countEl.className = 'problem-tab-count';
+          btn.appendChild(document.createTextNode(' '));
+          btn.appendChild(countEl);
+        }
+        countEl.textContent = String(next);
+      }
+    }
+
+    function ensureEmptyMessage(panel, emptyText) {
+      const list = panel.querySelector('.problem-feed-list');
+      if (list && !list.querySelector('.problem-feed-item')) {
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = emptyText;
+        list.parentNode.replaceChild(p, list);
+      } else if (!list && !panel.querySelector('.muted')) {
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = emptyText;
+        panel.insertBefore(p, panel.firstChild);
+      }
+    }
+
     // Problematic-feeds modal: wire feed-title button to Feed Properties (stacks
     // on top of the problem-feeds modal) and trash icon to the unsubscribe form.
     document.addEventListener('click', (event) => {
@@ -4665,6 +4798,93 @@
         if (url) openFeedPropertiesModal(url);
         return;
       }
+
+      const ackTrigger = event.target.closest('[data-problem-feed-ack]');
+      if (ackTrigger) {
+        event.preventDefault();
+        const url = ackTrigger.getAttribute('data-feed-url');
+        if (!url) return;
+        const modal = document.getElementById('problematic-feeds-modal');
+        const failingPanel = modal?.querySelector('[data-problem-panel="failing"]');
+        const ackedPanel = modal?.querySelector('[data-problem-panel="acked"]');
+        const li = ackTrigger.closest('.problem-feed-item');
+        ackTrigger.disabled = true;
+        problemFeedAckRequest(url, '/settings/problematic-feeds/acknowledge', 'lectio-problem-feed-ack')
+          .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+          .then(() => {
+            if (li && ackedPanel) {
+              // Swap ack button for unack button.
+              ackTrigger.setAttribute('data-problem-feed-unack', '');
+              ackTrigger.removeAttribute('data-problem-feed-ack');
+              ackTrigger.title = 'Move back to Failing';
+              ackTrigger.setAttribute('aria-label', 'Move back to Failing');
+              const icon = ackTrigger.querySelector('.material-symbols-rounded');
+              if (icon) icon.textContent = 'undo';
+              ackTrigger.disabled = false;
+              // Move the item into the acked panel list, creating a list if needed.
+              let ackedList = ackedPanel.querySelector('.problem-feed-list');
+              if (!ackedList) {
+                ackedList = document.createElement('ul');
+                ackedList.className = 'problem-feed-list';
+                const emptyMsg = ackedPanel.querySelector('.muted');
+                if (emptyMsg) emptyMsg.replaceWith(ackedList);
+                else ackedPanel.insertBefore(ackedList, ackedPanel.firstChild);
+              }
+              ackedList.appendChild(li);
+              ensureEmptyMessage(failingPanel, 'No failing feeds right now.');
+              if (modal) {
+                updateProblemTabCount(modal, 'failing', -1);
+                updateProblemTabCount(modal, 'acked', 1);
+              }
+            }
+          })
+          .catch(() => { ackTrigger.disabled = false; });
+        return;
+      }
+
+      const unackTrigger = event.target.closest('[data-problem-feed-unack]');
+      if (unackTrigger) {
+        event.preventDefault();
+        const url = unackTrigger.getAttribute('data-feed-url');
+        if (!url) return;
+        const modal = document.getElementById('problematic-feeds-modal');
+        const failingPanel = modal?.querySelector('[data-problem-panel="failing"]');
+        const ackedPanel = modal?.querySelector('[data-problem-panel="acked"]');
+        const li = unackTrigger.closest('.problem-feed-item');
+        unackTrigger.disabled = true;
+        problemFeedAckRequest(url, '/settings/problematic-feeds/unacknowledge', 'lectio-problem-feed-unack')
+          .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+          .then(() => {
+            if (li && failingPanel) {
+              // Swap unack button back to ack button.
+              unackTrigger.setAttribute('data-problem-feed-ack', '');
+              unackTrigger.removeAttribute('data-problem-feed-unack');
+              unackTrigger.title = 'Mark as manually checked OK (e.g. bot-blocked)';
+              unackTrigger.setAttribute('aria-label', 'Mark as checked OK');
+              const icon = unackTrigger.querySelector('.material-symbols-rounded');
+              if (icon) icon.textContent = 'check_circle';
+              unackTrigger.disabled = false;
+              // Move item back to failing panel.
+              let failingList = failingPanel.querySelector('.problem-feed-list');
+              if (!failingList) {
+                failingList = document.createElement('ul');
+                failingList.className = 'problem-feed-list';
+                const emptyMsg = failingPanel.querySelector('.muted');
+                if (emptyMsg) emptyMsg.replaceWith(failingList);
+                else failingPanel.insertBefore(failingList, failingPanel.firstChild);
+              }
+              failingList.appendChild(li);
+              ensureEmptyMessage(ackedPanel, 'No feeds marked as checked OK.');
+              if (modal) {
+                updateProblemTabCount(modal, 'failing', 1);
+                updateProblemTabCount(modal, 'acked', -1);
+              }
+            }
+          })
+          .catch(() => { unackTrigger.disabled = false; });
+        return;
+      }
+
       const unsubTrigger = event.target.closest('[data-problem-feed-unsubscribe]');
       if (unsubTrigger) {
         event.preventDefault();
@@ -4691,16 +4911,15 @@
         })
           .then((response) => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            // Remove the row from the modal.
+            const modal = document.getElementById('problematic-feeds-modal');
+            const isAcked = li?.closest('[data-problem-panel="acked"]');
+            const panelKey = isAcked ? 'acked' : 'failing';
+            const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
             if (li && li.parentNode) li.parentNode.removeChild(li);
-            // Update the badge counts (menu + folders panel) so they reflect
-            // the now-shorter list. Empty list → swap in the muted message.
-            const list = document.querySelector('#problematic-feeds-modal .problem-feed-list');
-            if (list && !list.querySelector('.problem-feed-item')) {
-              const empty = document.createElement('p');
-              empty.className = 'muted';
-              empty.textContent = 'No problematic feeds right now.';
-              list.parentNode.replaceChild(empty, list);
+            if (modal) {
+              updateProblemTabCount(modal, panelKey, -1);
+              const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
+              if (panel) ensureEmptyMessage(panel, emptyText);
             }
           })
           .catch((err) => {

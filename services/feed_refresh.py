@@ -66,12 +66,13 @@ class FeedRefreshService:
                 s.next_retry_at,
                 s.last_error,
                 s.last_failure_at,
+                s.acknowledged_at,
                 MIN(ff.folder_id) AS folder_id
             FROM feed_failure_state s
             JOIN folder_feeds ff ON ff.feed_url = s.feed_url
             WHERE s.consecutive_failures > 0
-            GROUP BY s.feed_url, s.consecutive_failures, s.next_retry_at, s.last_error, s.last_failure_at
-            ORDER BY s.next_retry_at DESC, s.consecutive_failures DESC, s.feed_url ASC
+            GROUP BY s.feed_url, s.consecutive_failures, s.next_retry_at, s.last_error, s.last_failure_at, s.acknowledged_at
+            ORDER BY s.acknowledged_at ASC NULLS FIRST, s.next_retry_at DESC, s.consecutive_failures DESC, s.feed_url ASC
             LIMIT ?
             """,
             (limit,),
@@ -88,6 +89,7 @@ class FeedRefreshService:
                     "next_retry_display": self.format_retry_epoch_for_ui(row["next_retry_at"]),
                     "last_error": str(row["last_error"] or ""),
                     "folder_id": int(row["folder_id"]) if row["folder_id"] is not None else None,
+                    "acknowledged_at": float(row["acknowledged_at"]) if row["acknowledged_at"] is not None else None,
                 }
             )
         return result
@@ -220,7 +222,8 @@ class FeedRefreshService:
                                 consecutive_failures = 0,
                                 next_retry_at = NULL,
                                 last_error = NULL,
-                                last_success_at = excluded.last_success_at
+                                last_success_at = excluded.last_success_at,
+                                acknowledged_at = NULL
                             """,
                             (feed_url, now_ts),
                         )

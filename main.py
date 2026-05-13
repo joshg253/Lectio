@@ -172,7 +172,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260512a")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513a")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -1016,6 +1016,10 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE feed_failure_state ADD COLUMN acknowledged_at REAL")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_lead_images (
@@ -3845,6 +3849,8 @@ def home(
         pf_last_failure_at = problematic_feed.get("last_failure_at")
         if not isinstance(pf_last_failure_at, (int, float)):
             continue
+        if problematic_feed.get("acknowledged_at"):
+            continue
         if problematic_feeds_last_viewed_at is None or float(pf_last_failure_at) > problematic_feeds_last_viewed_at:
             problematic_unseen_count += 1
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
@@ -4986,6 +4992,32 @@ def mark_problematic_feeds_viewed(request: Request):
     if is_async_action_request(request, "lectio-problematic-feeds-viewed"):
         return JSONResponse({"ok": True, "viewed_at": viewed_at})
 
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/settings/problematic-feeds/acknowledge")
+def acknowledge_problematic_feed(request: Request, feed_url: str = Form(...)):
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE feed_failure_state SET acknowledged_at = ? WHERE feed_url = ?",
+            (time.time(), feed_url),
+        )
+    invalidate_problematic_feeds_cache()
+    if is_async_action_request(request, "lectio-problem-feed-ack"):
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/settings/problematic-feeds/unacknowledge")
+def unacknowledge_problematic_feed(request: Request, feed_url: str = Form(...)):
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE feed_failure_state SET acknowledged_at = NULL WHERE feed_url = ?",
+            (feed_url,),
+        )
+    invalidate_problematic_feeds_cache()
+    if is_async_action_request(request, "lectio-problem-feed-unack"):
+        return JSONResponse({"ok": True})
     return RedirectResponse(url="/", status_code=303)
 
 
