@@ -2734,6 +2734,11 @@ body[data-tree-filter="unread"] .tree-feed-item[data-unread-count="0"] {
   height: auto;
 }
 
+.entry-content iframe,
+.entry-content video {
+  max-width: 100%;
+}
+
 /* PCGamer (and similar Future Publishing sites) use an aspect-ratio placeholder
    pattern: <p class="vanilla-image-block" style="padding-top: 56.27%"> with the
    image NOT absolutely positioned in our reader context. Strip the inline padding

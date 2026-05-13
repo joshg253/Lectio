@@ -172,7 +172,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513b")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513c")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -2226,6 +2226,46 @@ def delete_entry_read_state(feed_url: str, entry_id: str) -> None:
 
 
 _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["\']([^"\']+)["\']')
+_DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
+_AUDIO_SRC_RE = re.compile(r'<audio\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
+_KG_AUDIO_CARD_RE = re.compile(r'<div\b[^>]*\bkg-audio-card\b[^>]*>', re.IGNORECASE)
+
+
+def _transform_kg_audio_cards(content_html: str) -> str:
+    """Replace Ghost CMS kg-audio-card widgets with plain <audio controls> elements.
+
+    Ghost's custom player relies on JS to format the duration (stored as raw seconds)
+    and to wire up play/pause controls. Without the JS it renders as a broken UI with
+    values like '518.82585'. This replaces the whole card div with a native audio player.
+    """
+    result: list[str] = []
+    pos = 0
+    for card_m in _KG_AUDIO_CARD_RE.finditer(content_html):
+        result.append(content_html[pos : card_m.start()])
+        # Walk div open/close tags from here to find the matching end tag.
+        depth = 1
+        end_pos = len(content_html)
+        for tag_m in _DIV_TAG_RE.finditer(content_html, card_m.end()):
+            if tag_m.group(1):  # closing </div>
+                depth -= 1
+                if depth == 0:
+                    end_pos = tag_m.end()
+                    break
+            else:
+                depth += 1
+        card_html = content_html[card_m.start() : end_pos]
+        src_m = _AUDIO_SRC_RE.search(card_html)
+        if src_m:
+            src = html.escape(src_m.group(1), quote=True)
+            result.append(
+                f'<audio controls preload="metadata" src="{src}" style="width:100%">'
+                f'<a href="{src}">Download audio</a></audio>'
+            )
+        else:
+            result.append(card_html)
+        pos = end_pos
+    result.append(content_html[pos:])
+    return "".join(result)
 
 
 def sanitize_readability_html(content: str) -> str:
@@ -2975,6 +3015,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 flags=re.IGNORECASE,
             )
 
+        # Ghost CMS embeds a JS-powered audio card that renders as a broken custom player
+        # without its scripts. Replace the entire kg-audio-card widget with a native
+        # <audio controls> element so it works in the reader.
+        if isinstance(content_html, str) and "kg-audio-card" in content_html:
+            content_html = _transform_kg_audio_cards(content_html)
+
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
         duration_seconds = None
@@ -3024,7 +3070,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             ).fetchone()
             is_saved = bool(row)
 
-        lead_image_url = lead_image_service.resolve_entry_lead_image_url(entry, content_html, entry.summary)
+        lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         # If we injected a YouTube embed for this entry, avoid showing a
         # separate lead image (typically the video thumbnail) above the
         # embedded player — it looks redundant and visually noisy.
