@@ -172,7 +172,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513a")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513b")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -222,6 +222,9 @@ unread_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
 # spawn ONE background refresh. Concurrent renders never wait on the scan.
 unread_counts_compute_lock = threading.Lock()
 unread_counts_refresh_inflight = False
+# Incremented on every invalidation so in-flight background refreshes that
+# started before the invalidation don't write stale counts back to the cache.
+_unread_counts_generation: int = 0
 dedupe_log_cache_lock = threading.Lock()
 dedupe_log_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
 dedupe_log_compute_lock = threading.Lock()
@@ -1381,13 +1384,15 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
     return counts
 
 
-def _refresh_unread_counts_async() -> None:
-    """Single-flight background scan. Updates cache when done."""
+def _refresh_unread_counts_async(generation: int) -> None:
+    """Single-flight background scan. Updates cache when done, unless the
+    cache was invalidated (generation bumped) after this refresh started."""
     global unread_counts_refresh_inflight
     try:
         counts = _compute_unread_counts_by_feed()
         with unread_counts_cache_lock:
-            unread_counts_cache["unread_counts"] = (time.time(), counts)
+            if _unread_counts_generation == generation:
+                unread_counts_cache["unread_counts"] = (time.time(), counts)
     except Exception:
         LOGGER.exception("background unread counts refresh failed")
     finally:
@@ -1403,6 +1408,7 @@ def get_unread_counts_by_feed() -> dict[str, int]:
     now = time.time()
     with unread_counts_cache_lock:
         cached = unread_counts_cache.get("unread_counts")
+        current_gen = _unread_counts_generation
     if cached:
         ts, value = cached
         if now - ts < UNREAD_COUNTS_CACHE_TTL_SECONDS:
@@ -1411,7 +1417,7 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         with unread_counts_compute_lock:
             if not unread_counts_refresh_inflight:
                 unread_counts_refresh_inflight = True
-                threading.Thread(target=_refresh_unread_counts_async, daemon=True).start()
+                threading.Thread(target=_refresh_unread_counts_async, args=(current_gen,), daemon=True).start()
         return value.copy()
 
     # Cold cache: first arriver computes synchronously, others wait on lock.
@@ -3207,12 +3213,11 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
 
     marked_count = 0
     with get_reader() as reader:
-        for entry in reader.get_entries():
-            if entry.feed_url not in feed_urls or entry.read:
-                continue
-            reader.mark_entry_as_read((entry.feed_url, entry.id))
-            upsert_entry_read_state(entry.feed_url, entry.id)
-            marked_count += 1
+        for feed_url in feed_urls:
+            for entry in reader.get_entries(feed=feed_url, read=False):
+                reader.mark_entry_as_read((entry.feed_url, entry.id))
+                upsert_entry_read_state(entry.feed_url, entry.id)
+                marked_count += 1
     return marked_count
 
 
@@ -4531,6 +4536,8 @@ def mark_folder_as_read(
 
     marked_count = mark_feeds_as_read(feed_urls)
     with unread_counts_cache_lock:
+        global _unread_counts_generation
+        _unread_counts_generation += 1
         unread_counts_cache.clear()
     with dedupe_log_cache_lock:
         dedupe_log_cache.clear()
@@ -4556,6 +4563,8 @@ def mark_feed_as_read(
     normalized_tag = normalize_tag_value(tag)
     marked_count = mark_feeds_as_read({feed_url})
     with unread_counts_cache_lock:
+        global _unread_counts_generation
+        _unread_counts_generation += 1
         unread_counts_cache.clear()
     with dedupe_log_cache_lock:
         dedupe_log_cache.clear()
@@ -4602,6 +4611,8 @@ def mark_entry_read(
             reader.mark_entry_as_unread((feed_url, entry_id))
             delete_entry_read_state(feed_url, entry_id)
     with unread_counts_cache_lock:
+        global _unread_counts_generation
+        _unread_counts_generation += 1
         unread_counts_cache.clear()
     with dedupe_log_cache_lock:
         dedupe_log_cache.clear()

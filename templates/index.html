@@ -802,6 +802,7 @@
           return;
         }
         postItem.dataset.boundPaneSwipeNav = '1';
+        postItem.dataset.boundSwipe = '1';
         let sx = 0, sy = 0, dx = 0, dy = 0, touching = false;
         const threshold = 40;
         postItem.addEventListener('touchstart', (ev) => {
