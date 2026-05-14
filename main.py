@@ -217,6 +217,7 @@ updating_feeds_lock = threading.Lock()
 updating_feeds: set[str] = set()
 feed_tag_suggestion_cache_lock = threading.Lock()
 feed_tag_suggestion_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
+_feed_tag_fetch_in_progress: set[str] = set()
 # Short in-memory TTL cache for tag counts to avoid repeatedly scanning
 # reader entries on every request. Small TTL keeps counts fresh while
 # preventing repeated expensive work during rapid navigation.
@@ -1814,29 +1815,42 @@ def get_feed_tag_suggestions(
     if cached and (now - cached[0]) < FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS:
         candidate_entries = cached[1]
     else:
-        try:
-            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-                response = client.get(feed_url)
-            response.raise_for_status()
-        except Exception:
-            return []
-
-        parsed = feedparser.parse(response.content)
-        candidate_entries = []
-        for raw_entry in list(parsed.entries)[:120]:
-            tags = extract_feed_entry_tags(raw_entry)
-            if not tags:
-                continue
-            candidate_entries.append(
-                {
-                    "id": str(getattr(raw_entry, "id", "") or ""),
-                    "link": str(getattr(raw_entry, "link", "") or ""),
-                    "title": str(getattr(raw_entry, "title", "") or ""),
-                    "tags": tags,
-                }
-            )
+        # Don't block the entry-detail response on a live HTTP feed fetch.
+        # Populate the cache in a background thread; return [] for this request.
+        # Tag suggestions will appear on the next entry open from the same feed.
         with feed_tag_suggestion_cache_lock:
-            feed_tag_suggestion_cache[feed_url] = (now, candidate_entries)
+            already_fetching = feed_url in _feed_tag_fetch_in_progress
+            if not already_fetching:
+                _feed_tag_fetch_in_progress.add(feed_url)
+
+        if not already_fetching:
+            def _fetch_tags(url: str = feed_url) -> None:
+                try:
+                    with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                        response = client.get(url)
+                    response.raise_for_status()
+                    parsed = feedparser.parse(response.content)
+                    candidates: list[dict[str, object]] = []
+                    for raw_entry in list(parsed.entries)[:120]:
+                        tags = extract_feed_entry_tags(raw_entry)
+                        if not tags:
+                            continue
+                        candidates.append({
+                            "id": str(getattr(raw_entry, "id", "") or ""),
+                            "link": str(getattr(raw_entry, "link", "") or ""),
+                            "title": str(getattr(raw_entry, "title", "") or ""),
+                            "tags": tags,
+                        })
+                    with feed_tag_suggestion_cache_lock:
+                        feed_tag_suggestion_cache[url] = (time.monotonic(), candidates)
+                except Exception:
+                    pass
+                finally:
+                    with feed_tag_suggestion_cache_lock:
+                        _feed_tag_fetch_in_progress.discard(url)
+
+            threading.Thread(target=_fetch_tags, daemon=True).start()
+        return []
 
     best_score = 0
     best_tags: list[str] = []
