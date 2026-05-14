@@ -1319,7 +1319,11 @@ class LeadImageService:
         preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
         if preferred_image:
             return preferred_image
-        return self._extract_linked_image_url_from_html(source_html, final_url)
+        # Do NOT call _extract_linked_image_url_from_html on source pages:
+        # full-page HTML contains <link rel="apple-touch-icon|icon"> in <head>
+        # which would be found as hrefs and mistakenly used as lead images.
+        # That method is appropriate only for feed-content HTML snippets.
+        return None
 
     _SMBC_HOST: str = "smbc-comics.com"
     _SMBC_AFTER_RE: re.Pattern[str] = re.compile(
