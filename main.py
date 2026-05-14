@@ -3075,7 +3075,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     break
                 _depth = 0
                 _strip_end = 0
-                for _dm in re.finditer(r'<(/?)\s*div\b', _stripped, re.IGNORECASE):
+                for _dm in re.finditer(r'<(/?)div\b[^>]*>', _stripped, re.IGNORECASE):
                     if _dm.group(1):
                         _depth -= 1
                         if _depth == 0:
