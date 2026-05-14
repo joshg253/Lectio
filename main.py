@@ -20,6 +20,18 @@ from urllib.parse import quote_plus, urlparse
 
 import feedparser
 import httpx
+
+
+def _parse_month_first_pubdate(date_string: str):
+    # Handles non-RFC-2822 dates like "May 11, 2026 19:15:50 +0000" (no day-of-week).
+    try:
+        dt = datetime.strptime(date_string.strip(), "%B %d, %Y %H:%M:%S %z")
+        return dt.utctimetuple()
+    except ValueError:
+        return None
+
+
+feedparser.registerDateHandler(_parse_month_first_pubdate)
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -2685,7 +2697,7 @@ def list_entries_for_feeds(
                     continue
                 if normalized_read_filter == "history" and not is_read:
                     continue
-            published_dt = entry.published or entry.updated
+            published_dt = entry.published or entry.updated or entry.added
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
@@ -2783,6 +2795,11 @@ def list_entries_for_feeds(
             duration_display = None
 
         manual_tags = cast(list[str], rec.pop("_manual_tags"))
+
+        # Rebase proxy-feed entry links (e.g. feedburner) to the real publisher host.
+        if rec.get("link") and hasattr(entry, "feed"):
+            _ch = getattr(entry.feed, "link", None)
+            rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
         rec.update(
             {
@@ -2989,13 +3006,31 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     }
 
 
+def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link: str | None) -> str | None:
+    """Rebase an entry link that points to a proxy host (e.g. feedburner) back to the
+    real publisher host stored in the feed's channel link element."""
+    if not entry_link or not channel_link:
+        return entry_link
+    ep = urlparse(str(entry_link))
+    fp = urlparse(str(feed_url))
+    cp = urlparse(str(channel_link))
+    if ep.netloc and ep.netloc == fp.netloc and cp.netloc and cp.netloc != fp.netloc:
+        return (
+            cp.scheme + "://" + cp.netloc
+            + ep.path
+            + (("?" + ep.query) if ep.query else "")
+            + (("#" + ep.fragment) if ep.fragment else "")
+        )
+    return entry_link
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
             return _build_orphan_entry_detail(feed_url, entry_id)
 
-        published_dt = entry.published or entry.updated
+        published_dt = entry.published or entry.updated or entry.added
         author_name = (getattr(entry, "author", None) or "").strip() or None
 
         content = entry.get_content(prefer_summary=False)
@@ -3076,6 +3111,24 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # embedded player — it looks redundant and visually noisy.
         if video_id:
             lead_image_url = None
+
+        # Remove inline images whose src URL is a logo, tracker, or avatar — these
+        # are typically brand assets or analytics pixels embedded by feed publishers
+        # and should not appear as article visuals in the reader.
+        if isinstance(content_html, str):
+            def _strip_bad_img(m: re.Match) -> str:
+                src_m = re.search(r'\bsrc=(?:"([^"]*)"|\x27([^\x27]*)\x27)', m.group(0), re.IGNORECASE)
+                if not src_m:
+                    return m.group(0)
+                src = src_m.group(1) or src_m.group(2) or ""
+                if (
+                    lead_image_service._LOGO_URL_PATTERNS.search(src)
+                    or lead_image_service._TRACKER_URL_PATTERNS.search(src)
+                    or lead_image_service._AVATAR_HINT_PATTERNS.search(src)
+                ):
+                    return ""
+                return m.group(0)
+            content_html = re.sub(r"<img\b[^>]*/?>", _strip_bad_img, content_html, flags=re.IGNORECASE) or None
 
         # Strip the opener thumbnail and dedup against the remaining content.
         # Order matters: strip the leading <img> first, then check if the lead
@@ -3171,11 +3224,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
 
+        _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
+        _display_link = _rebase_proxy_entry_link(entry.link, feed_url, _channel_link)
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
             "title": entry.title,
-            "link": entry.link,
+            "link": _display_link,
             "summary": entry.summary,
             "content_html": content_html,
             "lead_image_url": lead_image_url,
@@ -3257,14 +3312,25 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
     if not feed_urls:
         return 0
 
-    marked_count = 0
+    to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
         for feed_url in feed_urls:
             for entry in reader.get_entries(feed=feed_url, read=False):
                 reader.mark_entry_as_read((entry.feed_url, entry.id))
-                upsert_entry_read_state(entry.feed_url, entry.id)
-                marked_count += 1
-    return marked_count
+                to_sync.append((entry.feed_url, entry.id))
+
+    if to_sync:
+        when = datetime.now().isoformat()
+        with get_meta_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                """,
+                [(fu, eid, when) for fu, eid in to_sync],
+            )
+    return len(to_sync)
 
 
 def normalize_youtube_feed_url(feed_url: str) -> str:
@@ -4864,6 +4930,7 @@ def mark_entries_range_read(
 
         marked_count = 0
         if target_posts:
+            to_sync: list[tuple[str, str]] = []
             with get_reader() as reader:
                 for post in target_posts:
                     if post["read"]:
@@ -4872,8 +4939,19 @@ def mark_entries_range_read(
                         reader.mark_entry_as_read((post["feed_url"], post["id"]))
                     except Exception:
                         continue
-                    upsert_entry_read_state(post["feed_url"], post["id"])
-                    marked_count += 1
+                    to_sync.append((post["feed_url"], post["id"]))
+            if to_sync:
+                when = datetime.now().isoformat()
+                with get_meta_connection() as conn:
+                    conn.executemany(
+                        """
+                        INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                        """,
+                        [(fu, eid, when) for fu, eid in to_sync],
+                    )
+            marked_count = len(to_sync)
 
         if direction not in {"above", "below"}:
             message = "Invalid range option."
@@ -4922,6 +5000,7 @@ def mark_entries_older_than_read(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     marked_count = 0
+    to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=False):
@@ -4936,8 +5015,20 @@ def mark_entries_older_than_read(
                     reader.mark_entry_as_read((entry.feed_url, entry.id))
                 except Exception:
                     continue
-                upsert_entry_read_state(entry.feed_url, entry.id)
+                to_sync.append((entry.feed_url, entry.id))
                 marked_count += 1
+
+    if to_sync:
+        when = datetime.now().isoformat()
+        with get_meta_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+                """,
+                [(fu, eid, when) for fu, eid in to_sync],
+            )
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""

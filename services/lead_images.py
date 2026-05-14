@@ -353,10 +353,18 @@ class LeadImageService:
             # Skip plugin-flagged wrapper URLs (e.g. PCGamer /flexiimages/) so
             # the background job falls through to a proper source-page fetch
             # rather than being satisfied with an inferior feed thumbnail.
-            if inline_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image):
+            if (
+                inline_image
+                and self._is_image_url_acceptable(inline_image, None, None)
+                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
+            ):
                 return inline_image
             linked_image = self._extract_linked_image_url_from_html(html_candidate, base_url)
-            if linked_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image):
+            if (
+                linked_image
+                and self._is_image_url_acceptable(linked_image, None, None)
+                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image)
+            ):
                 return linked_image
 
         # Plugin fallbacks run regardless of include_source_lookup — they handle
@@ -546,7 +554,11 @@ class LeadImageService:
             inline = self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
             if inline:
                 _found_inline = True
-                continue
+                # For feeds manually locked to og_scrape, the source page is the
+                # authoritative image source — fall through even when an inline
+                # image exists (e.g. album cover) so we can find the real hero image.
+                if not (strategy == "og_scrape" and manual):
+                    continue
 
             entry_link = str(getattr(entry, "link", "") or "")
             if not entry_link:
@@ -827,6 +839,15 @@ class LeadImageService:
             return False
         if height_attr is not None and height_attr < self._LEAD_IMAGE_MIN_HEIGHT:
             return False
+        # Square images at small scales are almost always author headshots.
+        # Article lead images are virtually never 1:1 aspect ratio at ≤400 px.
+        if (
+            width_attr is not None
+            and height_attr is not None
+            and width_attr == height_attr
+            and width_attr <= 400
+        ):
+            return False
 
         # Lazy-loaded site chrome (logos, nav images) uses a data: placeholder src
         # with no srcset and no explicit dimensions. The real URL lives in data-src,
@@ -1071,6 +1092,11 @@ class LeadImageService:
             return False
         return True
 
+    # Stricter minimum for og:image — small values (e.g. 300x200) are often
+    # WordPress generic defaults that aren't specific to the article.
+    _OG_IMAGE_MIN_WIDTH = 400
+    _OG_IMAGE_MIN_HEIGHT = 250
+
     def _extract_meta_image_url_from_html(self, html_text: str, base_url: str) -> str | None:
         og_width, og_height = self._extract_og_image_dimensions(html_text)
         for pattern in (self._OG_IMAGE_RE, self._OG_IMAGE_RE_REVERSED):
@@ -1082,6 +1108,10 @@ class LeadImageService:
                 continue
             resolved = urljoin(base_url, image_url)
             if not self._is_image_url_acceptable(resolved, og_width, og_height):
+                continue
+            if og_width is not None and og_width < self._OG_IMAGE_MIN_WIDTH:
+                continue
+            if og_height is not None and og_height < self._OG_IMAGE_MIN_HEIGHT:
                 continue
             return resolved
         return None
@@ -1218,31 +1248,15 @@ class LeadImageService:
     def fetch_entry_image_alt(self, entry_link: str) -> str | None:
         """Return alt/title text of the main scored image on the source page.
 
-        Uses the in-memory source HTML cache populated by _fetch_source_lead_image
-        so there is no extra HTTP request when called shortly after lead image
-        resolution for the same entry.
+        Uses the in-memory source HTML cache populated by _fetch_source_lead_image.
+        Returns None on cache miss — never fetches the source page on demand, since
+        get_entry_detail calls extract_entry_thumbnail_url with include_source_lookup=False
+        and an on-demand fetch would block the entry pane response for every entry.
         """
         cached = self._source_html_cache.get(entry_link)
-        if cached is not None:
-            final_url, source_html = cached
-        else:
-            parsed = urlparse(entry_link)
-            if parsed.scheme not in {"http", "https"}:
-                return None
-            if not is_safe_outbound_url(entry_link):
-                return None
-            try:
-                with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
-                    response = client.get(entry_link)
-                response.raise_for_status()
-            except Exception:
-                return None
-            source_html = response.text
-            final_url = str(response.url)
-            self._source_html_cache[entry_link] = (final_url, source_html)
-            self._source_html_cache.move_to_end(entry_link)
-            if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
-                self._source_html_cache.popitem(last=False)
+        if cached is None:
+            return None
+        final_url, source_html = cached
 
         # Try the scored path first (high confidence).
         _, alt_text = self._extract_preferred_source_image_data(source_html, final_url, entry_link)
