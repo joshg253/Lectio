@@ -1096,7 +1096,7 @@ class LeadImageService:
                 continue
         return False
 
-    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False) -> bool:
+    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False) -> bool:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
@@ -1105,7 +1105,7 @@ class LeadImageService:
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
 
-        if self._LOGO_URL_PATTERNS.search(image_url):
+        if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
             return False
         if self._PLACEHOLDER_URL_PATTERNS.search(image_url):
             return False
@@ -1181,7 +1181,7 @@ class LeadImageService:
             if not image_url or image_url.startswith("data:"):
                 continue
             resolved = urljoin(base_url, image_url)
-            if not self._is_image_url_acceptable(resolved, og_width, og_height, allow_extensionless=True):
+            if not self._is_image_url_acceptable(resolved, og_width, og_height, allow_extensionless=True, skip_logo_patterns=True):
                 continue
             if og_width is not None and og_width < self._OG_IMAGE_MIN_WIDTH:
                 continue
@@ -1286,6 +1286,34 @@ class LeadImageService:
 
         return result
 
+    _JS_COOKIE_CHALLENGE_RE: re.Pattern[str] = re.compile(
+        r'document\.cookie\s*=\s*["\']([^"\'=]+=[^"\']+)["\']',
+        re.IGNORECASE,
+    )
+
+    def _fetch_page_html(self, url: str) -> tuple[str, str] | None:
+        """Fetch a page, handling JS cookie challenges (e.g. BlueHost humans_XXXXX).
+
+        Returns (html, final_url) or None on failure.
+        """
+        try:
+            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
+                response = client.get(url)
+                if response.status_code == 409:
+                    m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
+                    if m:
+                        cookie_str = m.group(1)
+                        if "=" in cookie_str:
+                            cname, cval = cookie_str.split("=", 1)
+                            parsed_host = urlparse(url)
+                            domain = parsed_host.netloc.lstrip("www.")
+                            client.cookies.set(cname.strip(), cval.strip(), domain=domain)
+                        response = client.get(url)
+                response.raise_for_status()
+        except Exception:
+            return None
+        return response.text, str(response.url)
+
     def _fetch_source_lead_image(self, entry_link: str) -> str | None:
         parsed = urlparse(entry_link)
         if parsed.scheme not in {"http", "https"}:
@@ -1293,15 +1321,11 @@ class LeadImageService:
         if not is_safe_outbound_url(entry_link):
             return None
 
-        try:
-            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
-                response = client.get(entry_link)
-            response.raise_for_status()
-        except Exception:
+        result = self._fetch_page_html(entry_link)
+        if result is None:
             return None
 
-        source_html = response.text
-        final_url = str(response.url)
+        source_html, final_url = result
         # Cache for alt-text lookup without a second HTTP fetch.
         self._source_html_cache[entry_link] = (final_url, source_html)
         self._source_html_cache.move_to_end(entry_link)
@@ -1345,14 +1369,10 @@ class LeadImageService:
         if cached is None:
             if not is_safe_outbound_url(entry_link):
                 return None
-            try:
-                with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
-                    response = client.get(entry_link)
-                response.raise_for_status()
-            except Exception:
+            result = self._fetch_page_html(entry_link)
+            if result is None:
                 return None
-            source_html = response.text
-            final_url = str(response.url)
+            source_html, final_url = result
             self._source_html_cache[entry_link] = (final_url, source_html)
             self._source_html_cache.move_to_end(entry_link)
             if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
