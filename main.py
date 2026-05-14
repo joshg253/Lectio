@@ -1383,18 +1383,27 @@ def get_unread_counts_by_folder(
 
 
 def _compute_unread_counts_by_feed() -> dict[str, int]:
-    """Per-feed unread count via reader's SQL-aggregate API. One COUNT(*) query
-    per feed instead of iterating every entry in Python.
+    """Per-feed unread count via a single SQL GROUP BY — one query for all feeds.
 
     Cross-feed dedupe (same article appearing in RSS+Atom mirrors of one source)
     is intentionally dropped — it required a full Python scan of every entry on
     every cache miss, which doesn't scale past a few thousand entries. Users
     who run into double-counted feeds should unsubscribe one of the mirrors."""
-    counts: dict[str, int] = {}
-    with get_reader() as reader:
-        for feed in reader.get_feeds():
-            counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
-    return counts
+    try:
+        conn = sqlite3.connect(str(READER_DB_PATH), uri=False, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        rows = conn.execute(
+            "SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed"
+        ).fetchall()
+        conn.close()
+        return {str(row[0]): int(row[1]) for row in rows}
+    except Exception:
+        LOGGER.exception("_compute_unread_counts_by_feed direct SQL failed, falling back")
+        counts: dict[str, int] = {}
+        with get_reader() as reader:
+            for feed in reader.get_feeds():
+                counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
+        return counts
 
 
 def _refresh_unread_counts_async(generation: int) -> None:
