@@ -58,7 +58,7 @@ class LeadImageService:
     _PATH_WIDTH_RE = re.compile(r"(?:^|[,_])w_([0-9]{1,4})(?:[,_]|$)")
     _PATH_HEIGHT_RE = re.compile(r"(?:^|[,_])h_([0-9]{1,4})(?:[,_]|$)")
     _PLACEHOLDER_URL_PATTERNS = re.compile(
-        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif)",
+        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(

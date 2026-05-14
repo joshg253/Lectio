@@ -813,6 +813,57 @@ class ComicEaselPlugin:
         return None
 
 
+@dataclass(frozen=True)
+class WinPenPackPlugin:
+    """winpenpack.com — feed content embeds language-flag icons (/e107_images/icons/)
+    as images; the actual app thumbnail is at /e107_files/downloadthumbs/ on the
+    source page.  Bypass flag icons and fetch the real thumbnail."""
+
+    host: str = "winpenpack.com"
+    _FLAG_PATH: str = "/e107_images/icons/"
+    _BANNER_HINT: str = "wpp_banner"
+    _THUMB_PATH: str = "e107_files/downloadthumbs/"
+
+    def _is_target(self, url: str) -> bool:
+        return self.host in urlparse(url).netloc.lower()
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        if not self._is_target(entry_link):
+            return False
+        return self._FLAG_PATH in cached_url or self._BANNER_HINT in cached_url
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        if not self._is_target(source_url):
+            return 0
+        if self._FLAG_PATH in resolved_url or self._BANNER_HINT in resolved_url:
+            return -200
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        if not self._is_target(entry_link):
+            return None
+        if not is_safe_outbound_url(entry_link):
+            return None
+        try:
+            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
+                r = client.get(entry_link)
+            r.raise_for_status()
+            m = re.search(
+                r'([^"\'<>\s]*' + re.escape(self._THUMB_PATH) + r'[^"\'<>\s]+\.(?:png|jpe?g|gif|webp))',
+                r.text,
+                re.IGNORECASE,
+            )
+            if m:
+                from urllib.parse import urljoin
+                return urljoin(str(r.url), m.group(1).strip())
+        except Exception:
+            pass
+        return None
+
+
 DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     StandardEbooksLeadImagePlugin(),
     FutureSiteLeadImagePlugin(),
@@ -831,4 +882,5 @@ DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     ComicFuryPlugin(),
     OglafPlugin(),
     ComicEaselPlugin(),
+    WinPenPackPlugin(),
 )
