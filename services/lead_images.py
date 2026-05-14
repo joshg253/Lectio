@@ -1310,12 +1310,14 @@ class LeadImageService:
         preload_image = self._extract_preloaded_image_url(source_html, final_url)
         if preload_image:
             return preload_image
-        preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
-        if preferred_image:
-            return preferred_image
+        # Prefer the publisher-declared og:image/twitter:image over DOM scanning.
+        # DOM scanning is kept as fallback for pages without meta image tags.
         meta_image = self._extract_meta_image_url_from_html(source_html, final_url)
         if meta_image:
             return meta_image
+        preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
+        if preferred_image:
+            return preferred_image
         return self._extract_linked_image_url_from_html(source_html, final_url)
 
     _SMBC_HOST: str = "smbc-comics.com"
