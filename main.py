@@ -3064,6 +3064,31 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 flags=re.IGNORECASE,
             )
 
+        # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
+        # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
+        # divs by tracking div nesting depth so the article starts at actual content.
+        if isinstance(content_html, str) and re.search(r'<div[^>]*\bwp-block-nasa-blocks-', content_html[:300], re.IGNORECASE):
+            _stripped = content_html
+            while True:
+                _nm = re.match(r'\s*<div[^>]*\bwp-block-nasa-blocks-\w', _stripped, re.IGNORECASE)
+                if not _nm:
+                    break
+                _depth = 0
+                _strip_end = 0
+                for _dm in re.finditer(r'<(/?)\s*div\b', _stripped, re.IGNORECASE):
+                    if _dm.group(1):
+                        _depth -= 1
+                        if _depth == 0:
+                            _strip_end = _dm.end()
+                            break
+                    else:
+                        _depth += 1
+                if _strip_end > 0:
+                    _stripped = _stripped[_strip_end:].lstrip()
+                else:
+                    break
+            content_html = _stripped or None
+
         # Ghost CMS embeds a JS-powered audio card that renders as a broken custom player
         # without its scripts. Replace the entire kg-audio-card widget with a native
         # <audio controls> element so it works in the reader.

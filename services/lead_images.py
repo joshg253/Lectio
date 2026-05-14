@@ -50,7 +50,7 @@ class LeadImageService:
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|logo|banner|sponsor|/flags/|header)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|(?<![a-zA-Z0-9])banner(?![a-zA-Z0-9])|sponsor|/flags/|header)",
         re.IGNORECASE,
     )
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
@@ -1096,7 +1096,7 @@ class LeadImageService:
                 continue
         return False
 
-    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None) -> bool:
+    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False) -> bool:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
@@ -1115,7 +1115,8 @@ class LeadImageService:
         looks_like_image_url = bool(self._IMAGE_PATH_SUFFIX_RE.search(path))
         has_image_hint_in_query = any(marker in query for marker in ("format=", "fm=", "image=", "img=", "ext="))
         if not looks_like_image_url and not has_image_hint_in_query and width is None and height is None:
-            return False
+            if not allow_extensionless:
+                return False
 
         if width is None or height is None:
             query_w: int | None = None
@@ -1180,7 +1181,7 @@ class LeadImageService:
             if not image_url or image_url.startswith("data:"):
                 continue
             resolved = urljoin(base_url, image_url)
-            if not self._is_image_url_acceptable(resolved, og_width, og_height):
+            if not self._is_image_url_acceptable(resolved, og_width, og_height, allow_extensionless=True):
                 continue
             if og_width is not None and og_width < self._OG_IMAGE_MIN_WIDTH:
                 continue
