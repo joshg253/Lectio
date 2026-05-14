@@ -497,12 +497,16 @@ class TumblrPlugin:
             return False
         return self._MEDIA_HOST not in urlparse(cached_url).netloc.lower()
 
+    def should_skip_source_lookup(self, *, entry_link: str) -> bool:
+        # Tumblr post images are always inline in the RSS content when they exist.
+        # Source-page og:image returns the reblogged source's image (often a
+        # different post's photo), which is wrong for text-only reply posts.
+        return self._is_target(entry_link)
+
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()
 
     def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
-        # Heavily penalise all source-scraped images from Tumblr pages so that
-        # profile pics / reblog thumbnails never displace the post's own image.
         if self._is_target(source_url):
             return -200
         return 0
