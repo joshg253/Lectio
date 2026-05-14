@@ -764,6 +764,55 @@ class OglafPlugin:
         return self._story_url(entry_link)
 
 
+@dataclass(frozen=True)
+class ComicEaselPlugin:
+    """ComicEasel WordPress plugin — the feed embeds a /comicsthumbs/ thumbnail.
+    The full comic lives at the same filename under /comics/, derivable by a
+    simple path substitution with no HTTP request required."""
+
+    host_contains: tuple[str, ...] = (
+        "whompcomic.com",
+        "wildelifecomic.com",
+        "shortpacked.com",
+    )
+    _THUMB_PATH: str = "/comicsthumbs/"
+    _COMIC_PATH: str = "/comics/"
+
+    def _is_target(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower()
+        return any(h in host for h in self.host_contains)
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        if not self._is_target(entry_link):
+            return False
+        return self._THUMB_PATH in cached_url
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        if not self._is_target(source_url):
+            return 0
+        if self._THUMB_PATH in resolved_url:
+            return -100
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        if not self._is_target(entry_link):
+            return None
+        for source in (content_html, summary):
+            if not isinstance(source, str):
+                continue
+            m = re.search(
+                r'src=["\']([^"\']*' + re.escape(self._THUMB_PATH) + r'[^"\']+\.(?:png|jpe?g|gif|webp))["\']',
+                source,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(1).replace(self._THUMB_PATH, self._COMIC_PATH)
+        return None
+
+
 DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     StandardEbooksLeadImagePlugin(),
     FutureSiteLeadImagePlugin(),
@@ -781,4 +830,5 @@ DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     TheRockCocksPlugin(),
     ComicFuryPlugin(),
     OglafPlugin(),
+    ComicEaselPlugin(),
 )

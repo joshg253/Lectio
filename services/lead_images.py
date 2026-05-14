@@ -50,10 +50,13 @@ class LeadImageService:
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|logo)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|logo|banner|sponsor|/flags/|header)",
         re.IGNORECASE,
     )
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
+    # Substack CDN and similar services encode dimensions as ,w_N,h_N, in the URL path.
+    _PATH_WIDTH_RE = re.compile(r"(?:^|[,_])w_([0-9]{1,4})(?:[,_]|$)")
+    _PATH_HEIGHT_RE = re.compile(r"(?:^|[,_])h_([0-9]{1,4})(?:[,_]|$)")
     _PLACEHOLDER_URL_PATTERNS = re.compile(
         r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif)",
         re.IGNORECASE,
@@ -64,6 +67,12 @@ class LeadImageService:
     )
     _AVATAR_HINT_PATTERNS = re.compile(
         r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar)",
+        re.IGNORECASE,
+    )
+    # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
+    # Used by _extract_preferred_source_image_data to skip headshot images.
+    _AUTHOR_CONTEXT_RE = re.compile(
+        r'class=["\'][^"\']*(?:\bauthor\b|\bbio\b|\bbyline\b|\bspeaker\b|\bcontributor\b)',
         re.IGNORECASE,
     )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
@@ -366,6 +375,14 @@ class LeadImageService:
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image)
             ):
                 return linked_image
+
+        # Fallback: allow logo-pattern images from feed content that have large
+        # declared dimensions — product/brand logos in press-release feeds are
+        # valid lead images when the publisher explicitly sized them.
+        for html_candidate in html_candidates:
+            logo_image = self._extract_logo_with_dimensions_from_feed(html_candidate, base_url)
+            if logo_image and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=logo_image):
+                return logo_image
 
         # Plugin fallbacks run regardless of include_source_lookup — they handle
         # site-specific logic and may do their own targeted HTTP fetch.
@@ -741,6 +758,44 @@ class LeadImageService:
                     return resolved
         return None
 
+    def _extract_logo_with_dimensions_from_feed(self, html_text: str, base_url: str) -> str | None:
+        """Scan feed content for logo-URL images that have explicit large dimensions.
+
+        Product/brand logos in press-release feeds are valid lead images even when
+        their URL contains "logo" — the publisher's declared width/height signals
+        these are intentional content images, not site-chrome icons.
+        """
+        for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            tag = tag_match.group(0)
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                key = attr_match.group(1).strip().lower()
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                if key and value:
+                    attrs[key] = value
+            src = attrs.get("src", "")
+            if not src or src.startswith("data:"):
+                continue
+            resolved = urljoin(base_url, src)
+            if not self._LOGO_URL_PATTERNS.search(resolved):
+                continue
+            if (
+                self._TRACKER_URL_PATTERNS.search(resolved)
+                or self._AVATAR_HINT_PATTERNS.search(resolved)
+                or self._PLACEHOLDER_URL_PATTERNS.search(resolved)
+            ):
+                continue
+            if not self._IMAGE_PATH_SUFFIX_RE.search(resolved.split("?")[0].lower()):
+                continue
+            w = self._parse_positive_int_attr(attrs, "width")
+            h = self._parse_positive_int_attr(attrs, "height")
+            if (
+                w is not None and w >= self._LEAD_IMAGE_MIN_WIDTH
+                and h is not None and h >= self._LEAD_IMAGE_MIN_HEIGHT
+            ):
+                return resolved
+        return None
+
     def _parse_srcset_urls_descending(self, srcset: str) -> list[str]:
         ranked: list[tuple[float, str]] = []
         for part in srcset.split(","):
@@ -898,6 +953,10 @@ class LeadImageService:
         best_score = -1
 
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            # Skip images inside author/speaker/bio sections — they are headshots.
+            context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
+            if self._AUTHOR_CONTEXT_RE.search(context_before):
+                continue
             tag = tag_match.group(0)
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
@@ -1079,10 +1138,24 @@ class LeadImageService:
                 return False
 
         if width is None or height is None:
-            for m in self._URL_DIMENSION_RE.finditer(image_url.split("?")[0]):
+            url_path_no_query = image_url.split("?")[0]
+            for m in self._URL_DIMENSION_RE.finditer(url_path_no_query):
                 try:
                     w, h = int(m.group(1)), int(m.group(2))
                     if w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT:
+                        return False
+                except ValueError:
+                    pass
+            # Substack CDN and similar: ,w_N,h_N, path parameters.
+            for mw in self._PATH_WIDTH_RE.finditer(url_path_no_query):
+                try:
+                    if int(mw.group(1)) < self._LEAD_IMAGE_MIN_WIDTH:
+                        return False
+                except ValueError:
+                    pass
+            for mh in self._PATH_HEIGHT_RE.finditer(url_path_no_query):
+                try:
+                    if int(mh.group(1)) < self._LEAD_IMAGE_MIN_HEIGHT:
                         return False
                 except ValueError:
                     pass
@@ -1092,10 +1165,10 @@ class LeadImageService:
             return False
         return True
 
-    # Stricter minimum for og:image — small values (e.g. 300x200) are often
-    # WordPress generic defaults that aren't specific to the article.
-    _OG_IMAGE_MIN_WIDTH = 400
-    _OG_IMAGE_MIN_HEIGHT = 250
+    # Minimum for og:image — sized to allow article-specific 300×200 images
+    # (common on WordPress themes) while still blocking tiny icons.
+    _OG_IMAGE_MIN_WIDTH = 300
+    _OG_IMAGE_MIN_HEIGHT = 200
 
     def _extract_meta_image_url_from_html(self, html_text: str, base_url: str) -> str | None:
         og_width, og_height = self._extract_og_image_dimensions(html_text)
@@ -1244,6 +1317,49 @@ class LeadImageService:
         if meta_image:
             return meta_image
         return self._extract_linked_image_url_from_html(source_html, final_url)
+
+    _SMBC_HOST: str = "smbc-comics.com"
+    _SMBC_AFTER_RE: re.Pattern[str] = re.compile(
+        r'id=["\']aftercomic["\'][^>]*>.*?<img\b[^>]+src=["\']([^"\']+comics/[^"\']+after[^"\']*\.(?:png|jpe?g|gif|webp))["\']',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def fetch_smbc_bonus_panel_url(self, entry_link: str) -> str | None:
+        """Return the SMBC bonus-panel image URL for an entry.
+
+        Checks the in-memory source HTML cache first; fetches the source page
+        only if it is not already cached (e.g. on cold-start or first open).
+        Returns None on failure or if the entry is not an SMBC comic.
+        """
+        if self._SMBC_HOST not in urlparse(entry_link).netloc.lower():
+            return None
+
+        cached = self._source_html_cache.get(entry_link)
+        if cached is None:
+            if not is_safe_outbound_url(entry_link):
+                return None
+            try:
+                with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
+                    response = client.get(entry_link)
+                response.raise_for_status()
+            except Exception:
+                return None
+            source_html = response.text
+            final_url = str(response.url)
+            self._source_html_cache[entry_link] = (final_url, source_html)
+            self._source_html_cache.move_to_end(entry_link)
+            if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                self._source_html_cache.popitem(last=False)
+        else:
+            _, source_html = cached
+
+        m = self._SMBC_AFTER_RE.search(source_html)
+        if m:
+            url = html.unescape(m.group(1).strip())
+            if url.startswith("/"):
+                url = f"https://www.{self._SMBC_HOST}{url}"
+            return url
+        return None
 
     def fetch_entry_image_alt(self, entry_link: str) -> str | None:
         """Return alt/title text of the main scored image on the source page.

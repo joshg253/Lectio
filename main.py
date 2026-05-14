@@ -3056,6 +3056,35 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and "kg-audio-card" in content_html:
             content_html = _transform_kg_audio_cards(content_html)
 
+        # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
+        # replacing them with the literal text "<strong>iframe</strong>" inside a
+        # class="embed-container" div, leaving an adjacent plain-text YouTube link.
+        # Convert these pairs into a proper YouTube embed.
+        if isinstance(content_html, str) and "embed-container" in content_html and "strong" in content_html:
+            def _replace_bad_iframe(m: re.Match) -> str:
+                raw_url = m.group(1)
+                vid = youtube_duration_service.extract_video_id(raw_url)
+                if not vid:
+                    return ""
+                params = "?rel=0&modestbranding=0&controls=1&enablejsapi=1"
+                embed_src = f"https://www.youtube.com/embed/{vid}{params}"
+                return (
+                    f'<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
+                    f'<iframe width="100%" height="315" src="{embed_src}" '
+                    'frameborder="0" allowfullscreen loading="lazy" '
+                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
+                    "></iframe></div>"
+                )
+            content_html = re.sub(
+                r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
+                r'\s*<a[^>]+href=["\']'
+                r'(https?://(?:www\.)?(?:youtube\.com/watch\?[^"\'<\s]+|youtu\.be/[^"\'<\s]+))'
+                r'["\'][^>]*>[^<]*</a>',
+                _replace_bad_iframe,
+                content_html,
+                flags=re.IGNORECASE,
+            )
+
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
         duration_seconds = None
@@ -3130,16 +3159,36 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 return m.group(0)
             content_html = re.sub(r"<img\b[^>]*/?>", _strip_bad_img, content_html, flags=re.IGNORECASE) or None
 
+        # Extract img title/alt text before opener stripping so content_html is intact.
+        # Useful for comics where the hover text is the punchline (xkcd, etc.).
+        # Checks content_html first, then entry.summary (xkcd: content is stripped away
+        # but summary still has the img with title= attribute).
+        image_title_text: str | None = None
+        _img_title_re = re.compile(
+            r'<img\b[^>]+\btitle=(?:"([^"]*)"|\x27([^\x27]*)\x27)',
+            re.IGNORECASE,
+        )
+        for _search_html in [content_html, entry.summary]:
+            if not isinstance(_search_html, str):
+                continue
+            _img_title_match = _img_title_re.search(_search_html)
+            if _img_title_match:
+                _candidate = html.unescape((_img_title_match.group(1) or _img_title_match.group(2) or "")).strip()
+                if _candidate:
+                    image_title_text = _candidate
+                    break
+
         # Strip the opener thumbnail and dedup against the remaining content.
         # Order matters: strip the leading <img> first, then check if the lead
         # image URL still appears in what remains.  This prevents the case where
         # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
         # incorrectly suppressed just because it appears at the top of content.
         _LEAD_IMG_OPENER_RE = re.compile(
-            r"^\s*(?:<(?:p|figure|div)\b[^>]*>\s*)?"
+            r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
+            r"(?:<(?:p|figure|div)\b[^>]*>\s*)?"
             r"(?:<a\b[^>]*>\s*)?"
             r"<img\b[^>]*/?>",
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         )
         if lead_image_url and isinstance(content_html, str):
             _m = _LEAD_IMG_OPENER_RE.match(content_html)
@@ -3165,20 +3214,6 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _text_only = html.unescape(re.sub(r"\s+", " ", _text_only)).strip()
             if len(_text_only) < 120:
                 content_html = _no_imgs.strip() or None
-
-        # Extract img title/alt text from content_html for caption display.
-        # Useful for comics (xkcd etc.) where the hover text is the punchline.
-        image_title_text: str | None = None
-        if isinstance(content_html, str):
-            _img_title_match = re.search(
-                r'<img\b[^>]+\btitle=(?:"([^"]*)"|\x27([^\x27]*)\x27)',
-                content_html,
-                re.IGNORECASE,
-            )
-            if _img_title_match:
-                _candidate = html.unescape((_img_title_match.group(1) or _img_title_match.group(2) or "")).strip()
-                if _candidate:
-                    image_title_text = _candidate
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
@@ -3208,6 +3243,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 return tag
 
             content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
+
+        # SMBC: append the bonus panel image from the source page.
+        if entry.link and "smbc-comics.com" in (entry.link or ""):
+            _bonus_url = lead_image_service.fetch_smbc_bonus_panel_url(entry.link)
+            if _bonus_url:
+                _bonus_img = f'<p><img src="{html.escape(_bonus_url, quote=False)}" alt="Bonus panel" /></p>'
+                content_html = (content_html or "") + _bonus_img
 
         lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
 
