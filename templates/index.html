@@ -2544,6 +2544,9 @@
     window.addEventListener('mouseup', endResize);
     window.addEventListener('touchend', endResize);
 
+    const youtubeSyncLastAt = {{ youtube_sync_last_at | tojson }};
+    const youtubeSyncLastResult = {{ youtube_sync_last_result | tojson }};
+
     const contextMenu = document.getElementById('folder-context-menu');
     const rootContextMenu = document.getElementById('root-context-menu');
     const postContextMenu = document.getElementById('post-context-menu');
@@ -3694,7 +3697,13 @@
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
-        setMenuItemVisible(youtubeSyncButton, contextFolderName.startsWith('YouTube'));
+        const isYouTubeFolder = contextFolderName.startsWith('YouTube');
+        setMenuItemVisible(youtubeSyncButton, isYouTubeFolder);
+        if (isYouTubeFolder && youtubeSyncButton) {
+          youtubeSyncButton.title = youtubeSyncLastAt
+            ? `Last sync: ${youtubeSyncLastAt}\n${youtubeSyncLastResult}`
+            : 'No sync run yet';
+        }
         hideFolderSubmenu();
 
         showContextMenu(event);

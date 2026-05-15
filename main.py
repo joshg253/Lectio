@@ -174,6 +174,8 @@ SORT_BY_SETTING_KEY = "sort_by"
 SORT_DIR_SETTING_KEY = "sort_dir"
 GLOBAL_NOTE_SETTING_KEY = "global_note"
 PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
+YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
+YOUTUBE_SYNC_LAST_RESULT_KEY = "youtube_sync_last_result"
 AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -3615,7 +3617,7 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
             ).fetchall()
         return [str(r["feed_url"]) for r in rows]
 
-    return sync_youtube_folder(
+    result = sync_youtube_folder(
         api_key=YOUTUBE_API_KEY,
         channel_identifier=YOUTUBE_CHANNEL_ID,
         folder_id=folder_id,
@@ -3623,6 +3625,19 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
         add_feed=add_feed_to_folder,
         remove_feed=remove_feed_from_folder,
     )
+
+    # Record last-sync time and summary for display in the UI.
+    from datetime import datetime, timezone as _tz
+    now_iso = datetime.now(tz=_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if result["error"]:
+        last_result = f"Error: {result['error']}"
+    else:
+        last_result = f"+{result['added']} added, -{result['removed']} removed ({result['total']} subscriptions)"
+    with get_meta_connection() as conn:
+        set_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY, now_iso)
+        set_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY, last_result)
+
+    return result
 
 
 def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -> None:
@@ -4129,6 +4144,8 @@ def home(
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
+        youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
+        youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         _tick("global_note")
         now_pf = time.time()
         with _problematic_feeds_cache_lock:
@@ -4317,6 +4334,8 @@ def home(
             "selected_star_only": selected_star_only,
             "selected_resume_read_filter": selected_resume_read_filter,
             "global_note": global_note,
+            "youtube_sync_last_at": youtube_sync_last_at,
+            "youtube_sync_last_result": youtube_sync_last_result,
             "posts": posts,
             "selected_entry": selected_entry,
             "message": message,
