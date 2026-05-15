@@ -1221,6 +1221,11 @@
     <input type="hidden" name="name" id="context-folder-name" />
   </form>
 
+  <form id="context-rename-folder-form" method="post" action="/folders/rename" hidden>
+    <input type="hidden" name="folder_id" id="context-rename-folder-id" />
+    <input type="hidden" name="name" id="context-rename-folder-name" />
+  </form>
+
   <form id="context-delete-folder-form" method="post" action="/folders/delete" hidden>
     <input type="hidden" name="folder_id" id="context-delete-folder-id" />
   </form>
@@ -1342,6 +1347,7 @@
     </div>
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
+    <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
   </div>
@@ -2548,9 +2554,11 @@
     const addFeedButton = document.getElementById('ctx-add-feed');
     const feedPropertiesButton = document.getElementById('ctx-feed-properties');
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
+    const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
     const addFeedForm = document.getElementById('context-add-feed-form');
     const addFolderForm = document.getElementById('context-add-folder-form');
+    const renameFolderForm = document.getElementById('context-rename-folder-form');
     const deleteFolderForm = document.getElementById('context-delete-folder-form');
     const refreshFolderForm = document.getElementById('context-refresh-folder-form');
     const markReadFolderForm = document.getElementById('context-mark-read-folder-form');
@@ -2561,6 +2569,8 @@
     const contextFolderIdInput = document.getElementById('context-folder-id');
     const contextFolderNameInput = document.getElementById('context-folder-name');
     const contextFeedUrlInput = document.getElementById('context-feed-url');
+    const renameFolderIdInput = document.getElementById('context-rename-folder-id');
+    const renameFolderNameInput = document.getElementById('context-rename-folder-name');
     const deleteFolderIdInput = document.getElementById('context-delete-folder-id');
     const refreshFolderIdInput = document.getElementById('context-refresh-folder-id');
     const refreshFolderListFeedUrlInput = document.getElementById('context-refresh-folder-list-feed-url');
@@ -3674,6 +3684,7 @@
         setMenuItemVisible(addFeedButton, true);
         setMenuItemVisible(feedPropertiesButton, false);
         setMenuItemVisible(unsubscribeFeedButton, false);
+        setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
         hideFolderSubmenu();
 
@@ -3702,6 +3713,7 @@
         setMenuItemVisible(addFeedButton, false);
         setMenuItemVisible(feedPropertiesButton, true);
         setMenuItemVisible(unsubscribeFeedButton, true);
+        setMenuItemVisible(renameFolderButton, false);
         setMenuItemVisible(deleteFolderButton, false);
         updateFolderSubmenuOptions();
         hideFolderSubmenu();
@@ -3729,6 +3741,7 @@
       setMenuItemVisible(addFeedButton, false);
       setMenuItemVisible(feedPropertiesButton, true);
       setMenuItemVisible(unsubscribeFeedButton, true);
+      setMenuItemVisible(renameFolderButton, false);
       setMenuItemVisible(deleteFolderButton, false);
       updateFolderSubmenuOptions();
       hideFolderSubmenu();
@@ -4998,6 +5011,29 @@
           contextFolderIdInput.value = contextFolderId;
           contextFeedUrlInput.value = feedUrl;
           addFeedForm.submit();
+        },
+      });
+    });
+
+    renameFolderButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !renameFolderIdInput || !renameFolderNameInput || !renameFolderForm || contextFolderDepth === 0) {
+        return;
+      }
+      const folderId = contextFolderId;
+      const currentName = contextFolderName;
+      hideAllContextMenus();
+      openActionInputModal({
+        title: 'Rename Folder',
+        label: 'Folder name',
+        placeholder: 'New folder name',
+        submitLabel: 'Rename',
+        initialValue: currentName,
+        onSubmit: (newName) => {
+          renameFolderIdInput.value = folderId;
+          renameFolderNameInput.value = newName;
+          renameFolderForm.submit();
         },
       });
     });

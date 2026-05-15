@@ -4420,6 +4420,17 @@ def create_folder(name: str = Form(...)):
     return RedirectResponse(url=f"/?folder_id={target_id}", status_code=303)
 
 
+@app.post("/folders/rename")
+def rename_folder_route(folder_id: int = Form(...), name: str = Form(...)):
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE folders SET name = ? WHERE id = ?",
+            (name.strip(), folder_id),
+        )
+    invalidate_meta_structure_cache()
+    return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+
+
 @app.post("/folders/delete")
 def delete_folder_route(folder_id: int = Form(...)):
     root_id = None
