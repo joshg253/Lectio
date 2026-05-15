@@ -13,3 +13,4 @@
 - If a change affects user-visible behavior, update `README.md`.
 - If it changes design rationale, update `ARCHITECTURE.md`.
 - If it's future work, update `Plan.md`.
+- When adding or changing env vars in `.env`, always mirror the change in `.env.example` (same keys, blank or safe default values, same comments).
