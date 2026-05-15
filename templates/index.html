@@ -146,6 +146,7 @@
             </div>
           </div>
           <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
+          {% if inactive_feed_count > 0 %}<button type="button" class="menu-item" data-toggle-panel="inactive-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">pause_circle</span> Inactive Feeds ({{ inactive_feed_count }})</button>{% endif %}
           <button type="button" class="menu-item" data-toggle-panel="dedupe-log-modal"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span> Dedupe Log{% if dedupe_log_count > 0 %} ({{ dedupe_log_count }}){% endif %}</button>
           <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
           <div class="flyout-item">
@@ -1320,6 +1321,16 @@
     <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
   </form>
 
+  <form id="context-disable-feed-form" method="post" action="/feeds/disable" hidden>
+    <input type="hidden" name="folder_id" id="context-disable-folder-id" />
+    <input type="hidden" name="feed_url" id="context-disable-feed-url" />
+  </form>
+
+  <form id="context-enable-feed-form" method="post" action="/feeds/enable" hidden>
+    <input type="hidden" name="folder_id" id="context-enable-folder-id" />
+    <input type="hidden" name="feed_url" id="context-enable-feed-url" />
+  </form>
+
   <form id="context-unsubscribe-feed-form" method="post" action="/feeds/unsubscribe" hidden>
     <input type="hidden" name="folder_id" id="context-unsubscribe-folder-id" />
     <input type="hidden" name="feed_url" id="context-unsubscribe-feed-url" />
@@ -1353,6 +1364,7 @@
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
     <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Sync Subscriptions</button>
+    <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
   </div>
@@ -1442,6 +1454,39 @@
           <button id="global-note-save" type="submit">Save Note</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="inactive-feeds-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="inactive-feeds-modal-title">
+      <div class="modal-header-row">
+        <h3 id="inactive-feeds-modal-title" class="action-modal-title">Inactive Feeds</h3>
+        <button type="button" class="modal-close" data-close-modal="inactive-feeds-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      {% if inactive_feeds %}
+      <ul class="problem-feed-list">
+        {% for feed in inactive_feeds %}
+        <li class="problem-feed-item">
+          <div class="problem-feed-row">
+            <span class="problem-feed-title">{{ feed.feed_title }}</span>
+            {% if feed.folder_name %}<span class="problem-feed-meta">{{ feed.folder_name }}</span>{% endif %}
+          </div>
+          <div class="problem-feed-actions">
+            <form method="post" action="/feeds/enable" style="display:inline">
+              <input type="hidden" name="feed_url" value="{{ feed.feed_url }}" />
+              {% if feed.folder_id %}<input type="hidden" name="folder_id" value="{{ feed.folder_id }}" />{% endif %}
+              <button type="submit" class="problem-feed-action-btn">Enable</button>
+            </form>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="action-modal-empty">No inactive feeds.</p>
+      {% endif %}
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="inactive-feeds-modal">Close</button>
+      </div>
     </div>
   </div>
 
@@ -2120,7 +2165,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2568,12 +2613,19 @@
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
     const youtubeSyncButton = document.getElementById('ctx-youtube-sync');
+    const disableFeedButton = document.getElementById('ctx-disable-feed');
     const addFeedForm = document.getElementById('context-add-feed-form');
     const addFolderForm = document.getElementById('context-add-folder-form');
     const renameFolderForm = document.getElementById('context-rename-folder-form');
     const deleteFolderForm = document.getElementById('context-delete-folder-form');
     const youtubeSyncForm = document.getElementById('context-youtube-sync-form');
     const youtubeSyncFolderIdInput = document.getElementById('context-youtube-sync-folder-id');
+    const disableFeedForm = document.getElementById('context-disable-feed-form');
+    const enableFeedForm = document.getElementById('context-enable-feed-form');
+    const disableFeedFolderIdInput = document.getElementById('context-disable-folder-id');
+    const disableFeedUrlInput = document.getElementById('context-disable-feed-url');
+    const enableFeedFolderIdInput = document.getElementById('context-enable-folder-id');
+    const enableFeedUrlInput = document.getElementById('context-enable-feed-url');
     const refreshFolderForm = document.getElementById('context-refresh-folder-form');
     const markReadFolderForm = document.getElementById('context-mark-read-folder-form');
     const refreshFeedForm = document.getElementById('context-refresh-feed-form');
@@ -3700,6 +3752,7 @@
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
+        setMenuItemVisible(disableFeedButton, false);
         const isYouTubeFolder = contextFolderName.startsWith('YouTube');
         setMenuItemVisible(youtubeSyncButton, isYouTubeFolder);
         if (isYouTubeFolder && youtubeSyncButton) {
@@ -3737,6 +3790,7 @@
         setMenuItemVisible(renameFolderButton, false);
         setMenuItemVisible(deleteFolderButton, false);
         setMenuItemVisible(youtubeSyncButton, false);
+        setMenuItemVisible(disableFeedButton, true);
         updateFolderSubmenuOptions();
         hideFolderSubmenu();
 
@@ -3766,6 +3820,7 @@
       setMenuItemVisible(renameFolderButton, false);
       setMenuItemVisible(deleteFolderButton, false);
       setMenuItemVisible(youtubeSyncButton, false);
+      setMenuItemVisible(disableFeedButton, true);
       updateFolderSubmenuOptions();
       hideFolderSubmenu();
       showContextMenu(event);
@@ -5090,6 +5145,18 @@
       youtubeSyncForm.submit();
     });
 
+    disableFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFeedUrl || !disableFeedFolderIdInput || !disableFeedUrlInput || !disableFeedForm) {
+        return;
+      }
+      disableFeedFolderIdInput.value = contextFolderId || '';
+      disableFeedUrlInput.value = contextFeedUrl;
+      hideAllContextMenus();
+      disableFeedForm.submit();
+    });
+
     let postsContainer = null;
     let postsChunkSentinel = null;
     let postsChunkLoading = false;
@@ -6039,7 +6106,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

@@ -2130,6 +2130,14 @@ body[data-tree-filter="unread"] .tree-feed-item[data-unread-count="0"] {
   display: none;
 }
 
+/* Dim feeds and folders with no unread items. */
+.tree-feed-item[data-unread-count="0"] > .feed-link:not(.active) {
+  opacity: 0.45;
+}
+.tree-folder-group[data-unread-count="0"] > .tree-item:not(.active):not(.root-item) {
+  opacity: 0.45;
+}
+
 .post-time {
   flex: 0 0 auto;
   padding-left: 0;

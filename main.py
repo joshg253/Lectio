@@ -1125,6 +1125,14 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_lead_image_strategy ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass  # column already exists
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS disabled_feeds (
+                feed_url TEXT PRIMARY KEY,
+                disabled_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1367,6 +1375,32 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
 def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("SELECT feed_url FROM disabled_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def disable_feed(feed_url: str) -> None:
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)",
+            (feed_url,),
+        )
+    invalidate_meta_structure_cache()
+
+
+def enable_feed(feed_url: str) -> None:
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM disabled_feeds WHERE feed_url = ?", (feed_url,))
+    invalidate_meta_structure_cache()
 
 
 def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
@@ -3720,6 +3754,10 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
 
 
 def _start_background_update(feed_url: str) -> None:
+    with get_meta_connection() as conn:
+        if feed_url in get_disabled_feed_urls(conn):
+            return
+
     def _run() -> None:
         with updating_feeds_lock:
             if feed_url in updating_feeds:
@@ -3747,6 +3785,8 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
 
         with get_meta_connection() as conn:
             feed_urls = get_all_feed_urls(conn)
+            disabled = get_disabled_feed_urls(conn)
+        feed_urls -= disabled
         if REFRESH_DEBUG_ENABLED:
             LOGGER.info(
                 "[refresh] scheduled run triggered: interval_minutes=%d feed_count=%d",
@@ -4132,9 +4172,15 @@ def home(
         _tick("unread_counts")
         dedupe_log_rows = get_unread_dedupe_log(limit=80)
         _tick("dedupe_log")
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        # Exclude disabled feeds from unread counts so folder badges stay clean.
+        active_unread_counts_by_feed = {
+            url: count for url, count in unread_counts_by_feed.items()
+            if url not in disabled_feed_urls
+        }
         unread_counts_by_folder = get_unread_counts_by_folder(
             raw_folder_rows,
-            unread_counts_by_feed,
+            active_unread_counts_by_feed,
             direct_feed_urls_by_folder,
         )
         _tick("counts_by_folder")
@@ -4146,6 +4192,16 @@ def home(
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
+        # Build inactive feed list (feed_url + folder membership).
+        inactive_feed_rows = conn.execute(
+            """
+            SELECT df.feed_url, df.disabled_at, ff.folder_id, f.name AS folder_name
+            FROM disabled_feeds df
+            LEFT JOIN folder_feeds ff ON ff.feed_url = df.feed_url
+            LEFT JOIN folders f ON f.id = ff.folder_id
+            ORDER BY df.disabled_at DESC
+            """
+        ).fetchall()
         _tick("global_note")
         now_pf = time.time()
         with _problematic_feeds_cache_lock:
@@ -4188,6 +4244,16 @@ def home(
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
     feed_title_map = get_feed_title_map()
+    inactive_feeds = [
+        {
+            "feed_url": str(r["feed_url"]),
+            "feed_title": feed_title_map.get(str(r["feed_url"]), str(r["feed_url"])),
+            "disabled_at": str(r["disabled_at"] or ""),
+            "folder_id": r["folder_id"],
+            "folder_name": str(r["folder_name"] or ""),
+        }
+        for r in inactive_feed_rows
+    ]
     for dedupe_row in dedupe_log_rows:
         feed_urls = cast(list[str], dedupe_row.get("feed_urls", []))
         dedupe_row["feed_titles"] = [feed_title_map.get(url, url) for url in feed_urls]
@@ -4217,6 +4283,7 @@ def home(
                 unread_count=unread_counts_by_feed.get(url, 0),
             )
             for url in urls
+            if url not in disabled_feed_urls
         ]
         for url in urls:
             feed_to_folder[url] = folder_row_id
@@ -4236,8 +4303,11 @@ def home(
         limit = 250
 
     posts_start = time.perf_counter()
+    # Exclude disabled feeds from the entry list unless the user has selected a
+    # specific feed directly (clicking it should still let you browse its content).
+    entry_feed_urls = filtered_feed_urls if list_feed_url else filtered_feed_urls - disabled_feed_urls
     posts = list_entries_for_feeds(
-        filtered_feed_urls,
+        entry_feed_urls,
         limit=limit,
         sort_by=selected_sort_by,
         sort_dir=selected_sort_dir,
@@ -4336,6 +4406,8 @@ def home(
             "global_note": global_note,
             "youtube_sync_last_at": youtube_sync_last_at,
             "youtube_sync_last_result": youtube_sync_last_result,
+            "inactive_feeds": inactive_feeds,
+            "inactive_feed_count": len(inactive_feeds),
             "posts": posts,
             "selected_entry": selected_entry,
             "message": message,
@@ -4696,6 +4768,19 @@ def move_feed(
         ),
         status_code=303,
     )
+
+
+@app.post("/feeds/disable")
+def disable_feed_route(folder_id: int = Form(...), feed_url: str = Form(...)):
+    disable_feed(feed_url)
+    return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+
+
+@app.post("/feeds/enable")
+def enable_feed_route(folder_id: int | None = Form(default=None), feed_url: str = Form(...)):
+    enable_feed(feed_url)
+    dest = f"/?folder_id={folder_id}" if folder_id else "/"
+    return RedirectResponse(url=dest, status_code=303)
 
 
 @app.post("/feeds/unsubscribe")
