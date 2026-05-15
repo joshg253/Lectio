@@ -3627,8 +3627,8 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
     )
 
     # Record last-sync time and summary for display in the UI.
-    from datetime import datetime, timezone as _tz
-    now_iso = datetime.now(tz=_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+    from datetime import datetime
+    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M %Z")
     if result["error"]:
         last_result = f"Error: {result['error']}"
     else:
