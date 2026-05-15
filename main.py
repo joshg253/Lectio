@@ -3632,7 +3632,7 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
     if result["error"]:
         last_result = f"Error: {result['error']}"
     else:
-        last_result = f"+{result['added']} added, -{result['removed']} removed ({result['total']} subscriptions)"
+        last_result = f"+{result['added']} / -{result['removed']} ({result['total']} subs)"
     with get_meta_connection() as conn:
         set_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY, now_iso)
         set_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY, last_result)
@@ -4575,7 +4575,7 @@ def youtube_sync_route(folder_id: int = Form(...)):
     if result["error"]:
         message = f"YouTube sync error: {result['error']}"
     else:
-        message = f"YouTube sync complete: +{result['added']} added, -{result['removed']} removed ({result['total']} subscriptions)."
+        message = f"YouTube sync: +{result['added']} / -{result['removed']} ({result['total']} subs)"
     return RedirectResponse(url=f"/?folder_id={folder_id}&message={message}", status_code=303)
 
 
