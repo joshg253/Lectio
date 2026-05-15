@@ -2775,6 +2775,7 @@ def list_entries_for_feeds(
                 }
             )
 
+    filter_ms = int((time.perf_counter() - process_start) * 1000)
     # Dedupe + sort + limit on the lightweight records.
     best_by_key: dict[str, dict] = {}
     passthrough: list[dict] = []
@@ -2790,6 +2791,7 @@ def list_entries_for_feeds(
     light_records.sort(key=lambda item: item[sort_key], reverse=sort_desc)
     light_records = light_records[:limit]
 
+    enrich_start = time.perf_counter()
     # Enrich the surviving (top-N) records with display fields.
     entries = []
     for rec in light_records:
@@ -2842,8 +2844,12 @@ def list_entries_for_feeds(
         )
         entries.append(rec)
 
+    enrich_ms = int((time.perf_counter() - enrich_start) * 1000)
     process_ms = int((time.perf_counter() - process_start) * 1000)
-    LOGGER.info("[perf] list_entries: entries_processed=%d process_ms=%d", len(entries), process_ms)
+    LOGGER.info(
+        "[perf] list_entries: entries_processed=%d filter_ms=%d enrich_ms=%d process_ms=%d",
+        len(entries), filter_ms, enrich_ms, process_ms,
+    )
 
     return entries
 
