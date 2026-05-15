@@ -1352,7 +1352,7 @@
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
-    <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Update Feeds</button>
+    <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Sync Subscriptions</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
   </div>
@@ -1661,6 +1661,9 @@
         <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
         <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
         <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
+        {% if youtube_sync_last_at %}
+        <dt>YT sync</dt><dd>{{ youtube_sync_last_at }}<br><small>{{ youtube_sync_last_result }}</small></dd>
+        {% endif %}
       </dl>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="stats-modal">Close</button>
