@@ -1230,6 +1230,10 @@
     <input type="hidden" name="folder_id" id="context-delete-folder-id" />
   </form>
 
+  <form id="context-youtube-sync-form" method="post" action="/youtube/sync" hidden>
+    <input type="hidden" name="folder_id" id="context-youtube-sync-folder-id" />
+  </form>
+
   <form id="context-refresh-folder-form" method="post" action="/refresh" hidden>
     <input type="hidden" name="folder_id" id="context-refresh-folder-id" />
     <input type="hidden" name="list_feed_url" id="context-refresh-folder-list-feed-url" value="" />
@@ -1348,6 +1352,7 @@
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
+    <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Update Feeds</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
   </div>
@@ -2556,10 +2561,13 @@
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
+    const youtubeSyncButton = document.getElementById('ctx-youtube-sync');
     const addFeedForm = document.getElementById('context-add-feed-form');
     const addFolderForm = document.getElementById('context-add-folder-form');
     const renameFolderForm = document.getElementById('context-rename-folder-form');
     const deleteFolderForm = document.getElementById('context-delete-folder-form');
+    const youtubeSyncForm = document.getElementById('context-youtube-sync-form');
+    const youtubeSyncFolderIdInput = document.getElementById('context-youtube-sync-folder-id');
     const refreshFolderForm = document.getElementById('context-refresh-folder-form');
     const markReadFolderForm = document.getElementById('context-mark-read-folder-form');
     const refreshFeedForm = document.getElementById('context-refresh-feed-form');
@@ -3686,6 +3694,7 @@
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
+        setMenuItemVisible(youtubeSyncButton, contextFolderName.startsWith('YouTube'));
         hideFolderSubmenu();
 
         showContextMenu(event);
@@ -3715,6 +3724,7 @@
         setMenuItemVisible(unsubscribeFeedButton, true);
         setMenuItemVisible(renameFolderButton, false);
         setMenuItemVisible(deleteFolderButton, false);
+        setMenuItemVisible(youtubeSyncButton, false);
         updateFolderSubmenuOptions();
         hideFolderSubmenu();
 
@@ -3743,6 +3753,7 @@
       setMenuItemVisible(unsubscribeFeedButton, true);
       setMenuItemVisible(renameFolderButton, false);
       setMenuItemVisible(deleteFolderButton, false);
+      setMenuItemVisible(youtubeSyncButton, false);
       updateFolderSubmenuOptions();
       hideFolderSubmenu();
       showContextMenu(event);
@@ -5054,6 +5065,17 @@
       deleteFolderIdInput.value = contextFolderId;
       hideAllContextMenus();
       deleteFolderForm.submit();
+    });
+
+    youtubeSyncButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId || !youtubeSyncFolderIdInput || !youtubeSyncForm) {
+        return;
+      }
+      youtubeSyncFolderIdInput.value = contextFolderId;
+      hideAllContextMenus();
+      youtubeSyncForm.submit();
     });
 
     let postsContainer = null;

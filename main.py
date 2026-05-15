@@ -47,6 +47,7 @@ from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
 from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
+from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("uvicorn.error")
@@ -187,6 +188,24 @@ TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513c")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
+
+# --- YouTube subscription sync config ---
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+# Channel handle (@username), username, or raw channel ID (UCxxxxxx).
+# The channel's subscriptions must be set to Public on YouTube.
+YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
+# Folder name to sync subscriptions into. Created if it doesn't exist.
+YOUTUBE_FOLDER_NAME = os.getenv("YOUTUBE_FOLDER_NAME", "YouTube Subscriptions").strip() or "YouTube Subscriptions"
+# Hour of day (0–23, local server time) to auto-sync. Blank or 0-string disables.
+_yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
+YOUTUBE_SYNC_HOUR: int | None = None
+if _yt_sync_hour_raw:
+    try:
+        _h = int(_yt_sync_hour_raw)
+        if 0 <= _h <= 23:
+            YOUTUBE_SYNC_HOUR = _h
+    except ValueError:
+        pass
 
 # --- Auth config ---
 # Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
@@ -370,6 +389,36 @@ async def lifespan(app: FastAPI):
         name="starred-archive-backfill",
     ).start()
 
+    # YouTube subscription auto-sync: runs daily at YOUTUBE_SYNC_HOUR (local time).
+    if YOUTUBE_SYNC_HOUR is not None and YOUTUBE_API_KEY and YOUTUBE_CHANNEL_ID:
+        yt_stop_event = threading.Event()
+
+        def _youtube_sync_loop(stop: threading.Event) -> None:
+            LOGGER.info("YouTube auto-sync thread started (hour=%d)", YOUTUBE_SYNC_HOUR)
+            while not stop.is_set():
+                now = time.localtime()
+                if now.tm_hour == YOUTUBE_SYNC_HOUR and now.tm_min == 0:
+                    LOGGER.info("YouTube auto-sync: starting scheduled sync")
+                    result = _run_youtube_sync()
+                    if result["error"]:
+                        LOGGER.error("YouTube auto-sync error: %s", result["error"])
+                    else:
+                        LOGGER.info(
+                            "YouTube auto-sync complete: +%d -%d total=%d",
+                            result["added"], result["removed"], result["total"],
+                        )
+                    stop.wait(61)  # skip remainder of the minute
+                else:
+                    stop.wait(30)
+
+        app.state.yt_stop_event = yt_stop_event
+        threading.Thread(
+            target=_youtube_sync_loop,
+            args=(yt_stop_event,),
+            daemon=True,
+            name="youtube-sync",
+        ).start()
+
     try:
         yield
     finally:
@@ -394,6 +443,9 @@ async def lifespan(app: FastAPI):
             starred_archive_service.stop_worker(timeout=5.0)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[shutdown] starred archive worker stop failed: %s", exc)
+        yt_stop = getattr(app.state, "yt_stop_event", None)
+        if yt_stop:
+            yt_stop.set()
 
 
 app = FastAPI(title="Lectio", lifespan=lifespan)
@@ -3506,6 +3558,73 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     invalidate_meta_structure_cache()
 
 
+def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
+    """Remove a feed from a folder, and delete it from reader if it's in no other folder."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return
+    with get_meta_connection() as conn:
+        conn.execute(
+            "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+            (folder_id, feed_url),
+        )
+        still_exists = conn.execute(
+            "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1",
+            (feed_url,),
+        ).fetchone()
+    if not still_exists:
+        with get_reader() as reader:
+            reader.delete_feed(feed_url, missing_ok=True)
+    invalidate_meta_structure_cache()
+
+
+def _run_youtube_sync(folder_id: int | None = None) -> dict:
+    """Run YouTube subscription sync, creating the target folder if needed.
+
+    If folder_id is None, looks up or creates YOUTUBE_FOLDER_NAME.
+    Returns the result dict from sync_youtube_folder.
+    """
+    if not YOUTUBE_API_KEY:
+        return {"added": 0, "removed": 0, "total": 0, "error": "YOUTUBE_API_KEY is not set."}
+    if not YOUTUBE_CHANNEL_ID:
+        return {"added": 0, "removed": 0, "total": 0, "error": "YOUTUBE_CHANNEL_ID is not set."}
+
+    # Resolve or create the target folder.
+    if folder_id is None:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM folders WHERE name = ? LIMIT 1",
+                (YOUTUBE_FOLDER_NAME,),
+            ).fetchone()
+            if row:
+                folder_id = int(row["id"])
+            else:
+                root_id = get_root_folder_id(conn)
+                conn.execute(
+                    "INSERT INTO folders (name, parent_id) VALUES (?, ?)",
+                    (YOUTUBE_FOLDER_NAME, root_id),
+                )
+                folder_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        invalidate_meta_structure_cache()
+
+    def _get_folder_feed_urls(fid: int) -> list[str]:
+        with get_meta_connection() as conn:
+            rows = conn.execute(
+                "SELECT feed_url FROM folder_feeds WHERE folder_id = ?",
+                (fid,),
+            ).fetchall()
+        return [str(r["feed_url"]) for r in rows]
+
+    return sync_youtube_folder(
+        api_key=YOUTUBE_API_KEY,
+        channel_identifier=YOUTUBE_CHANNEL_ID,
+        folder_id=folder_id,
+        get_folder_feed_urls=_get_folder_feed_urls,
+        add_feed=add_feed_to_folder,
+        remove_feed=remove_feed_from_folder,
+    )
+
+
 def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -> None:
     feed_url = feed_url.strip()
     if not feed_url:
@@ -4429,6 +4548,16 @@ def rename_folder_route(folder_id: int = Form(...), name: str = Form(...)):
         )
     invalidate_meta_structure_cache()
     return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+
+
+@app.post("/youtube/sync")
+def youtube_sync_route(folder_id: int = Form(...)):
+    result = _run_youtube_sync(folder_id=folder_id)
+    if result["error"]:
+        message = f"YouTube sync error: {result['error']}"
+    else:
+        message = f"YouTube sync complete: +{result['added']} added, -{result['removed']} removed ({result['total']} subscriptions)."
+    return RedirectResponse(url=f"/?folder_id={folder_id}&message={message}", status_code=303)
 
 
 @app.post("/folders/delete")
