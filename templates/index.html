@@ -2191,38 +2191,35 @@
       updateDynamicFavicon();
     });
 
-    for (const trigger of document.querySelectorAll('[data-toggle-panel]')) {
-      trigger.addEventListener('click', () => {
-        const panelId = trigger.getAttribute('data-toggle-panel');
-        if (!panelId) {
-          return;
+    document.addEventListener('click', (event) => {
+      const trigger = event.target instanceof Element && event.target.closest('[data-toggle-panel]');
+      if (!trigger) return;
+
+      const panelId = trigger.getAttribute('data-toggle-panel');
+      if (!panelId) return;
+
+      const panel = document.getElementById(panelId);
+      if (!panel) return;
+
+      if (panel.classList.contains('action-modal')) {
+        panel.removeAttribute('hidden');
+      } else {
+        const willShow = panel.hasAttribute('hidden');
+
+        for (const otherPanel of document.querySelectorAll('.hidden-panel')) {
+          otherPanel.setAttribute('hidden', '');
         }
 
-        const panel = document.getElementById(panelId);
-        if (!panel) {
-          return;
-        }
-
-        if (panel.classList.contains('action-modal')) {
+        if (willShow) {
           panel.removeAttribute('hidden');
-        } else {
-          const willShow = panel.hasAttribute('hidden');
-
-          for (const otherPanel of document.querySelectorAll('.hidden-panel')) {
-            otherPanel.setAttribute('hidden', '');
-          }
-
-          if (willShow) {
-            panel.removeAttribute('hidden');
-          }
         }
+      }
 
-        const burger = trigger.closest('.hamburger-menu');
-        if (burger) {
-          burger.removeAttribute('open');
-        }
-      });
-    }
+      const burger = trigger.closest('.hamburger-menu');
+      if (burger) {
+        burger.removeAttribute('open');
+      }
+    });
 
     function closeAddModal(modalId) {
       const modal = document.getElementById(modalId);
