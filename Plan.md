@@ -2,32 +2,22 @@
 
 This file is the backlog and staging area for future work.
 
-## Now
-- Deploy to VPS (Traefik + Cloudflare Origin certs at `lectio.${BASE_URL}`).
+## Bugs
+- Feeds with missing `pubdate`: many feeds show "None" — handle gracefully.
+- Delete feed reloads the page and re-opens its folder — should remove in-place.
 
-## Soon
-- tons of feeds with "None" for pubdate
-- problem feeds: delete refreshes whole page and opens the folder where it lived -- should just remove from list, ~queue background remove
-- FIXED? counters not updating at all while using it, (looks like they eventually did but not while I was using the app)
-- Stronger saved/archive view state persistence.
-- More feed-specific display tweaks.
-- Better per-feed preferences.
-- Additional topbar or entry actions.
-- More robust refresh/restore behavior.
+## Up next (ordered)
 
-## Later
-- Per-user vs shared thumb cache decision.
+1. **Email Article** — share button in entry toolbar; sends link + summary via Resend.
+2. **Feed Troubleshooter** — right-click or Properties panel showing all candidate image/thumbnail sources, content extraction methods, and raw feed data; lets you pick best options per feed.
+3. **RSS Auto-Discovery** — when adding a feed URL, auto-detect hidden RSS/Atom links on the page before failing.
+4. **Text Highlighting** — highlight matching keywords in entry titles and bodies (global or per-feed keyword lists).
+5. **Rules / Actions Engine** — trigger actions (mark-read, tag, star) based on text match in title/body, per-feed or global; rule manager UI. Subsumes keyword/author auto-tagging and smart folders.
+6. **Page-to-Feed (Scraping)** — for truly feedless pages, generate synthetic feeds via scraping or change-detection (RSSHub, FetchRSS, or built-in scraper).
+
+## Backburner
+- Per-user vs. shared thumb cache (only relevant if multi-user is added).
 - Archive caps for starred entries.
-- Keyword/author auto-tagging.
-- Smart folders.
-- Non-RSS monitoring.
-- Read-later/share integrations.
-- Cloudflare integrations where useful.
-
-## Maybe
-- Docker packaging.
-- YunoHost packaging.
-- Multi-user support after auth refactor.
-- Richer plugin system.
+- Multi-user support / auth refactor.
+- YunoHost or other packaging.
 - PWA features.
-- Cloudflare Tunnel for ingress.
