@@ -2541,6 +2541,17 @@
       });
     }
 
+    document.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element && event.target.closest('[data-open-email-modal]');
+      if (!btn) return;
+      const modal = document.getElementById('email-article-modal');
+      const feedUrlInput = document.getElementById('email-article-feed-url');
+      const entryIdInput = document.getElementById('email-article-entry-id');
+      if (feedUrlInput instanceof HTMLInputElement) feedUrlInput.value = btn.getAttribute('data-email-feed-url') || '';
+      if (entryIdInput instanceof HTMLInputElement) entryIdInput.value = btn.getAttribute('data-email-entry-id') || '';
+      if (modal) modal.removeAttribute('hidden');
+    });
+
     const emailArticleForm = document.getElementById('email-article-form');
     const emailArticleModal = document.getElementById('email-article-modal');
     if (emailArticleForm && emailArticleModal) {

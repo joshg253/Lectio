@@ -316,7 +316,9 @@
           type="button"
           id="entry-email-button"
           class="entry-source-button"
-          data-toggle-panel="email-article-modal"
+          data-open-email-modal
+          data-email-feed-url="{{ selected_entry.feed_url }}"
+          data-email-entry-id="{{ selected_entry.id }}"
           title="Email this article"
           aria-label="Email this article"
           ><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span></button
