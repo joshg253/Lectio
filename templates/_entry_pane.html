@@ -333,7 +333,7 @@
       <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
       {% elif selected_entry.summary %}
       <pre class="entry-text">{{ selected_entry.summary }}</pre>
-      {% else %}
+      {% elif not selected_entry.lead_image_url %}
       <div class="muted">No content available.</div>
       {% endif %}
       {% if not selected_entry.lead_image_url and selected_entry.image_title_text %}

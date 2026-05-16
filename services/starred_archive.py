@@ -103,6 +103,7 @@ class StarredArchiveService:
                 "UPDATE archived_entry SET status = 'pending_removal' WHERE feed_url = ? AND entry_id = ?",
                 (feed_url, entry_id),
             )
+        self._wake_event.set()
 
     def backfill_missing_archives(self) -> int:
         """Insert pending rows for any saved_entries missing an archive row.
@@ -304,6 +305,42 @@ class StarredArchiveService:
         except sqlite3.Error:
             return False
 
+    def backfill_saved_entries_from_archive(self) -> int:
+        """Insert saved_entries rows for any complete archive entries missing them.
+
+        The reverse of backfill_missing_archives. Recovers from meta DB resets
+        where starred_archive survived intact. Returns the number of rows inserted.
+        """
+        try:
+            with self._get_archive_connection() as conn:
+                rows = conn.execute(
+                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'complete'"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: backfill_saved_entries failed to read archive: %s", exc)
+            return 0
+
+        if not rows:
+            return 0
+
+        inserted = 0
+        try:
+            with self._get_meta_connection() as meta_conn:
+                for row in rows:
+                    cur = meta_conn.execute(
+                        "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                        (str(row["feed_url"]), str(row["entry_id"])),
+                    )
+                    if cur.rowcount:
+                        inserted += 1
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: backfill_saved_entries failed to write meta: %s", exc)
+            return 0
+
+        if inserted:
+            LOGGER.info("starred archive: restored %d saved_entries row(s) from archive", inserted)
+        return inserted
+
     def backfill_metadata_for_complete_rows(self) -> int:
         """One-shot: fill title/link/etc on complete rows missing those fields.
 
@@ -487,7 +524,7 @@ class StarredArchiveService:
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
-            processed = self._process_one_pending()
+            processed = self._process_one_pending() or self._process_one_pending_removal()
             if processed:
                 # Stay hot — likely more queued.
                 continue
@@ -530,6 +567,46 @@ class StarredArchiveService:
                     )
             except sqlite3.Error:
                 pass
+        return True
+
+    def _process_one_pending_removal(self) -> bool:
+        try:
+            with self._get_archive_connection() as conn:
+                row = conn.execute(
+                    "SELECT feed_url, entry_id FROM archived_entry "
+                    "WHERE status = 'pending_removal' LIMIT 1"
+                ).fetchone()
+                if not row:
+                    return False
+                feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+                # Collect asset hashes before removing links so we can
+                # clean up assets that become unreferenced.
+                hashes = [
+                    str(r["asset_hash"]) for r in conn.execute(
+                        "SELECT DISTINCT asset_hash FROM archived_asset_link "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (feed_url, entry_id),
+                    ).fetchall()
+                ]
+                conn.execute(
+                    "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                if hashes:
+                    placeholders = ",".join("?" * len(hashes))
+                    conn.execute(
+                        f"DELETE FROM archived_asset WHERE asset_hash IN ({placeholders})"
+                        f" AND asset_hash NOT IN (SELECT DISTINCT asset_hash FROM archived_asset_link)",
+                        hashes,
+                    )
+                conn.execute(
+                    "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive worker: removal failed: %s", exc)
+            return False
+        LOGGER.info("starred archive: removed entry %s / %s", feed_url, entry_id)
         return True
 
     # ------------------------------------------------------------------

@@ -41,7 +41,8 @@ def _make_conn(db_path: Path):
             next_retry_at REAL,
             last_error TEXT,
             last_failure_at REAL,
-            last_success_at REAL
+            last_success_at REAL,
+            acknowledged_at REAL
         )
         """
     )

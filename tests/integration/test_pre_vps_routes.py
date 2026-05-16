@@ -31,7 +31,11 @@ def test_healthz_returns_ok_when_db_reachable(monkeypatch):
     assert response.json() == {"status": "ok"}
 
 
-def test_healthz_returns_503_when_db_unreachable(monkeypatch):
+def test_healthz_returns_ok_even_when_db_unreachable(monkeypatch):
+    """healthz is a lightweight liveness probe that intentionally does NOT
+    touch the DB — under bulk-refresh load the DB can be locked for several
+    seconds, so a probe that waits would cause the proxy to withdraw the
+    backend even though the app is still serving requests."""
     app = FastAPI()
     app.get("/healthz")(main.healthz)
 
@@ -43,10 +47,8 @@ def test_healthz_returns_503_when_db_unreachable(monkeypatch):
     with TestClient(app) as client:
         response = client.get("/healthz")
 
-    assert response.status_code == 503
-    body = response.json()
-    assert body["status"] == "error"
-    assert "simulated DB outage" in body["error"]
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_static_assets_get_long_lived_cache_control():

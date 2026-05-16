@@ -137,7 +137,7 @@ class StandardEbooksLeadImagePlugin:
         return self._cover_url(entry_link)
 
 
-_WP_COMIC_ENTRY_RE = re.compile(r"[?&]post_type=comic\b|/comic/", re.IGNORECASE)
+_WP_COMIC_ENTRY_RE = re.compile(r"[?&]post_type=comic\b|[?&]comic=|/comic/", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
