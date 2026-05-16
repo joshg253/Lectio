@@ -172,3 +172,104 @@ def test_fetch_and_store_lead_images_backfills_missing_inline(tmp_path: Path, mo
 
     assert row is not None
     assert row["image_url"] == "https://cdn.example.com/source-hero.jpg"
+
+
+def test_negative_retry_window_skips_recent_null(tmp_path: Path):
+    """Entries fetched as NULL within the 4-hour retry window must be skipped."""
+    import time
+
+    db_path = tmp_path / "meta.sqlite"
+    entry = _FakeEntry(
+        feed_url="https://example.com/feed.xml",
+        entry_id="p-5",
+        link="https://example.com/article",
+        content_html="<p>no images</p>",
+    )
+    service = _build_service(db_path, [entry])
+
+    fetched = []
+    service._fetch_source_lead_image = lambda link: fetched.append(link) or None
+
+    # Store NULL less than 4 hours ago.
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO entry_lead_images(feed_url, entry_id, image_url, fetched_at) VALUES (?, ?, NULL, ?)",
+            ("https://example.com/feed.xml", "p-5", time.time() - 60),
+        )
+    service.warm_cache_from_db()
+
+    service.fetch_and_store_lead_images_for_feed("https://example.com/feed.xml")
+
+    assert fetched == [], "source fetch should be skipped within the retry window"
+
+
+def test_negative_retry_window_retries_after_4h(tmp_path: Path):
+    """Entries whose NULL was stored more than 4 hours ago must be retried."""
+    import time
+
+    db_path = tmp_path / "meta.sqlite"
+    entry = _FakeEntry(
+        feed_url="https://example.com/feed.xml",
+        entry_id="p-6",
+        link="https://example.com/old-article",
+        content_html="<p>no images</p>",
+    )
+    service = _build_service(db_path, [entry])
+    service._fetch_source_lead_image = lambda link: "https://cdn.example.com/late.jpg"
+
+    # Store NULL more than 4 hours ago.
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO entry_lead_images(feed_url, entry_id, image_url, fetched_at) VALUES (?, ?, NULL, ?)",
+            ("https://example.com/feed.xml", "p-6", time.time() - (4 * 3600 + 60)),
+        )
+    service.warm_cache_from_db()
+
+    service.fetch_and_store_lead_images_for_feed("https://example.com/feed.xml", force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+            ("https://example.com/feed.xml", "p-6"),
+        ).fetchone()
+
+    assert row is not None
+    assert row["image_url"] == "https://cdn.example.com/late.jpg"
+
+
+def test_og_image_regex_matches_name_attribute():
+    """og:image with name= attribute order (not property=) must be found."""
+    service = _build_service(Path("/tmp"), [])
+    html = (
+        '<meta name="og:image" content="https://cdn.example.com/hero.png" data-next-head=""/>'
+    )
+    result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
+    assert result == "https://cdn.example.com/hero.png"
+
+
+def test_og_image_regex_matches_property_attribute():
+    """og:image with the standard property= attribute must be found."""
+    service = _build_service(Path("/tmp"), [])
+    html = '<meta property="og:image" content="https://cdn.example.com/banner.jpg"/>'
+    result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
+    assert result == "https://cdn.example.com/banner.jpg"
+
+
+def test_og_image_regex_matches_content_first_order():
+    """og:image where content= appears before property= must be found via reversed regex."""
+    service = _build_service(Path("/tmp"), [])
+    html = '<meta content="https://cdn.example.com/thumb.jpg" property="og:image"/>'
+    result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
+    assert result == "https://cdn.example.com/thumb.jpg"
+
+
+def test_og_image_extensionless_cdn_url_accepted():
+    """Extensionless og:image URLs (e.g. CDN token URLs) must not be rejected."""
+    service = _build_service(Path("/tmp"), [])
+    # CDN URL with no file extension — common for DO / Fastly image URLs.
+    html = (
+        '<meta property="og:image" '
+        'content="https://community-cdn-example.global.ssl.fastly.net/ABC123"/>'
+    )
+    result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
+    assert result == "https://community-cdn-example.global.ssl.fastly.net/ABC123"

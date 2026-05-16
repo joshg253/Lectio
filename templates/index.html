@@ -154,6 +154,7 @@
             <div class="flyout-panel">
               <label for="opml-file-input" class="menu-item file-item">Import</label>
               <a class="menu-item" href="/opml/export">Export</a>
+              <button type="button" class="menu-item" id="dedup-feeds-btn">Remove duplicate feeds</button>
             </div>
           </div>
         </div>
@@ -1362,6 +1363,7 @@
     </div>
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
+    <button type="button" id="ctx-folder-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
     <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Sync Subscriptions</button>
     <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
@@ -1377,10 +1379,30 @@
 
   <div id="post-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-post-mark-read" class="context-menu-item">Mark as read</button>
+    <button type="button" id="ctx-post-mark-feed-read" class="context-menu-item" hidden>Mark Feed as Read</button>
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
+  </div>
+
+  <div id="dedup-modal" class="action-modal" hidden>
+    <div class="action-modal-panel dedup-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dedup-modal-title">
+      <div class="modal-header-row">
+        <h3 id="dedup-modal-title" class="action-modal-title">Remove duplicate feeds</h3>
+        <button type="button" class="modal-close" data-close-modal="dedup-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p class="action-modal-label dedup-modal-intro"></p>
+      <div class="dedup-modal-list"></div>
+      <div class="dedup-cross-section" hidden>
+        <p class="action-modal-label dedup-cross-intro"></p>
+        <div class="dedup-cross-list"></div>
+      </div>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="dedup-modal">Cancel</button>
+        <button type="button" id="dedup-modal-ok" class="danger">Remove duplicates</button>
+      </div>
+    </div>
   </div>
 
   <div id="debug-confirm-modal" class="action-modal" hidden>
@@ -1689,6 +1711,27 @@
     </div>
   </div>
 
+  <div id="folder-properties-modal" class="action-modal" hidden>
+    <div class="action-modal-panel feed-properties-panel" role="dialog" aria-modal="true" aria-labelledby="folder-properties-title">
+      <div class="feed-properties-header-row">
+        <h3 id="folder-properties-title" class="action-modal-title">Folder Properties</h3>
+        <button type="button" id="folder-properties-close" class="feed-properties-close" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <dl class="feed-properties-grid">
+        <dt>Folder</dt><dd id="folder-prop-path">-</dd>
+        <dt>Feeds</dt><dd id="folder-prop-feed-count">-</dd>
+        <dt>Articles</dt><dd id="folder-prop-total">-</dd>
+      </dl>
+      <div id="folder-prop-top-feeds-wrap" hidden>
+        <h4 class="folder-prop-section-title">Most active feeds</h4>
+        <table class="folder-prop-top-feeds">
+          <thead><tr><th>Feed</th><th>Avg/week</th><th>Total</th></tr></thead>
+          <tbody id="folder-prop-top-feeds-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="stats-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="stats-modal-title">
       <div class="modal-header-row">
@@ -1701,8 +1744,7 @@
         <dt>Total articles</dt><dd id="stat-entry-total">—</dd>
         <dt>Unread</dt><dd id="stat-entry-unread">—</dd>
         <dt>Read</dt><dd id="stat-entry-read">—</dd>
-        <dt>Saved</dt><dd id="stat-entry-saved">—</dd>
-        <dt>Saved archive</dt><dd id="stat-archive-summary">—</dd>
+        <dt>Saved</dt><dd id="stat-archive-summary">—</dd>
         <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
         <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
         <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
@@ -2165,7 +2207,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2182,7 +2224,7 @@
     const statsModalTrigger = document.querySelector('[data-toggle-panel="stats-modal"]');
     if (statsModalTrigger) {
       statsModalTrigger.addEventListener('click', async () => {
-        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-entry-saved', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
+        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
         for (const id of statIds) {
           const el = document.getElementById(id);
           if (el) el.textContent = '…';
@@ -2196,9 +2238,7 @@
           document.getElementById('stat-entry-total').textContent = data.entry_total.toLocaleString();
           document.getElementById('stat-entry-unread').textContent = data.entry_unread.toLocaleString();
           document.getElementById('stat-entry-read').textContent = data.entry_read.toLocaleString();
-          document.getElementById('stat-entry-saved').textContent = data.entry_saved.toLocaleString();
-          // "N (size)", with any non-complete states appended so the count
-          // can be reconciled against Saved without guessing.
+          // "N (size)", with any non-complete states appended.
           const archivedComplete = data.starred_archive_complete || 0;
           let archiveSummary = `${archivedComplete.toLocaleString()} (${formatBytes(data.starred_archive_db_bytes || 0)})`;
           const archiveExtras = [];
@@ -2264,6 +2304,94 @@
       if (opmlInput.files && opmlInput.files.length > 0) {
         opmlForm?.submit();
       }
+    });
+
+    document.getElementById('dedup-feeds-btn')?.addEventListener('click', async () => {
+      const resp = await fetch('/feeds/duplicates');
+      const data = await resp.json();
+      const sameFolder = data.same_folder || [];
+      const crossFolder = data.cross_folder || [];
+      const modal = document.getElementById('dedup-modal');
+      const intro = modal.querySelector('.dedup-modal-intro');
+      const list = modal.querySelector('.dedup-modal-list');
+      const crossSection = modal.querySelector('.dedup-cross-section');
+      const crossList = modal.querySelector('.dedup-cross-list');
+
+      if (sameFolder.length === 0 && crossFolder.length === 0) {
+        intro.textContent = 'No duplicate feeds found.';
+        list.innerHTML = '';
+        crossSection.hidden = true;
+        modal.querySelector('#dedup-modal-ok').hidden = true;
+      } else {
+        modal.querySelector('#dedup-modal-ok').hidden = false;
+
+        // Same-folder section
+        if (sameFolder.length > 0) {
+          intro.textContent = `Found ${sameFolder.length} duplicate(s) in the same folder — the slash variant will be removed automatically:`;
+          const byFolder = {};
+          sameFolder.forEach(d => {
+            if (!byFolder[d.folder_id]) byFolder[d.folder_id] = { name: d.folder_name, items: [] };
+            byFolder[d.folder_id].items.push(d);
+          });
+          list.innerHTML = Object.values(byFolder).map(({ name, items }) =>
+            `<div class="dedup-folder-group"><span class="dedup-folder-label">${name}</span>` +
+            items.map(d =>
+              `<div class="dedup-pair">` +
+              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${d.keep}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${d.remove}</span></div>` +
+              `</div>`
+            ).join('') + `</div>`
+          ).join('');
+        } else {
+          intro.textContent = '';
+          list.innerHTML = '';
+        }
+
+        // Cross-folder section
+        if (crossFolder.length > 0) {
+          crossSection.hidden = false;
+          const crossIntro = crossSection.querySelector('.dedup-cross-intro');
+          crossIntro.textContent = sameFolder.length > 0
+            ? `Also found across different folders — choose which folder(s) to keep each feed in:`
+            : `Found ${crossFolder.length} duplicate feed(s) across different folders — choose which folder(s) to keep each feed in:`;
+          crossList.innerHTML = crossFolder.map((d, i) => {
+            const checkboxes = d.all_folders.map(f =>
+              `<label class="dedup-folder-check"><input type="checkbox" name="cross_${i}_folder" value="${f.id}" checked> ${f.name}</label>`
+            ).join('');
+            return `<div class="dedup-cross-pair" data-index="${i}" data-keep="${d.keep}" data-remove="${d.remove}">` +
+              `<div class="dedup-pair">` +
+              `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">keep</span><span class="dedup-url">${d.keep}</span></div>` +
+              `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">remove</span><span class="dedup-url">${d.remove}</span></div>` +
+              `</div>` +
+              `<div class="dedup-folder-checks">${checkboxes}</div>` +
+              `</div>`;
+          }).join('');
+        } else {
+          crossSection.hidden = true;
+        }
+      }
+      modal.hidden = false;
+    });
+
+    document.getElementById('dedup-modal-ok')?.addEventListener('click', async () => {
+      const modal = document.getElementById('dedup-modal');
+      // Collect cross-folder choices
+      const crossChoices = [];
+      for (const pair of modal.querySelectorAll('.dedup-cross-pair')) {
+        const keep = pair.dataset.keep;
+        const remove = pair.dataset.remove;
+        const folderIds = [...pair.querySelectorAll('input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
+        crossChoices.push({ keep, remove, folder_ids: folderIds });
+      }
+      modal.hidden = true;
+      const dedupeResp = await fetch('/feeds/deduplicate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cross_folder_choices: crossChoices }),
+      });
+      const dedupeData = await dedupeResp.json();
+      alert(`Removed ${dedupeData.count} duplicate feed(s).`);
+      window.location.reload();
     });
 
     const toast = document.getElementById('toast-message');
@@ -2609,6 +2737,7 @@
     const folderSubmenu = document.getElementById('ctx-folder-submenu');
     const addFeedButton = document.getElementById('ctx-add-feed');
     const feedPropertiesButton = document.getElementById('ctx-feed-properties');
+    const folderPropertiesButton = document.getElementById('ctx-folder-properties');
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
@@ -2668,6 +2797,7 @@
     const unsubscribeFolderIdInput = document.getElementById('context-unsubscribe-folder-id');
     const unsubscribeFeedUrlInput = document.getElementById('context-unsubscribe-feed-url');
     const postMarkReadButton = document.getElementById('ctx-post-mark-read');
+    const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
@@ -3621,6 +3751,79 @@
       }
     }
 
+    async function openFolderPropertiesModal(folderId) {
+      const modal = document.getElementById('folder-properties-modal');
+      if (!modal || !folderId) return;
+
+      const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = (val !== null && val !== undefined) ? String(val) : '-';
+      };
+
+      setVal('folder-prop-path', 'Loading...');
+      setVal('folder-prop-feed-count', '-');
+      setVal('folder-prop-total', '-');
+      const topWrap = document.getElementById('folder-prop-top-feeds-wrap');
+      if (topWrap) topWrap.hidden = true;
+      modal.removeAttribute('hidden');
+
+      try {
+        const response = await fetch(`/folders/properties?folder_id=${encodeURIComponent(folderId)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!data.found) {
+          setVal('folder-prop-path', data.error || 'Folder not found.');
+          return;
+        }
+        setVal('folder-prop-path', data.path || data.name || '-');
+        setVal('folder-prop-feed-count', data.feed_count);
+
+        const total = data.total_articles ?? 0;
+        const unread = data.unread_articles ?? 0;
+        const totalEl = document.getElementById('folder-prop-total');
+        if (totalEl) {
+          totalEl.textContent = '';
+          totalEl.appendChild(document.createTextNode(String(total)));
+          if (unread > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'folder-prop-unread-badge';
+            badge.textContent = ` (${unread.toLocaleString()} unread)`;
+            totalEl.appendChild(badge);
+          }
+        }
+
+        const tbody = document.getElementById('folder-prop-top-feeds-body');
+        if (tbody && data.top_feeds && data.top_feeds.length > 0) {
+          tbody.innerHTML = '';
+          for (const f of data.top_feeds) {
+            const tr = document.createElement('tr');
+            const tdTitle = document.createElement('td');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'folder-prop-feed-link';
+            btn.textContent = f.title;
+            btn.dataset.feedUrl = f.feed_url;
+            btn.addEventListener('click', () => {
+              modal.setAttribute('hidden', '');
+              openFeedPropertiesModal(f.feed_url);
+            });
+            tdTitle.appendChild(btn);
+            const tdAvg = document.createElement('td');
+            tdAvg.textContent = f.avg_per_week;
+            const tdTotal = document.createElement('td');
+            tdTotal.textContent = f.total;
+            tr.appendChild(tdTitle);
+            tr.appendChild(tdAvg);
+            tr.appendChild(tdTotal);
+            tbody.appendChild(tr);
+          }
+          if (topWrap) topWrap.hidden = false;
+        }
+      } catch (error) {
+        setVal('folder-prop-path', `Could not load: ${error}`);
+      }
+    }
+
     function closeActionInputModal() {
       if (!actionInputModal) {
         return;
@@ -3749,6 +3952,7 @@
         setMenuItemVisible(addToFolderWrap, false);
         setMenuItemVisible(addFeedButton, true);
         setMenuItemVisible(feedPropertiesButton, false);
+        setMenuItemVisible(folderPropertiesButton, true);
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
@@ -3786,6 +3990,7 @@
         setMenuItemVisible(addToFolderWrap, true);
         setMenuItemVisible(addFeedButton, false);
         setMenuItemVisible(feedPropertiesButton, true);
+        setMenuItemVisible(folderPropertiesButton, false);
         setMenuItemVisible(unsubscribeFeedButton, true);
         setMenuItemVisible(renameFolderButton, false);
         setMenuItemVisible(deleteFolderButton, false);
@@ -3816,6 +4021,7 @@
       setMenuItemVisible(addToFolderWrap, true);
       setMenuItemVisible(addFeedButton, false);
       setMenuItemVisible(feedPropertiesButton, true);
+      setMenuItemVisible(folderPropertiesButton, false);
       setMenuItemVisible(unsubscribeFeedButton, true);
       setMenuItemVisible(renameFolderButton, false);
       setMenuItemVisible(deleteFolderButton, false);
@@ -3929,6 +4135,7 @@
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+          setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -4136,6 +4343,7 @@
               postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
             }
             setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
+            setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -4222,6 +4430,12 @@
 
             const changed = applyPostItemReadState(postItem, nextIsRead);
             if (changed) {
+              const paneTitle = document.querySelector('.entry-pane-title');
+              if (paneTitle
+                  && paneTitle.getAttribute('data-post-feed-url') === postItem.getAttribute('data-post-feed-url')
+                  && paneTitle.getAttribute('data-post-entry-id') === postItem.getAttribute('data-post-entry-id')) {
+                applyEntryPaneReadState(nextIsRead);
+              }
               const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
               if (nextIsRead && wasUnread) {
                 const fallbackBase = getUnreadCountFallback();
@@ -4369,6 +4583,18 @@
 
     bindPostListInteractions();
 
+    document.addEventListener('submit', (event) => {
+      const form = event.target instanceof HTMLFormElement && event.target.closest('.mark-read-action-form');
+      if (!form) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrlInput = form.querySelector('input[name="feed_url"]');
+      const feedUrlFilter = feedUrlInput instanceof HTMLInputElement ? feedUrlInput.value : null;
+      const markReadMenuDetails = form.closest('details.mark-read-menu');
+      if (markReadMenuDetails) markReadMenuDetails.removeAttribute('open');
+      submitMarkReadAsync(form, feedUrlFilter || null);
+    }, true);
+
     postMarkReadButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -4388,6 +4614,30 @@
       postReadValueInput.value = contextPostRead ? '0' : '1';
       hideAllContextMenus();
       postReadForm.submit();
+    });
+
+    postMarkFeedReadButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (
+        !contextPostFeedUrl ||
+        !markReadFeedFolderIdInput ||
+        !markReadFeedUrlInput ||
+        !markReadListFeedUrlInput ||
+        !markReadFeedForm
+      ) {
+        return;
+      }
+
+      const feedUrl = contextPostFeedUrl;
+      const folderId = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`)?.getAttribute('data-folder-id')
+        || markReadFeedFolderIdInput.value
+        || '{{ selected_folder_id }}';
+      markReadFeedFolderIdInput.value = folderId;
+      markReadFeedUrlInput.value = feedUrl;
+      markReadListFeedUrlInput.value = feedUrl;
+      hideAllContextMenus();
+      submitMarkReadAsync(markReadFeedForm, feedUrl);
     });
 
     function adjustCountBadge(containerEl, delta) {
@@ -4451,6 +4701,59 @@
       }
 
       return true;
+    }
+
+    function applyBulkReadState(feedUrlFilter) {
+      const postItems = document.querySelectorAll('.posts .post-item');
+      const deltaByFeed = {};
+      for (const item of postItems) {
+        const itemFeedUrl = item.getAttribute('data-post-feed-url') || '';
+        if (feedUrlFilter && itemFeedUrl !== feedUrlFilter) continue;
+        if (item.getAttribute('data-post-read') === '1') continue;
+        const changed = applyPostItemReadState(item, true);
+        if (changed) {
+          deltaByFeed[itemFeedUrl] = (deltaByFeed[itemFeedUrl] || 0) + 1;
+        }
+      }
+      let totalChanged = 0;
+      for (const [fu, delta] of Object.entries(deltaByFeed)) {
+        adjustSidebarUnreadCount(fu, -delta);
+        totalChanged += delta;
+      }
+      if (totalChanged > 0) {
+        const fallbackBase = getUnreadCountFallback();
+        const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
+        appUnreadCount = Math.max(0, current - totalChanged);
+        updateDynamicFavicon();
+      }
+    }
+
+    async function submitMarkReadAsync(form, feedUrlFilter) {
+      // Optimistic: dim items immediately so there's no perceived delay.
+      applyBulkReadState(feedUrlFilter || null);
+
+      const formData = new FormData(form);
+      const body = new URLSearchParams();
+      for (const [key, value] of formData.entries()) {
+        body.append(key, String(value));
+      }
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      const csrfToken = csrfMeta ? csrfMeta.content : '';
+      const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-Requested-With': 'lectio-mark-read',
+      };
+      if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+      try {
+        await fetch(form.action, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers,
+          body: body.toString(),
+        });
+      } catch (_err) {
+        // Network error — UI already updated optimistically, silently ignore.
+      }
     }
 
     function applyPostItemSavedState(postItem, isSaved) {
@@ -4679,7 +4982,7 @@
         markReadFeedUrlInput.value = contextFeedUrl;
         markReadListFeedUrlInput.value = contextFeedUrl;
         hideContextMenu();
-        markReadFeedForm.submit();
+        submitMarkReadAsync(markReadFeedForm, contextFeedUrl);
         return;
       }
 
@@ -4689,7 +4992,7 @@
 
       markReadFolderIdInput.value = contextFolderId;
       hideContextMenu();
-      markReadFolderForm.submit();
+      submitMarkReadAsync(markReadFolderForm, null);
     });
 
     let _folderSubmenuCloseTimer = null;
@@ -4814,6 +5117,25 @@
 
       hideAllContextMenus();
       openFeedPropertiesModal(contextFeedUrl);
+    });
+
+    folderPropertiesButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (contextTargetType !== 'folder' || !contextFolderId) {
+        return;
+      }
+
+      hideAllContextMenus();
+      openFolderPropertiesModal(Number(contextFolderId));
+    });
+
+    const folderPropertiesModal = document.getElementById('folder-properties-modal');
+    document.getElementById('folder-properties-close')?.addEventListener('click', () => {
+      folderPropertiesModal?.setAttribute('hidden', '');
+    });
+    folderPropertiesModal?.addEventListener('click', (event) => {
+      if (event.target === folderPropertiesModal) folderPropertiesModal.setAttribute('hidden', '');
     });
 
     // Problematic-feeds modal: tab switching.

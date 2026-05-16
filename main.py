@@ -187,7 +187,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260513c")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260516w")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -382,6 +382,7 @@ async def lifespan(app: FastAPI):
     starred_archive_service.start_worker()
 
     def _archive_backfill_task() -> None:
+        starred_archive_service.backfill_saved_entries_from_archive()
         starred_archive_service.backfill_missing_archives()
         starred_archive_service.backfill_metadata_for_complete_rows()
 
@@ -2193,6 +2194,107 @@ def get_feed_properties(feed_url: str) -> dict:
         return props
 
 
+def get_folder_properties(folder_id: int) -> dict:
+    with get_meta_connection() as conn:
+        folder_row = conn.execute(
+            """
+            SELECT f.id, f.name,
+                CASE WHEN f.parent_id IS NULL THEN f.name
+                     ELSE root.name || ' / ' || f.name END AS path
+            FROM folders f
+            LEFT JOIN folders root ON f.parent_id = root.id
+            WHERE f.id = ?
+            """,
+            (folder_id,),
+        ).fetchone()
+
+        if not folder_row:
+            return {"found": False, "error": "Folder not found."}
+
+        feed_urls = get_folder_feed_urls(conn, folder_id)
+        feed_count = len(feed_urls)
+
+    if not feed_urls:
+        return {
+            "found": True,
+            "folder_id": folder_id,
+            "name": folder_row["name"],
+            "path": folder_row["path"],
+            "feed_count": 0,
+            "total_articles": 0,
+            "unread_articles": 0,
+            "top_feeds": [],
+        }
+
+    total_articles = 0
+    unread_articles = 0
+    feed_stats: dict[str, dict] = {}
+
+    with get_reader() as reader:
+        for entry in reader.get_entries():
+            if entry.feed_url not in feed_urls:
+                continue
+            total_articles += 1
+            if not entry.read:
+                unread_articles += 1
+            fs = feed_stats.setdefault(entry.feed_url, {
+                "title": None,
+                "count": 0,
+                "oldest": None,
+                "newest": None,
+            })
+            fs["count"] += 1
+            published = entry.published or entry.updated or entry.added
+            if published:
+                if fs["oldest"] is None or published < fs["oldest"]:
+                    fs["oldest"] = published
+                if fs["newest"] is None or published > fs["newest"]:
+                    fs["newest"] = published
+
+        for feed in reader.get_feeds():
+            if feed.url in feed_stats:
+                feed_stats[feed.url]["title"] = (
+                    getattr(feed, "resolved_title", None)
+                    or getattr(feed, "title", None)
+                    or feed.url
+                )
+
+    now = datetime.now(tz=timezone.utc)
+    top_feeds = []
+    for url, fs in feed_stats.items():
+        count = fs["count"]
+        oldest = fs["oldest"]
+        try:
+            if oldest and count > 0:
+                # Span from oldest article to today; floor at 1 week so
+                # bulk-imported or very new feeds don't produce absurd numbers.
+                span_weeks = max((now - oldest).total_seconds() / (7 * 86400), 1.0)
+                avg_per_week = round(count / span_weeks, 1)
+            else:
+                avg_per_week = 0.0
+        except Exception:
+            avg_per_week = 0.0
+        top_feeds.append({
+            "feed_url": url,
+            "title": fs["title"] or url,
+            "avg_per_week": avg_per_week,
+            "total": count,
+        })
+
+    top_feeds.sort(key=lambda x: x["avg_per_week"], reverse=True)
+
+    return {
+        "found": True,
+        "folder_id": folder_id,
+        "name": folder_row["name"],
+        "path": folder_row["path"],
+        "feed_count": feed_count,
+        "total_articles": total_articles,
+        "unread_articles": unread_articles,
+        "top_feeds": top_feeds[:8],
+    }
+
+
 def format_datetime_for_ui(dt: datetime | None) -> str | None:
     if dt is None:
         return None
@@ -2352,6 +2454,38 @@ _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["\']([^"\']+)["\
 _DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
 _AUDIO_SRC_RE = re.compile(r'<audio\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
 _KG_AUDIO_CARD_RE = re.compile(r'<div\b[^>]*\bkg-audio-card\b[^>]*>', re.IGNORECASE)
+
+
+def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
+    """Remove every <div> block whose opening tag's class contains all of class_markers.
+
+    Uses depth-tracking to find the matching closing </div> so nested divs are
+    handled correctly.  Multiple non-overlapping matches are all stripped.
+    """
+    open_re = re.compile(
+        r'<div\b[^>]+class=["\'][^"\']*' + r'[^"\']*'.join(re.escape(m) for m in class_markers) + r'[^"\']*["\'][^>]*>',
+        re.IGNORECASE,
+    )
+    result: list[str] = []
+    pos = 0
+    for match in open_re.finditer(html):
+        start = match.start()
+        if start < pos:
+            continue
+        result.append(html[pos:start])
+        depth = 0
+        end = start
+        for dm in _DIV_TAG_RE.finditer(html, start):
+            if dm.group(1):  # closing tag
+                depth -= 1
+                if depth == 0:
+                    end = dm.end()
+                    break
+            else:
+                depth += 1
+        pos = end if end > start else match.end()
+    result.append(html[pos:])
+    return "".join(result)
 
 
 def _transform_kg_audio_cards(content_html: str) -> str:
@@ -3192,6 +3326,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     break
             content_html = _stripped or None
 
+        # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
+        # after the first paragraph. It contains external article thumbnails that
+        # confuse lead-image extraction and clutter the reading view.
+        if isinstance(content_html, str) and "mynorthwest.com" in feed_url and "related" in content_html:
+            content_html = _strip_div_blocks_by_class(content_html, "related", "alignright")
+
         # Ghost CMS embeds a JS-powered audio card that renders as a broken custom player
         # without its scripts. Replace the entire kg-audio-card widget with a native
         # <audio controls> element so it works in the reader.
@@ -3255,6 +3395,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # Ensure base_html is wrapped as HTML
                 if not isinstance(base_html, str):
                     base_html = ""
+                # If base_html is plain text (no HTML tags), linkify bare URLs
+                # so they render as clickable links rather than plain text.
+                if base_html and not re.search(r"<[a-z]", base_html, re.IGNORECASE):
+                    def _linkify_url(m: re.Match) -> str:
+                        url = m.group(0)
+                        esc = html.escape(url, quote=True)
+                        return f'<a href="{esc}" target="_blank" rel="noopener noreferrer">{html.escape(url)}</a>'
+                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(base_html))
                 content_html = embed_html + f"<div>{base_html}</div>"
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
@@ -3277,6 +3425,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             is_saved = bool(row)
 
         lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        # Discard avatar/portrait images (author headshots, profile pics) that
+        # some feeds embed as the first image; prefer no image over a face.
+        if lead_image_url and lead_image_service._AVATAR_HINT_PATTERNS.search(lead_image_url):
+            lead_image_url = None
+        # If no inline image found, try the source page when either:
+        #   (a) entry has never been processed by the lead image service, OR
+        #   (b) it was processed but stored None (e.g. backfill ran before the
+        #       inline→source fallback was added, or the source page was
+        #       temporarily unavailable). Store the result immediately so future
+        #       opens don't re-fetch.
+        _cache_key = (str(entry.feed_url), str(entry.id))
+        if lead_image_url is None and entry.link and lead_image_service._cache.get(_cache_key) is None:
+            lead_image_url = lead_image_service._fetch_source_lead_image(entry.link)
+            if lead_image_url:
+                lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
         # If we injected a YouTube embed for this entry, avoid showing a
         # separate lead image (typically the video thumbnail) above the
         # embedded player — it looks redundant and visually noisy.
@@ -3316,6 +3479,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _img_title_match = _img_title_re.search(_search_html)
             if _img_title_match:
                 _candidate = html.unescape((_img_title_match.group(1) or _img_title_match.group(2) or "")).strip()
+                # Strip any HTML tags that may have survived entity-unescaping.
+                _candidate = re.sub(r"<[^>]+>", "", _candidate).strip()
                 if _candidate:
                     image_title_text = _candidate
                     break
@@ -3327,16 +3492,32 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # incorrectly suppressed just because it appears at the top of content.
         _LEAD_IMG_OPENER_RE = re.compile(
             r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
-            r"(?:<(?:p|figure|div)\b[^>]*>\s*)?"
+            r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
             r"(?:<a\b[^>]*>\s*)?"
             r"<img\b[^>]*/?>",
             re.IGNORECASE | re.DOTALL,
         )
+        _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
         if lead_image_url and isinstance(content_html, str):
             _m = _LEAD_IMG_OPENER_RE.match(content_html)
             if _m:
-                # Always strip the opener, then check if lead URL appears in the body
+                _matched_opener = _m.group(0)
                 content_html = content_html[_m.end() :].lstrip() or None
+                # If the opener consumed an <a> tag, check whether there is text
+                # content between the stripped <img> and the closing </a>.  If so,
+                # that text is a hyperlink (e.g. "Click here to see the bonus
+                # panel!" or "New comic!") — restore the <a> so it stays linked.
+                _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
+                if _a_opener_m and content_html:
+                    _close_m = _CLOSE_A_RE.search(content_html)
+                    if _close_m:
+                        _between_text = re.sub(r"<[^>]+>", "", content_html[: _close_m.start()]).strip()
+                        if _between_text:
+                            # Text exists — restore <a> so it wraps that text
+                            content_html = _a_opener_m.group(0) + content_html
+                        else:
+                            # No text — remove the orphaned </a> at the start
+                            content_html = content_html[_close_m.end() :].lstrip() or None
                 if content_html and (
                     lead_image_url in content_html or lead_image_url in html.unescape(content_html)
                 ):
@@ -3363,16 +3544,28 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Uses the source HTML cache from lead image resolution — no extra HTTP call
         # when the entry was just opened for the first time.
         if image_title_text is None and lead_image_url and entry.link:
-            image_title_text = lead_image_service.fetch_entry_image_alt(entry.link) or None
+            _fetched_alt = lead_image_service.fetch_entry_image_alt(entry.link, lead_image_url=lead_image_url)
+            if _fetched_alt:
+                _fetched_alt = re.sub(r"<[^>]+>", "", _fetched_alt).strip() or None
+            image_title_text = _fetched_alt or None
+
+        # Drop trivially generic alt texts that add no information (e.g. Bootstrap
+        # class names used as alt values, or single-word placeholder strings).
+        _TRIVIAL_ALT_TEXTS = frozenset({"responsive image", "image", "photo", "picture",
+                                         "img", "thumbnail", "banner", "featured image"})
+        if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
+            image_title_text = None
 
         # Inject image_title_text as alt attribute on the first <img> in content_html
-        # when the image is inline (no separate lead_image_url, e.g. xkcd).
+        # and insert a caption <p> immediately after it so it appears inline under
+        # the image rather than at the bottom of the article.
         if image_title_text and not lead_image_url and isinstance(content_html, str):
+            _caption_injected = False
 
             def _inject_alt(m: re.Match) -> str:
+                nonlocal _caption_injected
                 tag = m.group(0)
                 if re.search(r"\balt\s*=", tag, re.IGNORECASE):
-                    # Replace existing (possibly empty) alt value
                     tag = re.sub(
                         r'(\balt\s*=\s*)(?:"[^"]*"|\x27[^\x27]*\x27)',
                         lambda a: a.group(1) + '"' + image_title_text.replace('"', "&quot;") + '"',
@@ -3382,9 +3575,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 else:
                     tag = tag[:-1] + ' alt="' + image_title_text.replace('"', "&quot;") + '"' + tag[-1]
-                return tag
+                _caption_injected = True
+                caption = f'<p class="entry-image-title-text">{html.escape(image_title_text)}</p>'
+                return tag + caption
 
             content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
+            if _caption_injected:
+                # Caption is now inline in content_html; clear it so the template
+                # doesn't also render it at the bottom of the article.
+                image_title_text = None
 
         # SMBC: append the bonus panel image from the source page.
         if entry.link and "smbc-comics.com" in (entry.link or ""):
@@ -3410,12 +3609,24 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
         _display_link = _rebase_proxy_entry_link(entry.link, feed_url, _channel_link)
+
+        # Suppress summaries that consist entirely of img tags with no text (e.g. xkcd,
+        # Deathbulge).  After the lead image is shown above the content, rendering the
+        # raw <img> tag in a <pre> block would show it as literal HTML text.
+        _summary = entry.summary
+        if isinstance(_summary, str):
+            _summary_no_imgs = re.sub(r"<img\b[^>]*/?>", "", _summary, flags=re.IGNORECASE).strip()
+            _summary_text_only = re.sub(r"<[^>]+>", " ", _summary_no_imgs)
+            _summary_text_only = html.unescape(re.sub(r"\s+", " ", _summary_text_only)).strip()
+            if not _summary_text_only:
+                _summary = None
+
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
             "title": entry.title,
             "link": _display_link,
-            "summary": entry.summary,
+            "summary": _summary,
             "content_html": content_html,
             "lead_image_url": lead_image_url,
             "image_title_text": image_title_text,
@@ -3571,6 +3782,24 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
     return feed_url
 
 
+def normalize_feed_url(feed_url: str) -> str:
+    """Normalize a feed URL for consistent storage.
+
+    - Strips trailing slashes from paths longer than "/", so that
+      "/feed" and "/feed/" are treated as the same feed.
+    - Other normalization (YouTube links) is handled separately.
+    """
+    try:
+        parsed = urlparse(feed_url)
+        path = parsed.path
+        if path and path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
+            feed_url = parsed._replace(path=path).geturl()
+    except Exception:
+        pass
+    return feed_url
+
+
 def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     feed_url = feed_url.strip()
     if not feed_url:
@@ -3582,6 +3811,19 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     except Exception:
         # If normalization fails for any reason, proceed with the original URL.
         pass
+
+    # Strip trailing slashes for consistent deduplication.
+    feed_url = normalize_feed_url(feed_url)
+
+    # If the slash-normalized URL isn't yet in this folder but the un-normalized
+    # variant already is, reuse the existing URL to prevent duplicates.
+    with get_meta_connection() as conn:
+        existing = conn.execute(
+            "SELECT feed_url FROM folder_feeds WHERE folder_id = ? AND (feed_url = ? OR feed_url = ?)",
+            (folder_id, feed_url, feed_url + "/"),
+        ).fetchone()
+    if existing and existing[0] != feed_url:
+        feed_url = existing[0]
 
     with get_reader() as reader:
         reader.add_feed(feed_url, exist_ok=True)
@@ -4275,7 +4517,7 @@ def home(
     for row in folder_rows:
         folder_row_id = int(row["id"])
         urls = direct_feed_urls_by_folder.get(folder_row_id, [])
-        feeds_by_folder[folder_row_id] = [
+        folder_feeds = [
             FeedInFolder(
                 url=url,
                 title=feed_title_map.get(url, url),
@@ -4285,6 +4527,8 @@ def home(
             for url in urls
             if url not in disabled_feed_urls
         ]
+        folder_feeds.sort(key=lambda f: f.title.casefold())
+        feeds_by_folder[folder_row_id] = folder_feeds
         for url in urls:
             feed_to_folder[url] = folder_row_id
 
@@ -4696,6 +4940,11 @@ def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
 
 
+@app.get("/folders/properties")
+def folder_properties(folder_id: int):
+    return JSONResponse(get_folder_properties(folder_id))
+
+
 _VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "none"}
 
 
@@ -4851,6 +5100,136 @@ def unsubscribe_feed(
     )
 
 
+@app.get("/feeds/duplicates")
+def get_feed_duplicates():
+    """Return same-folder and cross-folder slash-duplicate feed pairs."""
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT ff.folder_id, ff.feed_url, f.name AS folder_name"
+            " FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+            " ORDER BY ff.feed_url"
+        ).fetchall()
+
+    # url → [(folder_id, folder_name), ...]
+    url_folders: dict[str, list[tuple[int, str]]] = {}
+    for folder_id, feed_url, folder_name in rows:
+        url_folders.setdefault(feed_url, []).append((folder_id, folder_name))
+
+    # canonical → [url, url/, ...] — group all URL variants by their normalized form
+    by_canonical: dict[str, list[str]] = {}
+    for url in url_folders:
+        canonical = normalize_feed_url(url)
+        by_canonical.setdefault(canonical, []).append(url)
+
+    same_folder: list[dict] = []
+    cross_folder: list[dict] = []
+
+    for canonical, variants in by_canonical.items():
+        if len(variants) < 2:
+            continue
+        # Always keep the canonical (no trailing slash) form; remove the slash variant(s).
+        keep = canonical
+        for remove in variants:
+            if remove == keep:
+                continue
+            keep_folder_ids = {fid for fid, _ in url_folders.get(keep, [])}
+            remove_folder_ids = {fid for fid, _ in url_folders.get(remove, [])}
+            shared = keep_folder_ids & remove_folder_ids
+            only_in_remove = remove_folder_ids - keep_folder_ids
+
+            # Same-folder entries: both URLs exist in this folder → auto-fix.
+            for fid, fname in url_folders.get(remove, []):
+                if fid in keep_folder_ids:
+                    same_folder.append({
+                        "folder_id": fid,
+                        "folder_name": fname,
+                        "keep": keep,
+                        "remove": remove,
+                    })
+
+            # Cross-folder entries: remove URL is in folders the keep URL is not → user picks.
+            if only_in_remove:
+                all_folders = {fid: fname for fid, fname in url_folders.get(keep, []) + url_folders.get(remove, [])}
+                cross_folder.append({
+                    "keep": keep,
+                    "remove": remove,
+                    "keep_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(keep, [])],
+                    "remove_folders": [{"id": fid, "name": fname} for fid, fname in url_folders.get(remove, []) if fid in only_in_remove],
+                    "all_folders": sorted(
+                        [{"id": fid, "name": fname} for fid, fname in all_folders.items()],
+                        key=lambda x: x["name"],
+                    ),
+                })
+
+    return JSONResponse({"same_folder": same_folder, "cross_folder": cross_folder})
+
+
+@app.post("/feeds/deduplicate")
+async def deduplicate_feeds(request: Request):
+    """Remove slash-duplicate feeds.
+
+    Body (JSON):
+      same_folder: handled automatically — remove slash variant from shared folders.
+      cross_folder_choices: list of {keep, remove, folder_ids} — user-selected folder assignments.
+    """
+    body = await request.json()
+    cross_choices: list[dict] = body.get("cross_folder_choices", [])
+
+    data = get_feed_duplicates()
+    import json as _json
+    dup_data = _json.loads(data.body)
+    same = dup_data["same_folder"]
+
+    removed: list[dict] = []
+
+    # Same-folder: auto-remove slash variant from the shared folder.
+    for dup in same:
+        feed_url = dup["remove"]
+        folder_id = dup["folder_id"]
+        with get_meta_connection() as conn:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                (folder_id, feed_url),
+            )
+            still_used = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (feed_url,)
+            ).fetchone()
+        if not still_used:
+            with get_reader() as reader:
+                reader.delete_feed(feed_url, missing_ok=True)
+        removed.append({"removed": feed_url, "kept": dup["keep"]})
+        LOGGER.info("[deduplicate] same-folder: removed %s from folder %d", feed_url, folder_id)
+
+    # Cross-folder: apply user's folder choices.
+    for choice in cross_choices:
+        keep = choice["keep"]
+        remove = choice["remove"]
+        target_folder_ids: list[int] = choice.get("folder_ids", [])
+        # Remove the slash variant from all its folders.
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (remove,))
+            still_used = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (remove,)
+            ).fetchone()
+        if not still_used:
+            with get_reader() as reader:
+                reader.delete_feed(remove, missing_ok=True)
+        # Ensure the canonical URL is in each selected folder.
+        with get_reader() as reader:
+            reader.add_feed(keep, exist_ok=True)
+        with get_meta_connection() as conn:
+            for fid in target_folder_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (fid, keep),
+                )
+        removed.append({"removed": remove, "kept": keep, "folders": target_folder_ids})
+        LOGGER.info("[deduplicate] cross-folder: removed %s, kept %s in folders %s", remove, keep, target_folder_ids)
+
+    invalidate_meta_structure_cache()
+    return JSONResponse({"removed": removed, "count": len(removed)})
+
+
 @app.post("/refresh")
 def refresh(
     folder_id: int = Form(...),
@@ -4967,6 +5346,7 @@ def refresh_feed(
 
 @app.post("/folders/mark-read")
 def mark_folder_as_read(
+    request: Request,
     folder_id: int = Form(...),
     tag: str | None = Form(default=None),
     sort_by: str | None = Form(default=None),
@@ -4994,6 +5374,8 @@ def mark_folder_as_read(
     with dedupe_log_cache_lock:
         dedupe_log_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
+    if is_async_action_request(request, "lectio-mark-read"):
+        return JSONResponse({"ok": True, "marked": marked_count, "message": message})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -5002,6 +5384,7 @@ def mark_folder_as_read(
 
 @app.post("/feeds/mark-read")
 def mark_feed_as_read(
+    request: Request,
     folder_id: int = Form(...),
     feed_url: str = Form(...),
     list_feed_url: str | None = Form(default=None),
@@ -5029,6 +5412,8 @@ def mark_feed_as_read(
     star_only_query = build_star_only_query(star_only) if star_only is not None else ""
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
+    if is_async_action_request(request, "lectio-mark-read"):
+        return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message})
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
@@ -5323,6 +5708,7 @@ def mark_entries_range_read(
 
 @app.post("/entries/mark-older-than-read")
 def mark_entries_older_than_read(
+    request: Request,
     folder_id: int = Form(...),
     max_age_days: int = Form(...),
     list_feed_url: str | None = Form(default=None),
@@ -5381,6 +5767,8 @@ def mark_entries_older_than_read(
     star_only_query = build_star_only_query(star_only) if star_only is not None else ""
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
+    if is_async_action_request(request, "lectio-mark-read"):
+        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,

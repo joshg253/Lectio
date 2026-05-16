@@ -22,7 +22,12 @@ class LeadImageService:
 
     _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
     _LINK_TAG_RE = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
-    _IMG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"' + r"|'([^']*)')")
+    _IMG_ATTR_RE = re.compile(
+        r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'
+        r'(?:"([^"]*)"'
+        r"|'([^']*)'"
+        r'|([^\s"\'`=<>]+))'
+    )
     _OG_IMAGE_RE = re.compile(
         r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::url)?|twitter:image(?::src)?)["\'][^>]+content=["\']([^"\']+)["\']',
         re.IGNORECASE,
@@ -50,7 +55,7 @@ class LeadImageService:
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|(?<![a-zA-Z0-9])banner(?![a-zA-Z0-9])|sponsor|/flags/|header)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|sponsor|/flags/)",
         re.IGNORECASE,
     )
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
@@ -66,7 +71,7 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar)",
+        r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
         re.IGNORECASE,
     )
     # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
@@ -81,7 +86,16 @@ class LeadImageService:
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
-    _NEGATIVE_RETRY_SECONDS = 24 * 60 * 60
+    _NEGATIVE_RETRY_SECONDS = 4 * 60 * 60
+
+    # Per-feed injected-block stripping: maps a host substring to a tuple of
+    # CSS class markers.  Divs whose class attribute contains ALL markers are
+    # removed before image extraction so sidebar/promo thumbnails don't win.
+    _FEED_STRIP_RULES: dict[str, tuple[str, ...]] = {
+        "mynorthwest.com": ("related", "alignright"),
+    }
+
+    _FEED_STRIP_DIV_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
     _POSITIVE_REVALIDATE_SECONDS = 12 * 60 * 60
     _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
     # Re-detect feed strategy weekly (or when still 'unknown')
@@ -118,6 +132,39 @@ class LeadImageService:
     # ------------------------------------------------------------------
     # Feed lead-image strategy helpers
     # ------------------------------------------------------------------
+
+    def _strip_feed_injected_blocks(self, html: str, feed_url: str) -> str:
+        """Strip known injected promo/sidebar div blocks for specific feeds."""
+        for host_marker, class_markers in self._FEED_STRIP_RULES.items():
+            if host_marker not in feed_url:
+                continue
+            if not all(m in html for m in class_markers):
+                continue
+            open_re = re.compile(
+                r'<div\b[^>]+class=["\'][^"\']*' + r'[^"\']*'.join(re.escape(m) for m in class_markers) + r'[^"\']*["\'][^>]*>',
+                re.IGNORECASE,
+            )
+            result: list[str] = []
+            pos = 0
+            for match in open_re.finditer(html):
+                start = match.start()
+                if start < pos:
+                    continue
+                result.append(html[pos:start])
+                depth = 0
+                end = start
+                for dm in self._FEED_STRIP_DIV_RE.finditer(html, start):
+                    if dm.group(1):
+                        depth -= 1
+                        if depth == 0:
+                            end = dm.end()
+                            break
+                    else:
+                        depth += 1
+                pos = end if end > start else match.end()
+            result.append(html[pos:])
+            html = "".join(result)
+        return html
 
     def get_feed_strategy(self, feed_url: str) -> tuple[str, float, bool]:
         """Return (strategy, detected_at, manual) from DB, or ('unknown', 0.0, False)."""
@@ -162,7 +209,7 @@ class LeadImageService:
             for row in rows:
                 url = row["image_url"]
                 key = (str(row["feed_url"]), str(row["entry_id"]))
-                if url and not self._is_image_url_acceptable(str(url), None, None):
+                if url and not self._is_image_url_acceptable(str(url), None, None, allow_extensionless=True):
                     try:
                         with self._get_meta_connection() as conn:
                             conn.execute(
@@ -277,7 +324,7 @@ class LeadImageService:
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
                     cached = None
-                elif not self._is_image_url_acceptable(cached, None, None):
+                elif not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True):
                     cached = None
                 else:
                     return cached
@@ -357,14 +404,29 @@ class LeadImageService:
             html_candidates.append(summary)
 
         base_url = entry_link or feed_url
+        _VIDEO_POSTER_RE = re.compile(r'<video\b[^>]+\bposter=["\']([^"\']+)["\']', re.IGNORECASE)
         for html_candidate in html_candidates:
-            inline_image = self._extract_first_image_url_from_html(html_candidate, base_url)
+            if feed_url:
+                html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+            # Check <video poster="..."> before <img> — video posts (e.g. Tumblr)
+            # embed the frame thumbnail as the poster, which is the best lead image.
+            for vm in _VIDEO_POSTER_RE.finditer(html_candidate):
+                poster_url = urljoin(base_url, html.unescape(vm.group(1).strip()))
+                if (
+                    poster_url
+                    and self._is_image_url_acceptable(poster_url, None, None)
+                    and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=poster_url)
+                ):
+                    return poster_url
+            # Feed publishers intentionally include images in their content, so
+            # extensionless URLs (e.g. server-generated banners) are acceptable here.
+            inline_image = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
             # Skip plugin-flagged wrapper URLs (e.g. PCGamer /flexiimages/) so
             # the background job falls through to a proper source-page fetch
             # rather than being satisfied with an inferior feed thumbnail.
             if (
                 inline_image
-                and self._is_image_url_acceptable(inline_image, None, None)
+                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
             ):
                 return inline_image
@@ -543,7 +605,7 @@ class LeadImageService:
                 if cached:
                     if self._should_bypass_cached_url(entry_link=str(getattr(entry, "link", "") or ""), cached_url=cached):
                         pass
-                    elif not self._is_image_url_acceptable(cached, None, None):
+                    elif not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True):
                         pass
                     elif positive_revalidated >= self._POSITIVE_REVALIDATE_PER_FEED_LIMIT:
                         continue
@@ -604,9 +666,15 @@ class LeadImageService:
                 continue
             # For feeds whose images are reliably inline, source scraping rarely
             # improves on the feed content and frequently picks up site chrome.
+            # Exception: still try source as a fallback when inline extraction
+            # found nothing (e.g. the artist omitted the image for this entry
+            # or it's behind an age gate that doesn't include it in the feed).
             if strategy == "inline" and not need_redetect:
-                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
-                time.sleep(0.05)
+                image_url = self._fetch_source_lead_image(entry_link)
+                if image_url:
+                    _found_og_scrape = True
+                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
+                time.sleep(0.15)
                 continue
             image_url = self._fetch_source_lead_image(entry_link)
             if image_url:
@@ -738,23 +806,27 @@ class LeadImageService:
                 return True
         return False
 
-    def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None) -> str | None:
+    def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
                 if key and value:
                     attrs[key] = value
 
+            # Images with percentage-based height (e.g. height="60%") are
+            # decorative dividers or CSS-sized banners, not article images.
+            if attrs.get("height", "").strip().endswith("%"):
+                continue
             for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
                 if not image_url or image_url.startswith("data:"):
                     continue
                 resolved = urljoin(base_url, image_url)
                 if source_url and not self._is_source_image_tag_acceptable(attrs, resolved):
                     continue
-                if self._is_image_url_acceptable(resolved, None, None):
+                if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=allow_extensionless):
                     return resolved
         return None
 
@@ -770,7 +842,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
                 if key and value:
                     attrs[key] = value
             src = attrs.get("src", "")
@@ -888,6 +960,12 @@ class LeadImageService:
         if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
             return False
 
+        # Percentage-based height (e.g. height="60%") marks decorative dividers
+        # or banner images sized by CSS — not article content images.
+        raw_height = attrs.get("height", "").strip()
+        if raw_height.endswith("%"):
+            return False
+
         width_attr = self._parse_positive_int_attr(attrs, "width")
         height_attr = self._parse_positive_int_attr(attrs, "height")
         if width_attr is not None and width_attr < self._LEAD_IMAGE_MIN_WIDTH:
@@ -919,6 +997,10 @@ class LeadImageService:
         score = 0
         class_attr = (attrs.get("class") or "").lower()
         alt_attr = (attrs.get("alt") or "").strip()
+        # Fall back to title if alt is empty — some CMS themes use title as the
+        # image caption and leave alt blank (e.g. Hugo/Hexo static sites).
+        if not alt_attr:
+            alt_attr = (attrs.get("title") or "").strip()
 
         if "hero-image" in class_attr:
             score += 120
@@ -937,6 +1019,13 @@ class LeadImageService:
             score += 10
         elif len(alt_attr) >= 16:
             score += 5
+
+        # URL path contains keywords typical of article hero/cover images.
+        _url_path = resolved_url.lower()
+        if any(kw in _url_path for kw in ("/banner", "-banner", "_banner", "/hero", "-hero", "_hero",
+                                            "/cover", "-cover", "_cover", "/featured", "-featured",
+                                            "_featured", "/thumbnail", "-thumbnail")):
+            score += 15
 
         score += self._plugin_source_score_adjustment(source_url=source_url, attrs=attrs, resolved_url=resolved_url)
 
@@ -961,7 +1050,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
                 if key and value:
                     attrs[key] = value
 
@@ -991,7 +1080,7 @@ class LeadImageService:
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
                 if key and value:
                     attrs[key] = value
 
@@ -1295,9 +1384,12 @@ class LeadImageService:
         """Fetch a page, handling JS cookie challenges (e.g. BlueHost humans_XXXXX).
 
         Returns (html, final_url) or None on failure.
+        Falls back to urllib when the server disconnects on httpx (e.g. Tumblr
+        rejects httpx's TLS fingerprint but accepts stdlib connections).
         """
+        _use_urllib = False
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
+            with httpx.Client(follow_redirects=True, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
                 response = client.get(url)
                 if response.status_code == 409:
                     m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
@@ -1310,8 +1402,22 @@ class LeadImageService:
                             client.cookies.set(cname.strip(), cval.strip(), domain=domain)
                         response = client.get(url)
                 response.raise_for_status()
+        except httpx.RemoteProtocolError:
+            _use_urllib = True
         except Exception:
             return None
+
+        if _use_urllib:
+            try:
+                import urllib.request as _ureq
+                _req = _ureq.Request(url, headers={"User-Agent": self._user_agent})
+                with _ureq.urlopen(_req, timeout=10) as _resp:
+                    _html = _resp.read().decode("utf-8", errors="replace")
+                    _final = _resp.url
+                return _html, _final
+            except Exception:
+                return None
+
         return response.text, str(response.url)
 
     def _fetch_source_lead_image(self, entry_link: str) -> str | None:
@@ -1332,14 +1438,15 @@ class LeadImageService:
         if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
             self._source_html_cache.popitem(last=False)
 
-        preload_image = self._extract_preloaded_image_url(source_html, final_url)
-        if preload_image:
-            return preload_image
-        # Prefer the publisher-declared og:image/twitter:image over DOM scanning.
-        # DOM scanning is kept as fallback for pages without meta image tags.
+        # og:image is explicitly curated by the publisher for this article and
+        # is more reliable than preload links, which often point at site-chrome
+        # images (navigation graphics, sidebar thumbnails, LCP elements).
         meta_image = self._extract_meta_image_url_from_html(source_html, final_url)
         if meta_image:
             return meta_image
+        preload_image = self._extract_preloaded_image_url(source_html, final_url)
+        if preload_image:
+            return preload_image
         preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
         if preferred_image:
             return preferred_image
@@ -1388,32 +1495,95 @@ class LeadImageService:
             return url
         return None
 
-    def fetch_entry_image_alt(self, entry_link: str) -> str | None:
-        """Return alt/title text of the main scored image on the source page.
+    @staticmethod
+    def _urls_equivalent(url1: str, url2: str) -> bool:
+        """Loose URL match ignoring scheme (http/https) and www. prefix."""
+        try:
+            def _norm(u: str) -> str:
+                p = urlparse(u)
+                host = p.netloc.lower()
+                if host.startswith("www."):
+                    host = host[4:]
+                return host + p.path + ("?" + p.query if p.query else "")
+            return _norm(url1) == _norm(url2)
+        except Exception:
+            return url1 == url2
 
-        Uses the in-memory source HTML cache populated by _fetch_source_lead_image.
-        Returns None on cache miss — never fetches the source page on demand, since
-        get_entry_detail calls extract_entry_thumbnail_url with include_source_lookup=False
-        and an on-demand fetch would block the entry pane response for every entry.
+    def fetch_entry_image_alt(self, entry_link: str, lead_image_url: str | None = None) -> str | None:
+        """Return alt/title text for the lead image on the source page.
+
+        Checks the in-memory source HTML cache first; fetches the source page on-demand
+        if it is not cached.
+
+        When lead_image_url is provided, scans specifically for that URL (loose
+        http/https/www match). Returns the matching img's alt/title, or None if the
+        image is not found in the source page body — never falls back to unrelated imgs.
+
+        When lead_image_url is None, uses the scored path to find the best candidate.
         """
+        # Deathbulge is an AngularJS SPA; static page fetch returns only a shell.
+        # Their JSON API at /api/comics/{id} exposes alt_text directly.
+        _db_spa_m = re.match(r'https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)', entry_link)
+        if _db_spa_m:
+            try:
+                import json as _json
+                import urllib.request as _ureq
+                _api_url = f"http://deathbulge.com/api/comics/{_db_spa_m.group(1)}"
+                _req = _ureq.Request(_api_url, headers={"User-Agent": self._user_agent})
+                with _ureq.urlopen(_req, timeout=10) as _resp:
+                    _api_data = _json.load(_resp)
+                return (_api_data.get("comic", {}).get("alt_text") or "").strip() or None
+            except Exception:
+                pass
+            return None
+
         cached = self._source_html_cache.get(entry_link)
         if cached is None:
-            return None
-        final_url, source_html = cached
+            if not is_safe_outbound_url(entry_link):
+                return None
+            result = self._fetch_page_html(entry_link)
+            if result is None:
+                return None
+            source_html, final_url = result
+            self._source_html_cache[entry_link] = (final_url, source_html)
+            self._source_html_cache.move_to_end(entry_link)
+            if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                self._source_html_cache.popitem(last=False)
+        else:
+            final_url, source_html = cached
 
-        # Try the scored path first (high confidence).
+        if lead_image_url:
+            # Scan specifically for the known lead image URL; do not return alt from
+            # unrelated images (avoids "hand holding pint glass" for a blog header,
+            # "Mature Content Warning" for an age-gated comic page, etc.).
+            for tag_match in self._IMG_TAG_RE.finditer(source_html):
+                tag = tag_match.group(0)
+                attrs: dict[str, str] = {}
+                for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                    key = attr_match.group(1).strip().lower()
+                    value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                    if key and value:
+                        attrs[key] = value
+                for image_url in self._collect_img_candidate_urls(attrs):
+                    if not image_url or image_url.startswith("data:"):
+                        continue
+                    resolved = urljoin(final_url, image_url)
+                    if self._urls_equivalent(resolved, lead_image_url):
+                        return (attrs.get("alt") or attrs.get("title") or "").strip() or None
+            return None
+
+        # No specific lead URL: use the scored path for best confidence.
         _, alt_text = self._extract_preferred_source_image_data(source_html, final_url, entry_link)
         if alt_text:
             return alt_text
 
-        # Fallback: take the alt/title from the first acceptable img on the page.
-        # Useful for simple comic pages where the img has no hero/featured class.
+        # Fallback: first acceptable img on the page with non-empty alt/title.
         for tag_match in self._IMG_TAG_RE.finditer(source_html):
             tag = tag_match.group(0)
             attrs: dict[str, str] = {}
             for attr_match in self._IMG_ATTR_RE.finditer(tag):
                 key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or "").strip())
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
                 if key and value:
                     attrs[key] = value
             for image_url in self._collect_img_candidate_urls(attrs):
@@ -1427,5 +1597,5 @@ class LeadImageService:
                 candidate = (attrs.get("alt") or attrs.get("title") or "").strip()
                 if candidate:
                     return candidate
-                break  # first acceptable img found but no alt text — stop
+                break  # only consider the first candidate URL per img tag
         return None
