@@ -311,6 +311,17 @@
             >open_in_new</span
           ></a
         >
+        {% if email_configured %}
+        <button
+          type="button"
+          id="entry-email-button"
+          class="entry-source-button"
+          data-toggle-panel="email-article-modal"
+          title="Email this article"
+          aria-label="Email this article"
+          ><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span></button
+        >
+        {% endif %}
       </div>
       {% endif %}
     </div>

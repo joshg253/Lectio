@@ -42,6 +42,7 @@ from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services.email import send_article_email
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
@@ -176,6 +177,7 @@ GLOBAL_NOTE_SETTING_KEY = "global_note"
 PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
 YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
 YOUTUBE_SYNC_LAST_RESULT_KEY = "youtube_sync_last_result"
+EMAIL_TO_SETTING_KEY = "email_to"
 AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -190,6 +192,12 @@ TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260516w")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
+
+# --- Email (Resend) config ---
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM = os.getenv("LECTIO_EMAIL_FROM", "").strip()
+RESEND_TO_DEFAULT = os.getenv("LECTIO_EMAIL_TO", "").strip()
+EMAIL_CONFIGURED = bool(RESEND_API_KEY and RESEND_FROM)
 
 # --- YouTube subscription sync config ---
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
@@ -1158,6 +1166,10 @@ def ensure_meta_schema() -> None:
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
             (GLOBAL_NOTE_SETTING_KEY, ""),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
+            (EMAIL_TO_SETTING_KEY, RESEND_TO_DEFAULT),
         )
 
 
@@ -4432,6 +4444,7 @@ def home(
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
+        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         # Build inactive feed list (feed_url + folder membership).
@@ -4648,6 +4661,8 @@ def home(
             "selected_star_only": selected_star_only,
             "selected_resume_read_filter": selected_resume_read_filter,
             "global_note": global_note,
+            "email_configured": EMAIL_CONFIGURED,
+            "email_to_default": email_to_default,
             "youtube_sync_last_at": youtube_sync_last_at,
             "youtube_sync_last_result": youtube_sync_last_result,
             "inactive_feeds": inactive_feeds,
@@ -5895,6 +5910,57 @@ def unacknowledge_problematic_feed(request: Request, feed_url: str = Form(...)):
     if is_async_action_request(request, "lectio-problem-feed-unack"):
         return JSONResponse({"ok": True})
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/entries/email")
+def email_entry(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+    to_addr: str = Form(...),
+):
+    if not EMAIL_CONFIGURED:
+        return JSONResponse({"ok": False, "error": "Email not configured."}, status_code=503)
+
+    to_addr = to_addr.strip()
+    if not to_addr:
+        return JSONResponse({"ok": False, "error": "No recipient address."}, status_code=400)
+
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+
+    if not entry:
+        return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+
+    title = entry.title or ""
+    link = entry.link or ""
+    feed_title = (entry.feed.title if entry.feed else None) or ""
+
+    # Prefer plain-text summary; fall back to stripping HTML content.
+    excerpt = ""
+    if entry.summary:
+        excerpt = re.sub(r"<[^>]+>", " ", entry.summary)
+        excerpt = re.sub(r"\s+", " ", excerpt).strip()
+    elif entry.content:
+        raw = entry.content[0].value if entry.content else ""
+        excerpt = re.sub(r"<[^>]+>", " ", raw)
+        excerpt = re.sub(r"\s+", " ", excerpt).strip()
+    if excerpt and len(excerpt) > 300:
+        excerpt = excerpt[:297] + "…"
+
+    ok, error = send_article_email(
+        api_key=RESEND_API_KEY,
+        from_addr=RESEND_FROM,
+        to_addr=to_addr,
+        title=title,
+        feed_title=feed_title,
+        link=link,
+        excerpt=excerpt,
+    )
+    if ok:
+        return JSONResponse({"ok": True, "message": f"Sent to {to_addr}"})
+    LOGGER.warning("email send failed for %s/%s: %s", feed_url, entry_id, error)
+    return JSONResponse({"ok": False, "error": error or "Send failed."}, status_code=500)
 
 
 @app.post("/opml/import")

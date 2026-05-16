@@ -16,6 +16,7 @@ dependencies = [
     "reader>=3.23",
     "readability-lxml",
     "sqlalchemy",
+    "resend",
     "uvicorn[standard]",
 ]
 

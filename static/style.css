@@ -2785,7 +2785,8 @@ button:hover, .button-link:hover {
   box-shadow: 0 0 0 1px var(--field-focus-ring);
 }
 
-.action-modal-form input[type="text"] {
+.action-modal-form input[type="text"],
+.action-modal-form input[type="email"] {
   width: 100%;
   border: 1px solid var(--field-border);
   border-radius: 8px;
@@ -2796,7 +2797,9 @@ button:hover, .button-link:hover {
 }
 
 .action-modal-form input[type="text"]:focus,
-.action-modal-form input[type="text"]:focus-visible {
+.action-modal-form input[type="text"]:focus-visible,
+.action-modal-form input[type="email"]:focus,
+.action-modal-form input[type="email"]:focus-visible {
   border-color: var(--field-focus-border);
   box-shadow: 0 0 0 1px var(--field-focus-ring);
 }

@@ -1479,6 +1479,36 @@
     </div>
   </div>
 
+  {% if email_configured %}
+  <div id="email-article-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="email-article-modal-title">
+      <div class="modal-header-row">
+        <h3 id="email-article-modal-title" class="action-modal-title">Email Article</h3>
+        <button type="button" class="modal-close" data-close-modal="email-article-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form id="email-article-form" class="action-modal-form">
+        <input type="hidden" id="email-article-feed-url" name="feed_url" value="{{ selected_entry.feed_url if selected_entry else '' }}" />
+        <input type="hidden" id="email-article-entry-id" name="entry_id" value="{{ selected_entry.id if selected_entry else '' }}" />
+        <label class="action-modal-label" for="email-article-to">To</label>
+        <input
+          id="email-article-to"
+          name="to_addr"
+          type="email"
+          class="action-modal-input"
+          value="{{ email_to_default or '' }}"
+          placeholder="you@example.com"
+          required
+          autocomplete="email"
+        />
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
+          <button id="email-article-send" type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
   <div id="inactive-feeds-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="inactive-feeds-modal-title">
       <div class="modal-header-row">
@@ -2207,7 +2237,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2510,6 +2540,38 @@
           if (earlyGlobalNoteModal) {
             earlyGlobalNoteModal.removeAttribute('hidden');
           }
+        }
+      });
+    }
+
+    const emailArticleForm = document.getElementById('email-article-form');
+    const emailArticleModal = document.getElementById('email-article-modal');
+    if (emailArticleForm && emailArticleModal) {
+      emailArticleForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(emailArticleForm);
+        const sendBtn = document.getElementById('email-article-send');
+        if (sendBtn) sendBtn.disabled = true;
+        emailArticleModal.setAttribute('hidden', '');
+        try {
+          const response = await fetch('/entries/email', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'lectio-email-article' },
+          });
+          const data = await response.json();
+          if (data && data.ok) {
+            showToastMessage(data.message || 'Article sent.');
+          } else {
+            showToastMessage(data?.error || 'Could not send email.');
+            emailArticleModal.removeAttribute('hidden');
+          }
+        } catch (_err) {
+          showToastMessage('Could not send email.');
+          emailArticleModal.removeAttribute('hidden');
+        } finally {
+          if (sendBtn) sendBtn.disabled = false;
         }
       });
     }

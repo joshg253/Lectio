@@ -19,6 +19,7 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
   - Right-click a feed or entry to **Mark Feed as Read** without leaving the current view.
   - Right-click a folder to mark all feeds in it as read.
 - Bulk mark-as-read (toolbar dropdown or context menu) updates the visible list in-place — no page reload.
+- **Email Article** — share button in the entry toolbar sends the title, excerpt, and link as a styled email via Resend (requires `RESEND_API_KEY`, `LECTIO_EMAIL_FROM`, and `LECTIO_EMAIL_TO` in `.env`).
 
 ## Running locally
 
