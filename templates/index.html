@@ -4652,9 +4652,11 @@
       event.stopPropagation();
       const feedUrlInput = form.querySelector('input[name="feed_url"]');
       const feedUrlFilter = feedUrlInput instanceof HTMLInputElement ? feedUrlInput.value : null;
+      const maxAgeDaysInput = form.querySelector('input[name="max_age_days"]');
+      const maxAgeDays = maxAgeDaysInput instanceof HTMLInputElement ? Number(maxAgeDaysInput.value) : null;
       const markReadMenuDetails = form.closest('details.mark-read-menu');
       if (markReadMenuDetails) markReadMenuDetails.removeAttribute('open');
-      submitMarkReadAsync(form, feedUrlFilter || null);
+      submitMarkReadAsync(form, feedUrlFilter || null, maxAgeDays);
     }, true);
 
     postMarkReadButton?.addEventListener('click', (event) => {
@@ -4765,13 +4767,25 @@
       return true;
     }
 
-    function applyBulkReadState(feedUrlFilter) {
+    function applyBulkReadState(feedUrlFilter, maxAgeDays) {
+      const cutoff = (maxAgeDays != null && Number.isFinite(maxAgeDays))
+        ? new Date(Date.now() - maxAgeDays * 86400 * 1000)
+        : null;
       const postItems = document.querySelectorAll('.posts .post-item');
       const deltaByFeed = {};
       for (const item of postItems) {
         const itemFeedUrl = item.getAttribute('data-post-feed-url') || '';
         if (feedUrlFilter && itemFeedUrl !== feedUrlFilter) continue;
         if (item.getAttribute('data-post-read') === '1') continue;
+        if (cutoff !== null) {
+          // Mirror the server logic: skip entries with no date, skip entries newer than cutoff.
+          const isoPost = (item.getAttribute('data-post-iso') || '').trim();
+          const isoReceived = (item.getAttribute('data-received-iso') || '').trim();
+          const dateStr = isoPost || isoReceived;
+          if (!dateStr) continue;
+          const entryDate = new Date(dateStr);
+          if (isNaN(entryDate.getTime()) || entryDate >= cutoff) continue;
+        }
         const changed = applyPostItemReadState(item, true);
         if (changed) {
           deltaByFeed[itemFeedUrl] = (deltaByFeed[itemFeedUrl] || 0) + 1;
@@ -4790,9 +4804,9 @@
       }
     }
 
-    async function submitMarkReadAsync(form, feedUrlFilter) {
-      // Optimistic: dim items immediately so there's no perceived delay.
-      applyBulkReadState(feedUrlFilter || null);
+    async function submitMarkReadAsync(form, feedUrlFilter, maxAgeDays) {
+      // Optimistic: dim only the posts that will actually be marked on the server.
+      applyBulkReadState(feedUrlFilter || null, maxAgeDays ?? null);
 
       const formData = new FormData(form);
       const body = new URLSearchParams();

@@ -3659,6 +3659,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         }
 
 
+def _get_email_to_default() -> str:
+    if not EMAIL_CONFIGURED:
+        return ""
+    with get_meta_connection() as conn:
+        return get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT
+
+
 @app.get("/entries/pane", response_class=HTMLResponse)
 def entry_pane(
     request: Request,
@@ -3711,6 +3718,8 @@ def entry_pane(
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
             "feed_to_folder": feed_to_folder,
+            "email_configured": EMAIL_CONFIGURED,
+            "email_to_default": _get_email_to_default(),
         },
     )
 
@@ -4444,7 +4453,7 @@ def home(
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
-        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT
+        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT if EMAIL_CONFIGURED else ""
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         # Build inactive feed list (feed_url + folder membership).
