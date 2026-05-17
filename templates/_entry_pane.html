@@ -51,7 +51,7 @@
           data-received-display="{{ selected_entry.received_display or '' }}"
           data-time-format="long"
           datetime="{{ selected_entry.post_timestamp or '' }}"
-          >{{ selected_entry.post_display }}</time
+          >{{ selected_entry.post_display or '—' }}</time
         >
         {% endif %}
       </div>

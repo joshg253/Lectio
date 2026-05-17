@@ -190,7 +190,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260516w")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517f")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -1165,6 +1165,17 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS highlight_keywords (
+                scope TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT 'yellow',
+                PRIMARY KEY (scope, scope_id, keyword)
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1262,6 +1273,35 @@ def upsert_feed_display_pref(conn: sqlite3.Connection, feed_url: str, key: str, 
         (feed_url,),
     )
     conn.execute(f"UPDATE feed_display_prefs SET {key} = ? WHERE feed_url = ?", (value, feed_url))
+
+
+_HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
+_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
+
+
+def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT scope, scope_id, keyword, color FROM highlight_keywords ORDER BY scope, scope_id, keyword"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_highlight_keyword(conn: sqlite3.Connection, scope: str, scope_id: str, keyword: str, color: str) -> None:
+    if scope not in _HIGHLIGHT_VALID_SCOPES:
+        raise ValueError(f"Invalid scope: {scope}")
+    if color not in _HIGHLIGHT_VALID_COLORS:
+        color = "yellow"
+    conn.execute(
+        "INSERT OR REPLACE INTO highlight_keywords (scope, scope_id, keyword, color) VALUES (?, ?, ?, ?)",
+        (scope, scope_id, keyword.strip(), color),
+    )
+
+
+def remove_highlight_keyword(conn: sqlite3.Connection, scope: str, scope_id: str, keyword: str) -> None:
+    conn.execute(
+        "DELETE FROM highlight_keywords WHERE scope = ? AND scope_id = ? AND keyword = ?",
+        (scope, scope_id, keyword.strip()),
+    )
 
 
 _TRIVIAL_CAPTIONS = frozenset({
@@ -3642,9 +3682,45 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 ):
                     lead_image_url = None
             elif lead_image_url in content_html or lead_image_url in html.unescape(content_html):
-                # Lead URL is in content but not at the opener position — suppress it
-                # so the same image doesn't render both above and inside the content.
-                lead_image_url = None
+                # Lead URL is buried in the content (not at the opener position).
+                # Hoist it to the top by keeping lead_image_url and stripping the
+                # inline occurrence — along with its enclosing block — so the image
+                # doesn't render twice and doesn't leave an empty card shell.
+                _fig_with_lead_re = re.compile(r'<figure\b[^>]*>.*?</figure\s*>', re.IGNORECASE | re.DOTALL)
+                content_html = _fig_with_lead_re.sub(
+                    lambda _m: '' if (lead_image_url in _m.group(0) or lead_image_url in html.unescape(_m.group(0))) else _m.group(0),
+                    content_html,
+                )
+                # If still present, strip the entire enclosing <div> block rather
+                # than just the <img> tag to avoid leaving empty card shells behind.
+                if lead_image_url in content_html or lead_image_url in html.unescape(content_html):
+                    _DIV_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
+                    _img_idx = content_html.find(lead_image_url)
+                    if _img_idx < 0:
+                        _img_idx = html.unescape(content_html).find(lead_image_url)
+                    if _img_idx >= 0:
+                        _prefix = content_html[:_img_idx]
+                        _div_start = None
+                        for _dm in _DIV_RE.finditer(_prefix):
+                            if not _dm.group(1):
+                                _div_start = _dm.start()
+                        if _div_start is not None:
+                            _depth = 0
+                            _div_end = None
+                            for _dm in _DIV_RE.finditer(content_html, _div_start):
+                                _depth += -1 if _dm.group(1) else 1
+                                if _depth == 0:
+                                    _div_end = _dm.end()
+                                    break
+                            if _div_end is not None:
+                                content_html = content_html[:_div_start] + content_html[_div_end:]
+                # Strip any remaining bare <img> with this URL as a final fallback.
+                content_html = re.sub(
+                    r'<img\b[^>]*/?>',
+                    lambda _m: '' if (lead_image_url in _m.group(0) or lead_image_url in html.unescape(_m.group(0))) else _m.group(0),
+                    content_html, flags=re.IGNORECASE,
+                )
+                content_html = content_html.strip() or None
 
         # If lead_image_url came from source scraping and the remaining content
         # is essentially just a thumbnail wrapper (minimal text after stripping
@@ -4573,6 +4649,7 @@ def home(
             folder_rows.append(folder_dict)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT if EMAIL_CONFIGURED else ""
+        highlight_rules = get_highlight_keywords(conn)
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         # Build inactive feed list (feed_url + folder membership).
@@ -4803,6 +4880,7 @@ def home(
             "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
             "static_asset_version": STATIC_ASSET_VERSION,
             "debug_mode": DEBUG_MODE,
+            "highlight_rules": highlight_rules,
         },
     )
 
@@ -5162,6 +5240,41 @@ def set_feed_display_pref_route(
     with get_meta_connection() as conn:
         upsert_feed_display_pref(conn, feed_url, key, value)
     return JSONResponse({"ok": True, "key": key, "value": value})
+
+
+@app.get("/highlights")
+def get_highlights_route():
+    with get_meta_connection() as conn:
+        rows = get_highlight_keywords(conn)
+    return JSONResponse({"ok": True, "keywords": rows})
+
+
+@app.post("/highlights/add")
+def add_highlight_route(
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    keyword: str = Form(...),
+    color: str = Form("yellow"),
+):
+    keyword = keyword.strip()
+    if not keyword:
+        return JSONResponse({"error": "keyword is required"}, status_code=400)
+    if scope not in _HIGHLIGHT_VALID_SCOPES:
+        return JSONResponse({"error": "invalid scope"}, status_code=400)
+    with get_meta_connection() as conn:
+        add_highlight_keyword(conn, scope, scope_id, keyword, color)
+    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword, "color": color})
+
+
+@app.post("/highlights/remove")
+def remove_highlight_route(
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    keyword: str = Form(...),
+):
+    with get_meta_connection() as conn:
+        remove_highlight_keyword(conn, scope, scope_id, keyword)
+    return JSONResponse({"ok": True})
 
 
 @app.post("/feeds/strategy-refresh")

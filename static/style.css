@@ -3329,6 +3329,7 @@ body[data-keyboard-open="1"] .action-modal-panel {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 0.75rem;
   margin-bottom: 0.5rem;
+  min-height: 0;
 }
 
 .feed-prop-strat-card {
@@ -3351,10 +3352,12 @@ body[data-keyboard-open="1"] .action-modal-panel {
 
 .feed-prop-strat-thumb {
   width: 100%;
+  height: auto;
   aspect-ratio: 16/9;
   object-fit: cover;
   display: block;
   background: var(--field-elevated-bg);
+  max-height: 120px;
 }
 
 .feed-prop-strat-thumb-empty {
@@ -3651,5 +3654,116 @@ body[data-keyboard-open="1"] .action-modal-panel {
   gap: 0.3rem;
   font-size: 0.82rem;
   cursor: pointer;
+}
+
+/* ── Highlights ─────────────────────────────────────────────────────────── */
+mark.highlight-mark {
+  border-radius: 2px;
+  padding: 0 1px;
+  font: inherit;
+}
+.highlight-mark-yellow { background: #ffe066; color: #333; }
+.highlight-mark-green  { background: #b6f2b6; color: #1a3a1a; }
+.highlight-mark-blue   { background: #b3d9ff; color: #0a2340; }
+.highlight-mark-pink   { background: #ffc0d6; color: #3a001a; }
+.highlight-mark-orange { background: #ffd0a0; color: #3a1a00; }
+
+/* Highlights modal */
+.highlights-modal-panel {
+  min-width: 340px;
+  max-width: 480px;
+  width: 92vw;
+}
+.highlights-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color, #ddd);
+  padding-bottom: 0.4rem;
+}
+.highlights-tab {
+  background: none;
+  border: none;
+  padding: 0.3rem 0.7rem;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: var(--text-muted, #888);
+}
+.highlights-tab.active {
+  background: var(--accent-subtle, #e8f0ff);
+  color: var(--accent, #2060cc);
+  font-weight: 600;
+}
+.highlights-scope-label {
+  font-size: 0.82rem;
+  color: var(--text-muted, #888);
+  margin: 0 0 0.5rem;
+}
+.highlights-keyword-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  min-height: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.highlights-empty {
+  font-size: 0.82rem;
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.highlights-keyword-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.highlights-keyword-badge {
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.highlights-remove-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-muted, #888);
+  font-size: 0.78rem;
+}
+.highlights-remove-btn .material-symbols-rounded { font-size: 1rem; }
+.highlights-remove-btn:hover { color: var(--danger, #c0392b); }
+.highlights-add-form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.highlights-keyword-input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+}
+.highlights-color-select {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: var(--input-bg, #fff);
+  color: var(--text, #222);
+}
+.highlights-add-btn {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.88rem;
+  border-radius: 4px;
 }
 

@@ -9,6 +9,7 @@
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
     window.__lectioTheme = window.localStorage.getItem('lectio-theme') || 'dark';
+    window.HIGHLIGHT_RULES = {{ highlight_rules | tojson }};
   </script>
   <script>
     // CSRF shim — installs BEFORE any other handler registers.
@@ -126,6 +127,7 @@
             </div>
           </div>
           <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
+          <button type="button" class="menu-item" id="menu-highlights-btn"><span class="material-symbols-rounded" aria-hidden="true">highlight</span> Highlights</button>
           <a
             class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
             href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
@@ -1364,6 +1366,7 @@
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-folder-properties" class="context-menu-item" hidden>Properties</button>
+    <button type="button" id="ctx-highlights" class="context-menu-item" hidden>Highlights…</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
     <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Sync Subscriptions</button>
     <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
@@ -1508,6 +1511,65 @@
     </div>
   </div>
   {% endif %}
+
+  <div id="highlights-modal" class="action-modal" hidden>
+    <div class="action-modal-panel highlights-modal-panel" role="dialog" aria-modal="true" aria-labelledby="highlights-modal-title">
+      <div class="modal-header-row">
+        <h3 id="highlights-modal-title" class="action-modal-title">Highlights</h3>
+        <button type="button" class="modal-close" data-close-modal="highlights-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="highlights-tabs" role="tablist">
+        <button type="button" class="highlights-tab active" id="hl-tab-global" role="tab" aria-selected="true" aria-controls="hl-panel-global" data-hl-tab="global">Global</button>
+        <button type="button" class="highlights-tab" id="hl-tab-folder" role="tab" aria-selected="false" aria-controls="hl-panel-folder" data-hl-tab="folder">Folder</button>
+        <button type="button" class="highlights-tab" id="hl-tab-feed" role="tab" aria-selected="false" aria-controls="hl-panel-feed" data-hl-tab="feed">Feed</button>
+      </div>
+      <div id="hl-panel-global" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-global">
+        <p class="highlights-scope-label">Keywords highlighted everywhere</p>
+        <ul class="highlights-keyword-list" id="hl-list-global"></ul>
+        <form class="highlights-add-form" data-hl-scope="global" data-hl-scope-id="">
+          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
+          <select class="highlights-color-select">
+            <option value="yellow">Yellow</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="pink">Pink</option>
+            <option value="orange">Orange</option>
+          </select>
+          <button type="submit" class="highlights-add-btn">Add</button>
+        </form>
+      </div>
+      <div id="hl-panel-folder" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-folder" hidden>
+        <p class="highlights-scope-label">Keywords highlighted in <strong id="hl-folder-name">this folder</strong></p>
+        <ul class="highlights-keyword-list" id="hl-list-folder"></ul>
+        <form class="highlights-add-form" data-hl-scope="folder" data-hl-scope-id="">
+          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
+          <select class="highlights-color-select">
+            <option value="yellow">Yellow</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="pink">Pink</option>
+            <option value="orange">Orange</option>
+          </select>
+          <button type="submit" class="highlights-add-btn">Add</button>
+        </form>
+      </div>
+      <div id="hl-panel-feed" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-feed" hidden>
+        <p class="highlights-scope-label">Keywords highlighted in <strong id="hl-feed-name">this feed</strong></p>
+        <ul class="highlights-keyword-list" id="hl-list-feed"></ul>
+        <form class="highlights-add-form" data-hl-scope="feed" data-hl-scope-id="">
+          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
+          <select class="highlights-color-select">
+            <option value="yellow">Yellow</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="pink">Pink</option>
+            <option value="orange">Orange</option>
+          </select>
+          <button type="submit" class="highlights-add-btn">Add</button>
+        </form>
+      </div>
+    </div>
+  </div>
 
   <div id="inactive-feeds-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="inactive-feeds-modal-title">
@@ -2262,7 +2324,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal, #highlights-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2836,6 +2898,7 @@
     const addFeedButton = document.getElementById('ctx-add-feed');
     const feedPropertiesButton = document.getElementById('ctx-feed-properties');
     const folderPropertiesButton = document.getElementById('ctx-folder-properties');
+    const highlightsButton = document.getElementById('ctx-highlights');
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
@@ -3379,6 +3442,7 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
+        if (typeof applyHighlights === 'function') applyHighlights();
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
         }
@@ -3454,6 +3518,7 @@
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
         }
+        if (typeof applyHighlights === 'function') applyHighlights();
         markActivePostByUrl(url);
         syncActivePostThumbnailFromEntryPane();
         centerActivePostInView();
@@ -3887,7 +3952,7 @@
       }
     }
 
-    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape']);
+    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss']);
 
     function renderStrategyGrid(cacheRows) {
       if (!feedPropStratGrid || !feedPropStratEmpty) return;
@@ -3927,7 +3992,7 @@
     async function doStrategyRefresh(feedUrl, entryId) {
       if (!feedPropRefreshBtn) return;
       feedPropRefreshBtn.disabled = true;
-      feedPropRefreshBtn.textContent = 'Refreshing…';
+      feedPropRefreshBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refreshing…';
       try {
         const body = new URLSearchParams({ feed_url: feedUrl });
         if (entryId) body.set('entry_id', entryId);
@@ -3943,7 +4008,7 @@
         }
       } finally {
         feedPropRefreshBtn.disabled = false;
-        feedPropRefreshBtn.textContent = 'Refresh';
+        feedPropRefreshBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh';
       }
     }
 
@@ -4194,6 +4259,7 @@
         setMenuItemVisible(addFeedButton, true);
         setMenuItemVisible(feedPropertiesButton, false);
         setMenuItemVisible(folderPropertiesButton, true);
+        setMenuItemVisible(highlightsButton, true);
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
@@ -4232,6 +4298,7 @@
         setMenuItemVisible(addFeedButton, false);
         setMenuItemVisible(feedPropertiesButton, true);
         setMenuItemVisible(folderPropertiesButton, false);
+        setMenuItemVisible(highlightsButton, true);
         setMenuItemVisible(unsubscribeFeedButton, true);
         setMenuItemVisible(renameFolderButton, false);
         setMenuItemVisible(deleteFolderButton, false);
@@ -4263,6 +4330,7 @@
       setMenuItemVisible(addFeedButton, false);
       setMenuItemVisible(feedPropertiesButton, true);
       setMenuItemVisible(folderPropertiesButton, false);
+      setMenuItemVisible(highlightsButton, true);
       setMenuItemVisible(unsubscribeFeedButton, true);
       setMenuItemVisible(renameFolderButton, false);
       setMenuItemVisible(deleteFolderButton, false);
@@ -5340,14 +5408,7 @@
     unsubscribeFeedButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (
-        contextTargetType !== 'feed' ||
-        !contextFolderId ||
-        !contextFeedUrl ||
-        !unsubscribeFolderIdInput ||
-        !unsubscribeFeedUrlInput ||
-        !unsubscribeFeedForm
-      ) {
+      if (contextTargetType !== 'feed' || !contextFolderId || !contextFeedUrl) {
         return;
       }
 
@@ -5357,10 +5418,46 @@
         return;
       }
 
-      unsubscribeFolderIdInput.value = contextFolderId;
-      unsubscribeFeedUrlInput.value = contextFeedUrl;
       hideAllContextMenus();
-      unsubscribeFeedForm.submit();
+
+      // Find the sidebar <li> for this feed before the async call so we can
+      // remove it on success without a full reload.
+      const feedLi = document.querySelector(
+        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(contextFeedUrl)}"][data-folder-id="${CSS.escape(String(contextFolderId))}"]`
+      )?.closest('.tree-feed-item');
+
+      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
+      if (feedLi) feedLi.style.opacity = '0.4';
+
+      const body = new URLSearchParams();
+      body.set('folder_id', contextFolderId);
+      body.set('feed_url', contextFeedUrl);
+      fetch('/feeds/unsubscribe', {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'lectio-sidebar',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        credentials: 'same-origin',
+        body: body.toString(),
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
+          if (wasActive) {
+            // Navigate to the folder view so the post list is no longer
+            // showing entries from a feed that no longer exists.
+            const params = new URLSearchParams(window.location.search);
+            params.delete('feed_url');
+            params.delete('entry_id');
+            params.set('folder_id', String(contextFolderId));
+            window.location.assign('/?' + params.toString());
+          }
+        })
+        .catch((err) => {
+          if (feedLi) feedLi.style.opacity = '';
+          window.alert(`Unsubscribe failed: ${err}`);
+        });
     });
 
     feedPropertiesButton?.addEventListener('click', (event) => {
@@ -5384,6 +5481,219 @@
       hideAllContextMenus();
       openFolderPropertiesModal(Number(contextFolderId));
     });
+
+    // ── Highlights modal ────────────────────────────────────────────────────
+    {
+      const hlModal = document.getElementById('highlights-modal');
+      if (!Array.isArray(window.HIGHLIGHT_RULES)) window.HIGHLIGHT_RULES = [];
+      const hlRules = window.HIGHLIGHT_RULES;
+      const hlColorLabels = { yellow: 'Yellow', green: 'Green', blue: 'Blue', pink: 'Pink', orange: 'Orange' };
+
+      function hlGetRules(scope, scopeId) {
+        return hlRules.filter(r => r.scope === scope && r.scope_id === (scopeId || ''));
+      }
+
+      function hlRenderList(listEl, scope, scopeId) {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const rules = hlGetRules(scope, scopeId || '');
+        if (rules.length === 0) {
+          const li = document.createElement('li');
+          li.className = 'highlights-empty';
+          li.textContent = 'No keywords yet';
+          listEl.appendChild(li);
+          return;
+        }
+        for (const rule of rules) {
+          const li = document.createElement('li');
+          li.className = 'highlights-keyword-item';
+          const badge = document.createElement('span');
+          badge.className = `highlights-keyword-badge highlight-mark-${rule.color}`;
+          badge.textContent = rule.keyword;
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'highlights-remove-btn';
+          removeBtn.setAttribute('aria-label', `Remove ${rule.keyword}`);
+          removeBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+          removeBtn.addEventListener('click', async () => {
+            const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword });
+            try {
+              const resp = await fetch('/highlights/remove', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+              if (!resp.ok) throw new Error('failed');
+              const idx = hlRules.findIndex(r => r.scope === rule.scope && r.scope_id === rule.scope_id && r.keyword === rule.keyword);
+              if (idx >= 0) hlRules.splice(idx, 1);
+              hlRefreshActivePanel();
+              applyHighlights();
+            } catch { window.alert('Failed to remove keyword'); }
+          });
+          li.appendChild(badge);
+          li.appendChild(removeBtn);
+          listEl.appendChild(li);
+        }
+      }
+
+      let hlActiveTab = 'global';
+      let hlActiveFolderId = '';
+      let hlActiveFolderName = '';
+      let hlActiveFeedUrl = '';
+      let hlActiveFeedName = '';
+
+      function hlRefreshActivePanel() {
+        const globalList = document.getElementById('hl-list-global');
+        const folderList = document.getElementById('hl-list-folder');
+        const feedList = document.getElementById('hl-list-feed');
+        hlRenderList(globalList, 'global', '');
+        hlRenderList(folderList, 'folder', hlActiveFolderId);
+        hlRenderList(feedList, 'feed', hlActiveFeedUrl);
+      }
+
+      function hlSwitchTab(tab) {
+        hlActiveTab = tab;
+        hlModal?.querySelectorAll('.highlights-tab').forEach(btn => {
+          const isActive = btn.getAttribute('data-hl-tab') === tab;
+          btn.classList.toggle('active', isActive);
+          btn.setAttribute('aria-selected', String(isActive));
+        });
+        hlModal?.querySelectorAll('.highlights-panel').forEach(panel => {
+          const panelId = panel.id.replace('hl-panel-', '');
+          panel.hidden = panelId !== tab;
+        });
+      }
+
+      hlModal?.querySelectorAll('.highlights-tab').forEach(btn => {
+        btn.addEventListener('click', () => hlSwitchTab(btn.getAttribute('data-hl-tab') || 'global'));
+      });
+
+      hlModal?.querySelectorAll('.highlights-add-form').forEach(form => {
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const scope = form.getAttribute('data-hl-scope');
+          const scopeId = form.getAttribute('data-hl-scope-id') || '';
+          const input = form.querySelector('.highlights-keyword-input');
+          const colorSelect = form.querySelector('.highlights-color-select');
+          const keyword = (input?.value || '').trim();
+          const color = colorSelect?.value || 'yellow';
+          if (!keyword) return;
+          const body = new URLSearchParams({ scope, scope_id: scopeId, keyword, color });
+          try {
+            const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+            if (!resp.ok) throw new Error('failed');
+            const existing = hlRules.findIndex(r => r.scope === scope && r.scope_id === scopeId && r.keyword === keyword);
+            if (existing < 0) hlRules.push({ scope, scope_id: scopeId, keyword, color });
+            else hlRules[existing].color = color;
+            if (input) input.value = '';
+            hlRefreshActivePanel();
+            applyHighlights();
+          } catch { window.alert('Failed to add keyword'); }
+        });
+      });
+
+      function openHighlightsModal(tab, folderId, folderName, feedUrl, feedName) {
+        hlActiveFolderId = folderId || '';
+        hlActiveFolderName = folderName || '';
+        hlActiveFeedUrl = feedUrl || '';
+        hlActiveFeedName = feedName || '';
+        const folderForm = hlModal?.querySelector('[data-hl-scope="folder"]');
+        const feedForm = hlModal?.querySelector('[data-hl-scope="feed"]');
+        if (folderForm) folderForm.setAttribute('data-hl-scope-id', hlActiveFolderId);
+        if (feedForm) feedForm.setAttribute('data-hl-scope-id', hlActiveFeedUrl);
+        const folderNameEl = document.getElementById('hl-folder-name');
+        if (folderNameEl) folderNameEl.textContent = hlActiveFolderName || 'this folder';
+        const feedNameEl = document.getElementById('hl-feed-name');
+        if (feedNameEl) feedNameEl.textContent = hlActiveFeedName || 'this feed';
+        hlRefreshActivePanel();
+        hlSwitchTab(tab || 'global');
+        hlModal?.removeAttribute('hidden');
+      }
+
+      highlightsButton?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideAllContextMenus();
+        if (contextTargetType === 'feed') {
+          openHighlightsModal('feed', contextFolderId || '', '', contextFeedUrl || '', contextFolderName || '');
+        } else {
+          openHighlightsModal('folder', contextFolderId || '', contextFolderName || '', '', '');
+        }
+      });
+
+      document.getElementById('menu-highlights-btn')?.addEventListener('click', () => {
+        openHighlightsModal('global', '', '', '', '');
+      });
+    }
+
+    // ── Highlight engine (applies <mark> to post titles) ────────────────────
+    function applyHighlights() {
+      const rules = window.HIGHLIGHT_RULES || [];
+      if (rules.length === 0) {
+        document.querySelectorAll('.post-title .highlight-mark, .entry-pane-title-link .highlight-mark').forEach(m => {
+          m.replaceWith(document.createTextNode(m.textContent));
+        });
+        return;
+      }
+
+      function highlightTextNode(node, matchRules) {
+        if (matchRules.length === 0) return;
+        const text = node.textContent;
+        let pattern = matchRules.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+        const re = new RegExp(`(${pattern})`, 'gi');
+        if (!re.test(text)) return;
+        re.lastIndex = 0;
+        const frag = document.createDocumentFragment();
+        let last = 0;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          const rule = matchRules.find(r => r.keyword.toLowerCase() === m[0].toLowerCase());
+          const mark = document.createElement('mark');
+          mark.className = `highlight-mark highlight-mark-${rule ? rule.color : 'yellow'}`;
+          mark.textContent = m[0];
+          frag.appendChild(mark);
+          last = m.index + m[0].length;
+        }
+        if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+        node.parentNode.replaceChild(frag, node);
+      }
+
+      function highlightEl(el, matchRules) {
+        // Reset existing marks first
+        el.querySelectorAll('.highlight-mark').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
+        el.normalize();
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        let n;
+        while ((n = walker.nextNode())) textNodes.push(n);
+        textNodes.forEach(tn => highlightTextNode(tn, matchRules));
+      }
+
+      // Post list titles
+      for (const postItem of document.querySelectorAll('.post-item')) {
+        const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
+        const folderIdStr = postItem.querySelector('.post-feed-link')?.getAttribute('data-folder-id') || '';
+        const matchRules = rules.filter(r =>
+          r.scope === 'global' ||
+          (r.scope === 'folder' && r.scope_id === folderIdStr) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl)
+        );
+        const titleEl = postItem.querySelector('.post-title');
+        if (titleEl) highlightEl(titleEl, matchRules);
+      }
+
+      // Entry pane title
+      const entryTitleEl = document.querySelector('.entry-pane-title-link');
+      if (entryTitleEl) {
+        const feedUrl = document.querySelector('.entry-pane-title')?.getAttribute('data-post-feed-url') || '';
+        const folderIdStr = document.querySelector('.entry-feed-link')?.getAttribute('data-folder-id') || '';
+        const matchRules = rules.filter(r =>
+          r.scope === 'global' ||
+          (r.scope === 'folder' && r.scope_id === folderIdStr) ||
+          (r.scope === 'feed' && r.scope_id === feedUrl)
+        );
+        highlightEl(entryTitleEl, matchRules);
+      }
+    }
+
+    applyHighlights();
 
     const folderPropertiesModal = document.getElementById('folder-properties-modal');
     document.getElementById('folder-properties-close')?.addEventListener('click', () => {
@@ -6683,7 +6993,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

@@ -767,11 +767,13 @@ class LeadImageService:
                 ):
                     continue
 
-                feed_thumb = feed_media.get(entry_link)
-                if feed_thumb:
-                    self.store_entry_lead_image(feed_url, entry_id, feed_thumb)
-                    time.sleep(0.05)
-                    continue
+                # Only use feed media thumbnails when not explicitly locked to og_scrape.
+                if strategy != "og_scrape":
+                    feed_thumb = feed_media.get(entry_link)
+                    if feed_thumb:
+                        self.store_entry_lead_image(feed_url, entry_id, feed_thumb)
+                        time.sleep(0.05)
+                        continue
 
                 # For inline/none-classified feeds, source scraping won't help.
                 if strategy in ("inline", "none"):
@@ -1212,6 +1214,24 @@ class LeadImageService:
             # Width-only hint (e.g. "1000w") — WordPress responsive-image naming
             if not _lp_has_large_dims:
                 for _m in self._URL_WIDTH_HINT_RE.finditer(_lp_path):
+                    try:
+                        if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH:
+                            _lp_has_large_dims = True
+                            break
+                    except ValueError:
+                        pass
+            # WordPress ?fit=W%2CH (URL-encoded comma) and w=/width= query-string hints
+            if not _lp_has_large_dims:
+                _lp_qs = parsed.query
+                for _m in re.finditer(r"(?:^|&)fit=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", _lp_qs, re.IGNORECASE):
+                    try:
+                        if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH and int(_m.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT:
+                            _lp_has_large_dims = True
+                            break
+                    except ValueError:
+                        pass
+            if not _lp_has_large_dims:
+                for _m in re.finditer(r"(?:^|&)(?:w|width)=([0-9]{1,4})(?:&|$)", parsed.query, re.IGNORECASE):
                     try:
                         if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH:
                             _lp_has_large_dims = True

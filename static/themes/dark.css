@@ -31,3 +31,9 @@
   --field-focus-border: var(--active-border);
   --field-focus-ring: color-mix(in srgb, var(--active-border) 38%, transparent);
 }
+/* Highlight mark colors for dark theme */
+.highlight-mark-yellow { background: #c8a800; color: #fff; }
+.highlight-mark-green  { background: #1e7a1e; color: #fff; }
+.highlight-mark-blue   { background: #1a4f8a; color: #fff; }
+.highlight-mark-pink   { background: #8a1a40; color: #fff; }
+.highlight-mark-orange { background: #8a4a00; color: #fff; }
