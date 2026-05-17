@@ -190,7 +190,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517g")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517h")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -1180,6 +1180,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1285,7 +1289,7 @@ _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
 
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT scope, scope_id, keyword, color, is_regex FROM highlight_keywords ORDER BY scope, scope_id, keyword"
+        "SELECT scope, scope_id, keyword, color, is_regex, enabled FROM highlight_keywords ORDER BY scope, scope_id, keyword"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -5287,6 +5291,21 @@ def remove_highlight_route(
     with get_meta_connection() as conn:
         remove_highlight_keyword(conn, scope, scope_id, keyword)
     return JSONResponse({"ok": True})
+
+
+@app.post("/highlights/toggle")
+def toggle_highlight_route(
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    keyword: str = Form(...),
+    enabled: int = Form(...),
+):
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE highlight_keywords SET enabled = ? WHERE scope = ? AND scope_id = ? AND keyword = ?",
+            (1 if enabled else 0, scope, scope_id, keyword.strip()),
+        )
+    return JSONResponse({"ok": True, "enabled": bool(enabled)})
 
 
 @app.post("/feeds/strategy-refresh")

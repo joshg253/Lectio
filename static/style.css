@@ -3727,6 +3727,23 @@ mark.highlight-mark {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.hl-rule-row--disabled .hl-rule-badge,
+.hl-rule-row--disabled .hl-rule-scope,
+.hl-rule-row--disabled .hl-rule-regex-badge {
+  opacity: 0.4;
+}
+.hl-rule-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent, #2060cc);
+}
+.hl-rule-toggle .material-symbols-rounded { font-size: 1.35rem; font-variation-settings: 'FILL' 1; }
+.hl-rule-row--disabled .hl-rule-toggle { color: var(--muted, #888); }
 .hl-rule-delete {
   background: none;
   border: none;

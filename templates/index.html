@@ -5461,22 +5461,18 @@
       const hlRules = window.HIGHLIGHT_RULES;
 
       // Build lookup maps from the sidebar DOM
+      // Folders use .tree-item (not .folder-link); exclude root-item so "All Feeds" stays distinct
       function hlScopeData() {
         const folderNames = {};
         const feedTitles = {};
-        const feedsByFolder = {};
-        for (const el of document.querySelectorAll('.folder-link[data-folder-id][data-folder-name]')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
           folderNames[el.getAttribute('data-folder-id')] = el.getAttribute('data-folder-name');
         }
         for (const el of document.querySelectorAll('.feed-link[data-feed-url][data-folder-id]')) {
           const url = el.getAttribute('data-feed-url');
-          const fid = el.getAttribute('data-folder-id');
-          const title = el.textContent.trim();
-          feedTitles[url] = title;
-          if (!feedsByFolder[fid]) feedsByFolder[fid] = [];
-          if (!feedsByFolder[fid].some(f => f.url === url)) feedsByFolder[fid].push({ url, title });
+          feedTitles[url] = el.textContent.trim();
         }
-        return { folderNames, feedTitles, feedsByFolder };
+        return { folderNames, feedTitles };
       }
 
       function hlScopeLabel(scope, scopeId) {
@@ -5499,27 +5495,51 @@
           return;
         }
         for (const rule of hlRules) {
+          const enabled = rule.enabled !== 0;
           const row = document.createElement('div');
-          row.className = 'hl-rule-row';
+          row.className = 'hl-rule-row' + (enabled ? '' : ' hl-rule-row--disabled');
+
+          // Toggle enable/disable
+          const toggle = document.createElement('button');
+          toggle.type = 'button';
+          toggle.className = 'hl-rule-toggle';
+          toggle.setAttribute('aria-label', enabled ? 'Disable rule' : 'Enable rule');
+          toggle.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true">${enabled ? 'toggle_on' : 'toggle_off'}</span>`;
+          toggle.addEventListener('click', async () => {
+            const newEnabled = rule.enabled === 0 ? 1 : 0;
+            const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword, enabled: newEnabled });
+            try {
+              const resp = await fetch('/highlights/toggle', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+              if (!resp.ok) throw new Error('failed');
+              rule.enabled = newEnabled;
+              hlRenderRules();
+              applyHighlights();
+            } catch { window.alert('Failed to toggle rule'); }
+          });
+          row.appendChild(toggle);
+
           const badge = document.createElement('span');
           badge.className = `hl-rule-badge highlight-mark-${rule.color}`;
           badge.textContent = rule.keyword;
           row.appendChild(badge);
+
           if (rule.is_regex) {
             const rb = document.createElement('span');
             rb.className = 'hl-rule-regex-badge';
             rb.textContent = '.*';
             row.appendChild(rb);
           }
-          const scope = document.createElement('span');
-          scope.className = 'hl-rule-scope';
-          scope.textContent = hlScopeLabel(rule.scope, rule.scope_id);
-          row.appendChild(scope);
+
+          const scopeEl = document.createElement('span');
+          scopeEl.className = 'hl-rule-scope';
+          scopeEl.textContent = hlScopeLabel(rule.scope, rule.scope_id);
+          row.appendChild(scopeEl);
+
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'hl-rule-delete';
-          del.setAttribute('aria-label', `Remove "${rule.keyword}"`);
-          del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+          del.setAttribute('aria-label', `Delete rule for "${rule.keyword}"`);
+          del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">delete</span>';
           del.addEventListener('click', async () => {
             const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword });
             try {
@@ -5529,7 +5549,7 @@
               if (idx >= 0) hlRules.splice(idx, 1);
               hlRenderRules();
               applyHighlights();
-            } catch { window.alert('Failed to remove rule'); }
+            } catch { window.alert('Failed to delete rule'); }
           });
           row.appendChild(del);
           listEl.appendChild(row);
@@ -5550,7 +5570,7 @@
       function hlPopulateFolders() {
         if (!draftFolder) return;
         while (draftFolder.options.length > 1) draftFolder.remove(1);
-        for (const el of document.querySelectorAll('.folder-link[data-folder-id][data-folder-name]')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
           const opt = document.createElement('option');
           opt.value = el.getAttribute('data-folder-id');
           opt.textContent = el.getAttribute('data-folder-name');
@@ -5696,10 +5716,12 @@
         el.appendChild(frag);
       }
 
+      const activeRules = rules.filter(r => r.enabled !== 0);
+
       for (const postItem of document.querySelectorAll('.post-item')) {
         const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
         const folderIdStr = postItem.querySelector('.post-feed-link')?.getAttribute('data-folder-id') || '';
-        const matchRules = rules.filter(r =>
+        const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
           (r.scope === 'feed' && r.scope_id === feedUrl)
@@ -5711,7 +5733,7 @@
       if (entryTitleEl) {
         const feedUrl = document.querySelector('.entry-pane-title')?.getAttribute('data-post-feed-url') || '';
         const folderIdStr = document.querySelector('.entry-feed-link')?.getAttribute('data-folder-id') || '';
-        const matchRules = rules.filter(r =>
+        const matchRules = activeRules.filter(r =>
           r.scope === 'global' ||
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
           (r.scope === 'feed' && r.scope_id === feedUrl)
