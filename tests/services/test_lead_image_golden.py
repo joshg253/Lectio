@@ -995,3 +995,66 @@ def test_fetch_entry_image_alt_non_empty_for_og_lead_image(tmp_path: Path):
     result = service.fetch_entry_image_alt(REALPYTHON_ENTRY_LINK)
 
     assert result == "Episode 293 thumbnail"
+
+
+# ---------------------------------------------------------------------------
+# Logo-with-dimensions regression — washingtonbeerblog.com
+# ---------------------------------------------------------------------------
+# The URL "The-Growler-Guys-logo-1000w-750x476.jpeg" contains "logo" in the
+# filename and previously was rejected by _LOGO_URL_PATTERNS before the dimension
+# check could run.  The fix allows it because 750x476 (from the URL path)
+# meets _LEAD_IMAGE_MIN_WIDTH/HEIGHT.
+
+_WABEER_FEED_URL = "https://washingtonbeerblog.com/feed/"
+_WABEER_ENTRY_LINK = "https://washingtonbeerblog.com/follow-up-suspect-arrested-in-saturdays-incident-at-the-growler-guys/"
+_WABEER_LOGO_NXN_URL = "https://washingtonbeerblog.com/wp-content/uploads/2026/05/The-Growler-Guys-logo-1000w-750x476.jpeg"
+_WABEER_LOGO_WIDTH_URL = "https://washingtonbeerblog.com/wp-content/uploads/2026/05/The-Growler-Guys-logo-1000w.jpeg"
+
+
+def test_wabeer_logo_with_nxn_dimensions_accepted(tmp_path: Path):
+    """Logo URLs with NxN dimensions encoded in the path must pass — 750x476 is
+    a publisher-sized content image, not site chrome."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    content = (
+        f'<p><img src="{_WABEER_LOGO_NXN_URL}" alt="The Growler Guys" /></p>'
+        f'<p>Article text.</p>'
+    )
+    entry = _FakeEntry(
+        feed_url=_WABEER_FEED_URL,
+        entry_id="wabeer-growler-nxn",
+        link=_WABEER_ENTRY_LINK,
+        content_html=content,
+    )
+
+    assert service.extract_entry_thumbnail_url(entry, include_source_lookup=False) == _WABEER_LOGO_NXN_URL
+
+
+def test_wabeer_logo_with_width_hint_accepted(tmp_path: Path):
+    """Logo URLs with a WordPress-style '1000w' width hint must pass — 1000px
+    wide is unambiguously a content image, not a site icon."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    content = (
+        f'<p><img src="{_WABEER_LOGO_WIDTH_URL}" alt="The Growler Guys" /></p>'
+        f'<p>Article text.</p>'
+    )
+    entry = _FakeEntry(
+        feed_url=_WABEER_FEED_URL,
+        entry_id="wabeer-growler-1000w",
+        link=_WABEER_ENTRY_LINK,
+        content_html=content,
+    )
+
+    assert service.extract_entry_thumbnail_url(entry, include_source_lookup=False) == _WABEER_LOGO_WIDTH_URL
+
+
+def test_wabeer_logo_without_dimensions_still_rejected(tmp_path: Path):
+    """A URL with 'logo' but no large dimensions must still be filtered out."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url=_WABEER_FEED_URL,
+        entry_id="wabeer-logo-small",
+        link=_WABEER_ENTRY_LINK,
+        content_html='<p><img src="https://example.com/wp-content/uploads/logo.png" alt="logo" /></p>',
+    )
+
+    assert service.extract_entry_thumbnail_url(entry, include_source_lookup=False) is None

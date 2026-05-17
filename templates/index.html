@@ -1738,6 +1738,34 @@
           <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
         </dd>
       </dl>
+
+      <h4 class="feed-prop-section-title">Image display</h4>
+      <div class="feed-prop-toggles">
+        <label class="feed-prop-toggle-row">
+          <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
+          <span>Use as thumbnail in post list</span>
+        </label>
+        <label class="feed-prop-toggle-row">
+          <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
+          <span>Show image at top of article</span>
+        </label>
+        <label class="feed-prop-toggle-row">
+          <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
+            <option value="-1">Caption: auto (suppress junk)</option>
+            <option value="1">Caption: always show</option>
+            <option value="0">Caption: never show</option>
+          </select>
+        </label>
+      </div>
+
+      <h4 class="feed-prop-section-title">
+        Strategy comparison
+        <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
+          <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
+        </button>
+      </h4>
+      <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
+      <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
     </div>
   </div>
 
@@ -2904,6 +2932,12 @@
     const feedPropLastPost = document.getElementById('feed-prop-last-post');
     const feedPropStrategy = document.getElementById('feed-prop-strategy');
     const feedPropStrategyHint = document.getElementById('feed-prop-strategy-hint');
+    const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
+    const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
+    const feedPropCaptionMode = document.getElementById('feed-prop-caption-mode');
+    const feedPropRefreshBtn = document.getElementById('feed-prop-refresh-btn');
+    const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
+    const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
     let entryArticle = document.querySelector('.entry');
     let entryPaneTitle = document.querySelector('.entry-pane-title');
     let entryBody = document.getElementById('entry-body');
@@ -3776,6 +3810,18 @@
       setFeedPropText(feedPropLastPost, '-');
       if (feedPropStrategy) feedPropStrategy.value = 'auto';
       if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
+      if (feedPropShowThumb) feedPropShowThumb.checked = true;
+      if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
+      if (feedPropCaptionMode) feedPropCaptionMode.value = '-1';
+      const activePost = document.querySelector('.post-item.active');
+      const activeEntryId = (activePost?.getAttribute('data-post-feed-url') === feedUrl)
+        ? (activePost?.getAttribute('data-post-entry-id') || '')
+        : '';
+      if (feedPropRefreshBtn) {
+        feedPropRefreshBtn.dataset.feedUrl = feedUrl;
+        feedPropRefreshBtn.dataset.entryId = activeEntryId;
+      }
+      renderStrategyGrid([]);
       feedPropertiesModal.removeAttribute('hidden');
 
       try {
@@ -3814,10 +3860,90 @@
           feedPropStrategyHint.textContent = (isAuto && detected && detected !== 'unknown')
             ? `detected: ${detected}` : '';
         }
+
+        if (feedPropShowThumb) {
+          feedPropShowThumb.checked = data.show_lead_image_as_thumb !== false;
+          feedPropShowThumb.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropShowInArticle) {
+          feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
+          feedPropShowInArticle.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropCaptionMode) {
+          feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
+          feedPropCaptionMode.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
+
+        if (activeEntryId) {
+          doStrategyRefresh(feedUrl, activeEntryId);
+        } else {
+          renderStrategyGrid(data.strategy_cache || []);
+        }
       } catch (error) {
         setFeedPropText(feedPropTitle, feedUrl);
         setFeedPropText(feedPropHealth, 'error');
         setFeedPropText(feedPropHealthDetail, `Could not load properties: ${error}`);
+      }
+    }
+
+    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape']);
+
+    function renderStrategyGrid(cacheRows) {
+      if (!feedPropStratGrid || !feedPropStratEmpty) return;
+      if (!cacheRows || cacheRows.length === 0) {
+        feedPropStratEmpty.hidden = false;
+        feedPropStratGrid.hidden = true;
+        feedPropStratGrid.innerHTML = '';
+        return;
+      }
+      const currentStrategy = feedPropStrategy?.value || 'auto';
+      feedPropStratEmpty.hidden = true;
+      feedPropStratGrid.hidden = false;
+      feedPropStratGrid.innerHTML = cacheRows.map(row => {
+        const label = row.strategy || '';
+        const isActive = label === currentStrategy;
+        const isSelectable = SELECTABLE_STRATEGIES.has(label);
+        const activeClass = isActive ? ' active' : '';
+        const title = isSelectable
+          ? `title="Click to use ${label} strategy"`
+          : `title="${label}: auto-detected only"`;
+        if (row.error) {
+          return `<div class="feed-prop-strat-card feed-prop-strat-card--error${activeClass}" data-strategy="${label}" ${title}>
+            <div class="feed-prop-strat-label">${label}</div>
+            <div class="feed-prop-strat-error">${row.error}</div>
+          </div>`;
+        }
+        const img = row.image_url
+          ? `<img class="feed-prop-strat-thumb" src="${row.image_url}" alt="" loading="lazy" />`
+          : `<div class="feed-prop-strat-thumb feed-prop-strat-thumb-empty">no image</div>`;
+        return `<div class="feed-prop-strat-card${activeClass}" data-strategy="${label}" ${title}>
+          ${img}
+          <div class="feed-prop-strat-label">${label}</div>
+        </div>`;
+      }).join('');
+    }
+
+    async function doStrategyRefresh(feedUrl, entryId) {
+      if (!feedPropRefreshBtn) return;
+      feedPropRefreshBtn.disabled = true;
+      feedPropRefreshBtn.textContent = 'Refreshing…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl });
+        if (entryId) body.set('entry_id', entryId);
+        const resp = await fetch('/feeds/strategy-refresh', { method: 'POST', body });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        renderStrategyGrid(data.strategy_cache || []);
+      } catch (e) {
+        if (feedPropStratEmpty) {
+          feedPropStratEmpty.textContent = `Refresh failed: ${e.message}`;
+          feedPropStratEmpty.hidden = false;
+          if (feedPropStratGrid) feedPropStratGrid.hidden = true;
+        }
+      } finally {
+        feedPropRefreshBtn.disabled = false;
+        feedPropRefreshBtn.textContent = 'Refresh';
       }
     }
 
@@ -3980,6 +4106,51 @@
       } catch (e) {
         if (feedPropStrategyHint) feedPropStrategyHint.textContent = 'error saving';
       }
+    });
+
+    async function saveDisplayPref(feedUrl, key, value) {
+      const body = new URLSearchParams({ feed_url: feedUrl, key, value: String(value) });
+      const resp = await fetch('/feeds/display-prefs', { method: 'POST', body });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    }
+
+    feedPropShowThumb?.addEventListener('change', async () => {
+      const feedUrl = feedPropShowThumb.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', feedPropShowThumb.checked ? 1 : 0); }
+      catch (e) { feedPropShowThumb.checked = !feedPropShowThumb.checked; }
+    });
+
+    feedPropShowInArticle?.addEventListener('change', async () => {
+      const feedUrl = feedPropShowInArticle.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'show_lead_image_in_article', feedPropShowInArticle.checked ? 1 : 0); }
+      catch (e) { feedPropShowInArticle.checked = !feedPropShowInArticle.checked; }
+    });
+
+    feedPropCaptionMode?.addEventListener('change', async () => {
+      const feedUrl = feedPropCaptionMode.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'show_image_caption', feedPropCaptionMode.value); }
+      catch (e) { /* leave select as-is, non-critical */ }
+    });
+
+    feedPropRefreshBtn?.addEventListener('click', () => {
+      const feedUrl = feedPropRefreshBtn.dataset.feedUrl;
+      if (!feedUrl) return;
+      doStrategyRefresh(feedUrl, feedPropRefreshBtn.dataset.entryId || '');
+    });
+
+    feedPropStratGrid?.addEventListener('click', (e) => {
+      const card = e.target.closest('.feed-prop-strat-card[data-strategy]');
+      if (!card || !feedPropStrategy) return;
+      const strategy = card.dataset.strategy;
+      if (!SELECTABLE_STRATEGIES.has(strategy)) return;
+      feedPropStrategy.value = strategy;
+      feedPropStrategy.dispatchEvent(new Event('change'));
+      feedPropStratGrid.querySelectorAll('.feed-prop-strat-card').forEach(c => {
+        c.classList.toggle('active', c.dataset.strategy === strategy);
+      });
     });
 
     document.querySelector('.action-modal-panel')?.addEventListener('click', (event) => {

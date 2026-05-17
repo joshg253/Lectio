@@ -59,6 +59,8 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
+    # WordPress responsive-image width-only suffix, e.g. "photo-1000w.jpeg"
+    _URL_WIDTH_HINT_RE = re.compile(r"(?:^|[-_.])([0-9]{2,4})w(?:[-_.]|$)", re.IGNORECASE)
     # Substack CDN and similar services encode dimensions as ,w_N,h_N, in the URL path.
     _PATH_WIDTH_RE = re.compile(r"(?:^|[,_])w_([0-9]{1,4})(?:[,_]|$)")
     _PATH_HEIGHT_RE = re.compile(r"(?:^|[,_])h_([0-9]{1,4})(?:[,_]|$)")
@@ -477,7 +479,7 @@ class LeadImageService:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
                     pass  # stale/wrong URL — re-run full resolution (plugin fallback first)
                 elif not self._is_image_url_acceptable(cached, None, None):
-                    cached_negative = True
+                    pass  # cached URL now fails our filter (rules may have changed) — re-resolve
                 else:
                     should_revalidate = (
                         bool(entry_link)
@@ -1195,7 +1197,29 @@ class LeadImageService:
             return False
 
         if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
-            return False
+            # Allow logo-pattern URLs when the path encodes a large enough dimension —
+            # publisher-sized content images are valid even when "logo" appears in the name.
+            _lp_path = image_url.split("?")[0]
+            _lp_has_large_dims = False
+            # NxN pattern (e.g. "750x476")
+            for _m in self._URL_DIMENSION_RE.finditer(_lp_path):
+                try:
+                    if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH and int(_m.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT:
+                        _lp_has_large_dims = True
+                        break
+                except ValueError:
+                    pass
+            # Width-only hint (e.g. "1000w") — WordPress responsive-image naming
+            if not _lp_has_large_dims:
+                for _m in self._URL_WIDTH_HINT_RE.finditer(_lp_path):
+                    try:
+                        if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH:
+                            _lp_has_large_dims = True
+                            break
+                    except ValueError:
+                        pass
+            if not _lp_has_large_dims:
+                return False
         if self._PLACEHOLDER_URL_PATTERNS.search(image_url):
             return False
 
@@ -1338,7 +1362,7 @@ class LeadImageService:
                 try:
                     w = int(thumb.get("width", 0) or 0)
                     h = int(thumb.get("height", 0) or 0)
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     w = h = 0
                 if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
                     continue
@@ -1361,7 +1385,7 @@ class LeadImageService:
                     try:
                         w = int(mc.get("width", 0) or 0)
                         h = int(mc.get("height", 0) or 0)
-                    except ValueError, TypeError:
+                    except (ValueError, TypeError):
                         w = h = 0
                     if w and h and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
                         continue
@@ -1455,6 +1479,89 @@ class LeadImageService:
         # which would be found as hrefs and mistakenly used as lead images.
         # That method is appropriate only for feed-content HTML snippets.
         return None
+
+    def test_entry_strategies(self, entry: object) -> list[dict]:
+        """Test each lead-image strategy against a single entry in isolation.
+
+        Unlike extract_entry_thumbnail_url, each result only uses sources
+        specific to that strategy. Used by the Properties panel Refresh button.
+
+        Returns [{"strategy": str, "image_url": str|None, "error": str|None}].
+        """
+        entry_link = str(getattr(entry, "link", "") or "")
+        feed_url = str(getattr(entry, "feed_url", "") or "")
+        base_url = entry_link or feed_url
+        results: list[dict] = []
+
+        # --- inline: first <img> from feed content HTML only ---
+        inline_url: str | None = None
+        inline_error: str | None = None
+        try:
+            html_candidates: list[str] = []
+            try:
+                content = getattr(entry, "get_content", lambda **_: None)(prefer_summary=False)
+                if content and getattr(content, "value", None) and getattr(content, "is_html", False):
+                    html_candidates.append(str(content.value))
+            except Exception:
+                pass
+            summary = getattr(entry, "summary", None)
+            if isinstance(summary, str) and summary.strip():
+                html_candidates.append(summary)
+
+            for html_candidate in html_candidates:
+                if feed_url:
+                    html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+                img = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
+                if img:
+                    inline_url = img
+                    break
+                linked = self._extract_linked_image_url_from_html(html_candidate, base_url)
+                if linked:
+                    inline_url = linked
+                    break
+            if not inline_url:
+                for html_candidate in html_candidates:
+                    logo = self._extract_logo_with_dimensions_from_feed(html_candidate, base_url)
+                    if logo:
+                        inline_url = logo
+                        break
+        except Exception as exc:
+            inline_error = str(exc)
+        results.append({"strategy": "inline", "image_url": inline_url, "error": inline_error})
+
+        # --- media_rss: media:thumbnail / media:content from the live feed XML ---
+        media_url: str | None = None
+        media_error: str | None = None
+        try:
+            if feed_url:
+                thumbs = self._fetch_feed_media_thumbnails(feed_url)
+                media_url = thumbs.get(entry_link) if entry_link else None
+        except Exception as exc:
+            media_error = str(exc)
+        results.append({"strategy": "media_rss", "image_url": media_url, "error": media_error})
+
+        # --- og_scrape: og:image / hero image from the article source page ---
+        og_url: str | None = None
+        og_error: str | None = None
+        try:
+            if entry_link:
+                og_url = self._fetch_source_lead_image(entry_link)
+        except Exception as exc:
+            og_error = str(exc)
+        results.append({"strategy": "og_scrape", "image_url": og_url, "error": og_error})
+
+        # --- youtube: hqdefault thumbnail for YouTube video entries ---
+        yt_url: str | None = None
+        try:
+            if entry_link:
+                video_id = self._extract_video_id(entry_link)
+                if video_id:
+                    yt_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        except Exception:
+            pass
+        results.append({"strategy": "youtube", "image_url": yt_url, "error": None})
+
+        return results
 
     _SMBC_HOST: str = "smbc-comics.com"
     _SMBC_AFTER_RE: re.Pattern[str] = re.compile(

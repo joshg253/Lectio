@@ -1142,6 +1142,28 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_display_prefs (
+                feed_url TEXT PRIMARY KEY,
+                show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
+                show_lead_image_as_thumb INTEGER NOT NULL DEFAULT 1,
+                show_image_caption INTEGER NOT NULL DEFAULT -1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_strategy_cache (
+                feed_url TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                image_url TEXT,
+                fetched_at REAL NOT NULL,
+                error TEXT,
+                PRIMARY KEY (feed_url, strategy)
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1213,6 +1235,66 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
         (key, value),
     )
+
+
+_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption"})
+_DISPLAY_PREF_DEFAULTS = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1}
+
+
+def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
+    row = conn.execute("SELECT * FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
+    if row:
+        return dict(row)
+    return {"feed_url": feed_url, **_DISPLAY_PREF_DEFAULTS}
+
+
+def get_all_feed_display_prefs(conn: sqlite3.Connection) -> dict[str, dict]:
+    rows = conn.execute("SELECT * FROM feed_display_prefs").fetchall()
+    return {row["feed_url"]: dict(row) for row in rows}
+
+
+def upsert_feed_display_pref(conn: sqlite3.Connection, feed_url: str, key: str, value: int) -> None:
+    if key not in _DISPLAY_PREF_KEYS:
+        raise ValueError(f"Unknown display pref key: {key}")
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(f"UPDATE feed_display_prefs SET {key} = ? WHERE feed_url = ?", (value, feed_url))
+
+
+_TRIVIAL_CAPTIONS = frozenset({
+    "responsive image", "image", "photo", "picture", "img",
+    "thumbnail", "banner", "featured image", "header image",
+})
+_FILENAME_CAPTION_RE = re.compile(
+    r"(?:\.(jpe?g|png|gif|webp|avif|svg|bmp|tiff?)$|^(?:DSC|IMG|dsc|img)[_-]?\d{3,})",
+    re.IGNORECASE,
+)
+
+
+def should_show_caption(caption: str | None, *, entry_title: str | None, content_html: str | None, pref: int) -> bool:
+    """Return whether the image caption should be rendered.
+
+    pref: -1 = auto-suppress heuristics, 0 = never, 1 = always.
+    """
+    if not caption:
+        return False
+    if pref == 0:
+        return False
+    if pref == 1:
+        return True
+    # Auto heuristics
+    stripped = caption.strip()
+    if stripped.lower() in _TRIVIAL_CAPTIONS:
+        return False
+    if _FILENAME_CAPTION_RE.search(stripped):
+        return False
+    if entry_title and stripped.lower() == entry_title.strip().lower():
+        return False
+    if content_html and stripped in content_html:
+        return False
+    return True
 
 
 def normalize_auto_refresh_minutes(value: int) -> int:
@@ -2131,6 +2213,21 @@ def get_feed_properties(feed_url: str) -> dict:
             health_detail = "Updates are disabled for this feed."
 
         img_strategy, _, img_strategy_manual = lead_image_service.get_feed_strategy(feed_url)
+        with get_meta_connection() as _pc:
+            _disp = get_feed_display_prefs(_pc, feed_url)
+            _strat_rows = _pc.execute(
+                "SELECT strategy, image_url, fetched_at, error FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
+                (feed_url,),
+            ).fetchall()
+        _strat_cache = [
+            {
+                "strategy": r["strategy"],
+                "image_url": r["image_url"],
+                "fetched_at": format_datetime_for_ui(datetime.fromtimestamp(r["fetched_at"], tz=timezone.utc)) if r["fetched_at"] else None,
+                "error": r["error"],
+            }
+            for r in _strat_rows
+        ]
         props = {
             "feed_url": feed_url,
             "found": True,
@@ -2147,6 +2244,10 @@ def get_feed_properties(feed_url: str) -> dict:
             "health_detail": health_detail,
             "image_strategy": img_strategy if img_strategy_manual else "auto",
             "image_strategy_detected": img_strategy,
+            "show_lead_image_in_article": bool(_disp.get("show_lead_image_in_article", 1)),
+            "show_lead_image_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)),
+            "show_image_caption": int(_disp.get("show_image_caption", -1)),
+            "strategy_cache": _strat_cache,
         }
 
         # If the stored title looks like a URL (often when a feed was just added),
@@ -3026,6 +3127,8 @@ def list_entries_for_feeds(
     light_records = light_records[:limit]
 
     enrich_start = time.perf_counter()
+    with get_meta_connection() as _prefs_conn:
+        _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
     # Enrich the surviving (top-N) records with display fields.
     entries = []
     for rec in light_records:
@@ -3060,9 +3163,12 @@ def list_entries_for_feeds(
             _ch = getattr(entry.feed, "link", None)
             rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
+        _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
+        _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        _thumb = _raw_thumb if _feed_prefs.get("show_lead_image_as_thumb", 1) else None
         rec.update(
             {
-                "thumbnail_url": lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False),
+                "thumbnail_url": _thumb,
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
                 "manual_tags": manual_tags,
@@ -3618,6 +3724,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
+
+        with get_meta_connection() as _prefs_conn:
+            _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
+        if not _disp.get("show_lead_image_in_article", 1):
+            lead_image_url = None
+        if not should_show_caption(
+            image_title_text,
+            entry_title=entry.title,
+            content_html=content_html,
+            pref=int(_disp.get("show_image_caption", -1)),
+        ):
+            image_title_text = None
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
         _display_link = _rebase_proxy_entry_link(entry.link, feed_url, _channel_link)
@@ -4987,7 +5105,84 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
         lead_image_service.store_feed_strategy(feed_url, strategy, manual=True)
     # Clear cached images so entries re-resolve under the new strategy.
     lead_image_service.clear_lead_image_cache(feed_url)
+    # Re-fetch images for recent entries using the new strategy.  Bypass the
+    # chunk-backfill semaphore so this isn't silently dropped if another
+    # backfill is in flight.  _do_backfill_entry_list already skips entries
+    # that are in cache (none are — we just cleared) and respects strategy
+    # (source-fetches for og_scrape, skips for inline/none).
+    if strategy not in ("auto", "none"):
+        def _refetch(furl: str) -> None:
+            try:
+                with get_reader() as reader:
+                    entries = list(reader.get_entries(feed=furl, limit=50))
+                posts = [
+                    {
+                        "feed_url": str(getattr(e, "feed_url", "") or ""),
+                        "id": str(getattr(e, "id", "") or ""),
+                        "link": str(getattr(e, "link", "") or ""),
+                    }
+                    for e in entries
+                ]
+                lead_image_service._do_backfill_entry_list(posts)
+            except Exception:
+                pass
+        threading.Thread(target=_refetch, args=(feed_url,), daemon=True).start()
     return JSONResponse({"ok": True, "strategy": strategy})
+
+
+@app.post("/feeds/display-prefs")
+def set_feed_display_pref_route(
+    feed_url: str = Form(...),
+    key: str = Form(...),
+    value: int = Form(...),
+):
+    if key not in _DISPLAY_PREF_KEYS:
+        return JSONResponse({"error": "invalid key"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_display_pref(conn, feed_url, key, value)
+    return JSONResponse({"ok": True, "key": key, "value": value})
+
+
+@app.post("/feeds/strategy-refresh")
+def refresh_feed_strategy_cache_route(
+    feed_url: str = Form(...),
+    entry_id: str | None = Form(None),
+):
+    with get_reader() as reader:
+        entries = list(reader.get_entries(feed=feed_url, read=None))
+    if not entries:
+        return JSONResponse({"ok": False, "error": "No entries found for this feed."}, status_code=404)
+
+    sample_entry = None
+    if entry_id:
+        sample_entry = next((e for e in entries if str(getattr(e, "id", "")) == entry_id), None)
+
+    if sample_entry is None:
+        def _best_date(e: object) -> float:
+            for attr in ("published", "updated", "added"):
+                dt = getattr(e, attr, None)
+                if dt:
+                    return dt.timestamp()
+            return 0.0
+        sample_entry = max(entries, key=_best_date)
+    strategy_rows = lead_image_service.test_entry_strategies(sample_entry)
+
+    now = time.time()
+    formatted_now = format_datetime_for_ui(datetime.fromtimestamp(now, tz=timezone.utc))
+    results: list[dict] = []
+    with get_meta_connection() as conn:
+        for row in strategy_rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO feed_strategy_cache (feed_url, strategy, image_url, fetched_at, error) VALUES (?, ?, ?, ?, ?)",
+                (feed_url, row["strategy"], row["image_url"], now, row["error"]),
+            )
+            results.append({
+                "strategy": row["strategy"],
+                "image_url": row["image_url"],
+                "fetched_at": formatted_now,
+                "error": row["error"],
+            })
+    return JSONResponse({"ok": True, "strategy_cache": results})
 
 
 @app.post("/feeds/move")

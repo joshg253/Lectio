@@ -3261,6 +3261,130 @@ body[data-keyboard-open="1"] .action-modal-panel {
   }
 }
 
+.feed-prop-section-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 1.1rem 0 0.45rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.feed-prop-refresh-btn {
+  font-size: 0.78rem;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  padding: 2px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.feed-prop-refresh-btn .material-symbols-rounded {
+  font-size: 14px;
+}
+
+.feed-prop-refresh-btn:hover {
+  background: var(--hover-bg);
+}
+
+.feed-prop-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.feed-prop-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.feed-prop-checkbox {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.feed-prop-strat-empty {
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.feed-prop-strat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.feed-prop-strat-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.feed-prop-strat-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.feed-prop-strat-card:hover {
+  border-color: var(--ink);
+}
+
+.feed-prop-strat-thumb {
+  width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: cover;
+  display: block;
+  background: var(--field-elevated-bg);
+}
+
+.feed-prop-strat-thumb-empty {
+  width: 100%;
+  aspect-ratio: 16/9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--field-elevated-bg);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.feed-prop-strat-label {
+  padding: 4px 6px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feed-prop-strat-error {
+  padding: 4px 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .folder-prop-section-title {
   font-size: 0.85rem;
   font-weight: 600;
