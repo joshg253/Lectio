@@ -43,6 +43,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services.email import send_article_email
+from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
@@ -5061,14 +5062,34 @@ def delete_folder_route(folder_id: int = Form(...)):
     )
 
 
+def _is_youtube_url(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
+
+
 @app.post("/feeds")
 def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
+    url = feed_url.strip()
+    target_url = url
+    auto_discovered = False
+
+    # For non-YouTube URLs, probe whether the URL is a feed and run
+    # auto-discovery if it looks like a webpage instead.
+    if not _is_youtube_url(url):
+        candidates = discover_feed_urls(url)
+        if not candidates:
+            return RedirectResponse(
+                url=f"/?folder_id={folder_id}&message={quote_plus('No RSS/Atom feed found at that URL. Try pasting the feed URL directly.')}",
+                status_code=303,
+            )
+        target_url = candidates[0]
+        auto_discovered = target_url.rstrip("/") != url.rstrip("/")
+
     message = "Feed added."
+    if auto_discovered:
+        message = f"Feed added (discovered from {url})."
     try:
-        add_feed_to_folder(feed_url, folder_id)
-        normalized_feed_url = feed_url.strip()
-        if normalized_feed_url:
-            feed_refresh_service.update_feeds([normalized_feed_url])
+        add_feed_to_folder(target_url, folder_id)
+        feed_refresh_service.update_feeds([target_url])
     except Exception as exc:
         message = f"Feed add failed: {exc}"
     return RedirectResponse(

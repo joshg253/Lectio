@@ -1443,8 +1443,8 @@
         <button type="button" class="modal-close" data-close-modal="add-feed-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <form method="post" action="/feeds" class="action-modal-form">
-        <label for="add-feed-url" class="action-modal-label">Feed URL</label>
-        <input id="add-feed-url" name="feed_url" placeholder="https://example.com/feed.xml" required />
+        <label for="add-feed-url" class="action-modal-label">Feed or website URL</label>
+        <input id="add-feed-url" name="feed_url" placeholder="https://example.com/ or https://example.com/feed.xml" required />
         <label for="add-feed-folder" class="action-modal-label">Folder</label>
         <select id="add-feed-folder" name="folder_id">
           {% for folder in folder_options %}

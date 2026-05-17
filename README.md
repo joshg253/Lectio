@@ -20,6 +20,7 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
   - Right-click a folder to mark all feeds in it as read.
 - Bulk mark-as-read (toolbar dropdown or context menu) updates the visible list in-place — no page reload.
 - **Email Article** — share button in the entry toolbar sends the title, excerpt, and link as a styled email via Resend (requires `RESEND_API_KEY`, `LECTIO_EMAIL_FROM`, and `LECTIO_EMAIL_TO` in `.env`).
+- **RSS Auto-Discovery** — paste a plain website URL when adding a feed; Lectio probes the page for `<link rel="alternate">` RSS/Atom tags and falls back to common feed path suffixes (`/feed`, `/rss.xml`, etc.) before reporting failure.
 - **Feed Properties / Image Troubleshooter** — right-click a feed → Properties to inspect feed metadata, health, and post counts. The Image Display section controls three per-feed flags:
   - *Show as thumbnail* — whether the lead image appears in the post list.
   - *Show in article* — whether the lead image is prepended to the article body.

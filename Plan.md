@@ -10,7 +10,7 @@ This file is the backlog and staging area for future work.
 
 1. ~~**Email Article**~~ — share button in entry toolbar; sends link + summary via Resend. ✓
 2. ~~**Feed Troubleshooter / Advanced Properties**~~ — right-click → "Properties…" panel with feed metadata, health/post counts, and image display controls. Three per-feed flags (show as thumbnail, show in article, caption mode with junk-suppression heuristics) plus strategy comparison (og_scrape / inline / media_rss / youtube) with cached results and a Refresh button. ✓
-3. **RSS Auto-Discovery** — when adding a feed URL, auto-detect hidden RSS/Atom links on the page before failing.
+3. ~~**RSS Auto-Discovery**~~ — when adding a feed URL, auto-detect hidden RSS/Atom links on the page before failing. ✓
 4. **Text Highlighting** — highlight matching keywords in entry titles and bodies (global or per-feed keyword lists).
 5. **Rules / Actions Engine** — trigger actions (mark-read, tag, star) based on text match in title/body, per-feed or global; rule manager UI. Subsumes keyword/author auto-tagging and smart folders.
 6. **Page-to-Feed (Scraping)** — for truly feedless pages, generate synthetic feeds via scraping or change-detection (RSSHub, FetchRSS, or built-in scraper).
