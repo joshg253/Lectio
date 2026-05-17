@@ -17,6 +17,8 @@ This file is the backlog and staging area for future work.
 
 ## Backburner
 
+- **Resurface / GUID-churn suppression** — publishers sometimes change entry GUIDs (CMS migrations, permalink changes, plugin rebuilds), causing batches of already-read articles to reappear as new. Mitigation: when a new entry arrives whose title + approximate date matches a known read entry in the same feed, auto-mark it read. Overlaps with cross-feed dedup (slug/title matching). Distinct from `updated`-timestamp changes, which don't affect read state because the GUID is unchanged.
+
 - **Cross-feed article deduplication** — same article published across multiple feeds (e.g. Sound Publishing network: Kent/Issaquah/Renton Reporter share identical URL slugs). Detection options in rough order of reliability:
   1. URL slug match (path component after last `/`) — works well for same-network syndication.
   2. Exact title match within a time window.
