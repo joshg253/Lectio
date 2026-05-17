@@ -9,7 +9,7 @@ This file is the backlog and staging area for future work.
 ## Up next (ordered)
 
 1. **Email Article** — share button in entry toolbar; sends link + summary via Resend.
-2. **Feed Troubleshooter / Advanced Properties** — right-click → "Properties…" panel with three sections: (1) feed metadata and detected feed type; (2) raw content preview (what `<content>`/`<summary>` actually contain); (3) image strategy: try all candidate strategies against a sample entry, pick the best, save as override. Two independent per-feed flags: *use as thumbnail* (post list) and *show at top of article body* — some feeds produce a good thumb but the injected article image looks redundant or wrong. Also the foundation for the Add Feed discovery flow.
+2. **Feed Troubleshooter / Advanced Properties** — right-click → "Properties…" panel with three sections: (1) feed metadata and detected feed type; (2) raw content preview (what `<content>`/`<summary>` actually contain); (3) image strategy: try all candidate strategies against a sample entry, pick the best, save as override. Three independent per-feed image flags: *use as thumbnail* (post list), *show at top of article body*, and *show image caption* (the alt/title text rendered below the image — useful for some feeds, noise for others). Also the foundation for the Add Feed discovery flow.
 3. **RSS Auto-Discovery** — when adding a feed URL, auto-detect hidden RSS/Atom links on the page before failing.
 4. **Text Highlighting** — highlight matching keywords in entry titles and bodies (global or per-feed keyword lists).
 5. **Rules / Actions Engine** — trigger actions (mark-read, tag, star) based on text match in title/body, per-feed or global; rule manager UI. Subsumes keyword/author auto-tagging and smart folders.
