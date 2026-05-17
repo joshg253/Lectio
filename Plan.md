@@ -16,6 +16,14 @@ This file is the backlog and staging area for future work.
 6. **Page-to-Feed (Scraping)** — for truly feedless pages, generate synthetic feeds via scraping or change-detection (RSSHub, FetchRSS, or built-in scraper).
 
 ## Backburner
+
+- **Cross-feed article deduplication** — same article published across multiple feeds (e.g. Sound Publishing network: Kent/Issaquah/Renton Reporter share identical URL slugs). Detection options in rough order of reliability:
+  1. URL slug match (path component after last `/`) — works well for same-network syndication.
+  2. Exact title match within a time window.
+  3. Content hash (more expensive, catches rewrites).
+  Could suppress duplicates in the post list (show one, dim/hide others) or auto-mark-read when a sibling is read. Needs a UI to configure which feeds participate and what the dedup scope is (folder, global).
+
+
 - Per-user vs. shared thumb cache (only relevant if multi-user is added).
 - Archive caps for starred entries.
 - Multi-user support / auth refactor.
