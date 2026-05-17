@@ -1518,56 +1518,28 @@
         <h3 id="highlights-modal-title" class="action-modal-title">Highlights</h3>
         <button type="button" class="modal-close" data-close-modal="highlights-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <div class="highlights-tabs" role="tablist">
-        <button type="button" class="highlights-tab active" id="hl-tab-global" role="tab" aria-selected="true" aria-controls="hl-panel-global" data-hl-tab="global">Global</button>
-        <button type="button" class="highlights-tab" id="hl-tab-folder" role="tab" aria-selected="false" aria-controls="hl-panel-folder" data-hl-tab="folder">Folder</button>
-        <button type="button" class="highlights-tab" id="hl-tab-feed" role="tab" aria-selected="false" aria-controls="hl-panel-feed" data-hl-tab="feed">Feed</button>
+      <p class="highlights-hint">Highlight keywords in post titles. Matches are case-insensitive. Enable <strong>.*</strong> for regex pattern matching.</p>
+      <div id="hl-rules-list" class="hl-rules-list"></div>
+      <div id="hl-draft-row" class="hl-draft-row" hidden>
+        <input type="text" id="hl-draft-pattern" class="hl-draft-pattern" placeholder="keyword or pattern" maxlength="200" autocomplete="off" />
+        <button type="button" id="hl-draft-regex-toggle" class="hl-regex-toggle" aria-pressed="false" title="Enable regex matching">.*</button>
+        <select id="hl-draft-folder" class="hl-draft-select hl-folder-select">
+          <option value="">All Feeds</option>
+        </select>
+        <select id="hl-draft-feed" class="hl-draft-select hl-feed-select" disabled>
+          <option value="">All in folder</option>
+        </select>
+        <select id="hl-draft-color" class="hl-draft-select hl-color-select">
+          <option value="yellow">Yellow</option>
+          <option value="green">Green</option>
+          <option value="blue">Blue</option>
+          <option value="pink">Pink</option>
+          <option value="orange">Orange</option>
+        </select>
+        <button type="button" id="hl-draft-save" class="hl-draft-save">Add</button>
+        <button type="button" id="hl-draft-cancel" class="hl-draft-cancel" aria-label="Cancel"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <div id="hl-panel-global" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-global">
-        <p class="highlights-scope-label">Keywords highlighted everywhere</p>
-        <ul class="highlights-keyword-list" id="hl-list-global"></ul>
-        <form class="highlights-add-form" data-hl-scope="global" data-hl-scope-id="">
-          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
-          <select class="highlights-color-select">
-            <option value="yellow">Yellow</option>
-            <option value="green">Green</option>
-            <option value="blue">Blue</option>
-            <option value="pink">Pink</option>
-            <option value="orange">Orange</option>
-          </select>
-          <button type="submit" class="highlights-add-btn">Add</button>
-        </form>
-      </div>
-      <div id="hl-panel-folder" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-folder" hidden>
-        <p class="highlights-scope-label">Keywords highlighted in <strong id="hl-folder-name">this folder</strong></p>
-        <ul class="highlights-keyword-list" id="hl-list-folder"></ul>
-        <form class="highlights-add-form" data-hl-scope="folder" data-hl-scope-id="">
-          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
-          <select class="highlights-color-select">
-            <option value="yellow">Yellow</option>
-            <option value="green">Green</option>
-            <option value="blue">Blue</option>
-            <option value="pink">Pink</option>
-            <option value="orange">Orange</option>
-          </select>
-          <button type="submit" class="highlights-add-btn">Add</button>
-        </form>
-      </div>
-      <div id="hl-panel-feed" class="highlights-panel" role="tabpanel" aria-labelledby="hl-tab-feed" hidden>
-        <p class="highlights-scope-label">Keywords highlighted in <strong id="hl-feed-name">this feed</strong></p>
-        <ul class="highlights-keyword-list" id="hl-list-feed"></ul>
-        <form class="highlights-add-form" data-hl-scope="feed" data-hl-scope-id="">
-          <input type="text" class="highlights-keyword-input" placeholder="keyword" maxlength="100" autocomplete="off" />
-          <select class="highlights-color-select">
-            <option value="yellow">Yellow</option>
-            <option value="green">Green</option>
-            <option value="blue">Blue</option>
-            <option value="pink">Pink</option>
-            <option value="orange">Orange</option>
-          </select>
-          <button type="submit" class="highlights-add-btn">Add</button>
-        </form>
-      </div>
+      <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
     </div>
   </div>
 
@@ -5487,123 +5459,183 @@
       const hlModal = document.getElementById('highlights-modal');
       if (!Array.isArray(window.HIGHLIGHT_RULES)) window.HIGHLIGHT_RULES = [];
       const hlRules = window.HIGHLIGHT_RULES;
-      const hlColorLabels = { yellow: 'Yellow', green: 'Green', blue: 'Blue', pink: 'Pink', orange: 'Orange' };
 
-      function hlGetRules(scope, scopeId) {
-        return hlRules.filter(r => r.scope === scope && r.scope_id === (scopeId || ''));
+      // Build lookup maps from the sidebar DOM
+      function hlScopeData() {
+        const folderNames = {};
+        const feedTitles = {};
+        const feedsByFolder = {};
+        for (const el of document.querySelectorAll('.folder-link[data-folder-id][data-folder-name]')) {
+          folderNames[el.getAttribute('data-folder-id')] = el.getAttribute('data-folder-name');
+        }
+        for (const el of document.querySelectorAll('.feed-link[data-feed-url][data-folder-id]')) {
+          const url = el.getAttribute('data-feed-url');
+          const fid = el.getAttribute('data-folder-id');
+          const title = el.textContent.trim();
+          feedTitles[url] = title;
+          if (!feedsByFolder[fid]) feedsByFolder[fid] = [];
+          if (!feedsByFolder[fid].some(f => f.url === url)) feedsByFolder[fid].push({ url, title });
+        }
+        return { folderNames, feedTitles, feedsByFolder };
       }
 
-      function hlRenderList(listEl, scope, scopeId) {
+      function hlScopeLabel(scope, scopeId) {
+        if (scope === 'global') return 'All Feeds';
+        const { folderNames, feedTitles } = hlScopeData();
+        if (scope === 'folder') return folderNames[scopeId] || `Folder ${scopeId}`;
+        if (scope === 'feed') return feedTitles[scopeId] || scopeId;
+        return scope;
+      }
+
+      function hlRenderRules() {
+        const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
-        listEl.innerHTML = '';
-        const rules = hlGetRules(scope, scopeId || '');
-        if (rules.length === 0) {
-          const li = document.createElement('li');
-          li.className = 'highlights-empty';
-          li.textContent = 'No keywords yet';
-          listEl.appendChild(li);
+        listEl.querySelectorAll('.hl-rule-row, .hl-empty').forEach(el => el.remove());
+        if (hlRules.length === 0) {
+          const empty = document.createElement('p');
+          empty.className = 'hl-empty';
+          empty.textContent = 'No highlight rules yet. Click "+ Add Rule" to create one.';
+          listEl.appendChild(empty);
           return;
         }
-        for (const rule of rules) {
-          const li = document.createElement('li');
-          li.className = 'highlights-keyword-item';
+        for (const rule of hlRules) {
+          const row = document.createElement('div');
+          row.className = 'hl-rule-row';
           const badge = document.createElement('span');
-          badge.className = `highlights-keyword-badge highlight-mark-${rule.color}`;
+          badge.className = `hl-rule-badge highlight-mark-${rule.color}`;
           badge.textContent = rule.keyword;
-          const removeBtn = document.createElement('button');
-          removeBtn.type = 'button';
-          removeBtn.className = 'highlights-remove-btn';
-          removeBtn.setAttribute('aria-label', `Remove ${rule.keyword}`);
-          removeBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
-          removeBtn.addEventListener('click', async () => {
+          row.appendChild(badge);
+          if (rule.is_regex) {
+            const rb = document.createElement('span');
+            rb.className = 'hl-rule-regex-badge';
+            rb.textContent = '.*';
+            row.appendChild(rb);
+          }
+          const scope = document.createElement('span');
+          scope.className = 'hl-rule-scope';
+          scope.textContent = hlScopeLabel(rule.scope, rule.scope_id);
+          row.appendChild(scope);
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'hl-rule-delete';
+          del.setAttribute('aria-label', `Remove "${rule.keyword}"`);
+          del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+          del.addEventListener('click', async () => {
             const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword });
             try {
               const resp = await fetch('/highlights/remove', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
               if (!resp.ok) throw new Error('failed');
               const idx = hlRules.findIndex(r => r.scope === rule.scope && r.scope_id === rule.scope_id && r.keyword === rule.keyword);
               if (idx >= 0) hlRules.splice(idx, 1);
-              hlRefreshActivePanel();
+              hlRenderRules();
               applyHighlights();
-            } catch { window.alert('Failed to remove keyword'); }
+            } catch { window.alert('Failed to remove rule'); }
           });
-          li.appendChild(badge);
-          li.appendChild(removeBtn);
-          listEl.appendChild(li);
+          row.appendChild(del);
+          listEl.appendChild(row);
         }
       }
 
-      let hlActiveTab = 'global';
-      let hlActiveFolderId = '';
-      let hlActiveFolderName = '';
-      let hlActiveFeedUrl = '';
-      let hlActiveFeedName = '';
+      // Draft-row controls
+      const draftRow    = document.getElementById('hl-draft-row');
+      const draftPat    = document.getElementById('hl-draft-pattern');
+      const draftRegex  = document.getElementById('hl-draft-regex-toggle');
+      const draftFolder = document.getElementById('hl-draft-folder');
+      const draftFeed   = document.getElementById('hl-draft-feed');
+      const draftColor  = document.getElementById('hl-draft-color');
+      const draftSave   = document.getElementById('hl-draft-save');
+      const draftCancel = document.getElementById('hl-draft-cancel');
+      const addRuleBtn  = document.getElementById('hl-add-rule-btn');
 
-      function hlRefreshActivePanel() {
-        const globalList = document.getElementById('hl-list-global');
-        const folderList = document.getElementById('hl-list-folder');
-        const feedList = document.getElementById('hl-list-feed');
-        hlRenderList(globalList, 'global', '');
-        hlRenderList(folderList, 'folder', hlActiveFolderId);
-        hlRenderList(feedList, 'feed', hlActiveFeedUrl);
+      function hlPopulateFolders() {
+        if (!draftFolder) return;
+        while (draftFolder.options.length > 1) draftFolder.remove(1);
+        for (const el of document.querySelectorAll('.folder-link[data-folder-id][data-folder-name]')) {
+          const opt = document.createElement('option');
+          opt.value = el.getAttribute('data-folder-id');
+          opt.textContent = el.getAttribute('data-folder-name');
+          draftFolder.appendChild(opt);
+        }
       }
 
-      function hlSwitchTab(tab) {
-        hlActiveTab = tab;
-        hlModal?.querySelectorAll('.highlights-tab').forEach(btn => {
-          const isActive = btn.getAttribute('data-hl-tab') === tab;
-          btn.classList.toggle('active', isActive);
-          btn.setAttribute('aria-selected', String(isActive));
-        });
-        hlModal?.querySelectorAll('.highlights-panel').forEach(panel => {
-          const panelId = panel.id.replace('hl-panel-', '');
-          panel.hidden = panelId !== tab;
-        });
+      function hlPopulateFeeds(folderId) {
+        if (!draftFeed) return;
+        while (draftFeed.options.length > 1) draftFeed.remove(1);
+        if (!folderId) { draftFeed.disabled = true; draftFeed.value = ''; return; }
+        const feeds = [];
+        for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
+          const url = el.getAttribute('data-feed-url');
+          if (url && !feeds.some(f => f.url === url)) feeds.push({ url, title: el.textContent.trim() });
+        }
+        feeds.sort((a, b) => a.title.localeCompare(b.title));
+        for (const f of feeds) {
+          const opt = document.createElement('option');
+          opt.value = f.url;
+          opt.textContent = f.title;
+          draftFeed.appendChild(opt);
+        }
+        draftFeed.disabled = feeds.length === 0;
       }
 
-      hlModal?.querySelectorAll('.highlights-tab').forEach(btn => {
-        btn.addEventListener('click', () => hlSwitchTab(btn.getAttribute('data-hl-tab') || 'global'));
+      draftRegex?.addEventListener('click', () => {
+        const on = draftRegex.getAttribute('aria-pressed') !== 'true';
+        draftRegex.setAttribute('aria-pressed', String(on));
+        draftRegex.classList.toggle('active', on);
       });
 
-      hlModal?.querySelectorAll('.highlights-add-form').forEach(form => {
-        form.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const scope = form.getAttribute('data-hl-scope');
-          const scopeId = form.getAttribute('data-hl-scope-id') || '';
-          const input = form.querySelector('.highlights-keyword-input');
-          const colorSelect = form.querySelector('.highlights-color-select');
-          const keyword = (input?.value || '').trim();
-          const color = colorSelect?.value || 'yellow';
-          if (!keyword) return;
-          const body = new URLSearchParams({ scope, scope_id: scopeId, keyword, color });
-          try {
-            const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-            if (!resp.ok) throw new Error('failed');
-            const existing = hlRules.findIndex(r => r.scope === scope && r.scope_id === scopeId && r.keyword === keyword);
-            if (existing < 0) hlRules.push({ scope, scope_id: scopeId, keyword, color });
-            else hlRules[existing].color = color;
-            if (input) input.value = '';
-            hlRefreshActivePanel();
-            applyHighlights();
-          } catch { window.alert('Failed to add keyword'); }
-        });
+      draftFolder?.addEventListener('change', () => hlPopulateFeeds(draftFolder.value));
+
+      function hlShowDraft(folderId = '', feedUrl = '') {
+        hlPopulateFolders();
+        if (draftFolder) draftFolder.value = folderId;
+        hlPopulateFeeds(folderId);
+        if (draftFeed && feedUrl) draftFeed.value = feedUrl;
+        if (draftRegex) { draftRegex.setAttribute('aria-pressed', 'false'); draftRegex.classList.remove('active'); }
+        if (draftPat) draftPat.value = '';
+        if (draftColor) draftColor.value = 'yellow';
+        draftRow?.removeAttribute('hidden');
+        addRuleBtn?.setAttribute('hidden', '');
+        draftPat?.focus();
+      }
+
+      function hlHideDraft() {
+        draftRow?.setAttribute('hidden', '');
+        addRuleBtn?.removeAttribute('hidden');
+      }
+
+      addRuleBtn?.addEventListener('click', () => hlShowDraft());
+      draftCancel?.addEventListener('click', hlHideDraft);
+      draftPat?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); draftSave?.click(); } });
+
+      draftSave?.addEventListener('click', async () => {
+        const pattern = (draftPat?.value || '').trim();
+        if (!pattern) { draftPat?.focus(); return; }
+        const isRegex = draftRegex?.getAttribute('aria-pressed') === 'true' ? 1 : 0;
+        const folderId = draftFolder?.value || '';
+        const feedUrl  = draftFeed?.value || '';
+        const color    = draftColor?.value || 'yellow';
+        let scope, scopeId;
+        if (!folderId)      { scope = 'global'; scopeId = ''; }
+        else if (!feedUrl)  { scope = 'folder'; scopeId = folderId; }
+        else                { scope = 'feed';   scopeId = feedUrl; }
+        const body = new URLSearchParams({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex });
+        try {
+          const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+          if (!resp.ok) throw new Error('failed');
+          const idx = hlRules.findIndex(r => r.scope === scope && r.scope_id === scopeId && r.keyword === pattern);
+          if (idx < 0) hlRules.push({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex });
+          else { hlRules[idx].color = color; hlRules[idx].is_regex = isRegex; }
+          hlHideDraft();
+          hlRenderRules();
+          applyHighlights();
+        } catch { window.alert('Failed to add rule'); }
       });
 
-      function openHighlightsModal(tab, folderId, folderName, feedUrl, feedName) {
-        hlActiveFolderId = folderId || '';
-        hlActiveFolderName = folderName || '';
-        hlActiveFeedUrl = feedUrl || '';
-        hlActiveFeedName = feedName || '';
-        const folderForm = hlModal?.querySelector('[data-hl-scope="folder"]');
-        const feedForm = hlModal?.querySelector('[data-hl-scope="feed"]');
-        if (folderForm) folderForm.setAttribute('data-hl-scope-id', hlActiveFolderId);
-        if (feedForm) feedForm.setAttribute('data-hl-scope-id', hlActiveFeedUrl);
-        const folderNameEl = document.getElementById('hl-folder-name');
-        if (folderNameEl) folderNameEl.textContent = hlActiveFolderName || 'this folder';
-        const feedNameEl = document.getElementById('hl-feed-name');
-        if (feedNameEl) feedNameEl.textContent = hlActiveFeedName || 'this feed';
-        hlRefreshActivePanel();
-        hlSwitchTab(tab || 'global');
+      function openHighlightsModal(folderId = '', feedUrl = '') {
+        hlRenderRules();
+        hlHideDraft();
         hlModal?.removeAttribute('hidden');
+        if (folderId || feedUrl) hlShowDraft(folderId, feedUrl);
       }
 
       highlightsButton?.addEventListener('click', (event) => {
@@ -5611,62 +5643,59 @@
         event.stopPropagation();
         hideAllContextMenus();
         if (contextTargetType === 'feed') {
-          openHighlightsModal('feed', contextFolderId || '', '', contextFeedUrl || '', contextFolderName || '');
+          openHighlightsModal(String(contextFolderId || ''), contextFeedUrl || '');
         } else {
-          openHighlightsModal('folder', contextFolderId || '', contextFolderName || '', '', '');
+          openHighlightsModal(String(contextFolderId || ''), '');
         }
       });
 
-      document.getElementById('menu-highlights-btn')?.addEventListener('click', () => {
-        openHighlightsModal('global', '', '', '', '');
-      });
+      document.getElementById('menu-highlights-btn')?.addEventListener('click', () => openHighlightsModal());
     }
 
     // ── Highlight engine (applies <mark> to post titles) ────────────────────
     function applyHighlights() {
       const rules = window.HIGHLIGHT_RULES || [];
-      if (rules.length === 0) {
-        document.querySelectorAll('.post-title .highlight-mark, .entry-pane-title-link .highlight-mark').forEach(m => {
-          m.replaceWith(document.createTextNode(m.textContent));
-        });
-        return;
-      }
-
-      function highlightTextNode(node, matchRules) {
-        if (matchRules.length === 0) return;
-        const text = node.textContent;
-        let pattern = matchRules.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-        const re = new RegExp(`(${pattern})`, 'gi');
-        if (!re.test(text)) return;
-        re.lastIndex = 0;
-        const frag = document.createDocumentFragment();
-        let last = 0;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-          if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-          const rule = matchRules.find(r => r.keyword.toLowerCase() === m[0].toLowerCase());
-          const mark = document.createElement('mark');
-          mark.className = `highlight-mark highlight-mark-${rule ? rule.color : 'yellow'}`;
-          mark.textContent = m[0];
-          frag.appendChild(mark);
-          last = m.index + m[0].length;
-        }
-        if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-        node.parentNode.replaceChild(frag, node);
-      }
 
       function highlightEl(el, matchRules) {
-        // Reset existing marks first
+        if (!el) return;
         el.querySelectorAll('.highlight-mark').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
         el.normalize();
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        const textNodes = [];
-        let n;
-        while ((n = walker.nextNode())) textNodes.push(n);
-        textNodes.forEach(tn => highlightTextNode(tn, matchRules));
+        if (matchRules.length === 0) return;
+        const text = el.textContent;
+        if (!text) return;
+        const ranges = [];
+        for (const rule of matchRules) {
+          let re;
+          try {
+            re = rule.is_regex
+              ? new RegExp(rule.keyword, 'gi')
+              : new RegExp(rule.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+          } catch { continue; }
+          let m;
+          while ((m = re.exec(text)) !== null) {
+            if (m[0].length === 0) { re.lastIndex++; continue; }
+            if (!ranges.some(r => m.index < r.end && m.index + m[0].length > r.start)) {
+              ranges.push({ start: m.index, end: m.index + m[0].length, color: rule.color });
+            }
+          }
+        }
+        if (ranges.length === 0) return;
+        ranges.sort((a, b) => a.start - b.start);
+        const frag = document.createDocumentFragment();
+        let pos = 0;
+        for (const r of ranges) {
+          if (r.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, r.start)));
+          const mark = document.createElement('mark');
+          mark.className = `highlight-mark highlight-mark-${r.color}`;
+          mark.textContent = text.slice(r.start, r.end);
+          frag.appendChild(mark);
+          pos = r.end;
+        }
+        if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+        el.textContent = '';
+        el.appendChild(frag);
       }
 
-      // Post list titles
       for (const postItem of document.querySelectorAll('.post-item')) {
         const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
         const folderIdStr = postItem.querySelector('.post-feed-link')?.getAttribute('data-folder-id') || '';
@@ -5675,11 +5704,9 @@
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
           (r.scope === 'feed' && r.scope_id === feedUrl)
         );
-        const titleEl = postItem.querySelector('.post-title');
-        if (titleEl) highlightEl(titleEl, matchRules);
+        highlightEl(postItem.querySelector('.post-title'), matchRules);
       }
 
-      // Entry pane title
       const entryTitleEl = document.querySelector('.entry-pane-title-link');
       if (entryTitleEl) {
         const feedUrl = document.querySelector('.entry-pane-title')?.getAttribute('data-post-feed-url') || '';

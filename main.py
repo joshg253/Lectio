@@ -190,7 +190,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517f")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517g")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -1176,6 +1176,10 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1281,19 +1285,26 @@ _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
 
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT scope, scope_id, keyword, color FROM highlight_keywords ORDER BY scope, scope_id, keyword"
+        "SELECT scope, scope_id, keyword, color, is_regex FROM highlight_keywords ORDER BY scope, scope_id, keyword"
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def add_highlight_keyword(conn: sqlite3.Connection, scope: str, scope_id: str, keyword: str, color: str) -> None:
+def add_highlight_keyword(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    keyword: str,
+    color: str,
+    is_regex: bool = False,
+) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
     if color not in _HIGHLIGHT_VALID_COLORS:
         color = "yellow"
     conn.execute(
-        "INSERT OR REPLACE INTO highlight_keywords (scope, scope_id, keyword, color) VALUES (?, ?, ?, ?)",
-        (scope, scope_id, keyword.strip(), color),
+        "INSERT OR REPLACE INTO highlight_keywords (scope, scope_id, keyword, color, is_regex) VALUES (?, ?, ?, ?, ?)",
+        (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0),
     )
 
 
@@ -5255,6 +5266,7 @@ def add_highlight_route(
     scope_id: str = Form(""),
     keyword: str = Form(...),
     color: str = Form("yellow"),
+    is_regex: int = Form(0),
 ):
     keyword = keyword.strip()
     if not keyword:
@@ -5262,8 +5274,8 @@ def add_highlight_route(
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         return JSONResponse({"error": "invalid scope"}, status_code=400)
     with get_meta_connection() as conn:
-        add_highlight_keyword(conn, scope, scope_id, keyword, color)
-    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword, "color": color})
+        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex))
+    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword, "color": color, "is_regex": bool(is_regex)})
 
 
 @app.post("/highlights/remove")
