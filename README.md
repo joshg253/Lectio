@@ -32,6 +32,10 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
   - *Mark as Read* — auto-marks matching entries read when a feed is fetched. Scoped to a specific feed, folder, or globally. Supports title, body, or both search.
   - *Deduplicate* — marks newer duplicates as read across feeds in a folder or globally. Match methods: URL slug, title, slug+title, or fuzzy. Results logged to Automation History.
 - **Read History** — the History view (main menu or folder-pane footer) shows individually-opened articles in reverse-read order, capped at 2,000 entries.
+- **Settings dialog** — unified settings panel (user avatar button in topbar) with tabs: *Profile* (name, email), *Settings* (timezone display pref, maintenance hour), *Contacts* (email recipients), *Email* (Resend API key + from address), and *Integrations* (YouTube config + Instapaper credentials). All previously env-only keys are now editable in the UI (env still works as fallback).
+- **Instapaper integration** — "Save to Instapaper" button in the entry toolbar. Configure credentials in Settings → Integrations. Entries are saved with their tags plus a `viaLectio` tag. Requires an Instapaper account (free).
+- **YouTube duration prefix** — entries from YouTube feeds show a `[H:MM:SS]` duration prefix in the post list and entry pane title.
+- **Web View proxy** — the Source view (reader icon in entry toolbar) first attempts to load the article in an inline frame. If the site blocks framing (via `X-Frame-Options` or `Content-Security-Policy: frame-ancestors`), Lectio automatically falls back to a server-side proxy that fetches the page, injects a `<base>` tag so relative assets resolve correctly, and adds a persistent "Proxied view · Open original ↗" bar. Cloudflare challenge pages and paywalls are detected and shown as informational notices instead of blank frames.
 
 ## Running locally
 

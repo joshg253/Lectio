@@ -10,14 +10,17 @@
         data-post-link="{{ selected_entry.link or '' }}"
         data-post-lead-image-url="{{ selected_entry.lead_image_url or '' }}"
       >
+        {% set _dur = selected_entry.duration_display %}
+        {% set _title_text = selected_entry.title or "(untitled)" %}
+        {% set _display_title = ("[" ~ _dur ~ "] " ~ _title_text) if _dur else _title_text %}
         {% if selected_entry.link %}<a
           class="entry-pane-title-link"
           href="{{ selected_entry.link }}"
-          title="{{ selected_entry.title or '(untitled)' }}"
-          >{{ selected_entry.title or "(untitled)" }}</a
+          title="{{ _display_title }}"
+          >{{ _display_title }}</a
         >{% else %}<span class="entry-pane-title-link"
-          title="{{ selected_entry.title or '(untitled)' }}"
-          >{{ selected_entry.title or "(untitled)" }}</span
+          title="{{ _display_title }}"
+          >{{ _display_title }}</span
         >{% endif %}
       </h2>
     </div>
@@ -322,6 +325,18 @@
           title="Email this article"
           aria-label="Email this article"
           ><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span></button
+        >
+        {% endif %}
+        {% if instapaper_configured %}
+        <button
+          type="button"
+          id="entry-instapaper-button"
+          class="entry-source-button"
+          data-instapaper-feed-url="{{ selected_entry.feed_url }}"
+          data-instapaper-entry-id="{{ selected_entry.id }}"
+          title="Save to Instapaper"
+          aria-label="Save to Instapaper"
+          ><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span></button
         >
         {% endif %}
       </div>

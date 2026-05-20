@@ -2668,6 +2668,7 @@ button:hover, .button-link:hover {
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 88%, black 12%);
   box-shadow: var(--shadow);
+  z-index: 10;
 }
 
 .entry-source-fallback[hidden] {
@@ -2730,14 +2731,16 @@ button:hover, .button-link:hover {
   gap: 0;
 }
 
-.entry.source-active .entry-source-frame {
+.entry.source-active .entry-source-frame:not([hidden]) {
   border-radius: 0;
 }
 
 /* Ensure the iframe grows to fill the entry area when source view is active.
    Use explicit flex settings so it behaves correctly across browsers and
-   inside nested scrolling/flex containers (fixes clipped/short iframe). */
-.entry.source-active .entry-source-frame {
+   inside nested scrolling/flex containers (fixes clipped/short iframe).
+   Guard with :not([hidden]) so reader-view (which also uses source-active)
+   cannot accidentally show the iframe. */
+.entry.source-active .entry-source-frame:not([hidden]) {
   display: block;
   flex: 1 1 auto;
   align-self: stretch;
@@ -4654,6 +4657,8 @@ textarea.hl-draft-pattern {
   min-width: min(520px, 100%);
   max-width: 680px;
   width: 94vw;
+  /* Let native popups (datalist, etc.) escape the modal without clipping. */
+  overflow: visible;
 }
 .settings-modal-header {
   display: flex;
@@ -4662,7 +4667,8 @@ textarea.hl-draft-pattern {
   margin-bottom: 0.25rem;
 }
 .settings-tab-bar { margin-bottom: 0.75rem; flex-wrap: wrap; }
-.settings-tab-panel { display: flex; flex-direction: column; gap: 0; }
+.settings-tab-panel { display: flex; flex-direction: column; gap: 0; overflow-y: auto; max-height: 70vh; }
+.settings-tab-panel[hidden] { display: none; }
 .settings-section {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -4758,4 +4764,5 @@ textarea.hl-draft-pattern {
 .sett-contact-del { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0.1rem; display: flex; align-items: center; }
 .sett-contact-del:hover { color: var(--danger, #c00); }
 .sett-contact-del .material-symbols-rounded { font-size: 1rem; }
+.sett-contact-row--me { opacity: 0.65; font-style: italic; }
 .sett-contact-form { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0 0; }

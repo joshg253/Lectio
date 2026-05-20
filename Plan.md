@@ -15,13 +15,12 @@ This file is the backlog and staging area for future work.
    - Email Article rules: UI + manual send done. Server-side automation (batch digest, rate limiting, Cc application) pending — see below.
 6. ~~**Profile**~~ ✓ UI — name + email in `app_settings`. Server-side Cc application on email rules pending.
 7. ~~**Deduplicate Rule**~~ ✓ — UI, dry-run, and server-side execution at fetch time all done.
-8. **Settings dialog + Daily Maintenance** ← *in progress*
-   - Replace hamburger menu + Profile modal with a unified Settings dialog (user avatar button in topbar).
-   - Tabs: *Profile* (name, email), *Settings* (timezone display pref, maintenance hour), *Contacts* (email recipients list with default), *Email* (Resend API key + from address), *Integrations* (YouTube config + Instapaper credentials).
-   - Move `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `YOUTUBE_FOLDER_NAME`, `RESEND_API_KEY`, `LECTIO_EMAIL_FROM` from `.env` into DB-backed settings (env still works as fallback). Remove `LECTIO_EMAIL_TO` (replaced by Rules).
-   - `YOUTUBE_SYNC_HOUR` → `LECTIO_MAINTENANCE_HOUR` (default 3 am): single daily job that runs VACUUM on meta/thumb/archive DBs, prunes old rule run log rows (90-day retention), purges orphaned DB rows (strategy cache, display prefs, failure state for removed feeds), and syncs YouTube subscriptions.
-   - Auth (`LECTIO_USERNAME` / `LECTIO_PASSWORD` / `LECTIO_SECRET_KEY`) stays in `.env`; change-password UI deferred to multi-user work.
-9. **Instapaper integration** — "Save to Instapaper" button in the entry toolbar (next to email). Credentials (username + password) stored in Integrations settings. Backend endpoint does a `POST https://www.instapaper.com/api/add` with Basic Auth; frontend shows a toast.
+8. ~~**Settings dialog + Daily Maintenance**~~ ✓
+   - Unified Settings dialog (user avatar button in topbar) with tabs: *Profile* (name, email), *Settings* (timezone display pref, maintenance hour), *Contacts* (email recipients list with default), *Email* (Resend API key + from address), *Integrations* (YouTube config + Instapaper credentials).
+   - All previously env-only keys (`YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `YOUTUBE_FOLDER_NAME`, `RESEND_API_KEY`, `LECTIO_EMAIL_FROM`) now editable in the DB-backed Settings dialog; env still works as fallback.
+   - `LECTIO_MAINTENANCE_HOUR` (default 3 am): daily job runs VACUUM on meta/thumb/archive DBs, prunes old rule run log rows (90-day retention), purges orphaned DB rows, and syncs YouTube subscriptions.
+   - Auth (`LECTIO_USERNAME` / `LECTIO_PASSWORD` / `LECTIO_SECRET_KEY`) stays in `.env`.
+9. ~~**Instapaper integration**~~ ✓ — "Save to Instapaper" button in the entry toolbar. Credentials stored in Settings → Integrations. Backend POSTs to the Instapaper Add API with Basic Auth; includes entry tags + "viaLectio" tag; frontend shows a toast.
 10. **Email Automation** — server-side Email Article rule execution at fetch time. Pending items:
     - *Immediately* mode: fire at fetch time; cap per-run (e.g. 10/run); per-recipient cooldown (e.g. 1 article/5 min from same feed).
     - *Batch digest* mode: queue table; flush on N articles OR daily maintenance window.

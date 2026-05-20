@@ -202,7 +202,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520j")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520m")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -222,6 +222,13 @@ def get_resend_from() -> str:
 
 def is_email_configured() -> bool:
     return bool(get_resend_api_key() and get_resend_from())
+
+
+def is_instapaper_configured() -> bool:
+    return bool(
+        get_runtime_setting(SETTING_INSTAPAPER_USERNAME)
+        and get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
+    )
 
 
 # --- YouTube subscription sync config — env vars are fallbacks; DB settings take precedence ---
@@ -3894,6 +3901,41 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
         )
 
     raw_html = response.text
+
+    # Detect Cloudflare bot-challenge pages before sanitising (scripts are stripped,
+    # making the challenge invisible and leaving a blank white page).
+    _CF_MARKERS = ("challenges.cloudflare.com", "_cf_chl_opt", "cf-chl-", "Just a moment...")
+    if any(m in raw_html[:4096] for m in _CF_MARKERS):
+        escaped_url = html.escape(source_url)
+        escaped_display = html.escape(parsed.netloc or source_url)
+        return HTMLResponse(
+            (
+                "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Verification required</title>"
+                "<style>"
+                "html,body{margin:0;padding:0;height:100%;background:transparent;}"
+                "body{display:flex;align-items:center;justify-content:center;"
+                "font-family:Segoe UI,system-ui,Arial,sans-serif;}"
+                ".wall{text-align:center;padding:2rem 1.5rem;max-width:340px;}"
+                ".wall-icon{font-size:2.2rem;margin-bottom:.6rem;opacity:.6;}"
+                ".wall-title{font-size:1rem;font-weight:600;margin:0 0 .4rem;}"
+                ".wall-body{font-size:.85rem;color:#666;margin:0 0 1.2rem;}"
+                ".wall-btn{display:inline-block;padding:.5rem 1.1rem;background:#1a73e8;"
+                "color:#fff;text-decoration:none;border-radius:6px;"
+                "font-size:.85rem;font-weight:500;}"
+                ".wall-btn:hover{background:#1558b0;}"
+                "</style></head>"
+                "<body><div class='wall'>"
+                "<div class='wall-icon'>🛡️</div>"
+                "<div class='wall-title'>Bot verification required</div>"
+                f"<div class='wall-body'>{escaped_display} uses Cloudflare bot protection "
+                "which can't be passed in the embedded view.</div>"
+                f"<a class='wall-btn' href='{escaped_url}' target='_blank' rel='noopener noreferrer'>"
+                "Open in new tab</a>"
+                "</div></body></html>"
+            ),
+            status_code=200,
+        )
+
     sanitized = sanitize_source_html(raw_html)
 
     # Detect common paywall patterns before rendering, and return a clear
@@ -3949,6 +3991,7 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
 
     sanitized = normalize_proxy_lazy_media(sanitized)
     escaped_source = html.escape(str(response.url))
+    unescaped_source = str(response.url)
     proxy_style = (
         "<style>"
         "img[alt*='image unavailable' i],"
@@ -3956,7 +3999,23 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
         "img[src*='placeholder']{display:none!important;}"
         "img[data-src],img[data-lazy-src],img[loading='lazy']{"
         "opacity:1!important;visibility:visible!important;filter:none!important;}"
+        "#lectio-bar{position:fixed;bottom:0;left:0;right:0;z-index:2147483647;"
+        "background:rgba(20,20,20,.82);color:#ccc;backdrop-filter:blur(4px);"
+        "font:11px/1.5 system-ui,-apple-system,sans-serif;padding:5px 12px;"
+        "display:flex;align-items:center;gap:8px;}"
+        "#lectio-bar a{color:#7ec8f7;text-decoration:none;}"
+        "#lectio-bar a:hover{text-decoration:underline;}"
+        "#lectio-bar-close{margin-left:auto;cursor:pointer;opacity:.6;font-size:15px;line-height:1;padding:0 2px;}"
+        "#lectio-bar-close:hover{opacity:1;}"
         "</style>"
+    )
+    proxy_bar = (
+        f"<div id='lectio-bar'>"
+        f"<span>Proxied view</span>"
+        f"<span style='opacity:.4'>·</span>"
+        f"<a href='{escaped_source}' target='_blank' rel='noopener noreferrer'>Open original ↗</a>"
+        f"<span id='lectio-bar-close' onclick=\"document.getElementById('lectio-bar').remove()\" title='Dismiss'>×</span>"
+        f"</div>"
     )
 
     # Ensure relative links and assets resolve against the fetched document URL.
@@ -3974,6 +4033,12 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
             f"<meta charset='utf-8'>{proxy_style}</head>"
             f"<body>{sanitized}</body></html>"
         )
+
+    # Inject the proxy bar before </body> (or append if not found).
+    if re.search(r"</body\s*>", sanitized, re.IGNORECASE):
+        sanitized = re.sub(r"(</body\s*>)", proxy_bar + r"\1", sanitized, count=1, flags=re.IGNORECASE)
+    else:
+        sanitized += proxy_bar
 
     return HTMLResponse(sanitized, status_code=200)
 
@@ -5050,6 +5115,7 @@ def entry_pane(
             "feed_to_folder": feed_to_folder,
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
+            "instapaper_configured": is_instapaper_configured(),
         },
     )
 
@@ -6112,6 +6178,7 @@ def home(
             "global_note": global_note,
             "email_configured": is_email_configured(),
             "email_to_default": email_to_default,
+            "instapaper_configured": is_instapaper_configured(),
             "youtube_sync_last_at": youtube_sync_last_at,
             "youtube_sync_last_result": youtube_sync_last_result,
             "inactive_feeds": inactive_feeds,
@@ -7943,6 +8010,53 @@ def email_entry(
         return JSONResponse({"ok": True, "message": f"Sent to {to_addr}"})
     LOGGER.warning("email send failed for %s/%s: %s", feed_url, entry_id, error)
     return JSONResponse({"ok": False, "error": error or "Send failed."}, status_code=500)
+
+
+@app.post("/entries/instapaper")
+def save_to_instapaper(
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    username = get_runtime_setting(SETTING_INSTAPAPER_USERNAME).strip()
+    password = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD).strip()
+    if not (username and password):
+        return JSONResponse({"ok": False, "error": "Instapaper not configured."}, status_code=503)
+
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+
+    if not entry:
+        return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+
+    url = entry.link or ""
+    if not url:
+        return JSONResponse({"ok": False, "error": "Entry has no URL."}, status_code=400)
+
+    try:
+        import urllib.request, urllib.parse, urllib.error
+        tag_names = {t.name for t in (entry.tags or []) if t.name}
+        tag_names.add("viaLectio")
+        data = urllib.parse.urlencode({
+            "url": url,
+            "title": entry.title or "",
+            "tags": ",".join(sorted(tag_names)),
+        }).encode()
+        req = urllib.request.Request(
+            "https://www.instapaper.com/api/add",
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        import base64
+        creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+        req.add_header("Authorization", f"Basic {creds}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+        if status in (200, 201):
+            return JSONResponse({"ok": True})
+        return JSONResponse({"ok": False, "error": f"Instapaper returned {status}."}, status_code=502)
+    except Exception as exc:
+        LOGGER.warning("Instapaper save failed for %s: %s", url, exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
 
 
 @app.post("/opml/import")

@@ -1603,7 +1603,8 @@
       <div id="settings-tab-app" class="settings-tab-panel" hidden>
         <div class="settings-section">
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
-          <input type="text" id="sett-tz-display" class="settings-input" placeholder="e.g. America/Los_Angeles (leave blank for server default)" />
+          <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
+          <datalist id="sett-tz-list"></datalist>
           <label class="settings-label" for="sett-maint-hour">Daily maintenance hour (0–23)</label>
           <input type="number" id="sett-maint-hour" class="settings-input settings-input--short" min="0" max="23" placeholder="3" />
           <p class="settings-hint">Maintenance runs once per day at this hour (server local time). It vacuums databases, prunes old logs, and syncs YouTube subscriptions.</p>
@@ -1617,14 +1618,14 @@
 
       <!-- Contacts tab -->
       <div id="settings-tab-contacts" class="settings-tab-panel" hidden>
-        <p class="settings-hint">Email addresses available when sending articles. The first entry is the default.</p>
+        <p class="settings-hint">Email addresses available when sending articles. The first entry is the default. <strong>~Me</strong> is always available and uses your Profile email.</p>
         <div id="sett-contacts-list" class="sett-contacts-list"></div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="contacts">Save contacts</button>
           <button type="button" id="sett-contact-add-btn" class="settings-secondary-btn">+ Add</button>
         </div>
         <div id="sett-contact-form" class="sett-contact-form" hidden>
-          <input type="text" id="sett-contact-label" class="settings-input" placeholder="Label (e.g. Me, Work)" maxlength="80" />
+          <input type="text" id="sett-contact-label" class="settings-input" placeholder="Label (e.g. Work, Family)" maxlength="80" />
           <input type="email" id="sett-contact-email" class="settings-input" placeholder="address@example.com" maxlength="200" />
           <div class="settings-actions">
             <button type="button" id="sett-contact-save" class="settings-save-btn">Add</button>
@@ -1656,14 +1657,15 @@
           <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
           <label class="settings-label" for="sett-yt-folder">Folder name</label>
           <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
-          <p class="settings-hint">Subscriptions are synced during daily maintenance. Your channel's subscriptions must be set to Public on YouTube.</p>
+          <p class="settings-hint">The API key is used to fetch video durations (prepended to post titles) and sync your subscriptions during daily maintenance. Your channel's subscriptions must be set to Public on YouTube.</p>
         </div>
         <h4 class="settings-section-title">Instapaper</h4>
         <div class="settings-section">
           <label class="settings-label" for="sett-ip-user">Username</label>
           <input type="text" id="sett-ip-user" class="settings-input" placeholder="your@email.com" maxlength="200" autocomplete="off" />
           <label class="settings-label" for="sett-ip-pass">Password</label>
-          <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="(leave blank to keep existing)" autocomplete="new-password" />
+          <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
+          <p class="settings-hint">Lectio saves articles via the <a href="https://www.instapaper.com/api/simple" target="_blank" rel="noopener">Instapaper Simple API</a> using your account credentials. No separate API key is needed.</p>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
@@ -2716,6 +2718,26 @@
       });
     }
 
+    document.addEventListener('click', async (event) => {
+      const ipBtn = event.target instanceof Element && event.target.closest('[data-instapaper-feed-url]');
+      if (ipBtn) {
+        ipBtn.disabled = true;
+        try {
+          const fd = new FormData();
+          fd.append('feed_url', ipBtn.getAttribute('data-instapaper-feed-url') || '');
+          fd.append('entry_id', ipBtn.getAttribute('data-instapaper-entry-id') || '');
+          const resp = await fetch('/entries/instapaper', { method: 'POST', body: fd, credentials: 'same-origin' });
+          const data = await resp.json();
+          showToastMessage(data.ok ? 'Saved to Instapaper' : (data.error || 'Instapaper save failed'));
+        } catch (e) {
+          showToastMessage('Instapaper save failed');
+        } finally {
+          ipBtn.disabled = false;
+        }
+        return;
+      }
+    });
+
     document.addEventListener('click', (event) => {
       const btn = event.target instanceof Element && event.target.closest('[data-open-email-modal]');
       if (!btn) return;
@@ -3183,6 +3205,8 @@
     function ensureSourceFrameFills() {
       try {
         if (!entrySourceFrame) return;
+        // Only run when web view is actively showing the iframe.
+        if (!sourceViewActive || sourceViewMode === 'readability') return;
         // Anchor sizing to the pane container (more reliable than article height).
         const paneEntry = document.querySelector('.pane-entry');
         if (!paneEntry) return;
@@ -3765,8 +3789,26 @@
       sourceViewMode = 'source-proxy';
       setSourceModeIndicator(sourceViewMode);
       sourceFrameLoaded = false;
-      entrySourceFrame.src = `/entries/source?url=${encodeURIComponent(sourceViewUrl)}`;
-      scheduleSourceLoadTimeout(2600);
+      fetchAndInjectProxy(sourceViewUrl);
+    }
+
+    // Fetch the proxied page via JS (with session credentials) and inject it into the
+    // iframe via srcdoc. This avoids cookie/Sec-Fetch-Dest issues that arise when
+    // setting iframe.src directly to a same-origin URL.
+    function fetchAndInjectProxy(entryUrl) {
+      scheduleSourceLoadTimeout(12000);
+      const proxyUrl = `/entries/source?url=${encodeURIComponent(entryUrl)}`;
+      fetch(proxyUrl, { credentials: 'same-origin' })
+        .then((r) => (r.ok ? r.text() : Promise.reject(`HTTP ${r.status}`)))
+        .then((html) => {
+          if (!sourceViewActive || sourceViewMode !== 'source-proxy' || !entrySourceFrame) return;
+          entrySourceFrame.removeAttribute('src');
+          entrySourceFrame.srcdoc = html;
+        })
+        .catch(() => {
+          if (!sourceViewActive) return;
+          setEntrySourceFallbackVisible(true);
+        });
     }
 
     function setEntrySourceFallbackVisible(visible) {
@@ -4756,29 +4798,26 @@
             try {
               const loadedUrl = entrySourceFrame.contentWindow?.location?.href || '';
               if (loadedUrl === 'about:blank') {
+                if (sourceDirectLoaded) {
+                  // Page had already loaded successfully. This about:blank is from
+                  // a subsequent JS-driven navigation (e.g. the site's own scripts
+                  // or a redirect chain) — not a framing block. Leave it alone.
+                  return;
+                }
+                // First load ended at about:blank — site blocked framing.
                 sourceFrameLoaded = false;
                 fallbackToProxiedSource();
                 return;
               }
               sourceDirectLoaded = true;
             } catch (_error) {
+              // Cross-origin frame — content is there but inaccessible. Mark as
+              // directly loaded so the health check doesn't force a proxy switch.
               sourceDirectLoaded = true;
             }
           }
 
-          if (sourceViewMode === 'source-proxy' && !sourceReadabilityAttempted) {
-            try {
-              const doc = entrySourceFrame.contentDocument;
-              const textLength = (doc?.body?.innerText || '').trim().length;
-              const hasContentNodes = Boolean(doc?.querySelector('img,video,article,main,p,h1,h2,h3,li,table,pre,blockquote'));
-              if (textLength < 80 && !hasContentNodes) {
-                setEntrySourceFallbackVisible(true);
-              }
-            } catch (_error) {
-              // Ignore introspection failures and keep proxy content.
-            }
-          }
-
+          // Proxy bar ("Open original ↗") inside the srcdoc handles bad-rendering content.
           setEntrySourceFallbackVisible(false);
           if (sourceLoadTimeoutId) {
             window.clearTimeout(sourceLoadTimeoutId);
@@ -5982,11 +6021,11 @@
       let hlActiveHistPanel = null;
       let hlDragSrcIdx = null;
 
-      // Tab switching
-      document.querySelectorAll('.hl-tab-btn').forEach(btn => {
+      // Tab switching (Automation modal only)
+      document.querySelectorAll('[data-hl-tab]').forEach(btn => {
         btn.addEventListener('click', () => {
           const tab = btn.dataset.hlTab;
-          document.querySelectorAll('.hl-tab-btn').forEach(b => { b.classList.toggle('hl-tab-btn--active', b === btn); b.setAttribute('aria-selected', b === btn); });
+          document.querySelectorAll('[data-hl-tab]').forEach(b => { b.classList.toggle('hl-tab-btn--active', b === btn); b.setAttribute('aria-selected', b === btn); });
           document.getElementById('hl-tab-rules').hidden = tab !== 'rules';
           document.getElementById('hl-tab-history').hidden = tab !== 'history';
           if (tab === 'history') hlLoadHistory();
@@ -7255,13 +7294,29 @@
           btn.setAttribute('aria-selected', active ? 'true' : 'false');
         });
         document.querySelectorAll('.settings-tab-panel').forEach(panel => {
-          panel.hidden = panel.id !== `settings-tab-${tabName}`;
+          const isActive = panel.id === `settings-tab-${tabName}`;
+          panel.hidden = !isActive;
+          panel.style.display = isActive ? 'flex' : 'none';
         });
       }
 
       document.querySelectorAll('[data-settings-tab]').forEach(btn => {
         btn.addEventListener('click', () => settSwitchTab(btn.getAttribute('data-settings-tab')));
       });
+      // Force hidden panels to display:none regardless of stylesheet specificity
+      document.querySelectorAll('.settings-tab-panel[hidden]').forEach(p => { p.style.display = 'none'; });
+
+      // Populate timezone datalist from IANA list
+      (function() {
+        const dl = document.getElementById('sett-tz-list');
+        if (!dl) return;
+        const zones = (typeof Intl?.supportedValuesOf === 'function')
+          ? Intl.supportedValuesOf('timeZone')
+          : [];
+        const frag = document.createDocumentFragment();
+        zones.forEach(z => { const o = document.createElement('option'); o.value = z; frag.appendChild(o); });
+        dl.appendChild(frag);
+      })();
 
       async function loadSettingsData() {
         try {
@@ -7308,6 +7363,19 @@
         const list = document.getElementById('sett-contacts-list');
         if (!list) return;
         list.innerHTML = '';
+        // ~Me row (always first, read-only, derived from profile email)
+        const meEmail = settingsData?.profile_email || window.PROFILE_EMAIL || '';
+        const meRow = document.createElement('div');
+        meRow.className = 'sett-contact-row sett-contact-row--me';
+        const meLbl = document.createElement('span');
+        meLbl.className = 'sett-contact-label';
+        meLbl.textContent = meEmail ? `Me <${meEmail}>` : 'Me (set your Profile email first)';
+        const meBadge = document.createElement('span');
+        meBadge.className = 'sett-contact-default-badge';
+        meBadge.textContent = 'auto';
+        meLbl.appendChild(meBadge);
+        meRow.appendChild(meLbl);
+        list.appendChild(meRow);
         settContacts.forEach((c, idx) => {
           const row = document.createElement('div');
           row.className = 'sett-contact-row';
@@ -7346,6 +7414,10 @@
         const label = document.getElementById('sett-contact-label')?.value.trim() || '';
         const address = document.getElementById('sett-contact-email')?.value.trim() || '';
         if (!address) return;
+        if (label.toLowerCase() === 'me') {
+          showToastMessage('"Me" is reserved for your Profile email — choose a different label.');
+          return;
+        }
         settContacts.push({ label, address });
         settRenderContacts();
         const form = document.getElementById('sett-contact-form');
@@ -7384,10 +7456,14 @@
             body: JSON.stringify(payload),
           });
           if (!resp.ok) throw new Error('failed');
-          // Update profile globals if saved
+          // Update client-side globals after save
           if (scope === 'profile') {
             window.PROFILE_NAME = payload.profile_name;
             window.PROFILE_EMAIL = payload.profile_email;
+            settRenderContacts();
+          }
+          if (scope === 'contacts') {
+            window.EMAIL_CONTACTS = [...settContacts];
           }
           showToastMessage('Settings saved.');
         } catch { showToastMessage('Failed to save settings.'); }
@@ -8010,7 +8086,13 @@
       sourceReadabilityAttempted = sourceViewMode === 'readability';
       sourceDirectLoaded = false;
       sourceFrameLoaded = false;
-      if (entrySourceFrame.src !== iframeUrl) {
+      if (sourceViewMode === 'source-proxy') {
+        // Use fetch+srcdoc so session cookies are sent and the browser's
+        // iframe-level Sec-Fetch-Dest filtering doesn't block the same-origin URL.
+        entrySourceFrame.removeAttribute('src');
+        entrySourceFrame.srcdoc = '';
+        fetchAndInjectProxy(sourceViewUrl);
+      } else if (entrySourceFrame.src !== iframeUrl) {
         entrySourceFrame.src = iframeUrl;
       } else {
         sourceFrameLoaded = true;
@@ -8019,6 +8101,10 @@
         entrySourceOpenExternal.href = sourceUrl;
       }
       entryBody.setAttribute('hidden', '');
+      if (entryReadabilityContainer) {
+        entryReadabilityContainer.setAttribute('hidden', '');
+        entryReadabilityContainer.innerHTML = '';
+      }
       entrySourceFrame.removeAttribute('hidden');
       // When activating source view in single-mode ensure we switch to the
       // entry single-pane level so the iframe becomes visible.
@@ -8058,6 +8144,21 @@
       if (sourceHealthCheckId) { window.clearTimeout(sourceHealthCheckId); sourceHealthCheckId = null; }
       sourceHealthCheckId = window.setTimeout(() => {
         try {
+          if (!sourceViewActive) return;
+          // Even if load event fired, a blocked iframe may appear blank.
+          // If we can read the document and it's empty, fall back to proxy.
+          if (sourceFrameLoaded && sourceViewMode === 'source' && !sourceFallbackAttempted) {
+            try {
+              const doc = entrySourceFrame.contentDocument;
+              if (doc && doc.body && doc.body.innerText.trim().length < 5 &&
+                  !doc.body.querySelector('img,video,canvas,svg,iframe')) {
+                sourceFrameLoaded = false;
+                fallbackToProxiedSource();
+                return;
+              }
+            } catch (_e) { /* cross-origin: assume loaded fine */ }
+            return;
+          }
           // If already loaded fine, nothing to do.
           if (sourceFrameLoaded) return;
           // If source mode, try proxied source as a fallback.
@@ -8065,6 +8166,8 @@
             fallbackToProxiedSource();
             return;
           }
+          // In proxy mode the frame is still loading — let the load timeout handle it.
+          if (sourceViewMode === 'source-proxy') return;
           // Otherwise show fallback UI.
           setEntrySourceFallbackVisible(true);
         } catch (e) {
