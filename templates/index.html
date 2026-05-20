@@ -1618,7 +1618,7 @@
 
       <!-- Contacts tab -->
       <div id="settings-tab-contacts" class="settings-tab-panel" hidden>
-        <p class="settings-hint">Email addresses available when sending articles. The first entry is the default. <strong>~Me</strong> is always available and uses your Profile email.</p>
+        <p class="settings-hint">Email addresses available when sending articles. <strong>Me</strong> is always available and uses your Profile email. Use ★ to set the default.</p>
         <div id="sett-contacts-list" class="sett-contacts-list"></div>
         <div class="sett-contact-form">
           <input type="text" id="sett-contact-label" class="settings-input" placeholder="Label (e.g. Work, Family)" maxlength="80" />
@@ -7482,6 +7482,9 @@
         });
       }
 
+      document.getElementById('sett-contact-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); document.getElementById('sett-contact-save')?.click(); }
+      });
       document.getElementById('sett-contact-save')?.addEventListener('click', async () => {
         const label = document.getElementById('sett-contact-label')?.value.trim() || '';
         const address = document.getElementById('sett-contact-email')?.value.trim() || '';
