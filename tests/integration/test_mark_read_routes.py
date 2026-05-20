@@ -44,7 +44,6 @@ def _build_feed_mark_read_app(monkeypatch, marked: int = 3) -> FastAPI:
     monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: marked)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "unread_counts_cache", {})
-    monkeypatch.setattr(main, "dedupe_log_cache", {})
     return app
 
 
@@ -102,7 +101,6 @@ def _build_folder_mark_read_app(monkeypatch, marked: int = 7) -> FastAPI:
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
     monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: marked)
     monkeypatch.setattr(main, "unread_counts_cache", {})
-    monkeypatch.setattr(main, "dedupe_log_cache", {})
     return app
 
 
@@ -159,7 +157,6 @@ def _build_older_than_app(monkeypatch) -> FastAPI:
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: set())
     monkeypatch.setattr(main, "filter_feed_urls", lambda feed_urls, _list_feed_url: feed_urls)
     monkeypatch.setattr(main, "unread_counts_cache", {})
-    monkeypatch.setattr(main, "dedupe_log_cache", {})
     return app
 
 

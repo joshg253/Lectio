@@ -27,11 +27,11 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
   - *Image caption* — auto (suppress junk captions heuristically), always show, or never show.
   - *Thumbnails strategy* — lock the feed to a specific image source: Auto-detect, Feed content only, Source scraping, or None.
   - *Strategy comparison* — when Properties is opened while reading an article, it automatically runs all four extraction strategies (og_scrape, inline, media_rss, youtube) against that specific entry. Click an **og_scrape** or **inline** card to select that strategy. Click **Refresh** to re-test at any time.
-- **Text Highlighting** — keyword-based highlighting of post titles. Keywords are managed per scope:
-  - *Global* — highlights every feed.
-  - *Per folder* — right-click a folder → Highlights…
-  - *Per feed* — right-click a feed → Highlights…
-  - Each keyword can be assigned a color (yellow, green, blue, pink, orange). Keywords match case-insensitively and are highlighted both in the post list and the entry pane title.
+- **Automation** — keyword/regex rules that fire automatically at fetch time. Managed via the main menu → Automation or right-click a folder/feed. Rule types:
+  - *Highlight* — marks matching post titles with a color in the post list and entry pane. Client-side only.
+  - *Mark as Read* — auto-marks matching entries read when a feed is fetched. Scoped to a specific feed, folder, or globally. Supports title, body, or both search.
+  - *Deduplicate* — marks newer duplicates as read across feeds in a folder or globally. Match methods: URL slug, title, slug+title, or fuzzy. Results logged to Automation History.
+- **Read History** — the History view (main menu or folder-pane footer) shows individually-opened articles in reverse-read order, capped at 2,000 entries.
 
 ## Running locally
 

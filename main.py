@@ -179,6 +179,9 @@ PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at
 YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
 YOUTUBE_SYNC_LAST_RESULT_KEY = "youtube_sync_last_result"
 EMAIL_TO_SETTING_KEY = "email_to"
+EMAIL_BCC_SETTING_KEY = "email_bcc_address"
+PROFILE_NAME_SETTING_KEY = "profile_name"
+PROFILE_EMAIL_SETTING_KEY = "profile_email"
 AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -190,7 +193,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260517h")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520i")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -268,11 +271,6 @@ unread_counts_refresh_inflight = False
 # Incremented on every invalidation so in-flight background refreshes that
 # started before the invalidation don't write stale counts back to the cache.
 _unread_counts_generation: int = 0
-dedupe_log_cache_lock = threading.Lock()
-dedupe_log_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
-dedupe_log_compute_lock = threading.Lock()
-dedupe_log_refresh_inflight: dict[str, bool] = {}
-DEDUPE_LOG_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_DEDUPE_LOG_CACHE_TTL", "300"))
 # Feed-title map: hits the reader DB to enumerate every feed. Cache it — feed
 # titles barely change between page renders.
 FEED_TITLE_MAP_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_FEED_TITLE_MAP_CACHE_TTL", "300"))
@@ -400,6 +398,51 @@ async def lifespan(app: FastAPI):
         daemon=True,
         name="starred-archive-backfill",
     ).start()
+
+    # One-time backfill: populate read_history from entry_read_state if history is empty.
+    def _backfill_read_history() -> None:
+        try:
+            with get_meta_connection() as conn:
+                count = conn.execute("SELECT COUNT(*) FROM read_history").fetchone()[0]
+                if count > 0:
+                    return
+                rows = conn.execute(
+                    "SELECT feed_url, entry_id, read_at FROM entry_read_state"
+                    " ORDER BY read_at DESC LIMIT ?",
+                    (READ_HISTORY_CAP,),
+                ).fetchall()
+            if not rows:
+                return
+            needed = {(str(r["feed_url"]), str(r["entry_id"])): str(r["read_at"]) for r in rows}
+            to_insert = []
+            with get_reader() as reader:
+                for (feed_url, entry_id), read_at in needed.items():
+                    entry = reader.get_entry((feed_url, entry_id), None)
+                    if entry is None:
+                        continue
+                    feed = reader.get_feed(feed_url, None)
+                    to_insert.append((
+                        feed_url,
+                        entry_id,
+                        str(getattr(entry, "title", None) or ""),
+                        str(getattr(entry, "link", None) or ""),
+                        str(getattr(feed, "title", None) or ""),
+                        read_at,
+                    ))
+            if not to_insert:
+                return
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO NOTHING",
+                    to_insert,
+                )
+            LOGGER.info("[read_history] backfilled %d entries from entry_read_state", len(to_insert))
+        except Exception:
+            LOGGER.exception("[read_history] backfill error")
+
+    threading.Thread(target=_backfill_read_history, daemon=True, name="read-history-backfill").start()
 
     # YouTube subscription auto-sync: runs daily at YOUTUBE_SYNC_HOUR (local time).
     if YOUTUBE_SYNC_HOUR is not None and YOUTUBE_API_KEY and YOUTUBE_CHANNEL_ID:
@@ -1076,6 +1119,23 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS read_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                title TEXT,
+                link TEXT,
+                feed_title TEXT,
+                read_at TEXT NOT NULL,
+                UNIQUE(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_read_history_read_at ON read_history(read_at DESC)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS youtube_video_duration (
                 video_id TEXT PRIMARY KEY,
                 duration_seconds INTEGER,
@@ -1184,6 +1244,96 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN type TEXT NOT NULL DEFAULT 'highlight'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN search_in TEXT NOT NULL DEFAULT 'title'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN delivery TEXT NOT NULL DEFAULT 'immediately'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN email_to TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN batch_time TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN batch_count INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN cc_me INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN dedup_window_hours INTEGER NOT NULL DEFAULT 24")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN exclude_scope_ids TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            conn.execute("UPDATE highlight_keywords SET sort_order = rowid WHERE sort_order = 0")
+        except Exception:
+            pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rule_run_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at TEXT NOT NULL,
+                rule_type TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                scope_id TEXT NOT NULL DEFAULT '',
+                keyword TEXT NOT NULL DEFAULT '',
+                entries_affected INTEGER NOT NULL DEFAULT 0,
+                trigger TEXT NOT NULL DEFAULT 'manual'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rule_run_log_entries (
+                log_id   INTEGER NOT NULL,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                title    TEXT,
+                link     TEXT,
+                feed_title TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS rule_run_log_entries_log_id"
+            " ON rule_run_log_entries (log_id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dedup_false_matches (
+                keep_link TEXT NOT NULL,
+                mark_link TEXT NOT NULL,
+                added_at  TEXT NOT NULL,
+                PRIMARY KEY (keep_link, mark_link)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_contacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                address TEXT NOT NULL UNIQUE
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1287,9 +1437,17 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
 
 
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate"}
+_HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
+_HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
+_DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
+
+
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT scope, scope_id, keyword, color, is_regex, enabled FROM highlight_keywords ORDER BY scope, scope_id, keyword"
+        "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
+        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order"
+        " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1301,15 +1459,63 @@ def add_highlight_keyword(
     keyword: str,
     color: str,
     is_regex: bool = False,
+    rule_type: str = "highlight",
+    search_in: str = "title",
+    delivery: str = "immediately",
+    email_to: str = "",
+    batch_time: str = "",
+    batch_count: int = 0,
+    cc_me: bool = False,
+    enabled: int = 0,
+    dedup_window_hours: int = 168,
+    exclude_scope_ids: str = "",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
     if color not in _HIGHLIGHT_VALID_COLORS:
         color = "yellow"
+    if rule_type not in _HIGHLIGHT_VALID_TYPES:
+        rule_type = "highlight"
+    if search_in not in _HIGHLIGHT_VALID_SEARCH_IN:
+        search_in = "title"
+    if delivery not in _HIGHLIGHT_VALID_DELIVERY:
+        delivery = "immediately"
     conn.execute(
-        "INSERT OR REPLACE INTO highlight_keywords (scope, scope_id, keyword, color, is_regex) VALUES (?, ?, ?, ?, ?)",
-        (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0),
+        "INSERT OR REPLACE INTO highlight_keywords"
+        " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
+        "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
+         rule_type, search_in, delivery,
+         email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
+         max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip()),
     )
+
+
+def get_email_contacts(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, label, address FROM email_contacts ORDER BY label"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_email_contact(conn: sqlite3.Connection, label: str, address: str) -> dict:
+    label = label.strip()
+    address = address.strip()
+    if not label or not address or "@" not in address:
+        raise ValueError("Invalid label or address")
+    conn.execute(
+        "INSERT OR IGNORE INTO email_contacts (label, address) VALUES (?, ?)",
+        (label, address),
+    )
+    row = conn.execute(
+        "SELECT id, label, address FROM email_contacts WHERE address = ?", (address,)
+    ).fetchone()
+    return dict(row)
+
+
+def remove_email_contact(conn: sqlite3.Connection, contact_id: int) -> None:
+    conn.execute("DELETE FROM email_contacts WHERE id = ?", (contact_id,))
 
 
 def remove_highlight_keyword(conn: sqlite3.Connection, scope: str, scope_id: str, keyword: str) -> None:
@@ -1693,131 +1899,6 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         return counts.copy()
 
 
-def _refresh_dedupe_log_async(limit: int) -> None:
-    cache_key = f"limit={int(limit)}"
-    try:
-        result = _compute_unread_dedupe_log(limit)
-        with dedupe_log_cache_lock:
-            dedupe_log_cache[cache_key] = (time.time(), [dict(row) for row in result])
-    except Exception:
-        LOGGER.exception("background dedupe log refresh failed")
-    finally:
-        with dedupe_log_compute_lock:
-            dedupe_log_refresh_inflight[cache_key] = False
-
-
-def get_unread_dedupe_log(limit: int = 100) -> list[dict[str, object]]:
-    """Stale-while-revalidate, same as get_unread_counts_by_feed."""
-    cache_key = f"limit={int(limit)}"
-    now = time.time()
-    with dedupe_log_cache_lock:
-        cached = dedupe_log_cache.get(cache_key)
-    if cached:
-        ts, value = cached
-        if now - ts < DEDUPE_LOG_CACHE_TTL_SECONDS:
-            return [dict(row) for row in value]
-        with dedupe_log_compute_lock:
-            if not dedupe_log_refresh_inflight.get(cache_key):
-                dedupe_log_refresh_inflight[cache_key] = True
-                threading.Thread(target=_refresh_dedupe_log_async, args=(limit,), daemon=True).start()
-        return [dict(row) for row in value]
-
-    with dedupe_log_compute_lock:
-        with dedupe_log_cache_lock:
-            cached = dedupe_log_cache.get(cache_key)
-            if cached:
-                return [dict(row) for row in cached[1]]
-        result = _compute_unread_dedupe_log(limit)
-        with dedupe_log_cache_lock:
-            dedupe_log_cache[cache_key] = (time.time(), [dict(row) for row in result])
-        return [dict(row) for row in result]
-
-
-def _compute_unread_dedupe_log(limit: int) -> list[dict[str, object]]:
-    """Cross-feed unread dedupe report.
-
-    Disabled on the home-render path: the only way to compute this is to
-    iterate every unread entry, which is unworkable past a few thousand. The
-    feature mainly catches RSS+Atom mirrors of the same source — uncommon
-    enough to defer to an explicit user action. The dedupe modal will simply
-    be empty; future work can wire it to an on-demand compute endpoint."""
-    if os.getenv("LECTIO_ENABLE_DEDUPE_LOG", "0") != "1":
-        return []
-    seen_keys: set[str] = set()
-    first_seen_by_key: dict[str, dict[str, str]] = {}
-    duplicate_groups: dict[str, dict[str, object]] = {}
-
-    with get_reader() as reader:
-        for entry in reader.get_entries():
-            if entry.read:
-                continue
-
-            dedupe_key = build_entry_dedupe_key(entry.link, entry.title)
-            if not dedupe_key:
-                continue
-
-            normalized_link = normalize_entry_link_for_dedupe(entry.link)
-            if dedupe_key in seen_keys:
-                group = duplicate_groups.setdefault(
-                    dedupe_key,
-                    {
-                        "link": normalized_link,
-                        "collapsed_count": 0,
-                        "feed_urls": set(),
-                        "sample_titles": [],
-                    },
-                )
-
-                group["collapsed_count"] = int(group["collapsed_count"]) + 1
-
-                feed_urls = cast(set[str], group["feed_urls"])
-                if entry.feed_url:
-                    feed_urls.add(entry.feed_url)
-
-                first_seen = first_seen_by_key.get(dedupe_key)
-                if first_seen:
-                    first_feed_url = first_seen.get("feed_url")
-                    if first_feed_url:
-                        feed_urls.add(first_feed_url)
-
-                sample_titles = cast(list[str], group["sample_titles"])
-                if first_seen:
-                    first_title = first_seen.get("title")
-                    if first_title and first_title not in sample_titles and len(sample_titles) < 3:
-                        sample_titles.append(first_title)
-                current_title = str(entry.title or "")
-                if current_title and current_title not in sample_titles and len(sample_titles) < 3:
-                    sample_titles.append(current_title)
-
-                continue
-
-            seen_keys.add(dedupe_key)
-            first_seen_by_key[dedupe_key] = {
-                "feed_url": str(entry.feed_url or ""),
-                "title": str(entry.title or ""),
-            }
-
-    rows: list[dict[str, object]] = []
-    for group in duplicate_groups.values():
-        collapsed_count = int(group["collapsed_count"])
-        rows.append(
-            {
-                "link": cast(str, group["link"]),
-                "collapsed_count": collapsed_count,
-                "total_occurrences": collapsed_count + 1,
-                "feed_urls": sorted(cast(set[str], group["feed_urls"])),
-                "sample_titles": cast(list[str], group["sample_titles"]),
-            }
-        )
-
-    rows.sort(
-        key=lambda row: (
-            -int(cast(int, row["collapsed_count"])),
-            str(cast(str, row["link"])),
-        )
-    )
-    return rows[: max(1, int(limit))]
-
 
 def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
     if not link:
@@ -1832,12 +1913,899 @@ def normalize_entry_title_for_dedupe(title: str | None) -> str:
     return " ".join(str(title).strip().lower().split())
 
 
+def title_word_similarity(t1: str, t2: str) -> float:
+    """Jaccard similarity on word sets. Returns 0.0–1.0."""
+    w1 = set(t1.split())
+    w2 = set(t2.split())
+    if not w1 or not w2:
+        return 0.0
+    return len(w1 & w2) / len(w1 | w2)
+
+
+# ── Safe multi-signal dedup ───────────────────────────────────────────────────
+
+_SAFE_DEDUP_FUZZY_THRESH      = 0.80
+_SAFE_DEDUP_BODY_FUZZY_THRESH = 0.75
+_SAFE_DEDUP_BODY_CHARS        = 400
+_SAFE_DEDUP_MIN_BODY_CHARS    = 30
+_SAFE_DEDUP_MIN_SLUG_LEN      = 4
+_SAFE_DEDUP_MIN_TITLE_WORDS   = 4
+_SAFE_DEDUP_MIN_SLUG_NO_HYPHEN = 16
+
+_SAFE_DEDUP_SLUG_EXTS = frozenset({
+    ".php", ".html", ".htm", ".asp", ".aspx", ".cgi", ".pl", ".jsp", ".cfm", ".shtml"
+})
+_SAFE_DEDUP_SLUG_BLOCKLIST = frozenset({
+    "watch", "shorts", "video", "videos", "post", "posts", "article", "articles",
+    "page", "pages", "index", "home", "feed", "rss", "atom", "news", "story",
+    "entry", "item", "read", "view", "show", "detail", "details", "content",
+    "about", "contact", "search", "archive", "archives", "category", "categories",
+    "tag", "tags", "author", "user", "profile", "default", "main", "welcome",
+    "latest", "recent", "popular", "trending", "featured", "top", "new",
+    "forum", "forums", "thread", "threads", "topic", "topics", "blog",
+    "comic", "comics", "gallery", "photo", "photos", "image", "images",
+    "release", "releases", "pre-release", "download", "downloads", "changelog",
+    "update", "updates",
+    "p", "s", "t", "r", "q", "m", "n", "a", "e",
+})
+_SAFE_DEDUP_UNICODE_TRANS = str.maketrans({
+    '‘': "'", '’': "'",
+    '“': '"', '”': '"',
+    '–': '-', '—': '-',
+    '…': '...',
+    ' ': ' ',
+})
+_SAFE_DEDUP_TAG_RE = re.compile(r"<[^>]+>")
+
+_SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
+    frozenset({"slug", "title", "body"}),
+    frozenset({"slug", "fuzzy_near", "body"}),
+    frozenset({"title", "body"}),
+    frozenset({"slug", "title", "body_fuzzy"}),
+    frozenset({"slug", "fuzzy_near", "body_fuzzy"}),
+    frozenset({"title", "body_fuzzy"}),
+    frozenset({"slug", "body"}),
+    frozenset({"fuzzy_near", "body_fuzzy"}),
+    frozenset({"fuzzy_near", "body"}),
+    frozenset({"body_fuzzy"}),
+    frozenset({"slug", "title", "body", "body_fuzzy"}),
+    frozenset({"slug", "fuzzy_near", "body", "body_fuzzy"}),
+    frozenset({"title", "body", "body_fuzzy"}),
+    frozenset({"slug", "body", "body_fuzzy"}),
+    frozenset({"fuzzy_near", "body", "body_fuzzy"}),
+})
+
+
+def _safe_dedup_entry_slug(url: str | None) -> str | None:
+    if not url:
+        return None
+    path = url.split("#")[0].split("?")[0].rstrip("/")
+    slug = path.rsplit("/", 1)[-1].lower()
+    for ext in _SAFE_DEDUP_SLUG_EXTS:
+        if slug.endswith(ext):
+            slug = slug[: -len(ext)]
+            break
+    if len(slug) < _SAFE_DEDUP_MIN_SLUG_LEN or slug in _SAFE_DEDUP_SLUG_BLOCKLIST:
+        return None
+    if "-" not in slug and len(slug) < _SAFE_DEDUP_MIN_SLUG_NO_HYPHEN:
+        return None
+    return slug
+
+
+def _safe_dedup_norm_title(t: str | None) -> str:
+    if not t:
+        return ""
+    import unicodedata
+    t = unicodedata.normalize("NFC", t).translate(_SAFE_DEDUP_UNICODE_TRANS)
+    return " ".join(t.strip().lower().split())
+
+
+def _safe_dedup_norm_body(entry) -> str:
+    import html as _html
+    raw = ""
+    if entry.content:
+        raw = entry.content[0].value or ""
+    if not raw:
+        raw = entry.summary or ""
+    text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
+    text = _html.unescape(text)
+    return " ".join(text.split())[: _SAFE_DEDUP_BODY_CHARS].lower()
+
+
+def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_filter) -> list[dict]:
+    """Read entries from each feed and build the record list for safe-dedup."""
+    records: list[dict] = []
+    feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+    for feed_url in feed_urls:
+        try:
+            kwargs: dict = {"feed": feed_url, "limit": max_per_feed}
+            if read_filter is not None:
+                kwargs["read"] = read_filter
+            for entry in reader.get_entries(**kwargs):
+                published = entry.published or entry.updated or entry.added
+                ntitle = _safe_dedup_norm_title(entry.title)
+                records.append({
+                    "feed_url":   str(entry.feed_url or ""),
+                    "entry_id":   str(entry.id),
+                    "title":      str(entry.title or ""),
+                    "link":       str(entry.link or ""),
+                    "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                    "published":  published.isoformat() if published else None,
+                    "published_ts": published.timestamp() if published else 0.0,
+                    "slug":       _safe_dedup_entry_slug(entry.link),
+                    "ntitle":     ntitle,
+                    "body":       _safe_dedup_norm_body(entry),
+                })
+        except Exception:
+            LOGGER.exception("safe-dedup: error reading feed %s", feed_url)
+    return records
+
+
+def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[str]]:
+    """Run the multi-signal safe-dedup algorithm. Returns {(keep_link, mark_link): [modes]}."""
+    from collections import defaultdict as _dd
+
+    def _mk_pair(a: dict, b: dict) -> tuple[str, str]:
+        return (a["link"], b["link"]) if a["published_ts"] <= b["published_ts"] else (b["link"], a["link"])
+
+    def _index_to_pairs(idx: dict) -> set[tuple[str, str]]:
+        pairs: set[tuple[str, str]] = set()
+        for entries in idx.values():
+            if len({e["feed_url"] for e in entries}) < 2:
+                continue
+            for i, a in enumerate(sorted(entries, key=lambda e: e["published_ts"] or 0)):
+                for b in sorted(entries, key=lambda e: e["published_ts"] or 0)[i + 1:]:
+                    if a["feed_url"] != b["feed_url"] and a["link"] != b["link"]:
+                        pairs.add(_mk_pair(a, b))
+        return pairs
+
+    slug_idx:  dict = _dd(list)
+    title_idx: dict = _dd(list)
+    body_idx:  dict = _dd(list)
+    by_feed:   dict = _dd(list)
+
+    for r in records:
+        if r["slug"]:
+            slug_idx[r["slug"]].append(r)
+        if r["ntitle"] and len(r["ntitle"].split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS:
+            title_idx[r["ntitle"]].append(r)
+        if r["body"] and len(r["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS:
+            body_idx[r["body"]].append(r)
+        if r["ntitle"] and len(r["ntitle"].split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS:
+            by_feed[r["feed_url"]].append(r)
+
+    slug_pairs  = _index_to_pairs(slug_idx)
+    title_pairs = _index_to_pairs(title_idx)
+    body_pairs  = _index_to_pairs(body_idx)
+
+    link_feed: dict[str, str] = {r["link"]: r["feed_url"] for r in records if r["link"]}
+    cand_pairs: set[tuple[str, str]] = set()
+    for pk in slug_pairs | title_pairs:
+        fu_a = link_feed.get(pk[0])
+        fu_b = link_feed.get(pk[1])
+        if fu_a and fu_b and fu_a != fu_b:
+            cand_pairs.add((min(fu_a, fu_b), max(fu_a, fu_b)))
+
+    fuzzy_pairs:      set[tuple[str, str]] = set()
+    body_fuzzy_pairs: set[tuple[str, str]] = set()
+
+    for fu_i, fu_j in cand_pairs:
+        for a in by_feed.get(fu_i, []):
+            for b in by_feed.get(fu_j, []):
+                if a["link"] == b["link"]:
+                    continue
+                sim_t = title_word_similarity(a["ntitle"], b["ntitle"])
+                if _SAFE_DEDUP_FUZZY_THRESH <= sim_t < 1.0:
+                    fuzzy_pairs.add(_mk_pair(a, b))
+                if (len(a["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS
+                        and len(b["body"]) >= _SAFE_DEDUP_MIN_BODY_CHARS):
+                    sim_b = title_word_similarity(a["body"], b["body"])
+                    if sim_b >= _SAFE_DEDUP_BODY_FUZZY_THRESH:
+                        body_fuzzy_pairs.add(_mk_pair(a, b))
+
+    all_pairs = slug_pairs | title_pairs | fuzzy_pairs | body_pairs | body_fuzzy_pairs
+    pair_modes: dict[tuple[str, str], list[str]] = {}
+    for pk in all_pairs:
+        modes: list[str] = []
+        if pk in slug_pairs:        modes.append("slug")
+        if pk in title_pairs:       modes.append("title")
+        if pk in fuzzy_pairs:       modes.append("fuzzy_near")
+        if pk in body_pairs:        modes.append("body")
+        if pk in body_fuzzy_pairs:  modes.append("body_fuzzy")
+        if frozenset(modes) in _SAFE_DEDUP_COMBOS:
+            pair_modes[pk] = modes
+    return pair_modes
+
+
 def build_entry_dedupe_key(link: str | None, title: str | None) -> str | None:
     normalized_link = normalize_entry_link_for_dedupe(link)
     if not normalized_link:
         return None
     normalized_title = normalize_entry_title_for_dedupe(title)
     return f"{normalized_link}::{normalized_title}"
+
+
+def entry_url_slug(url: str | None) -> str | None:
+    """Extract the last non-empty path segment from a URL (before query/fragment)."""
+    if not url:
+        return None
+    path = url.split("#")[0].split("?")[0].rstrip("/")
+    slug = path.rsplit("/", 1)[-1]
+    return slug.lower() if slug else None
+
+
+def _dry_run_dedup(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    match_method: str,
+    window_hours: int,
+    max_entries: int = 5000,
+    exclude_scope_ids: str = "",
+    custom_feed_urls: set[str] | None = None,
+) -> dict:
+    """Preview which entries a deduplicate rule would mark read."""
+    if custom_feed_urls is not None:
+        feed_urls = custom_feed_urls
+    elif scope == "global":
+        feed_urls = get_all_feed_urls(conn)
+    elif scope == "folder":
+        try:
+            fid = int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+        feed_urls = get_folder_feed_urls(conn, fid)
+    else:
+        return {"error": "deduplicate rules require global or folder scope"}
+
+    if exclude_scope_ids and custom_feed_urls is None:
+        excluded: set[str] = set()
+        for fid_str in exclude_scope_ids.split(","):
+            fid_str = fid_str.strip()
+            if fid_str.isdigit():
+                excluded |= get_folder_feed_urls(conn, int(fid_str))
+        feed_urls -= excluded
+
+    if len(feed_urls) < 2:
+        return {
+            "groups": [], "total_entries_scanned": 0, "total_would_mark_read": 0,
+            "message": "Need at least 2 feeds in scope to deduplicate",
+        }
+
+    if match_method == "safe":
+        per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
+        false_matches: set[str] = set()
+        rows = conn.execute(
+            "SELECT keep_link, mark_link FROM dedup_false_matches"
+        ).fetchall()
+        false_matches = {r[0] + "||" + r[1] for r in rows}
+        with get_reader() as reader:
+            records = _safe_dedup_collect(reader, feed_urls, per_feed_limit, None)
+        pair_modes = _safe_dedup_find_pairs(records)
+        link_to_rec = {r["link"]: r for r in records if r["link"]}
+        by_keep: dict[str, dict] = {}
+        seen_mark: set[str] = set()
+        for (keep_link, mark_link), modes in sorted(
+            pair_modes.items(), key=lambda kv: -len(kv[1])  # most signals first
+        ):
+            if keep_link + "||" + mark_link in false_matches:
+                continue
+            keep_rec = link_to_rec.get(keep_link)
+            mark_rec = link_to_rec.get(mark_link)
+            if not keep_rec or not mark_rec:
+                continue
+            if keep_link not in by_keep:
+                by_keep[keep_link] = {
+                    "match_by": "safe",
+                    "matched_value": "+".join(modes),
+                    "keep": keep_rec,
+                    "mark_read": [],
+                }
+            if mark_link not in seen_mark:
+                by_keep[keep_link]["mark_read"].append(mark_rec)
+                seen_mark.add(mark_link)
+        groups = [g for g in by_keep.values() if g["mark_read"]]
+        return {
+            "groups": groups,
+            "total_entries_scanned": len(records),
+            "total_would_mark_read": len(seen_mark),
+        }
+
+    per_feed_limit = max(1, max_entries // max(1, len(feed_urls)))
+
+    with get_reader() as reader:
+        feed_title_map = {f.url: (f.title or str(f.url)) for f in reader.get_feeds()}
+        slug_index: dict[str, list[dict]] = {}
+        title_index: dict[str, list[dict]] = {}
+        combined_index: dict[tuple[str, str], list[dict]] = {}
+        fuzzy_entries: dict[str, list[dict]] = {}
+        total_scanned = 0
+
+        for feed_url in feed_urls:
+            if total_scanned >= max_entries:
+                break
+            try:
+                for entry in reader.get_entries(feed=feed_url, limit=per_feed_limit):
+                    if total_scanned >= max_entries:
+                        break
+                    total_scanned += 1
+                    published = entry.published or entry.updated or entry.added
+                    info: dict = {
+                        "title": str(entry.title or ""),
+                        "link": str(entry.link or ""),
+                        "feed_url": str(entry.feed_url or ""),
+                        "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                        "published": published.isoformat() if published else None,
+                        "published_ts": published.timestamp() if published else 0.0,
+                    }
+                    if match_method == "slug" and entry.link:
+                        slug = entry_url_slug(entry.link)
+                        if slug and len(slug) >= 4:
+                            slug_index.setdefault(slug, []).append(info)
+                    if match_method == "title" and entry.title:
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if norm:
+                            title_index.setdefault(norm, []).append(info)
+                    if match_method == "both" and entry.link and entry.title:
+                        slug = entry_url_slug(entry.link)
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if slug and norm:
+                            combined_index.setdefault((slug, norm), []).append(info)
+                    if match_method == "fuzzy" and entry.title:
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if norm and len(norm.split()) >= 4:
+                            info["norm_title"] = norm
+                            fuzzy_entries.setdefault(str(entry.feed_url or ""), []).append(info)
+            except Exception:
+                LOGGER.exception("dry-run-dedup: error reading feed %s", feed_url)
+
+    groups: list[dict] = []
+    seen_links: set[str] = set()
+    window_secs = window_hours * 3600
+    _FUZZY_THRESHOLD = 0.80
+
+    if match_method == "slug":
+        for slug, entries in slug_index.items():
+            if len({e["feed_url"] for e in entries}) < 2:
+                continue
+            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            keep = sorted_entries[0]
+            mark_read = sorted_entries[1:]
+            groups.append({"match_by": "slug", "matched_value": slug, "keep": keep, "mark_read": mark_read})
+            for e in entries:
+                seen_links.add(e["link"])
+
+    if match_method == "title":
+        for norm_title, entries in title_index.items():
+            if len({e["feed_url"] for e in entries}) < 2:
+                continue
+            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            oldest_ts = sorted_entries[0]["published_ts"] or 0.0
+            newest_ts = sorted_entries[-1]["published_ts"] or 0.0
+            if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
+                continue
+            keep = sorted_entries[0]
+            mark_read = sorted_entries[1:]
+            groups.append({"match_by": "title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
+
+    if match_method == "both":
+        for (slug, norm_title), entries in combined_index.items():
+            if len({e["feed_url"] for e in entries}) < 2:
+                continue
+            sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+            oldest_ts = sorted_entries[0]["published_ts"] or 0.0
+            newest_ts = sorted_entries[-1]["published_ts"] or 0.0
+            if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
+                continue
+            keep = sorted_entries[0]
+            mark_read = sorted_entries[1:]
+            groups.append({"match_by": "slug+title", "matched_value": norm_title, "keep": keep, "mark_read": mark_read})
+
+    if match_method == "fuzzy":
+        feed_list = [u for u in feed_urls if u in fuzzy_entries]
+        seen_mark_links: set[str] = set()
+        for i, feed_i in enumerate(feed_list):
+            for feed_j in feed_list[i + 1:]:
+                for ei in fuzzy_entries[feed_i]:
+                    for ej in fuzzy_entries[feed_j]:
+                        ts_i = ei["published_ts"] or 0.0
+                        ts_j = ej["published_ts"] or 0.0
+                        if window_secs > 0 and abs(ts_i - ts_j) > window_secs:
+                            continue
+                        sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
+                        if sim < _FUZZY_THRESHOLD:
+                            continue
+                        keep, newer = (ei, ej) if ts_i <= ts_j else (ej, ei)
+                        if newer["link"] in seen_mark_links:
+                            continue
+                        seen_mark_links.add(newer["link"])
+                        groups.append({
+                            "match_by": "fuzzy",
+                            "matched_value": f"{round(sim * 100)}% similar",
+                            "keep": keep,
+                            "mark_read": [newer],
+                        })
+
+    return {
+        "groups": groups,
+        "total_entries_scanned": total_scanned,
+        "total_would_mark_read": sum(len(g["mark_read"]) for g in groups),
+    }
+
+
+def _dry_run_pattern(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    keyword: str,
+    is_regex: bool,
+    search_in: str,
+    max_entries: int = 1000,
+    result_limit: int = 20,
+) -> dict:
+    """Preview which entries a pattern-based rule would affect (read + unread, newest first)."""
+    import re as _re
+
+    if not keyword:
+        return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
+
+    try:
+        if is_regex:
+            pattern = _re.compile(keyword, _re.IGNORECASE)
+            match_fn = lambda text: bool(pattern.search(text)) if text else False
+        else:
+            kw_lower = keyword.lower()
+            match_fn = lambda text: kw_lower in (text or "").lower()
+    except _re.error as e:
+        return {"error": f"Invalid regex: {e}"}
+
+    if scope == "global":
+        feed_urls: set[str] | None = None
+    elif scope == "folder":
+        try:
+            fid = int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+        feed_urls = get_folder_feed_urls(conn, fid)
+    elif scope == "feed":
+        feed_urls = {scope_id} if scope_id else None
+    else:
+        feed_urls = None
+
+    matches: list[dict] = []
+    total_scanned = 0
+    total_matches = 0
+
+    with get_reader() as reader:
+        feed_title_map = {str(f.url): (f.title or str(f.url)) for f in reader.get_feeds()}
+
+        def iter_entries():
+            if feed_urls is None:
+                yield from reader.get_entries(limit=max_entries)
+            elif len(feed_urls) == 1:
+                yield from reader.get_entries(feed=next(iter(feed_urls)), limit=max_entries)
+            else:
+                per_feed = max(1, max_entries // len(feed_urls))
+                for furl in feed_urls:
+                    yield from reader.get_entries(feed=furl, limit=per_feed)
+
+        for entry in iter_entries():
+            if total_scanned >= max_entries:
+                break
+            total_scanned += 1
+            title_text = str(entry.title or "")
+            body_text = ""
+            if search_in in ("body", "both"):
+                for c in (entry.content or []):
+                    body_text += (c.value or "") + " "
+                body_text += str(entry.summary or "")
+
+            if search_in == "title":
+                matched = match_fn(title_text)
+            elif search_in == "body":
+                matched = match_fn(body_text)
+            else:
+                matched = match_fn(title_text) or match_fn(body_text)
+
+            if matched:
+                total_matches += 1
+                if len(matches) < result_limit:
+                    published = entry.published or entry.updated or entry.added
+                    matches.append({
+                        "title": title_text,
+                        "link": str(entry.link or ""),
+                        "feed_url": str(entry.feed_url or ""),
+                        "feed_title": feed_title_map.get(str(entry.feed_url or ""), str(entry.feed_url or "")),
+                        "published": published.isoformat() if published else None,
+                        "read": bool(entry.read),
+                    })
+
+    return {
+        "matches": matches,
+        "total_scanned": total_scanned,
+        "total_matches": total_matches,
+        "truncated": total_matches > result_limit,
+    }
+
+
+def _run_now_dedup(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    match_method: str,
+    window_hours: int,
+    max_per_feed: int = 500,
+    exclude_scope_ids: str = "",
+) -> dict:
+    """Execute dedup rule on unread entries. Mark newer duplicates as read."""
+    global _unread_counts_generation
+    if scope == "global":
+        feed_urls = get_all_feed_urls(conn)
+    elif scope == "folder":
+        try:
+            fid = int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+        feed_urls = get_folder_feed_urls(conn, fid)
+    else:
+        return {"error": "deduplicate rules require global or folder scope"}
+
+    if exclude_scope_ids:
+        excluded: set[str] = set()
+        for fid_str in exclude_scope_ids.split(","):
+            fid_str = fid_str.strip()
+            if fid_str.isdigit():
+                excluded |= get_folder_feed_urls(conn, int(fid_str))
+        feed_urls -= excluded
+
+    if len(feed_urls) < 2:
+        return {"count": 0, "message": "Need at least 2 feeds in scope"}
+
+    if match_method == "safe":
+        false_rows = conn.execute(
+            "SELECT keep_link, mark_link FROM dedup_false_matches"
+        ).fetchall()
+        false_matches: set[str] = {r[0] + "||" + r[1] for r in false_rows}
+        with get_reader() as reader:
+            records = _safe_dedup_collect(reader, feed_urls, max_per_feed, False)
+        pair_modes = _safe_dedup_find_pairs(records)
+        link_to_rec = {r["link"]: r for r in records if r["link"]}
+        to_mark: set[tuple[str, str]] = set()
+        for (keep_link, mark_link), _modes in pair_modes.items():
+            if keep_link + "||" + mark_link in false_matches:
+                continue
+            mark_rec = link_to_rec.get(mark_link)
+            if mark_rec:
+                to_mark.add((mark_rec["feed_url"], mark_rec["entry_id"]))
+        with get_reader() as reader:
+            for feed_url, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_url, entry_id))
+        if to_mark:
+            when = datetime.now().isoformat()
+            conn.executemany(
+                "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                [(fu, eid, when) for fu, eid in to_mark],
+            )
+            _unread_counts_generation += 1
+        return {"count": len(to_mark)}
+
+    slug_index: dict[str, list[dict]] = {}
+    title_index: dict[str, list[dict]] = {}
+    combined_index: dict[tuple[str, str], list[dict]] = {}
+    fuzzy_entries: dict[str, list[dict]] = {}
+    window_secs = window_hours * 3600
+    _FUZZY_THRESHOLD = 0.80
+
+    with get_reader() as reader:
+        for feed_url in feed_urls:
+            try:
+                for entry in reader.get_entries(feed=feed_url, read=False, limit=max_per_feed):
+                    published = entry.published or entry.updated or entry.added
+                    info = {
+                        "feed_url": str(entry.feed_url or ""),
+                        "entry_id": str(entry.id),
+                        "link": str(entry.link or ""),
+                        "published_ts": published.timestamp() if published else 0.0,
+                    }
+                    if match_method == "slug" and entry.link:
+                        slug = entry_url_slug(entry.link)
+                        if slug and len(slug) >= 4:
+                            slug_index.setdefault(slug, []).append(info)
+                    if match_method == "title" and entry.title:
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if norm:
+                            title_index.setdefault(norm, []).append(info)
+                    if match_method == "both" and entry.link and entry.title:
+                        slug = entry_url_slug(entry.link)
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if slug and norm:
+                            combined_index.setdefault((slug, norm), []).append(info)
+                    if match_method == "fuzzy" and entry.title:
+                        norm = normalize_entry_title_for_dedupe(entry.title)
+                        if norm and len(norm.split()) >= 4:
+                            info["norm_title"] = norm
+                            fuzzy_entries.setdefault(str(entry.feed_url or ""), []).append(info)
+            except Exception:
+                LOGGER.exception("run-now-dedup: error reading feed %s", feed_url)
+
+        to_mark: set[tuple[str, str]] = set()
+
+        if match_method == "slug":
+            for slug, entries in slug_index.items():
+                if len({e["feed_url"] for e in entries}) < 2:
+                    continue
+                for e in sorted(entries, key=lambda e: e["published_ts"] or 0)[1:]:
+                    to_mark.add((e["feed_url"], e["entry_id"]))
+
+        if match_method == "title":
+            for norm_title, entries in title_index.items():
+                if len({e["feed_url"] for e in entries}) < 2:
+                    continue
+                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                oldest_ts = sorted_entries[0]["published_ts"] or 0.0
+                newest_ts = sorted_entries[-1]["published_ts"] or 0.0
+                if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
+                    continue
+                for e in sorted_entries[1:]:
+                    to_mark.add((e["feed_url"], e["entry_id"]))
+
+        if match_method == "both":
+            for (slug, norm_title), entries in combined_index.items():
+                if len({e["feed_url"] for e in entries}) < 2:
+                    continue
+                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                oldest_ts = sorted_entries[0]["published_ts"] or 0.0
+                newest_ts = sorted_entries[-1]["published_ts"] or 0.0
+                if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
+                    continue
+                for e in sorted_entries[1:]:
+                    to_mark.add((e["feed_url"], e["entry_id"]))
+
+        if match_method == "fuzzy":
+            feed_list = [u for u in feed_urls if u in fuzzy_entries]
+            for i, feed_i in enumerate(feed_list):
+                for feed_j in feed_list[i + 1:]:
+                    for ei in fuzzy_entries[feed_i]:
+                        for ej in fuzzy_entries[feed_j]:
+                            ts_i = ei["published_ts"] or 0.0
+                            ts_j = ej["published_ts"] or 0.0
+                            if window_secs > 0 and abs(ts_i - ts_j) > window_secs:
+                                continue
+                            sim = title_word_similarity(ei["norm_title"], ej["norm_title"])
+                            if sim < _FUZZY_THRESHOLD:
+                                continue
+                            newer = ej if ts_i <= ts_j else ei
+                            to_mark.add((newer["feed_url"], newer["entry_id"]))
+
+        for feed_url, entry_id in to_mark:
+            reader.mark_entry_as_read((feed_url, entry_id))
+
+    if to_mark:
+        when = datetime.now().isoformat()
+        conn.executemany(
+            "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+            [(fu, eid, when) for fu, eid in to_mark],
+        )
+        _unread_counts_generation += 1
+
+    return {"count": len(to_mark)}
+
+
+def _run_now_pattern(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    keyword: str,
+    is_regex: bool,
+    search_in: str,
+) -> dict:
+    """Execute mark_as_read rule: find matching unread entries and mark them read."""
+    import re as _re
+    global _unread_counts_generation
+
+    if not keyword:
+        return {"count": 0}
+
+    try:
+        if is_regex:
+            pattern = _re.compile(keyword, _re.IGNORECASE)
+            match_fn = lambda text: bool(pattern.search(text)) if text else False
+        else:
+            kw_lower = keyword.lower()
+            match_fn = lambda text: kw_lower in (text or "").lower()
+    except _re.error as e:
+        return {"error": f"Invalid regex: {e}"}
+
+    if scope == "global":
+        feed_urls: set[str] | None = None
+    elif scope == "folder":
+        try:
+            fid = int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+        feed_urls = get_folder_feed_urls(conn, fid)
+    elif scope == "feed":
+        feed_urls = {scope_id} if scope_id else None
+    else:
+        feed_urls = None
+
+    to_mark: list[tuple[str, str]] = []
+    matched_entries: list[dict] = []
+    _ENTRY_DETAIL_CAP = 50
+
+    with get_reader() as reader:
+        feed_title_cache: dict[str, str] = {}
+
+        def iter_unread():
+            if feed_urls is None:
+                yield from reader.get_entries(read=False)
+            else:
+                for furl in feed_urls:
+                    yield from reader.get_entries(feed=furl, read=False)
+
+        for entry in iter_unread():
+            title_text = str(entry.title or "")
+            body_text = ""
+            if search_in in ("body", "both"):
+                for c in (entry.content or []):
+                    body_text += (c.value or "") + " "
+                body_text += str(entry.summary or "")
+
+            if search_in == "title":
+                matched = match_fn(title_text)
+            elif search_in == "body":
+                matched = match_fn(body_text)
+            else:
+                matched = match_fn(title_text) or match_fn(body_text)
+
+            if matched:
+                fu = str(entry.feed_url or "")
+                to_mark.append((fu, str(entry.id)))
+                if len(matched_entries) < _ENTRY_DETAIL_CAP:
+                    if fu not in feed_title_cache:
+                        try:
+                            f = reader.get_feed(fu)
+                            feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                        except Exception:
+                            feed_title_cache[fu] = fu
+                    matched_entries.append({
+                        "feed_url": fu,
+                        "entry_id": str(entry.id),
+                        "title": str(entry.title or ""),
+                        "link": str(entry.link or ""),
+                        "feed_title": feed_title_cache.get(fu, fu),
+                    })
+
+        for feed_url, entry_id in to_mark:
+            reader.mark_entry_as_read((feed_url, entry_id))
+
+    if to_mark:
+        when = datetime.now().isoformat()
+        conn.executemany(
+            "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+            [(fu, eid, when) for fu, eid in to_mark],
+        )
+        _unread_counts_generation += 1
+
+    return {"count": len(to_mark), "entries": matched_entries}
+
+
+def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,
+                  scope_id: str, keyword: str, result: dict) -> None:
+    """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
+    cur = conn.execute(
+        "INSERT INTO rule_run_log"
+        " (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'auto')",
+        (now, rule_type, scope, scope_id, keyword, result["count"]),
+    )
+    auto_entries = result.get("entries") or []
+    if auto_entries and cur.lastrowid:
+        conn.executemany(
+            "INSERT INTO rule_run_log_entries"
+            " (log_id, feed_url, entry_id, title, link, feed_title)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(cur.lastrowid, e["feed_url"], e["entry_id"],
+              e["title"], e["link"], e["feed_title"])
+             for e in auto_entries],
+        )
+
+
+def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Run enabled mark_as_read and deduplicate rules for freshly-refreshed feeds."""
+    if not refreshed_feed_urls:
+        return
+    try:
+        # ── Read phase (no write lock held) ──────────────────────────────────
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder"
+                and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        enabled_rules = [
+            r for r in all_rules
+            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate")
+        ]
+        if not enabled_rules:
+            return
+
+        now = datetime.now().isoformat()
+        ran_dedup_keys: set[tuple[str, str, str]] = set()
+
+        # ── Run phase: each result gets its own short write transaction ───────
+        for rule in enabled_rules:
+            try:
+                rule_type = str(rule.get("type", ""))
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+
+                if rule_type == "mark_as_read":
+                    for feed_url in refreshed_feed_urls:
+                        if scope == "global":
+                            in_scope = True
+                        elif scope == "folder":
+                            try:
+                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
+                            except (ValueError, TypeError):
+                                in_scope = False
+                        elif scope == "feed":
+                            in_scope = scope_id == feed_url
+                        else:
+                            in_scope = False
+
+                        if not in_scope:
+                            continue
+
+                        with get_meta_connection() as conn:
+                            result = _run_now_pattern(conn, "feed", feed_url, keyword, is_regex, search_in)
+                            if "error" not in result and result.get("count", 0) > 0:
+                                _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
+
+                elif rule_type == "deduplicate":
+                    rule_key = (scope, scope_id, keyword)
+                    if rule_key in ran_dedup_keys:
+                        continue
+
+                    if scope == "global":
+                        in_scope = True
+                    elif scope == "folder":
+                        try:
+                            in_scope = bool(refreshed_feed_urls & folder_feed_map.get(int(scope_id), set()))
+                        except (ValueError, TypeError):
+                            in_scope = False
+                    else:
+                        in_scope = False  # dedup requires global or folder scope
+
+                    if not in_scope:
+                        continue
+
+                    ran_dedup_keys.add(rule_key)
+                    match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
+                    window_hours = max(1, int(rule.get("dedup_window_hours") or 24))
+                    exclude_scope_ids = str(rule.get("exclude_scope_ids") or "")
+                    with get_meta_connection() as conn:
+                        result = _run_now_dedup(
+                            conn, scope, scope_id, match_method, window_hours,
+                            exclude_scope_ids=exclude_scope_ids,
+                        )
+                        if "error" not in result and result.get("count", 0) > 0:
+                            _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
+            except Exception:
+                LOGGER.exception("[automation] error processing rule %s/%s/%s", rule_type, scope, keyword)
+    except Exception:
+        LOGGER.exception("[automation] error running automation rules after refresh")
 
 
 reader_api = ReaderApi(READER_DB_PATH)
@@ -2173,7 +3141,7 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     if not feed_urls:
         return []
 
-    # Fast path: zero manual tags exist anywhere → no per-entry scan needed.
+    # Fast path: zero manual tags exist anywhere → skip entirely.
     if not has_any_manual_tags():
         return []
 
@@ -2186,12 +3154,29 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
             if now - ts < TAG_COUNTS_CACHE_TTL_SECONDS:
                 return value
 
+    # Single bulk query instead of per-entry reader.get_tags() calls.
+    prefix = MANUAL_TAG_KEY_PREFIX
+    sorted_feeds = sorted(feed_urls)
+    placeholders = ",".join("?" * len(sorted_feeds))
+    try:
+        conn = sqlite3.connect(str(READER_DB_PATH), timeout=5.0)
+        try:
+            rows = conn.execute(
+                f"SELECT key, COUNT(*) FROM entry_tags"
+                f" WHERE key LIKE ? AND feed IN ({placeholders})"
+                f" GROUP BY key",
+                [f"{prefix}%", *sorted_feeds],
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        rows = []
+
     counts: dict[str, int] = {}
-    with get_reader() as reader:
-        for feed_url in feed_urls:
-            for entry in reader.get_entries(feed=feed_url, limit=None):
-                for tag in get_manual_tags_for_resource(reader, entry.resource_id):
-                    counts[tag] = counts.get(tag, 0) + 1
+    for raw_key, count in rows:
+        tag = raw_key[len(prefix):].strip().lower()
+        if tag:
+            counts[tag] = counts.get(tag, 0) + count
 
     result = [{"name": tag, "count": counts[tag]} for tag in sorted(counts)]
     with tag_counts_cache_lock:
@@ -2269,12 +3254,21 @@ def get_feed_properties(feed_url: str) -> dict:
             health_detail = "Updates are disabled for this feed."
 
         img_strategy, _, img_strategy_manual = lead_image_service.get_feed_strategy(feed_url)
+        _feed_domain = urlparse(feed_url).netloc.lower()
         with get_meta_connection() as _pc:
             _disp = get_feed_display_prefs(_pc, feed_url)
             _strat_rows = _pc.execute(
                 "SELECT strategy, image_url, fetched_at, error FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
                 (feed_url,),
             ).fetchall()
+            _feed_backoff_row = _pc.execute(
+                "SELECT consecutive_failures, next_retry_at FROM feed_failure_state WHERE feed_url = ?",
+                (feed_url,),
+            ).fetchone()
+            _domain_backoff_row = _pc.execute(
+                "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = ?",
+                (_feed_domain,),
+            ).fetchone() if _feed_domain else None
         _strat_cache = [
             {
                 "strategy": r["strategy"],
@@ -2284,6 +3278,20 @@ def get_feed_properties(feed_url: str) -> dict:
             }
             for r in _strat_rows
         ]
+        _folder_id_rows = _pc.execute(
+            "SELECT DISTINCT folder_id FROM folder_feeds WHERE feed_url = ?",
+            (feed_url,),
+        ).fetchall()
+
+        _now_ts = time.time()
+        _feed_next_retry = float(_feed_backoff_row["next_retry_at"]) if _feed_backoff_row and _feed_backoff_row["next_retry_at"] else None
+        _domain_next_retry = float(_domain_backoff_row["next_retry_at"]) if _domain_backoff_row and _domain_backoff_row["next_retry_at"] else None
+        _feed_failures = int(_feed_backoff_row["consecutive_failures"]) if _feed_backoff_row else 0
+        _domain_failures = int(_domain_backoff_row["consecutive_failures"]) if _domain_backoff_row else 0
+        _effective_next_retry = max(f for f in [_feed_next_retry or 0.0, _domain_next_retry or 0.0]) or None
+        _backoff_active = bool(_effective_next_retry and _effective_next_retry > _now_ts)
+        _backoff_domain_driven = _backoff_active and (_domain_next_retry or 0.0) > (_feed_next_retry or 0.0)
+
         props = {
             "feed_url": feed_url,
             "found": True,
@@ -2304,6 +3312,13 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_lead_image_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)),
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "strategy_cache": _strat_cache,
+            "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
+            "backoff_active": _backoff_active,
+            "backoff_domain_driven": _backoff_domain_driven,
+            "backoff_domain": _feed_domain if _backoff_domain_driven else None,
+            "backoff_retry_at": format_datetime_for_ui(datetime.fromtimestamp(_effective_next_retry, tz=timezone.utc)) if _effective_next_retry else None,
+            "backoff_feed_failures": _feed_failures,
+            "backoff_domain_failures": _domain_failures,
         }
 
         # If the stored title looks like a URL (often when a feed was just added),
@@ -2616,6 +3631,33 @@ def delete_entry_read_state(feed_url: str, entry_id: str) -> None:
         conn.execute(
             "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
             (feed_url, entry_id),
+        )
+
+
+READ_HISTORY_CAP = 2_000
+
+
+def append_read_history(
+    feed_url: str,
+    entry_id: str,
+    title: str,
+    link: str,
+    feed_title: str,
+) -> None:
+    now = datetime.now().isoformat()
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO read_history (feed_url, entry_id, title, link, feed_title, read_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(feed_url, entry_id) DO UPDATE SET"
+            "  title=excluded.title, link=excluded.link,"
+            "  feed_title=excluded.feed_title, read_at=excluded.read_at",
+            (feed_url, entry_id, title, link, feed_title, now),
+        )
+        conn.execute(
+            "DELETE FROM read_history WHERE id NOT IN"
+            " (SELECT id FROM read_history ORDER BY read_at DESC LIMIT ?)",
+            (READ_HISTORY_CAP,),
         )
 
 
@@ -3019,6 +4061,7 @@ def list_entries_for_feeds(
     read_state_map: dict[tuple[str, str], datetime] = {}
     feed_url_values = tuple(feed_urls)
     placeholders = ",".join("?" for _ in feed_url_values)
+    history_fast_keys: list[tuple[str, str]] = []
     with get_meta_connection() as conn:
         rows = conn.execute(
             f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
@@ -3026,18 +4069,37 @@ def list_entries_for_feeds(
         ).fetchall()
         saved_entries_set = {(row["feed_url"], row["entry_id"]) for row in rows}
         if normalized_read_filter == "history" and not normalized_star_only:
-            read_rows = conn.execute(
-                f"SELECT feed_url, entry_id, read_at FROM entry_read_state WHERE feed_url IN ({placeholders})",
-                feed_url_values,
+            # Fast path: read_history table stores recent individually-read entries
+            # in read order with timestamps. Avoids scanning all read entries in
+            # reader's DB when the user has been using the app with this version.
+            hist_rows = conn.execute(
+                f"SELECT feed_url, entry_id, read_at FROM read_history"
+                f" WHERE feed_url IN ({placeholders}) ORDER BY read_at DESC LIMIT ?",
+                feed_url_values + (max(1, int(limit)),),
             ).fetchall()
-            for row in read_rows:
-                raw_read_at = row["read_at"]
-                if not raw_read_at:
-                    continue
-                try:
-                    read_state_map[(row["feed_url"], row["entry_id"])] = datetime.fromisoformat(str(raw_read_at))
-                except Exception:
-                    continue
+            if hist_rows:
+                for row in hist_rows:
+                    history_fast_keys.append((row["feed_url"], row["entry_id"]))
+                    raw_read_at = row["read_at"]
+                    if raw_read_at:
+                        try:
+                            read_state_map[(row["feed_url"], row["entry_id"])] = datetime.fromisoformat(str(raw_read_at))
+                        except Exception:
+                            pass
+            else:
+                # Fall back to legacy entry_read_state scan (pre-read_history entries)
+                read_rows = conn.execute(
+                    f"SELECT feed_url, entry_id, read_at FROM entry_read_state WHERE feed_url IN ({placeholders})",
+                    feed_url_values,
+                ).fetchall()
+                for row in read_rows:
+                    raw_read_at = row["read_at"]
+                    if not raw_read_at:
+                        continue
+                    try:
+                        read_state_map[(row["feed_url"], row["entry_id"])] = datetime.fromisoformat(str(raw_read_at))
+                    except Exception:
+                        continue
 
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
@@ -3049,30 +4111,39 @@ def list_entries_for_feeds(
             if feed_obj.url in feed_site_map:
                 feed_site_map[feed_obj.url] = getattr(feed_obj, "link", None) or None
 
-        # Two strategies:
-        #   - few feeds (e.g. user clicked one feed): query per feed with the
-        #     SQL feed= filter. Avoids scanning every entry across the library.
-        #   - many feeds (root / large folder): one global query and filter in
-        #     Python. Avoids 2000+ tiny queries with their per-call overhead.
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
         need_all = bool(search_terms or normalized_sort_dir == "asc")
-        PER_FEED_QUERY_THRESHOLD = 32
-        if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
-            for feed_url in feed_urls:
-                for entry in reader.get_entries(feed=feed_url, read=reader_read_filter):
+
+        if history_fast_keys:
+            # Fast history path: fetch each entry by primary key (indexed lookup)
+            # instead of scanning all read entries. N small lookups vs. one huge scan.
+            for furl, eid in history_fast_keys:
+                e = reader.get_entry((furl, eid), None)
+                if e is not None:
+                    all_feed_entries.append(e)
+        else:
+            # Two strategies:
+            #   - few feeds (e.g. user clicked one feed): query per feed with the
+            #     SQL feed= filter. Avoids scanning every entry across the library.
+            #   - many feeds (root / large folder): one global query and filter in
+            #     Python. Avoids 2000+ tiny queries with their per-call overhead.
+            PER_FEED_QUERY_THRESHOLD = 32
+            if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
+                for feed_url in feed_urls:
+                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter):
+                        all_feed_entries.append(entry)
+                        if not need_all and len(all_feed_entries) >= fetch_limit:
+                            break
+                    if not need_all and len(all_feed_entries) >= fetch_limit:
+                        break
+            else:
+                for entry in reader.get_entries(read=reader_read_filter):
+                    if entry.feed_url not in feed_urls:
+                        continue
                     all_feed_entries.append(entry)
                     if not need_all and len(all_feed_entries) >= fetch_limit:
                         break
-                if not need_all and len(all_feed_entries) >= fetch_limit:
-                    break
-        else:
-            for entry in reader.get_entries(read=reader_read_filter):
-                if entry.feed_url not in feed_urls:
-                    continue
-                all_feed_entries.append(entry)
-                if not need_all and len(all_feed_entries) >= fetch_limit:
-                    break
 
         fetch_ms = int((time.perf_counter() - fetch_start) * 1000)
         LOGGER.info(
@@ -3901,7 +4972,10 @@ def entry_pane(
     if selected_entry and not selected_entry["read"]:
         with get_reader() as reader:
             reader.mark_entry_as_read((feed_url, entry_id))
-        upsert_entry_read_state(feed_url, entry_id)
+        try:
+            upsert_entry_read_state(feed_url, entry_id)
+        except Exception:
+            LOGGER.warning("upsert_entry_read_state failed (db contention?); entry still marked read in reader", exc_info=True)
         selected_entry["read"] = True
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
@@ -4238,6 +5312,7 @@ def _start_background_update(feed_url: str) -> None:
             updating_feeds.add(feed_url)
         try:
             feed_refresh_service.update_feeds([feed_url])
+            _run_automation_after_refresh({feed_url})
         finally:
             with updating_feeds_lock:
                 updating_feeds.discard(feed_url)
@@ -4268,6 +5343,7 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
             )
         app.state.last_scheduled_refresh_started_at = time.monotonic()
         feed_refresh_service.update_feeds(feed_urls)
+        _run_automation_after_refresh(feed_urls)
 
 
 def check_and_mark_manual_refresh() -> int:
@@ -4643,8 +5719,6 @@ def home(
 
         unread_counts_by_feed = get_unread_counts_by_feed()
         _tick("unread_counts")
-        dedupe_log_rows = get_unread_dedupe_log(limit=80)
-        _tick("dedupe_log")
         disabled_feed_urls = get_disabled_feed_urls(conn)
         # Exclude disabled feeds from unread counts so folder badges stay clean.
         active_unread_counts_by_feed = {
@@ -4665,6 +5739,10 @@ def home(
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT if EMAIL_CONFIGURED else ""
         highlight_rules = get_highlight_keywords(conn)
+        email_contacts = get_email_contacts(conn)
+        email_bcc = get_setting(conn, EMAIL_BCC_SETTING_KEY) or ""
+        profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
+        profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         # Build inactive feed list (feed_url + folder membership).
@@ -4729,9 +5807,6 @@ def home(
         }
         for r in inactive_feed_rows
     ]
-    for dedupe_row in dedupe_log_rows:
-        feed_urls = cast(list[str], dedupe_row.get("feed_urls", []))
-        dedupe_row["feed_titles"] = [feed_title_map.get(url, url) for url in feed_urls]
     problematic_unseen_count = 0
     for problematic_feed in problematic_feeds:
         pf_url = cast(str, problematic_feed["feed_url"])
@@ -4873,8 +5948,6 @@ def home(
             "problematic_feeds": problematic_feeds,
             "problematic_feed_count": len(problematic_feeds),
             "problematic_unseen_count": problematic_unseen_count,
-            "dedupe_log_rows": dedupe_log_rows,
-            "dedupe_log_count": len(dedupe_log_rows),
             "selected_sort_by": selected_sort_by,
             "selected_sort_dir": selected_sort_dir,
             "selected_read_filter": selected_read_filter,
@@ -4896,6 +5969,10 @@ def home(
             "static_asset_version": STATIC_ASSET_VERSION,
             "debug_mode": DEBUG_MODE,
             "highlight_rules": highlight_rules,
+            "email_contacts": email_contacts,
+            "email_bcc": email_bcc,
+            "profile_name": profile_name,
+            "profile_email": profile_email,
         },
     )
 
@@ -5271,15 +6348,39 @@ def add_highlight_route(
     keyword: str = Form(...),
     color: str = Form("yellow"),
     is_regex: int = Form(0),
+    type: str = Form("highlight"),
+    search_in: str = Form("title"),
+    delivery: str = Form("immediately"),
+    email_to: str = Form(""),
+    batch_time: str = Form(""),
+    batch_count: int = Form(0),
+    cc_me: int = Form(0),
+    enabled: int = Form(0),
+    dedup_window_hours: int = Form(168),
+    exclude_scope_ids: str = Form(""),
 ):
     keyword = keyword.strip()
-    if not keyword:
-        return JSONResponse({"error": "keyword is required"}, status_code=400)
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         return JSONResponse({"error": "invalid scope"}, status_code=400)
+    if type == "deduplicate":
+        if keyword not in _DEDUP_VALID_MATCH_METHODS:
+            return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
+        if scope == "feed":
+            return JSONResponse({"error": "deduplicate rules cannot be scoped to a single feed"}, status_code=400)
+    else:
+        if not keyword:
+            return JSONResponse({"error": "keyword is required"}, status_code=400)
     with get_meta_connection() as conn:
-        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex))
-    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword, "color": color, "is_regex": bool(is_regex)})
+        add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
+                              type, search_in, delivery, email_to, batch_time, batch_count,
+                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids)
+    return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
+                         "color": color, "is_regex": bool(is_regex), "type": type,
+                         "search_in": search_in, "delivery": delivery,
+                         "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
+                         "cc_me": bool(cc_me), "enabled": bool(enabled),
+                         "dedup_window_hours": dedup_window_hours,
+                         "exclude_scope_ids": exclude_scope_ids.strip()})
 
 
 @app.post("/highlights/remove")
@@ -5306,6 +6407,205 @@ def toggle_highlight_route(
             (1 if enabled else 0, scope, scope_id, keyword.strip()),
         )
     return JSONResponse({"ok": True, "enabled": bool(enabled)})
+
+
+@app.get("/rules/dry-run")
+def rules_dry_run_route(
+    type: str = Query("highlight"),
+    scope: str = Query("global"),
+    scope_id: str = Query(""),
+    keyword: str = Query(""),
+    is_regex: int = Query(0),
+    search_in: str = Query("title"),
+    dedup_window_hours: int = Query(168),
+    exclude_scope_ids: str = Query(""),
+    feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
+):
+    with get_meta_connection() as conn:
+        if type == "deduplicate":
+            match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
+            custom: set[str] | None = None
+            if feed_urls:
+                custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
+            result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
+                                    exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
+        elif type in ("highlight", "mark_as_read", "email_article"):
+            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        else:
+            return JSONResponse({"error": "unknown rule type"}, status_code=400)
+    if "error" in result:
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    result["ok"] = True
+    result["type"] = type
+    return JSONResponse(result)
+
+
+@app.post("/rules/run-now")
+def rules_run_now_route(
+    type: str = Form(...),
+    scope: str = Form(...),
+    scope_id: str = Form(""),
+    keyword: str = Form(""),
+    is_regex: int = Form(0),
+    search_in: str = Form("title"),
+    dedup_window_hours: int = Form(168),
+    exclude_scope_ids: str = Form(""),
+):
+    with get_meta_connection() as conn:
+        if type == "deduplicate":
+            match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
+            result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
+                                    exclude_scope_ids=exclude_scope_ids)
+        elif type == "mark_as_read":
+            result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        else:
+            return JSONResponse({"error": f"Run Now not supported for type '{type}'"}, status_code=400)
+    if "error" in result:
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    with get_meta_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO rule_run_log (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'manual')",
+            (datetime.now().isoformat(), type, scope, scope_id, keyword, result.get("count", 0)),
+        )
+        log_id = cur.lastrowid
+        entries = result.get("entries") or []
+        if entries and log_id:
+            conn.executemany(
+                "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id, title, link, feed_title)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"])
+                 for e in entries],
+            )
+    result["ok"] = True
+    return JSONResponse(result)
+
+
+@app.post("/highlights/reorder")
+async def reorder_highlights_route(request: Request):
+    body = await request.json()
+    order: list[dict] = body.get("order", [])
+    with get_meta_connection() as conn:
+        for i, item in enumerate(order):
+            conn.execute(
+                "UPDATE highlight_keywords SET sort_order = ? WHERE scope = ? AND scope_id = ? AND keyword = ?",
+                (i, item.get("scope", ""), item.get("scope_id", ""), item.get("keyword", "")),
+            )
+    return JSONResponse({"ok": True})
+
+
+@app.get("/automation/history")
+def automation_history_route(
+    limit: int = Query(200),
+    scope: str | None = Query(default=None),
+    scope_id: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+):
+    filters: list[str] = []
+    params: list[object] = []
+    if scope is not None:
+        filters.append("scope = ?")
+        params.append(scope)
+    if scope_id is not None:
+        filters.append("scope_id = ?")
+        params.append(scope_id)
+    if keyword is not None:
+        filters.append("keyword = ?")
+        params.append(keyword)
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    params.append(limit)
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger"
+            f" FROM rule_run_log {where} ORDER BY run_at DESC LIMIT ?",
+            params,
+        ).fetchall()
+    return JSONResponse({"ok": True, "history": [dict(r) for r in rows]})
+
+
+@app.get("/automation/history/{log_id}/entries")
+def automation_history_entries_route(log_id: int):
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT feed_url, entry_id, title, link, feed_title"
+            " FROM rule_run_log_entries WHERE log_id = ? ORDER BY rowid",
+            (log_id,),
+        ).fetchall()
+    return JSONResponse({"ok": True, "entries": [dict(r) for r in rows]})
+
+
+@app.get("/dedup/false-matches")
+def get_dedup_false_matches():
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT keep_link, mark_link FROM dedup_false_matches ORDER BY added_at DESC"
+        ).fetchall()
+    return JSONResponse({"ok": True, "pairs": [{"keep_link": r[0], "mark_link": r[1]} for r in rows]})
+
+
+@app.post("/dedup/false-match")
+async def toggle_dedup_false_match(request: Request):
+    data = await request.json()
+    keep_link = str(data.get("keep_link") or "").strip()
+    mark_link = str(data.get("mark_link") or "").strip()
+    if not keep_link or not mark_link:
+        return JSONResponse({"ok": False, "error": "keep_link and mark_link required"}, status_code=400)
+    with get_meta_connection() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM dedup_false_matches WHERE keep_link = ? AND mark_link = ?",
+            (keep_link, mark_link),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "DELETE FROM dedup_false_matches WHERE keep_link = ? AND mark_link = ?",
+                (keep_link, mark_link),
+            )
+            active = False
+        else:
+            conn.execute(
+                "INSERT INTO dedup_false_matches (keep_link, mark_link, added_at) VALUES (?, ?, ?)",
+                (keep_link, mark_link, datetime.now().isoformat()),
+            )
+            active = True
+    return JSONResponse({"ok": True, "active": active})
+
+
+@app.get("/email-contacts")
+def list_email_contacts_route():
+    with get_meta_connection() as conn:
+        return JSONResponse({"ok": True, "contacts": get_email_contacts(conn)})
+
+
+@app.post("/email-contacts/add")
+def add_email_contact_route(label: str = Form(...), address: str = Form(...)):
+    try:
+        with get_meta_connection() as conn:
+            contact = add_email_contact(conn, label, address)
+        return JSONResponse({"ok": True, "contact": contact})
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/email-contacts/remove")
+def remove_email_contact_route(contact_id: int = Form(...)):
+    with get_meta_connection() as conn:
+        remove_email_contact(conn, contact_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/settings/email-bcc")
+def save_email_bcc_route(address: str = Form("")):
+    with get_meta_connection() as conn:
+        set_setting(conn, EMAIL_BCC_SETTING_KEY, address.strip())
+    return JSONResponse({"ok": True})
+
+
+@app.post("/settings/profile")
+def save_profile_route(name: str = Form(""), email: str = Form("")):
+    with get_meta_connection() as conn:
+        set_setting(conn, PROFILE_NAME_SETTING_KEY, name.strip())
+        set_setting(conn, PROFILE_EMAIL_SETTING_KEY, email.strip())
+    return JSONResponse({"ok": True})
 
 
 @app.post("/feeds/strategy-refresh")
@@ -5666,6 +6966,7 @@ def refresh(
             normalized_tag,
         )
     feed_refresh_service.update_feeds(feed_urls)
+    _run_automation_after_refresh(feed_urls)
     return RedirectResponse(
         url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"),
         status_code=303,
@@ -5720,6 +7021,7 @@ def refresh_feed(
             normalized_tag,
         )
     feed_refresh_service.update_feeds([feed_url])
+    _run_automation_after_refresh({feed_url})
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Feed refresh complete.')}"
@@ -5755,8 +7057,6 @@ def mark_folder_as_read(
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
-    with dedupe_log_cache_lock:
-        dedupe_log_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "marked": marked_count, "message": message})
@@ -5785,8 +7085,6 @@ def mark_feed_as_read(
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
-    with dedupe_log_cache_lock:
-        dedupe_log_cache.clear()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = ""
@@ -5828,6 +7126,16 @@ def mark_entry_read(
         if read:
             reader.mark_entry_as_read((feed_url, entry_id))
             upsert_entry_read_state(feed_url, entry_id)
+            if is_async_action_request(request, "lectio-entry-read-toggle"):
+                entry_obj = reader.get_entry((feed_url, entry_id), None)
+                feed_obj = reader.get_feed(feed_url, None)
+                append_read_history(
+                    feed_url,
+                    entry_id,
+                    str(getattr(entry_obj, "title", None) or ""),
+                    str(getattr(entry_obj, "link", None) or ""),
+                    str(getattr(feed_obj, "title", None) or ""),
+                )
         else:
             reader.mark_entry_as_unread((feed_url, entry_id))
             delete_entry_read_state(feed_url, entry_id)
@@ -5835,8 +7143,6 @@ def mark_entry_read(
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
-    with dedupe_log_cache_lock:
-        dedupe_log_cache.clear()
 
     if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
@@ -6139,6 +7445,9 @@ def mark_entries_older_than_read(
                 """,
                 [(fu, eid, when) for fu, eid in to_sync],
             )
+        global _unread_counts_generation
+        _unread_counts_generation += 1
+        unread_counts_cache.clear()
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -6153,6 +7462,73 @@ def mark_entries_older_than_read(
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message})
+    return RedirectResponse(
+        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@app.post("/entries/mark-newer-than-unread")
+def mark_entries_newer_than_unread(
+    request: Request,
+    min_age_days: int = Form(...),
+    folder_id: int = Form(...),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+    sort_by: str | None = Form(default=None),
+    sort_dir: str | None = Form(default=None),
+    read_filter: str | None = Form(default=None),
+    star_only: str | None = Form(default=None),
+    resume_read_filter: str | None = Form(default=None),
+):
+    normalized_tag = normalize_tag_value(tag)
+    with get_meta_connection() as conn:
+        feed_urls = get_folder_feed_urls(conn, folder_id)
+    filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+    unmarked_count = 0
+    to_delete: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for fu in filtered_feed_urls:
+            for entry in reader.get_entries(feed=fu, read=True):
+                date = entry.published or entry.updated
+                if date is None:
+                    continue
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=timezone.utc)
+                if date < cutoff:
+                    continue
+                try:
+                    reader.mark_entry_as_unread((entry.feed_url, entry.id))
+                except Exception:
+                    continue
+                to_delete.append((entry.feed_url, entry.id))
+                unmarked_count += 1
+
+    if to_delete:
+        with get_meta_connection() as conn:
+            conn.executemany(
+                "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+                to_delete,
+            )
+        global _unread_counts_generation
+        _unread_counts_generation += 1
+        unread_counts_cache.clear()
+
+    list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
+    tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
+    sort_query = (
+        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
+        if sort_by is not None or sort_dir is not None
+        else ""
+    )
+    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
+    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    message = "No read posts newer than that." if unmarked_count == 0 else f"Marked {unmarked_count} posts as unread."
+    if is_async_action_request(request, "lectio-mark-read"):
+        return JSONResponse({"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days, "message": message})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,

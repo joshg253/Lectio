@@ -37,3 +37,27 @@
 .highlight-mark-blue   { background: #1a4f8a; color: #fff; }
 .highlight-mark-pink   { background: #8a1a40; color: #fff; }
 .highlight-mark-orange { background: #8a4a00; color: #fff; }
+
+/* Automation type chip colors for dark theme */
+.hl-rule-type-chip--mark_as_read { background: #1a4f8a; color: #b8d8f5; }
+.hl-rule-type-chip--email_article { background: #4a2070; color: #d8b8f5; }
+.hl-rule-type-chip--deduplicate { background: #5a3500; color: #fde68a; }
+.hl-rule-delivery-badge { background: #4a2070; color: #d8b8f5; }
+.hl-rule-cc-badge { background: #1a4f8a; color: #b8d8f5; }
+.hl-rule-test:hover, .hl-rule-test.active { color: #66bb6a; }
+.hl-rule-run:hover { color: #ff9800; }
+.hl-rule-hist:hover, .hl-rule-hist.active { color: #4f89ab; }
+.hl-rule-hist-trigger--auto { background: #1a3060; color: #93c5fd; }
+.hl-rule-hist-trigger--manual { background: #2a3040; color: #a6b0b8; }
+.hl-rule-dryrun-keep-label { color: #66bb6a; }
+
+/* Compare mode badges — dark theme */
+.hl-cmp-mode-badge--slug    { background: #1a3a6a; color: #93c5fd; }
+.hl-cmp-mode-badge--title   { background: #14432a; color: #86efac; }
+.hl-cmp-mode-badge--both    { background: #3b1f6e; color: #c4b5fd; }
+.hl-cmp-mode-badge--fuzzy   { background: #5a2e00; color: #fdba74; }
+/* Compare overlap buckets — dark theme */
+.hl-cmp-bucket--4 .hl-cmp-bucket-summary { background: rgba(134,239,172,0.12); color: #86efac; }
+.hl-cmp-bucket--3 .hl-cmp-bucket-summary { background: rgba(147,197,253,0.12); color: #93c5fd; }
+.hl-cmp-bucket--2 .hl-cmp-bucket-summary { background: rgba(253,186,116,0.12); color: #fdba74; }
+.hl-cmp-bucket--1 .hl-cmp-bucket-summary { background: rgba(252,165,165,0.12); color: #fca5a5; }

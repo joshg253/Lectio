@@ -10,6 +10,10 @@
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
     window.__lectioTheme = window.localStorage.getItem('lectio-theme') || 'dark';
     window.HIGHLIGHT_RULES = {{ highlight_rules | tojson }};
+    window.EMAIL_CONTACTS = {{ email_contacts | tojson }};
+    window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
+    window.PROFILE_NAME = {{ profile_name | tojson }};
+    window.PROFILE_EMAIL = {{ profile_email | tojson }};
   </script>
   <script>
     // CSRF shim — installs BEFORE any other handler registers.
@@ -119,6 +123,7 @@
       <details class="hamburger-menu app-menu topbar-menu">
         <summary title="Menu" aria-label="Open menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
         <div class="menu-popover">
+          <button type="button" class="menu-item" id="menu-profile-btn"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Profile</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -126,14 +131,14 @@
               <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
             </div>
           </div>
-          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
-          <button type="button" class="menu-item" id="menu-highlights-btn"><span class="material-symbols-rounded" aria-hidden="true">highlight</span> Highlights</button>
+          <button type="button" class="menu-item" id="menu-highlights-btn"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
           <a
             class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
             href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
             title="Global history"
             aria-label="Global history"
           ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
+          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -147,10 +152,9 @@
               </form>
             </div>
           </div>
+          <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
           <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
           {% if inactive_feed_count > 0 %}<button type="button" class="menu-item" data-toggle-panel="inactive-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">pause_circle</span> Inactive Feeds ({{ inactive_feed_count }})</button>{% endif %}
-          <button type="button" class="menu-item" data-toggle-panel="dedupe-log-modal"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span> Dedupe Log{% if dedupe_log_count > 0 %} ({{ dedupe_log_count }}){% endif %}</button>
-          <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -471,6 +475,28 @@
                 </button>
               </form>
               {% endfor %}
+
+              <hr class="mark-read-divider" />
+              <p class="mark-read-header-label">Mark as unread:</p>
+              <p class="mark-read-section-label">Newer than:</p>
+
+              {% for age_days, age_label in [(30, '1 month'), (14, '2 weeks'), (7, '1 week')] %}
+              <form method="post" action="/entries/mark-newer-than-unread" class="mark-unread-action-form">
+                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                <input type="hidden" name="min_age_days" value="{{ age_days }}" />
+                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                <button type="submit" class="mark-read-action" role="menuitem">
+                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
+                  <span>{{ age_label }}</span>
+                </button>
+              </form>
+              {% endfor %}
             </div>
           </details>
         </div>
@@ -516,7 +542,7 @@
               <div class="post-title-row">
                 <a class="post-main-link"
                   href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}">
-                  <div class="post-title" title="{{ post.title or '(untitled)' }}">{{ post.title or "(untitled)" }}</div>
+                  <div class="post-title" title="{{ post.link or '' }}">{{ post.title or "(untitled)" }}</div>
                 </a>
               </div>
             </div>
@@ -953,10 +979,15 @@
             indicator.classList.add('ptr-loading');
             Promise.resolve()
               .then(() => {
-                if (typeof window.refreshCurrentFeedOrFolder === 'function') {
+                const sp = new URLSearchParams(window.location.search);
+                const isSingleFeed = sp.has('list_feed_url');
+                if (isSingleFeed && typeof window.refreshCurrentFeedOrFolder === 'function') {
+                  // Single feed in view: one network call, worth waiting for
                   return window.refreshCurrentFeedOrFolder();
                 }
-                window.location.reload();
+                // Folder / root: reload the view from DB (instant).
+                // Background auto-refresh handles actual network fetching.
+                return loadScopePanesWithoutFullRefresh(window.location.href, false);
               })
               .finally(() => hide());
           } else {
@@ -1033,7 +1064,7 @@
       // Only intercept app navigation (folders/feeds/tags/tree links, plus
       // the post-list / entry-pane feed-name links that should also expand
       // the containing folder in the sidebar).
-      if (!(a.matches('.feed-link, .tag-link, .tree-item, .post-feed-link, .entry-feed-link') || a.closest('.tree'))) return;
+      if (!(a.matches('.feed-link, .tag-link, .tree-item, .post-feed-link, .entry-feed-link, .folders-utility-btn') || a.closest('.tree'))) return;
 
       // If this is a filter pill click (All/Unread/Star), persist the
       // `lectio-read-filter` immediately so the SPA loader can include it
@@ -1188,7 +1219,7 @@
       }
     }, true);
 
-    // Close hamburger menu when clicking outside it
+    // Close hamburger menu when clicking outside it or on any non-flyout menu item
     const appMenuDetails = document.querySelector('.hamburger-menu.topbar-menu');
     if (appMenuDetails) {
       document.addEventListener('click', (e) => {
@@ -1196,6 +1227,12 @@
           appMenuDetails.removeAttribute('open');
         }
       }, true);
+      appMenuDetails.addEventListener('click', (e) => {
+        const item = e.target.closest('.menu-item');
+        if (item && !item.classList.contains('flyout-trigger') && !item.closest('.flyout-trigger')) {
+          appMenuDetails.removeAttribute('open');
+        }
+      });
     }
 
     // init
@@ -1366,7 +1403,7 @@
     <button type="button" id="ctx-add-feed" class="context-menu-item">Add Feed Here</button>
     <button type="button" id="ctx-feed-properties" class="context-menu-item" hidden>Properties</button>
     <button type="button" id="ctx-folder-properties" class="context-menu-item" hidden>Properties</button>
-    <button type="button" id="ctx-highlights" class="context-menu-item" hidden>Highlights…</button>
+    <button type="button" id="ctx-highlights" class="context-menu-item" hidden>Automation…</button>
     <button type="button" id="ctx-rename-folder" class="context-menu-item" hidden>Rename Folder</button>
     <button type="button" id="ctx-youtube-sync" class="context-menu-item" hidden>Sync Subscriptions</button>
     <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
@@ -1515,31 +1552,38 @@
   <div id="highlights-modal" class="action-modal" hidden>
     <div class="action-modal-panel highlights-modal-panel" role="dialog" aria-modal="true" aria-labelledby="highlights-modal-title">
       <div class="modal-header-row">
-        <h3 id="highlights-modal-title" class="action-modal-title">Highlights</h3>
+        <h3 id="highlights-modal-title" class="action-modal-title">Automation</h3>
         <button type="button" class="modal-close" data-close-modal="highlights-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <p class="highlights-hint">Highlight keywords in post titles. Matches are case-insensitive. Enable <strong>.*</strong> for regex pattern matching.</p>
-      <div id="hl-rules-list" class="hl-rules-list"></div>
-      <div id="hl-draft-row" class="hl-draft-row" hidden>
-        <input type="text" id="hl-draft-pattern" class="hl-draft-pattern" placeholder="keyword or pattern" maxlength="200" autocomplete="off" />
-        <button type="button" id="hl-draft-regex-toggle" class="hl-regex-toggle" aria-pressed="false" title="Enable regex matching">.*</button>
-        <select id="hl-draft-folder" class="hl-draft-select hl-folder-select">
-          <option value="">All Feeds</option>
-        </select>
-        <select id="hl-draft-feed" class="hl-draft-select hl-feed-select" disabled>
-          <option value="">All in folder</option>
-        </select>
-        <select id="hl-draft-color" class="hl-draft-select hl-color-select">
-          <option value="yellow">Yellow</option>
-          <option value="green">Green</option>
-          <option value="blue">Blue</option>
-          <option value="pink">Pink</option>
-          <option value="orange">Orange</option>
-        </select>
-        <button type="button" id="hl-draft-save" class="hl-draft-save">Add</button>
-        <button type="button" id="hl-draft-cancel" class="hl-draft-cancel" aria-label="Cancel"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      <div class="hl-tab-bar" role="tablist">
+        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-hl-tab="rules" role="tab" aria-selected="true">Rules</button>
+        <button type="button" class="hl-tab-btn" data-hl-tab="history" role="tab" aria-selected="false">History</button>
       </div>
-      <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
+      <div id="hl-tab-rules" class="hl-tab-panel">
+        <p class="highlights-hint">Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Enable <strong>.*</strong> for regex.</p>
+        <div id="hl-rules-list" class="hl-rules-list"></div>
+        <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
+      </div>
+      <div id="hl-tab-history" class="hl-tab-panel" hidden>
+        <div id="hl-history-list" class="hl-history-list"><p class="hl-empty">Loading…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="profile-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+      <div class="modal-header-row">
+        <h3 id="profile-modal-title" class="action-modal-title">Profile</h3>
+        <button type="button" class="modal-close" data-close-modal="profile-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p class="highlights-hint">Your name and email are used as the "Cc me" address in Automation email rules.</p>
+      <div class="profile-form">
+        <label class="profile-label" for="profile-name-input">Name</label>
+        <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name" maxlength="200" />
+        <label class="profile-label" for="profile-email-input">Email</label>
+        <input type="email" id="profile-email-input" class="profile-input" placeholder="you@example.com" maxlength="200" />
+        <button type="button" id="profile-save-btn" class="hl-draft-save">Save</button>
+      </div>
     </div>
   </div>
 
@@ -1700,35 +1744,6 @@
     </div>
   </div>
 
-  <div id="dedupe-log-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dedupe-log-modal-title">
-      <div class="modal-header-row">
-        <h3 id="dedupe-log-modal-title" class="action-modal-title">Dedupe Log</h3>
-        <button type="button" class="modal-close" data-close-modal="dedupe-log-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      {% if dedupe_log_rows %}
-      <ul class="problem-feed-list">
-        {% for row in dedupe_log_rows %}
-        <li class="problem-feed-item">
-          <a class="problem-feed-link" href="{{ row.link }}" target="_blank" rel="noopener noreferrer" title="{{ row.link }}">{{ row.link }}</a>
-          <div class="problem-feed-meta">
-            <span>{{ row.total_occurrences }} cop{{ 'y' if row.total_occurrences == 1 else 'ies' }}</span>
-            <span>{{ row.collapsed_count }} hidden by dedupe</span>
-          </div>
-          {% if row.feed_titles %}<div class="problem-feed-error">Feeds: {{ row.feed_titles | join(', ') }}</div>{% endif %}
-          {% if row.sample_titles %}<div class="problem-feed-error">Examples: {{ row.sample_titles | join(' | ') }}</div>{% endif %}
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="muted">No duplicate unread links detected right now.</p>
-      {% endif %}
-      <div class="action-modal-actions">
-        <button type="button" class="action-modal-cancel" data-close-modal="dedupe-log-modal">Close</button>
-      </div>
-    </div>
-  </div>
-
   <div id="action-input-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
       <h3 id="action-modal-title" class="action-modal-title">Add</h3>
@@ -1749,57 +1764,69 @@
         <h3 id="feed-properties-title" class="action-modal-title">Feed Properties</h3>
         <button type="button" id="feed-properties-close" class="feed-properties-close" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <dl class="feed-properties-grid">
-        <dt>Title</dt><dd id="feed-prop-title">-</dd>
-        <dt>Website</dt><dd id="feed-prop-website">-</dd>
-        <dt>XML address</dt><dd id="feed-prop-xml">-</dd>
-        <dt>Health</dt><dd id="feed-prop-health">-</dd>
-        <dt>Detail</dt><dd id="feed-prop-health-detail">-</dd>
-        <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
-        <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
-        <dt>Date followed</dt><dd id="feed-prop-added">-</dd>
-        <dt>Last crawled</dt><dd id="feed-prop-updated">-</dd>
-        <dt>Last received</dt><dd id="feed-prop-received">-</dd>
-        <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
-        <dt>Thumbnails</dt>
-        <dd>
-          <select id="feed-prop-strategy" class="feed-prop-strategy-select">
-            <option value="auto">Auto-detect</option>
-            <option value="inline">Feed content only</option>
-            <option value="og_scrape">Source scraping</option>
-            <option value="none">None</option>
-          </select>
-          <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
-        </dd>
-      </dl>
-
-      <h4 class="feed-prop-section-title">Image display</h4>
-      <div class="feed-prop-toggles">
-        <label class="feed-prop-toggle-row">
-          <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
-          <span>Use as thumbnail in post list</span>
-        </label>
-        <label class="feed-prop-toggle-row">
-          <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
-          <span>Show image at top of article</span>
-        </label>
-        <label class="feed-prop-toggle-row">
-          <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
-            <option value="-1">Caption: auto (suppress junk)</option>
-            <option value="1">Caption: always show</option>
-            <option value="0">Caption: never show</option>
-          </select>
-        </label>
+      <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
+        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-feed-prop-tab="info" role="tab" aria-selected="true">Info</button>
+        <button type="button" class="hl-tab-btn" data-feed-prop-tab="tuning" role="tab" aria-selected="false">Tuning</button>
       </div>
-
-      <h4 class="feed-prop-section-title">
-        Strategy comparison
-        <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
-          <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
-        </button>
-      </h4>
-      <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
-      <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
+      <div id="feed-prop-tab-info" class="feed-prop-tab-panel">
+        <dl class="feed-properties-grid">
+          <dt>Title</dt><dd id="feed-prop-title">-</dd>
+          <dt>Website</dt><dd id="feed-prop-website">-</dd>
+          <dt>XML address</dt><dd id="feed-prop-xml">-</dd>
+          <dt>Health</dt><dd id="feed-prop-health">-</dd>
+          <dt>Detail</dt><dd id="feed-prop-health-detail">-</dd>
+          <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
+          <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
+          <dt>Date followed</dt><dd id="feed-prop-added">-</dd>
+          <dt>Last crawled</dt><dd id="feed-prop-updated">-</dd>
+          <dt id="feed-prop-cooldown-label" hidden>Crawl hold</dt><dd id="feed-prop-cooldown" hidden>-</dd>
+          <dt>Last received</dt><dd id="feed-prop-received">-</dd>
+          <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
+        </dl>
+        <div class="feed-prop-footer">
+          <button type="button" id="feed-prop-unsubscribe-btn" class="feed-prop-unsubscribe-btn" hidden>Unsubscribe from feed</button>
+        </div>
+      </div>
+      <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>
+        <dl class="feed-properties-grid">
+          <dt>Thumbnails</dt>
+          <dd>
+            <select id="feed-prop-strategy" class="feed-prop-strategy-select">
+              <option value="auto">Auto-detect</option>
+              <option value="inline">Feed content only</option>
+              <option value="og_scrape">Source scraping</option>
+              <option value="none">None</option>
+            </select>
+            <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
+          </dd>
+        </dl>
+        <h4 class="feed-prop-section-title">Image display</h4>
+        <div class="feed-prop-toggles">
+          <label class="feed-prop-toggle-row">
+            <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
+            <span>Use as thumbnail in post list</span>
+          </label>
+          <label class="feed-prop-toggle-row">
+            <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
+            <span>Show image at top of article</span>
+          </label>
+          <label class="feed-prop-toggle-row">
+            <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
+              <option value="-1">Caption: auto (suppress junk)</option>
+              <option value="1">Caption: always show</option>
+              <option value="0">Caption: never show</option>
+            </select>
+          </label>
+        </div>
+        <h4 class="feed-prop-section-title">
+          Strategy comparison
+          <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
+            <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
+          </button>
+        </h4>
+        <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
+        <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
+      </div>
     </div>
   </div>
 
@@ -2296,7 +2323,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #dedupe-log-modal, #stats-modal, #dedup-modal, #highlights-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2973,12 +3000,29 @@
     const feedPropRefreshBtn = document.getElementById('feed-prop-refresh-btn');
     const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
     const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
+    const feedPropUnsubscribeBtn = document.getElementById('feed-prop-unsubscribe-btn');
+    const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
+    const feedPropCooldown = document.getElementById('feed-prop-cooldown');
+    const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
+    const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
+    document.querySelectorAll('[data-feed-prop-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-feed-prop-tab');
+        document.querySelectorAll('[data-feed-prop-tab]').forEach(b => {
+          b.classList.toggle('hl-tab-btn--active', b === btn);
+          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+        if (feedPropTabInfo) feedPropTabInfo.hidden = tab !== 'info';
+        if (feedPropTabTuning) feedPropTabTuning.hidden = tab !== 'tuning';
+      });
+    });
     let entryArticle = document.querySelector('.entry');
     let entryPaneTitle = document.querySelector('.entry-pane-title');
     let entryBody = document.getElementById('entry-body');
     let entryReadabilityButton = document.getElementById('entry-readability-button');
     let entrySourceButton = document.getElementById('entry-source-button');
     let entrySourceFrame = document.getElementById('entry-source-frame');
+    let entryReadabilityContainer = document.getElementById('entry-readability-container');
     let entrySourceFallback = document.getElementById('entry-source-fallback');
     let entrySourceOpenExternal = document.getElementById('entry-source-open-external');
     let entrySourceDismiss = document.getElementById('entry-source-dismiss');
@@ -3024,6 +3068,7 @@
       entryReadabilityButton = document.getElementById('entry-readability-button');
       entrySourceButton = document.getElementById('entry-source-button');
       entrySourceFrame = document.getElementById('entry-source-frame');
+      entryReadabilityContainer = document.getElementById('entry-readability-container');
       entrySourceFallback = document.getElementById('entry-source-fallback');
       entrySourceOpenExternal = document.getElementById('entry-source-open-external');
       entrySourceDismiss = document.getElementById('entry-source-dismiss');
@@ -3335,8 +3380,13 @@
             return;
           }
 
-          // remember scroll position
-          const prevScroll = currentPostsPane.scrollTop;
+          // .posts is the actual item container and the element setupPostChunks
+          // queries. Append there so getPostItems() finds new items and the
+          // chunk counter advances correctly. In single-pane mode .pane-posts
+          // scrolls, so preserve scroll on the right element.
+          const postsInnerEl = currentPostsPane.querySelector('.posts') || currentPostsPane;
+          const scrollingEl = (window.isSingleMode && window.isSingleMode()) ? currentPostsPane : postsInnerEl;
+          const prevScroll = scrollingEl.scrollTop;
 
           // Avoid appending duplicates: only append items whose entry-id
           // isn't already present in the current posts pane.
@@ -3350,17 +3400,17 @@
               // skip duplicates
               continue;
             }
-            // Move the node from the parsed doc into the live DOM
-            currentPostsPane.appendChild(item);
+            // Move the node from the parsed doc into the live .posts container
+            postsInnerEl.appendChild(item);
           }
 
           // Move/replace the sentinel so it remains at the end
           try {
             const nextSentinel = nextPostsPane.querySelector('#posts-chunk-sentinel');
-            const existingSentinel = currentPostsPane.querySelector('#posts-chunk-sentinel');
+            const existingSentinel = postsInnerEl.querySelector('#posts-chunk-sentinel');
             if (nextSentinel) {
               if (existingSentinel) existingSentinel.remove();
-              currentPostsPane.appendChild(nextSentinel);
+              postsInnerEl.appendChild(nextSentinel);
             }
           } catch (e) {
             // ignore
@@ -3375,9 +3425,9 @@
 
           // Unhide the next chunk of items (keep client chunking behavior)
           try {
-            const chunkSize = Number.parseInt(currentPostsPane.getAttribute('data-chunk-size') || '10', 10) || 10;
-            const currentlyVisible = currentPostsPane.querySelectorAll('.post-item:not(.post-item-hidden)').length;
-            const items = Array.from(currentPostsPane.querySelectorAll('.post-item'));
+            const chunkSize = Number.parseInt(postsInnerEl.getAttribute('data-chunk-size') || '10', 10) || 10;
+            const currentlyVisible = postsInnerEl.querySelectorAll('.post-item:not(.post-item-hidden)').length;
+            const items = Array.from(postsInnerEl.querySelectorAll('.post-item'));
             const nextVisible = Math.min(items.length, currentlyVisible + chunkSize);
             for (let i = currentlyVisible; i < nextVisible; i++) {
               items[i].classList.remove('post-item-hidden');
@@ -3387,7 +3437,7 @@
           }
 
           // restore scroll position so the viewport doesn't jump
-          currentPostsPane.scrollTop = prevScroll;
+          scrollingEl.scrollTop = prevScroll;
           updateScopeActiveState(url);
           return;
         }
@@ -3850,6 +3900,7 @@
       if (feedPropShowThumb) feedPropShowThumb.checked = true;
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropCaptionMode) feedPropCaptionMode.value = '-1';
+      if (feedPropUnsubscribeBtn) feedPropUnsubscribeBtn.setAttribute('hidden', '');
       const activePost = document.querySelector('.post-item.active');
       const activeEntryId = (activePost?.getAttribute('data-post-feed-url') === feedUrl)
         ? (activePost?.getAttribute('data-post-entry-id') || '')
@@ -3859,6 +3910,14 @@
         feedPropRefreshBtn.dataset.entryId = activeEntryId;
       }
       renderStrategyGrid([]);
+      // Reset to Info tab
+      document.querySelectorAll('[data-feed-prop-tab]').forEach(b => {
+        const isInfo = b.getAttribute('data-feed-prop-tab') === 'info';
+        b.classList.toggle('hl-tab-btn--active', isInfo);
+        b.setAttribute('aria-selected', isInfo ? 'true' : 'false');
+      });
+      if (feedPropTabInfo) feedPropTabInfo.hidden = false;
+      if (feedPropTabTuning) feedPropTabTuning.hidden = true;
       feedPropertiesModal.removeAttribute('hidden');
 
       try {
@@ -3884,6 +3943,22 @@
         setFeedPropText(feedPropUnread, data.unread_posts);
         setFeedPropText(feedPropAdded, data.added);
         setFeedPropText(feedPropUpdated, data.last_updated);
+        if (feedPropCooldown && feedPropCooldownLabel) {
+          if (data.backoff_active) {
+            let cooldownText = `until ${data.backoff_retry_at || '?'}`;
+            if (data.backoff_domain_driven) {
+              cooldownText += ` — domain-wide (${data.backoff_domain})`;
+            }
+            if (data.backoff_feed_failures > 0) cooldownText += `, ${data.backoff_feed_failures} feed failure${data.backoff_feed_failures !== 1 ? 's' : ''}`;
+            if (data.backoff_domain_failures > 0 && data.backoff_domain_driven) cooldownText += `, ${data.backoff_domain_failures} domain failure${data.backoff_domain_failures !== 1 ? 's' : ''}`;
+            setFeedPropText(feedPropCooldown, cooldownText);
+            feedPropCooldown.removeAttribute('hidden');
+            feedPropCooldownLabel.removeAttribute('hidden');
+          } else {
+            feedPropCooldown.setAttribute('hidden', '');
+            feedPropCooldownLabel.setAttribute('hidden', '');
+          }
+        }
         setFeedPropText(feedPropReceived, data.last_received);
         setFeedPropText(feedPropLastPost, data.last_post);
 
@@ -3911,6 +3986,17 @@
           feedPropCaptionMode.dataset.feedUrl = feedUrl;
         }
         if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
+
+        if (feedPropUnsubscribeBtn) {
+          const folderIds = data.folder_ids || [];
+          if (folderIds.length > 0) {
+            feedPropUnsubscribeBtn.dataset.feedUrl = feedUrl;
+            feedPropUnsubscribeBtn.dataset.folderIds = folderIds.join(',');
+            feedPropUnsubscribeBtn.removeAttribute('hidden');
+          } else {
+            feedPropUnsubscribeBtn.setAttribute('hidden', '');
+          }
+        }
 
         if (activeEntryId) {
           doStrategyRefresh(feedUrl, activeEntryId);
@@ -4125,6 +4211,38 @@
     feedPropertiesModal?.addEventListener('click', (event) => {
       if (event.target === feedPropertiesModal) {
         closeFeedPropertiesModal();
+      }
+    });
+
+    feedPropUnsubscribeBtn?.addEventListener('click', async () => {
+      const feedUrl = feedPropUnsubscribeBtn.dataset.feedUrl;
+      const folderIdStr = (feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0];
+      const folderId = parseInt(folderIdStr, 10);
+      if (!feedUrl || !folderId) return;
+      const title = feedPropTitle?.textContent || feedUrl;
+      if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
+      feedPropUnsubscribeBtn.disabled = true;
+      const feedLi = document.querySelector(
+        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
+      )?.closest('.tree-feed-item');
+      if (feedLi) feedLi.style.opacity = '0.4';
+      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
+        const resp = await fetch('/feeds/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' }, credentials: 'same-origin', body: body.toString() });
+        if (!resp.ok) throw new Error('request failed');
+        closeFeedPropertiesModal();
+        if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
+        if (wasActive) {
+          const params = new URLSearchParams(window.location.search);
+          params.delete('feed_url'); params.delete('entry_id');
+          params.set('folder_id', String(folderId));
+          window.location.assign('/?' + params.toString());
+        }
+      } catch {
+        if (feedLi) feedLi.style.opacity = '';
+        window.alert('Unsubscribe failed. Please try again.');
+        feedPropUnsubscribeBtn.disabled = false;
       }
     });
 
@@ -4425,22 +4543,75 @@
 
       if (entryReadabilityButton && !entryReadabilityButton.dataset.boundClick) {
         entryReadabilityButton.dataset.boundClick = '1';
-        entryReadabilityButton.addEventListener('click', (event) => {
+        entryReadabilityButton.addEventListener('click', async (event) => {
           event.preventDefault();
           const sourceUrl = entryReadabilityButton.getAttribute('data-source-url');
-          if (!sourceUrl || !entryBody || !entrySourceFrame) {
+          if (!sourceUrl || !entryBody) {
             return;
           }
           if (entryReadabilityButton.classList.contains('active')) {
             deactivateSourceView();
-          } else {
-            const feedUrl = entryReadabilityButton.getAttribute('data-feed-url') || '';
-            const entryId = entryReadabilityButton.getAttribute('data-entry-id') || '';
-            const archiveQuery = (feedUrl && entryId)
-              ? `&feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(entryId)}`
-              : '';
-            const readabilityUrl = `/entries/readability?url=${encodeURIComponent(sourceUrl)}${archiveQuery}`;
-            activateSourceView(readabilityUrl, entryReadabilityButton);
+            return;
+          }
+          // Deactivate any active source view first.
+          if (sourceViewActive) deactivateSourceView();
+
+          const feedUrl = entryReadabilityButton.getAttribute('data-feed-url') || '';
+          const entryId = entryReadabilityButton.getAttribute('data-entry-id') || '';
+          const archiveQuery = (feedUrl && entryId)
+            ? `&feed_url=${encodeURIComponent(feedUrl)}&entry_id=${encodeURIComponent(entryId)}`
+            : '';
+          const readabilityUrl = `/entries/readability?url=${encodeURIComponent(sourceUrl)}${archiveQuery}`;
+
+          // Switch UI to readability mode.
+          sourceViewMode = 'readability';
+          sourceViewActive = true;
+          sourceViewUrl = sourceUrl;
+          setSourceModeIndicator('readability');
+          entryReadabilityButton.classList.add('active');
+          entrySourceButton?.classList.remove('active');
+          if (entrySourceOpenExternal) entrySourceOpenExternal.href = sourceUrl;
+          entryBody.setAttribute('hidden', '');
+          if (entryReadabilityContainer) {
+            entryReadabilityContainer.innerHTML = '<p class="entry-readability-loading">Loading reader view…</p>';
+            entryReadabilityContainer.removeAttribute('hidden');
+          }
+          try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(2); } catch (e) {}
+          entryArticle?.classList.add('source-active');
+
+          try {
+            const resp = await fetch(readabilityUrl, { credentials: 'same-origin' });
+            const html = await resp.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const article = doc.querySelector('article');
+            const titleText = doc.querySelector('h1')?.textContent || '';
+            if (!entryReadabilityContainer || !sourceViewActive || sourceViewMode !== 'readability') return;
+            entryReadabilityContainer.innerHTML = '';
+
+            // Prepend lead image if present in the entry pane title metadata.
+            const leadImageUrl = entryPaneTitle?.getAttribute('data-post-lead-image-url') || '';
+            if (leadImageUrl) {
+              const img = document.createElement('img');
+              img.src = leadImageUrl;
+              img.className = 'entry-readability-lead-image';
+              img.alt = titleText;
+              img.loading = 'lazy';
+              entryReadabilityContainer.appendChild(img);
+            }
+
+            if (article) {
+              const contentDiv = document.createElement('div');
+              contentDiv.className = 'entry-readability-content';
+              contentDiv.innerHTML = article.innerHTML;
+              entryReadabilityContainer.appendChild(contentDiv);
+            } else {
+              entryReadabilityContainer.innerHTML = '<p class="muted">Could not extract readable content.</p>';
+            }
+          } catch (err) {
+            if (entryReadabilityContainer && sourceViewMode === 'readability') {
+              entryReadabilityContainer.innerHTML = '<p class="muted">Failed to load reader view.</p>';
+            }
           }
         });
       }
@@ -4998,8 +5169,10 @@
         if (item.getAttribute('data-post-read') === '1') continue;
         if (cutoff !== null) {
           // Mirror the server logic: skip entries with no date, skip entries newer than cutoff.
-          const isoPost = (item.getAttribute('data-post-iso') || '').trim();
-          const isoReceived = (item.getAttribute('data-received-iso') || '').trim();
+          // Timestamps live on the child <time> element, not on post-item itself.
+          const timeEl = item.querySelector('time[data-post-iso]');
+          const isoPost = (timeEl?.getAttribute('data-post-iso') || '').trim();
+          const isoReceived = (timeEl?.getAttribute('data-received-iso') || '').trim();
           const dateStr = isoPost || isoReceived;
           if (!dateStr) continue;
           const entryDate = new Date(dateStr);
@@ -5475,6 +5648,220 @@
         return { folderNames, feedTitles };
       }
 
+      const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
+      const _hlCmpModeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
+
+      function hlBuildModeComparisonWrap(results, activeMode) {
+        const modes = _hlCmpModes, modeLabels = _hlCmpModeLabels;
+        function makePairEl(p) {
+          const pairKey = (p.keep.link || p.keep.title || '') + '||' + (p.mark.link || p.mark.title || '');
+          const isFalse = hlFalseMatches.has(pairKey);
+          const pairEl = document.createElement('div');
+          pairEl.className = 'hl-cmp-pair' + (isFalse ? ' hl-cmp-pair--false' : '');
+          const modeWrap = document.createElement('div');
+          modeWrap.className = 'hl-cmp-entry-modes';
+          for (const m of p.modes) {
+            const b = document.createElement('span');
+            b.className = 'hl-cmp-mode-badge hl-cmp-mode-badge--' + m;
+            b.textContent = modeLabels[m];
+            modeWrap.appendChild(b);
+          }
+          pairEl.appendChild(modeWrap);
+          for (const [side, label, cls] of [[p.keep, '✓ keep', 'hl-rule-dryrun-keep-label'], [p.mark, '✗ mark read', 'hl-rule-dryrun-markread-label']]) {
+            const row = document.createElement('div');
+            row.className = 'hl-cmp-pair-item ' + (side === p.keep ? 'hl-cmp-pair-keep' : 'hl-cmp-pair-mark');
+            const lbl = document.createElement('span');
+            lbl.className = 'hl-cmp-pair-label ' + cls;
+            lbl.textContent = label;
+            const titleEl = document.createElement('a');
+            titleEl.className = 'hl-rule-dryrun-item-title';
+            titleEl.href = side.link || '#'; titleEl.target = '_blank'; titleEl.rel = 'noopener';
+            titleEl.textContent = side.title || side.link || '(no title)';
+            const feedEl = document.createElement('span');
+            feedEl.className = 'hl-rule-dryrun-item-feed';
+            feedEl.appendChild(hlMakeFeedLink(side.feed_title, side.feed_url));
+            row.appendChild(lbl); row.appendChild(titleEl); row.appendChild(feedEl);
+            pairEl.appendChild(row);
+          }
+          const actionsEl = document.createElement('div');
+          actionsEl.className = 'hl-cmp-pair-actions';
+          const falseBtn = document.createElement('button');
+          falseBtn.type = 'button';
+          falseBtn.className = 'hl-cmp-pair-false-btn' + (isFalse ? ' active' : '');
+          falseBtn.textContent = isFalse ? 'False match ✓' : 'False match?';
+          falseBtn.title = isFalse ? 'Unmark as false match' : 'Mark as false match';
+          falseBtn.addEventListener('click', async () => {
+            await hlToggleFalseMatch(pairKey);
+            const nowFalse = hlFalseMatches.has(pairKey);
+            pairEl.classList.toggle('hl-cmp-pair--false', nowFalse);
+            falseBtn.classList.toggle('active', nowFalse);
+            falseBtn.textContent = nowFalse ? 'False match ✓' : 'False match?';
+            falseBtn.title = nowFalse ? 'Unmark as false match' : 'Mark as false match';
+          });
+          actionsEl.appendChild(falseBtn);
+          if (p.keep.feed_url && p.mark.feed_url && p.keep.feed_url !== p.mark.feed_url) {
+            const pairCmpBtn = document.createElement('button');
+            pairCmpBtn.type = 'button';
+            pairCmpBtn.className = 'hl-cmp-pair-cmp-btn';
+            pairCmpBtn.textContent = 'Compare feeds';
+            const resultEl = document.createElement('div');
+            resultEl.className = 'hl-cmp-pair-result';
+            resultEl.hidden = true;
+            pairCmpBtn.addEventListener('click', async () => {
+              if (!resultEl.hidden) { resultEl.hidden = true; pairCmpBtn.textContent = 'Compare feeds'; return; }
+              pairCmpBtn.disabled = true; pairCmpBtn.textContent = 'Comparing…';
+              try {
+                const feedUrlsParam = [p.keep.feed_url, p.mark.feed_url].join(',');
+                const results = await Promise.all(_hlCmpModes.map(m => {
+                  const qs = new URLSearchParams({ type: 'deduplicate', scope: 'global', keyword: m, feed_urls: feedUrlsParam, dedup_window_hours: 168 });
+                  return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
+                }));
+                resultEl.innerHTML = '';
+                resultEl.appendChild(hlBuildModeComparisonWrap(results, null));
+                resultEl.hidden = false;
+                pairCmpBtn.textContent = 'Hide compare';
+              } catch { pairCmpBtn.textContent = 'Compare feeds'; }
+              pairCmpBtn.disabled = false;
+            });
+            actionsEl.appendChild(pairCmpBtn);
+            pairEl.appendChild(actionsEl);
+            pairEl.appendChild(resultEl);
+          } else {
+            pairEl.appendChild(actionsEl);
+          }
+          return pairEl;
+        }
+        function makeBucketSection(label, cls, pairs, open) {
+          if (pairs.length === 0) return null;
+          const sec = document.createElement('details');
+          sec.className = 'hl-cmp-bucket ' + cls;
+          sec.open = open;
+          const sum = document.createElement('summary');
+          sum.className = 'hl-cmp-bucket-summary';
+          sum.textContent = label + ' (' + pairs.length + ')';
+          sec.appendChild(sum);
+          for (const p of pairs) sec.appendChild(makePairEl(p));
+          return sec;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'hl-compare-wrap';
+        const tbl = document.createElement('div');
+        tbl.className = 'hl-compare-table';
+        modes.forEach((m, mi) => {
+          const d = results[mi];
+          const rowEl = document.createElement('div');
+          rowEl.className = 'hl-compare-row' + (m === activeMode ? ' hl-compare-row--active' : '');
+          const modeSpan = document.createElement('span');
+          modeSpan.className = 'hl-compare-mode';
+          const badge = document.createElement('span');
+          badge.className = 'hl-cmp-mode-badge hl-cmp-mode-badge--' + m;
+          badge.textContent = modeLabels[m];
+          modeSpan.appendChild(badge);
+          const grpSpan = document.createElement('span');
+          grpSpan.className = 'hl-compare-groups';
+          grpSpan.textContent = (d.groups ? d.groups.length : '—') + ' groups';
+          const markSpan = document.createElement('span');
+          markSpan.className = 'hl-compare-mark';
+          markSpan.textContent = (d.total_would_mark_read !== undefined ? d.total_would_mark_read : '—') + ' mark read';
+          const detailPanel = document.createElement('div');
+          detailPanel.className = 'hl-rule-dryrun-panel hl-compare-detail-panel';
+          detailPanel.dataset.comparePanel = '1';
+          detailPanel.hidden = true;
+          const expandBtn = document.createElement('button');
+          expandBtn.type = 'button';
+          expandBtn.className = 'hl-compare-expand';
+          expandBtn.textContent = 'Details';
+          expandBtn.addEventListener('click', () => {
+            if (detailPanel.hidden) {
+              detailPanel.hidden = false; expandBtn.textContent = 'Hide';
+              if (!detailPanel.dataset.rendered) {
+                hlRenderDryRunResult(detailPanel, { ...d, type: 'deduplicate' }, null);
+                detailPanel.dataset.rendered = '1';
+              }
+            } else { detailPanel.hidden = true; expandBtn.textContent = 'Details'; }
+          });
+          rowEl.appendChild(modeSpan); rowEl.appendChild(grpSpan);
+          rowEl.appendChild(markSpan); rowEl.appendChild(expandBtn);
+          tbl.appendChild(rowEl);
+          tbl.appendChild(detailPanel);
+        });
+        wrap.appendChild(tbl);
+        const pairMap = new Map();
+        modes.forEach((m, mi) => {
+          const d = results[mi];
+          if (!d.groups) return;
+          for (const g of d.groups) {
+            const keepKey = g.keep.link || g.keep.title || '';
+            for (const e of g.mark_read) {
+              const markKey = e.link || e.title || '';
+              const pairKey = keepKey + '||' + markKey;
+              if (!markKey) continue;
+              if (!pairMap.has(pairKey)) pairMap.set(pairKey, { keep: g.keep, mark: e, modes: new Set() });
+              pairMap.get(pairKey).modes.add(m);
+            }
+          }
+        });
+        const allPairs = [...pairMap.values()].map(p => ({ ...p, modes: [...p.modes] }))
+          .sort((a, b) => b.modes.length - a.modes.length || (a.mark.title || '').localeCompare(b.mark.title || ''));
+        const totalPairs = allPairs.length;
+        if (totalPairs > 0) {
+          const ovHdr = document.createElement('div');
+          ovHdr.className = 'hl-compare-overlap-hdr';
+          ovHdr.textContent = totalPairs + ' duplicate pair' + (totalPairs === 1 ? '' : 's') + ' across all modes';
+          wrap.appendChild(ovHdr);
+          for (const [minCount, label, cls, open] of [
+            [4, 'All 4 modes agree', 'hl-cmp-bucket--4', true],
+            [3, '3 modes agree',     'hl-cmp-bucket--3', true],
+            [2, '2 modes agree',     'hl-cmp-bucket--2', true],
+          ]) {
+            const sec = makeBucketSection(label, cls, allPairs.filter(p => p.modes.length === minCount), open);
+            if (sec) wrap.appendChild(sec);
+          }
+          const singlePairs = allPairs.filter(p => p.modes.length === 1);
+          if (singlePairs.length > 0) {
+            const outerSec = document.createElement('details');
+            outerSec.className = 'hl-cmp-bucket hl-cmp-bucket--1';
+            outerSec.open = false;
+            const outerSum = document.createElement('summary');
+            outerSum.className = 'hl-cmp-bucket-summary';
+            outerSum.textContent = 'Single mode only — review for false positives (' + singlePairs.length + ')';
+            outerSec.appendChild(outerSum);
+            for (const m of modes) {
+              const mPairs = singlePairs.filter(p => p.modes[0] === m);
+              if (mPairs.length === 0) continue;
+              const subSec = document.createElement('details');
+              subSec.className = 'hl-cmp-bucket hl-cmp-bucket--1-sub';
+              subSec.open = false;
+              const subSum = document.createElement('summary');
+              subSum.className = 'hl-cmp-bucket-summary hl-cmp-bucket-summary--sub';
+              const subBadge = document.createElement('span');
+              subBadge.className = 'hl-cmp-mode-badge hl-cmp-mode-badge--' + m;
+              subBadge.textContent = modeLabels[m];
+              subSum.appendChild(subBadge);
+              subSum.appendChild(document.createTextNode(' only (' + mPairs.length + ')'));
+              subSec.appendChild(subSum);
+              for (const p of mPairs) subSec.appendChild(makePairEl(p));
+              outerSec.appendChild(subSec);
+            }
+            wrap.appendChild(outerSec);
+          }
+        }
+        return wrap;
+      }
+
+      function hlMakeFeedLink(feedTitle, feedUrl) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'hl-feed-link';
+        btn.textContent = feedTitle || feedUrl || '(unknown feed)';
+        btn.title = feedUrl || '';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (feedUrl) openFeedPropertiesModal(feedUrl);
+        });
+        return btn;
+      }
+
       function hlScopeLabel(scope, scopeId) {
         if (scope === 'global') return 'All Feeds';
         const { folderNames, feedTitles } = hlScopeData();
@@ -5483,21 +5870,191 @@
         return scope;
       }
 
+      let hlFalseMatches = new Set();
+      async function hlLoadFalseMatches() {
+        try {
+          const resp = await fetch('/dedup/false-matches', { credentials: 'same-origin' });
+          const data = await resp.json();
+          hlFalseMatches = new Set((data.pairs || []).map(p => p.keep_link + '||' + p.mark_link));
+        } catch { /* non-fatal */ }
+      }
+      async function hlToggleFalseMatch(key) {
+        const [keep_link, mark_link] = key.split('||');
+        try {
+          const resp = await fetch('/dedup/false-match', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keep_link, mark_link }),
+          });
+          const data = await resp.json();
+          if (data.active) hlFalseMatches.add(key);
+          else hlFalseMatches.delete(key);
+        } catch { /* non-fatal */ }
+      }
+
+      let hlActiveDryRun = null;
+      let hlActiveHistPanel = null;
+      let hlDragSrcIdx = null;
+
+      // Tab switching
+      document.querySelectorAll('.hl-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = btn.dataset.hlTab;
+          document.querySelectorAll('.hl-tab-btn').forEach(b => { b.classList.toggle('hl-tab-btn--active', b === btn); b.setAttribute('aria-selected', b === btn); });
+          document.getElementById('hl-tab-rules').hidden = tab !== 'rules';
+          document.getElementById('hl-tab-history').hidden = tab !== 'history';
+          if (tab === 'history') hlLoadHistory();
+        });
+      });
+
+      async function hlLoadHistory() {
+        const listEl = document.getElementById('hl-history-list');
+        if (!listEl) return;
+        listEl.innerHTML = '<p class="hl-empty">Loading…</p>';
+        try {
+          const resp = await fetch('/automation/history', { credentials: 'same-origin' });
+          const data = await resp.json();
+          listEl.innerHTML = '';
+          if (!data.history || data.history.length === 0) {
+            listEl.innerHTML = '<p class="hl-empty">No history yet — rules log entries when Run Now is used.</p>';
+            return;
+          }
+          const { folderNames, feedTitles } = hlScopeData();
+          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', highlight: 'Highlight' };
+          const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
+          for (const row of data.history) {
+            const el = document.createElement('div');
+            el.className = 'hl-history-row';
+            const typeChip = document.createElement('span');
+            typeChip.className = `hl-rule-type-chip hl-rule-type-chip--${row.rule_type}`;
+            typeChip.textContent = typeLabels[row.rule_type] || row.rule_type;
+            el.appendChild(typeChip);
+            if (row.rule_type === 'deduplicate') {
+              const mBadge = document.createElement('span');
+              mBadge.className = 'hl-rule-badge';
+              mBadge.textContent = methodLabels[row.keyword] || row.keyword;
+              el.appendChild(mBadge);
+            } else if (row.keyword) {
+              const kBadge = document.createElement('span');
+              kBadge.className = 'hl-rule-badge';
+              kBadge.textContent = row.keyword;
+              el.appendChild(kBadge);
+            }
+            const scopeEl = document.createElement('span');
+            scopeEl.className = 'hl-rule-scope';
+            scopeEl.textContent = row.scope === 'global' ? 'All Feeds' : row.scope === 'folder' ? (folderNames[row.scope_id] || row.scope_id) : (feedTitles[row.scope_id] || row.scope_id);
+            el.appendChild(scopeEl);
+            const countEl = document.createElement('span');
+            countEl.className = 'hl-history-count';
+            countEl.textContent = row.entries_affected + ' marked read';
+            el.appendChild(countEl);
+            const tsEl = document.createElement('span');
+            tsEl.className = 'hl-history-ts';
+            tsEl.textContent = new Date(row.run_at).toLocaleString();
+            el.appendChild(tsEl);
+            listEl.appendChild(el);
+          }
+        } catch { listEl.innerHTML = '<p class="hl-empty">Failed to load history.</p>'; }
+      }
+
+      async function hlSaveOrder() {
+        const order = hlRules.map(r => ({ scope: r.scope, scope_id: r.scope_id, keyword: r.keyword }));
+        try {
+          await fetch('/highlights/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ order }) });
+        } catch { /* non-fatal */ }
+      }
+
       function hlRenderRules() {
         const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
-        listEl.querySelectorAll('.hl-rule-row, .hl-empty').forEach(el => el.remove());
+        listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
+        hlActiveDryRun = null;
+        hlActiveHistPanel = null;
         if (hlRules.length === 0) {
           const empty = document.createElement('p');
           empty.className = 'hl-empty';
-          empty.textContent = 'No highlight rules yet. Click "+ Add Rule" to create one.';
+          empty.textContent = 'No automation rules yet. Click "+ Add Rule" to create one.';
           listEl.appendChild(empty);
           return;
         }
-        for (const rule of hlRules) {
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article' };
+        for (const sectionType of TYPE_ORDER) {
+          const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
+          if (sectionRules.length === 0) continue;
+          const labelEl = document.createElement('div');
+          labelEl.className = 'hl-section-label';
+          labelEl.textContent = TYPE_LABELS[sectionType] || sectionType;
+          listEl.appendChild(labelEl);
+          for (const { r: rule, i } of sectionRules) {
           const enabled = rule.enabled !== 0;
           const row = document.createElement('div');
           row.className = 'hl-rule-row' + (enabled ? '' : ' hl-rule-row--disabled');
+          row.dataset.ruleIdx = i;
+
+          // Drag handle (mouse + touch)
+          const handle = document.createElement('span');
+          handle.className = 'hl-rule-handle';
+          handle.title = 'Drag to reorder';
+          handle.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">drag_indicator</span>';
+          handle.addEventListener('mousedown', () => row.setAttribute('draggable', 'true'));
+          row.addEventListener('dragstart', e => {
+            hlDragSrcIdx = i;
+            e.dataTransfer.effectAllowed = 'move';
+            row.classList.add('hl-rule-dragging');
+          });
+          row.addEventListener('dragend', () => {
+            row.removeAttribute('draggable');
+            row.classList.remove('hl-rule-dragging');
+            listEl.querySelectorAll('.hl-rule-drag-over').forEach(el => el.classList.remove('hl-rule-drag-over'));
+            hlDragSrcIdx = null;
+          });
+          row.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            listEl.querySelectorAll('.hl-rule-drag-over').forEach(el => el.classList.remove('hl-rule-drag-over'));
+            row.classList.add('hl-rule-drag-over');
+          });
+          row.addEventListener('drop', e => {
+            e.preventDefault();
+            if (hlDragSrcIdx === null || hlDragSrcIdx === i) return;
+            if ((hlRules[hlDragSrcIdx].type || 'highlight') !== sectionType) return;
+            const moved = hlRules.splice(hlDragSrcIdx, 1)[0];
+            hlRules.splice(i, 0, moved);
+            hlSaveOrder();
+            hlRenderRules();
+          });
+          handle.addEventListener('touchstart', e => {
+            e.preventDefault();
+            hlDragSrcIdx = i;
+            row.classList.add('hl-rule-dragging');
+          }, { passive: false });
+          handle.addEventListener('touchmove', e => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const target = document.elementFromPoint(touch.clientX, touch.clientY);
+            const targetRow = target && target.closest('.hl-rule-row');
+            listEl.querySelectorAll('.hl-rule-drag-over').forEach(el => el.classList.remove('hl-rule-drag-over'));
+            if (targetRow && targetRow !== row) targetRow.classList.add('hl-rule-drag-over');
+          }, { passive: false });
+          handle.addEventListener('touchend', e => {
+            e.preventDefault();
+            row.classList.remove('hl-rule-dragging');
+            const overRow = listEl.querySelector('.hl-rule-drag-over');
+            listEl.querySelectorAll('.hl-rule-drag-over').forEach(el => el.classList.remove('hl-rule-drag-over'));
+            if (overRow && hlDragSrcIdx !== null) {
+              const destIdx = parseInt(overRow.dataset.ruleIdx, 10);
+              if (!isNaN(destIdx) && destIdx !== hlDragSrcIdx &&
+                  (hlRules[destIdx]?.type || 'highlight') === (hlRules[hlDragSrcIdx]?.type || 'highlight')) {
+                const moved = hlRules.splice(hlDragSrcIdx, 1)[0];
+                hlRules.splice(destIdx > hlDragSrcIdx ? destIdx - 1 : destIdx, 0, moved);
+                hlSaveOrder();
+                hlRenderRules();
+              }
+            }
+            hlDragSrcIdx = null;
+          }, { passive: false });
+          row.appendChild(handle);
 
           // Toggle enable/disable
           const toggle = document.createElement('button');
@@ -5518,22 +6075,317 @@
           });
           row.appendChild(toggle);
 
-          const badge = document.createElement('span');
-          badge.className = `hl-rule-badge highlight-mark-${rule.color}`;
-          badge.textContent = rule.keyword;
-          row.appendChild(badge);
+          const ruleType = rule.type || 'highlight';
 
-          if (rule.is_regex) {
-            const rb = document.createElement('span');
-            rb.className = 'hl-rule-regex-badge';
-            rb.textContent = '.*';
-            row.appendChild(rb);
+          if (ruleType === 'deduplicate') {
+            const methodBadge = document.createElement('span');
+            methodBadge.className = 'hl-rule-badge';
+            const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug + Title', fuzzy: 'Fuzzy Title' };
+            methodBadge.textContent = methodLabels[rule.keyword] || rule.keyword;
+            row.appendChild(methodBadge);
+            if (!['slug', 'safe'].includes(rule.keyword)) { // title, both, fuzzy show window
+              const winBadge = document.createElement('span');
+              winBadge.className = 'hl-rule-search-in-badge';
+              winBadge.textContent = Math.round((rule.dedup_window_hours || 168) / 24) + 'd';
+              row.appendChild(winBadge);
+            }
+            if (rule.exclude_scope_ids) {
+              const exclIds = rule.exclude_scope_ids.split(',').map(s => s.trim()).filter(Boolean);
+              if (exclIds.length > 0) {
+                const folderNames = exclIds.map(fid => {
+                  const el = document.querySelector(`.tree-item[data-folder-id="${fid}"][data-folder-name]`);
+                  return el ? el.getAttribute('data-folder-name') : '#' + fid;
+                });
+                const exclBadge = document.createElement('span');
+                exclBadge.className = 'hl-rule-badge hl-rule-excl-badge';
+                exclBadge.textContent = '−' + folderNames.join(', ');
+                row.appendChild(exclBadge);
+              }
+            }
+          } else {
+            const badge = document.createElement('span');
+            badge.className = ruleType === 'highlight'
+              ? `hl-rule-badge highlight-mark-${rule.color}`
+              : 'hl-rule-badge';
+            badge.textContent = rule.keyword;
+            row.appendChild(badge);
+
+            if (rule.is_regex) {
+              const rb = document.createElement('span');
+              rb.className = 'hl-rule-regex-badge';
+              rb.textContent = '.*';
+              row.appendChild(rb);
+            }
+
+            const searchIn = rule.search_in || 'title';
+            if (searchIn !== 'title') {
+              const sinBadge = document.createElement('span');
+              sinBadge.className = 'hl-rule-search-in-badge';
+              sinBadge.textContent = searchIn === 'body' ? 'body' : 'title+body';
+              row.appendChild(sinBadge);
+            }
+
+            if (ruleType === 'email_article') {
+              if ((rule.delivery || 'immediately') === 'batch') {
+                const delivBadge = document.createElement('span');
+                delivBadge.className = 'hl-rule-delivery-badge';
+                delivBadge.textContent = 'batch';
+                row.appendChild(delivBadge);
+              }
+              if (rule.email_to) {
+                const contacts = window.EMAIL_CONTACTS || [];
+                const contact = contacts.find(c => c.address === rule.email_to);
+                const toSpan = document.createElement('span');
+                toSpan.className = 'hl-rule-email-to';
+                let toLabel;
+                if (rule.email_to === window.PROFILE_EMAIL) toLabel = 'Me';
+                else if (contact) toLabel = contact.label;
+                else toLabel = rule.email_to;
+                toSpan.textContent = '→ ' + toLabel;
+                row.appendChild(toSpan);
+              }
+              if (rule.cc_me) {
+                const ccBadge = document.createElement('span');
+                ccBadge.className = 'hl-rule-cc-badge';
+                ccBadge.textContent = 'Cc me';
+                row.appendChild(ccBadge);
+              }
+            }
           }
 
           const scopeEl = document.createElement('span');
           scopeEl.className = 'hl-rule-scope';
           scopeEl.textContent = hlScopeLabel(rule.scope, rule.scope_id);
           row.appendChild(scopeEl);
+
+          // Test (dry-run) button
+          const testBtn = document.createElement('button');
+          testBtn.type = 'button';
+          testBtn.className = 'hl-rule-test';
+          testBtn.setAttribute('aria-label', 'Test rule (dry run)');
+          testBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">play_circle</span>';
+          testBtn.addEventListener('click', async () => {
+            const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
+            // Toggle off if already showing for this rule
+            if (hlActiveDryRun && hlActiveDryRun.dataset.ruleKey === ruleKey) {
+              hlActiveDryRun.remove(); hlActiveDryRun = null;
+              testBtn.classList.remove('active');
+              return;
+            }
+            if (hlActiveDryRun) { hlActiveDryRun.remove(); hlActiveDryRun = null; }
+            if (hlActiveHistPanel) { hlActiveHistPanel.remove(); hlActiveHistPanel = null; }
+            // Also clear active class from all test/hist buttons
+            document.querySelectorAll('.hl-rule-test.active, .hl-rule-hist.active').forEach(b => b.classList.remove('active'));
+            testBtn.classList.add('active');
+            const panel = document.createElement('div');
+            panel.className = 'hl-rule-dryrun-panel hl-rule-dryrun-panel--loading';
+            panel.dataset.ruleKey = ruleKey;
+            panel.textContent = 'Running test…';
+            row.insertAdjacentElement('afterend', panel);
+            hlActiveDryRun = panel;
+            try {
+              const qs = new URLSearchParams({
+                type: rule.type || 'highlight',
+                scope: rule.scope, scope_id: rule.scope_id || '',
+                keyword: rule.keyword || '', is_regex: rule.is_regex || 0,
+                search_in: rule.search_in || 'title',
+                dedup_window_hours: rule.dedup_window_hours || 168,
+                exclude_scope_ids: rule.exclude_scope_ids || '',
+              });
+              const resp = await fetch('/rules/dry-run?' + qs.toString(), { credentials: 'same-origin' });
+              const data = await resp.json();
+              panel.classList.remove('hl-rule-dryrun-panel--loading');
+              hlRenderDryRunResult(panel, data, rule);
+            } catch { panel.textContent = 'Failed to run test'; panel.classList.remove('hl-rule-dryrun-panel--loading'); }
+          });
+          row.appendChild(testBtn);
+
+          // Run Now button — only for actionable server-side rule types
+          if (ruleType === 'mark_as_read' || ruleType === 'deduplicate') {
+            const runBtn = document.createElement('button');
+            runBtn.type = 'button';
+            runBtn.className = 'hl-rule-run';
+            runBtn.setAttribute('aria-label', 'Run rule now on unread entries');
+            runBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">bolt</span>';
+            runBtn.addEventListener('click', async () => {
+              const scopeLabel = hlScopeLabel(rule.scope, rule.scope_id);
+              const ruleLabel = ruleType === 'deduplicate'
+                ? `Deduplicate (${rule.keyword}) in ${scopeLabel}`
+                : `"${rule.keyword}" mark-as-read in ${scopeLabel}`;
+              if (!window.confirm(`Run rule now on all matching unread entries?\n\n${ruleLabel}\n\nThis cannot be undone.`)) return;
+              runBtn.disabled = true;
+              runBtn.style.opacity = '0.5';
+              try {
+                const body = new URLSearchParams({
+                  type: rule.type || 'highlight',
+                  scope: rule.scope, scope_id: rule.scope_id || '',
+                  keyword: rule.keyword || '', is_regex: rule.is_regex || 0,
+                  search_in: rule.search_in || 'title',
+                  dedup_window_hours: rule.dedup_window_hours || 168,
+                  exclude_scope_ids: rule.exclude_scope_ids || '',
+                });
+                const resp = await fetch('/rules/run-now', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+                const data = await resp.json();
+                if (!resp.ok || data.error) throw new Error(data.error || 'failed');
+                const n = data.count;
+                if (n === 0) {
+                  showToastMessage('No matching unread entries found.');
+                  runBtn.disabled = false;
+                  runBtn.style.opacity = '';
+                } else {
+                  showToastMessage(`Marked ${n} entr${n === 1 ? 'y' : 'ies'} as read.`);
+                  window.location.reload();
+                }
+              } catch (err) {
+                window.alert('Run failed: ' + (err.message || err));
+                runBtn.disabled = false;
+                runBtn.style.opacity = '';
+              }
+            });
+            row.appendChild(runBtn);
+
+            // History button — shows recent runs for this specific rule
+            const histBtn = document.createElement('button');
+            histBtn.type = 'button';
+            histBtn.className = 'hl-rule-hist';
+            histBtn.setAttribute('aria-label', 'Show run history for this rule');
+            histBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">history</span>';
+            histBtn.addEventListener('click', async () => {
+              const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
+              if (hlActiveHistPanel && hlActiveHistPanel.dataset.ruleKey === ruleKey) {
+                hlActiveHistPanel.remove(); hlActiveHistPanel = null;
+                histBtn.classList.remove('active');
+                return;
+              }
+              if (hlActiveHistPanel) { hlActiveHistPanel.remove(); hlActiveHistPanel = null; }
+              document.querySelectorAll('.hl-rule-hist.active').forEach(b => b.classList.remove('active'));
+              histBtn.classList.add('active');
+              const panel = document.createElement('div');
+              panel.className = 'hl-rule-hist-panel hl-rule-hist-panel--loading';
+              panel.dataset.ruleKey = ruleKey;
+              panel.textContent = 'Loading…';
+              row.insertAdjacentElement('afterend', panel);
+              hlActiveHistPanel = panel;
+              try {
+                const qs = new URLSearchParams({
+                  scope: rule.scope, scope_id: rule.scope_id || '',
+                  keyword: rule.keyword || '', limit: 20,
+                });
+                const resp = await fetch('/automation/history?' + qs.toString(), { credentials: 'same-origin' });
+                const data = await resp.json();
+                panel.classList.remove('hl-rule-hist-panel--loading');
+                panel.textContent = '';
+                const rows = data.history || [];
+                if (rows.length === 0) {
+                  panel.textContent = 'No runs recorded yet.';
+                } else {
+                  rows.forEach(h => {
+                    const item = document.createElement('div');
+                    item.className = 'hl-rule-hist-item';
+                    const timeEl = document.createElement('span');
+                    timeEl.className = 'hl-rule-hist-time';
+                    const d = new Date(h.run_at);
+                    timeEl.textContent = formatRelativeDate(d);
+                    timeEl.title = localTimeFormatterLong.format(d);
+                    const countEl = document.createElement('span');
+                    countEl.className = 'hl-rule-hist-count';
+                    const n = h.entries_affected;
+                    countEl.textContent = n === 0 ? 'no matches' : `${n} matched`;
+                    const trigBadge = document.createElement('span');
+                    trigBadge.className = `hl-rule-hist-trigger hl-rule-hist-trigger--${h.trigger}`;
+                    trigBadge.textContent = h.trigger;
+                    item.appendChild(timeEl);
+                    item.appendChild(countEl);
+                    item.appendChild(trigBadge);
+                    if (n > 0) {
+                      const expandBtn = document.createElement('button');
+                      expandBtn.type = 'button';
+                      expandBtn.className = 'hl-hist-expand-btn';
+                      expandBtn.title = 'Show matched articles';
+                      expandBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">expand_more</span>';
+                      let entryList = null;
+                      expandBtn.addEventListener('click', async () => {
+                        if (entryList) {
+                          const visible = !entryList.hidden;
+                          entryList.hidden = visible;
+                          expandBtn.querySelector('.material-symbols-rounded').textContent = visible ? 'expand_more' : 'expand_less';
+                          return;
+                        }
+                        entryList = document.createElement('div');
+                        entryList.className = 'hl-hist-entry-list';
+                        entryList.textContent = 'Loading…';
+                        item.appendChild(entryList);
+                        expandBtn.querySelector('.material-symbols-rounded').textContent = 'expand_less';
+                        try {
+                          const er = await fetch(`/automation/history/${h.id}/entries`, { credentials: 'same-origin' });
+                          const ed = await er.json();
+                          entryList.textContent = '';
+                          const entries = ed.entries || [];
+                          if (entries.length === 0) {
+                            entryList.textContent = 'No detail stored for this run.';
+                          } else {
+                            entries.forEach(e => {
+                              const row = document.createElement('div');
+                              row.className = 'hl-hist-entry-row';
+                              const feedEl = document.createElement('span');
+                              feedEl.className = 'hl-hist-entry-feed';
+                              feedEl.textContent = e.feed_title || e.feed_url || '';
+                              const titleEl = e.link
+                                ? document.createElement('a')
+                                : document.createElement('span');
+                              titleEl.className = 'hl-hist-entry-title';
+                              titleEl.textContent = e.title || '(untitled)';
+                              if (e.link) { titleEl.href = e.link; titleEl.target = '_blank'; titleEl.rel = 'noopener noreferrer'; }
+                              row.appendChild(feedEl);
+                              row.appendChild(titleEl);
+                              entryList.appendChild(row);
+                            });
+                            if (n > entries.length) {
+                              const moreEl = document.createElement('p');
+                              moreEl.className = 'hl-hist-entry-more';
+                              moreEl.textContent = `… and ${n - entries.length} more`;
+                              entryList.appendChild(moreEl);
+                            }
+                          }
+                        } catch { entryList.textContent = 'Failed to load matches.'; }
+                      });
+                      item.appendChild(expandBtn);
+                    }
+                    panel.appendChild(item);
+                  });
+                }
+              } catch { panel.textContent = 'Failed to load history'; panel.classList.remove('hl-rule-hist-panel--loading'); }
+            });
+            row.appendChild(histBtn);
+          }
+
+          const edit = document.createElement('button');
+          edit.type = 'button';
+          edit.className = 'hl-rule-edit';
+          edit.setAttribute('aria-label', `Edit rule for "${rule.keyword}"`);
+          edit.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">edit</span>';
+          edit.addEventListener('click', () => {
+            const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
+            const origEnabled = rule.enabled;
+            const draft = hlBuildDraft(rule, 'Save', async (updated) => {
+              const removeBody = new URLSearchParams({ scope: origScope, scope_id: origScopeId, keyword: origKeyword });
+              const addBody = hlRuleToParams({ ...updated, enabled: origEnabled });
+              try {
+                const [r1, r2] = await Promise.all([
+                  fetch('/highlights/remove', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: removeBody.toString() }),
+                  fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: addBody.toString() }),
+                ]);
+                if (!r1.ok || !r2.ok) throw new Error('failed');
+                const idx = hlRules.findIndex(r => r.scope === origScope && r.scope_id === origScopeId && r.keyword === origKeyword);
+                if (idx >= 0) hlRules[idx] = { ...updated, enabled: origEnabled };
+                hlHideDraft();
+                hlRenderRules();
+                applyHighlights();
+              } catch { window.alert('Failed to update rule'); }
+            });
+            hlInsertDraft(draft, row);
+          });
+          row.appendChild(edit);
 
           const del = document.createElement('button');
           del.type = 'button';
@@ -5553,123 +6405,774 @@
           });
           row.appendChild(del);
           listEl.appendChild(row);
+          } // end sectionRules loop
+        } // end TYPE_ORDER loop
+      }
+
+      function hlRenderDedupGroups(panel, groups, maxShown) {
+        const shown = groups.slice(0, maxShown);
+        shown.forEach(g => {
+          const gDiv = document.createElement('div');
+          gDiv.className = 'hl-rule-dryrun-group';
+          const matchLabel = { slug: 'slug', title: 'title', 'slug+title': 'slug+title', fuzzy: g.matched_value, safe: g.matched_value }[g.match_by] || g.match_by;
+          const matchByEl = document.createElement('div');
+          matchByEl.className = 'hl-rule-dryrun-match-by';
+          matchByEl.textContent = 'matched on ' + matchLabel;
+          gDiv.appendChild(matchByEl);
+          const keepEl = document.createElement('div');
+          keepEl.className = 'hl-rule-dryrun-item hl-rule-dryrun-keep-item';
+          const keepTitle = document.createElement('a');
+          keepTitle.className = 'hl-rule-dryrun-item-title';
+          keepTitle.href = g.keep.link || '#'; keepTitle.target = '_blank'; keepTitle.rel = 'noopener';
+          keepTitle.textContent = g.keep.title || g.keep.link || '(no title)';
+          const keepFeed = document.createElement('span');
+          keepFeed.className = 'hl-rule-dryrun-item-feed hl-rule-dryrun-keep-label';
+          keepFeed.appendChild(document.createTextNode('✓ keep · '));
+          keepFeed.appendChild(hlMakeFeedLink(g.keep.feed_title, g.keep.feed_url));
+          keepEl.appendChild(keepTitle); keepEl.appendChild(keepFeed); gDiv.appendChild(keepEl);
+          for (const dup of g.mark_read) {
+            const dupKey = (g.keep.link || g.keep.title || '') + '||' + (dup.link || dup.title || '');
+            const dupIsFalse = hlFalseMatches.has(dupKey);
+            const dupEl = document.createElement('div');
+            dupEl.className = 'hl-rule-dryrun-item' + (dupIsFalse ? ' hl-cmp-pair--false' : '');
+            const dupTitle = document.createElement('a');
+            dupTitle.className = 'hl-rule-dryrun-item-title';
+            dupTitle.href = dup.link || '#'; dupTitle.target = '_blank'; dupTitle.rel = 'noopener';
+            dupTitle.textContent = dup.title || dup.link || '(no title)';
+            const dupFeed = document.createElement('span');
+            dupFeed.className = 'hl-rule-dryrun-item-feed hl-rule-dryrun-markread-label';
+            dupFeed.appendChild(document.createTextNode('✗ mark read · '));
+            dupFeed.appendChild(hlMakeFeedLink(dup.feed_title, dup.feed_url));
+            const dupFalseBtn = document.createElement('button');
+            dupFalseBtn.type = 'button';
+            dupFalseBtn.className = 'hl-cmp-pair-false-btn' + (dupIsFalse ? ' active' : '');
+            dupFalseBtn.textContent = dupIsFalse ? 'False match ✓' : 'False match?';
+            dupFalseBtn.title = dupIsFalse ? 'Unmark as false match' : 'Mark as false match';
+            dupFalseBtn.addEventListener('click', async () => {
+              await hlToggleFalseMatch(dupKey);
+              const nowFalse = hlFalseMatches.has(dupKey);
+              dupEl.classList.toggle('hl-cmp-pair--false', nowFalse);
+              dupFalseBtn.classList.toggle('active', nowFalse);
+              dupFalseBtn.textContent = nowFalse ? 'False match ✓' : 'False match?';
+              dupFalseBtn.title = nowFalse ? 'Unmark as false match' : 'Mark as false match';
+            });
+            dupEl.appendChild(dupTitle); dupEl.appendChild(dupFeed); dupEl.appendChild(dupFalseBtn); gDiv.appendChild(dupEl);
+          }
+          panel.appendChild(gDiv);
+        });
+      }
+
+      function hlRenderDryRunResult(panel, data, rule) {
+        panel.innerHTML = '';
+        if (data.error) { panel.textContent = 'Error: ' + data.error; return; }
+
+        if (data.type === 'deduplicate') {
+          const groups = data.groups || [];
+          const PAGE = 30;
+          let shownCount = PAGE;
+
+          const summary = document.createElement('div');
+          summary.className = 'hl-rule-dryrun-summary';
+          const updateSummary = () => {
+            if (groups.length === 0) {
+              summary.textContent = 'No duplicates found' + (data.message ? ' — ' + data.message : '') + ' (' + (data.total_entries_scanned || 0) + ' scanned)';
+            } else {
+              summary.textContent = groups.length + ' duplicate group' + (groups.length === 1 ? '' : 's') + ' · ' + data.total_would_mark_read + ' would be marked read · ' + (data.total_entries_scanned || 0) + ' scanned';
+            }
+          };
+          updateSummary();
+          panel.appendChild(summary);
+
+          // Compare modes button (only for top-level dedup panels, not inside a compare sub-panel)
+          if (rule && !panel.dataset.comparePanel) {
+            const cmpBtn = document.createElement('button');
+            cmpBtn.type = 'button';
+            cmpBtn.className = 'hl-dryrun-compare-btn';
+            cmpBtn.textContent = 'Compare all modes';
+            cmpBtn.addEventListener('click', async () => {
+              cmpBtn.disabled = true; cmpBtn.textContent = 'Comparing…';
+              const modes = ['slug', 'title', 'both', 'fuzzy'];
+              const modeLabels = { slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
+              try {
+                const results = await Promise.all(modes.map(m => {
+                  const qs = new URLSearchParams({ type: 'deduplicate', scope: rule.scope, scope_id: rule.scope_id || '', keyword: m, dedup_window_hours: rule.dedup_window_hours || 168, exclude_scope_ids: rule.exclude_scope_ids || '' });
+                  return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
+                }));
+
+                cmpBtn.replaceWith(hlBuildModeComparisonWrap(results, rule.keyword));
+              } catch (err) { cmpBtn.textContent = 'Compare failed'; cmpBtn.disabled = false; }
+            });
+            panel.appendChild(cmpBtn);
+
+            // Compare specific feeds button
+            const cmpFeedsBtn = document.createElement('button');
+            cmpFeedsBtn.type = 'button';
+            cmpFeedsBtn.className = 'hl-dryrun-compare-btn hl-dryrun-compare-feeds-btn';
+            cmpFeedsBtn.textContent = 'Compare specific feeds…';
+            cmpFeedsBtn.addEventListener('click', () => {
+              cmpFeedsBtn.remove();
+              const { feedTitles } = hlScopeData();
+              const feedOptions = Object.entries(feedTitles)
+                .sort((a, b) => a[1].localeCompare(b[1]))
+                .map(([url, title]) => `<option value="${url.replace(/"/g, '&quot;')}">${title.replace(/</g, '&lt;')}</option>`)
+                .join('');
+              const form = document.createElement('div');
+              form.className = 'hl-cmp-feeds-form';
+              const selA = document.createElement('select');
+              selA.className = 'hl-cmp-feeds-sel';
+              selA.innerHTML = `<option value="">Feed A…</option>${feedOptions}`;
+              const selB = document.createElement('select');
+              selB.className = 'hl-cmp-feeds-sel';
+              selB.innerHTML = `<option value="">Feed B…</option>${feedOptions}`;
+              const runBtn = document.createElement('button');
+              runBtn.type = 'button';
+              runBtn.className = 'hl-dryrun-compare-btn';
+              runBtn.textContent = 'Compare';
+              runBtn.addEventListener('click', async () => {
+                const urlA = selA.value, urlB = selB.value;
+                if (!urlA || !urlB) { window.alert('Select two feeds to compare.'); return; }
+                if (urlA === urlB) { window.alert('Select two different feeds.'); return; }
+                runBtn.disabled = true; runBtn.textContent = 'Comparing…';
+                try {
+                  const feedUrlsParam = [urlA, urlB].join(',');
+                  const windowHours = rule ? (rule.dedup_window_hours || 168) : 168;
+                  const results = await Promise.all(_hlCmpModes.map(m => {
+                    const qs = new URLSearchParams({ type: 'deduplicate', scope: 'global', keyword: m, feed_urls: feedUrlsParam, dedup_window_hours: windowHours });
+                    return fetch('/rules/dry-run?' + qs, { credentials: 'same-origin' }).then(r => r.json());
+                  }));
+                  form.replaceWith(hlBuildModeComparisonWrap(results, null));
+                } catch { runBtn.disabled = false; runBtn.textContent = 'Compare'; window.alert('Compare failed.'); }
+              });
+              form.appendChild(selA); form.appendChild(selB); form.appendChild(runBtn);
+              panel.insertBefore(form, groupsEl);
+            });
+            panel.appendChild(cmpFeedsBtn);
+          }
+
+          const groupsEl = document.createElement('div');
+          groupsEl.className = 'hl-dryrun-groups-wrap';
+          panel.appendChild(groupsEl);
+
+          const renderPage = () => {
+            groupsEl.innerHTML = '';
+            hlRenderDedupGroups(groupsEl, groups, shownCount);
+            if (groups.length > shownCount) {
+              const moreBtn = document.createElement('button');
+              moreBtn.type = 'button';
+              moreBtn.className = 'hl-dryrun-more-btn';
+              moreBtn.textContent = 'Show ' + Math.min(PAGE, groups.length - shownCount) + ' more (' + (groups.length - shownCount) + ' remaining)';
+              moreBtn.addEventListener('click', () => { shownCount = Math.min(shownCount + PAGE, groups.length); renderPage(); });
+              groupsEl.appendChild(moreBtn);
+            }
+          };
+          renderPage();
+
+        } else {
+          const matches = data.matches || [];
+          const summary = document.createElement('div');
+          summary.className = 'hl-rule-dryrun-summary';
+          if (matches.length === 0) {
+            summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+          } else {
+            summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' entries (read + unread)';
+          }
+          panel.appendChild(summary);
+          for (const m of matches) {
+            const item = document.createElement('div');
+            item.className = 'hl-rule-dryrun-item' + (m.read ? ' hl-rule-dryrun-item--read' : '');
+            const titleEl = document.createElement('a');
+            titleEl.className = 'hl-rule-dryrun-item-title';
+            titleEl.href = m.link || '#'; titleEl.target = '_blank'; titleEl.rel = 'noopener';
+            titleEl.textContent = m.title || m.link || '(no title)';
+            const feedEl = document.createElement('span');
+            feedEl.className = 'hl-rule-dryrun-item-feed';
+            feedEl.textContent = (m.read ? '✓ ' : '') + (m.feed_title || m.feed_url);
+            item.appendChild(titleEl); item.appendChild(feedEl);
+            panel.appendChild(item);
+          }
         }
       }
 
-      // Draft-row controls
-      const draftRow    = document.getElementById('hl-draft-row');
-      const draftPat    = document.getElementById('hl-draft-pattern');
-      const draftRegex  = document.getElementById('hl-draft-regex-toggle');
-      const draftFolder = document.getElementById('hl-draft-folder');
-      const draftFeed   = document.getElementById('hl-draft-feed');
-      const draftColor  = document.getElementById('hl-draft-color');
-      const draftSave   = document.getElementById('hl-draft-save');
-      const draftCancel = document.getElementById('hl-draft-cancel');
-      const addRuleBtn  = document.getElementById('hl-add-rule-btn');
+      // Dynamic draft-row management
+      let hlActiveDraft = null;
+      const addRuleBtn = document.getElementById('hl-add-rule-btn');
 
-      function hlPopulateFolders() {
-        if (!draftFolder) return;
-        while (draftFolder.options.length > 1) draftFolder.remove(1);
+      function hlHideDraft() {
+        if (hlActiveDraft) { hlActiveDraft.remove(); hlActiveDraft = null; }
+        addRuleBtn?.removeAttribute('hidden');
+      }
+
+      function hlInsertDraft(draftEl, afterEl) {
+        hlHideDraft();
+        hlActiveDraft = draftEl;
+        addRuleBtn?.setAttribute('hidden', '');
+        const listEl = document.getElementById('hl-rules-list');
+        if (afterEl) afterEl.insertAdjacentElement('afterend', draftEl);
+        else listEl?.appendChild(draftEl);
+        draftEl.querySelector('.hl-draft-pattern')?.focus();
+        window.setTimeout(() => draftEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+      }
+
+      function hlBuildDraft(prefill, saveLabel, onSave) {
+        const draft = document.createElement('div');
+        draft.className = 'hl-draft-row';
+
+        // Type
+        const typeSel = document.createElement('select');
+        typeSel.className = 'hl-draft-select hl-type-select';
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['deduplicate','Deduplicate']]) {
+          if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          typeSel.appendChild(opt);
+        }
+        typeSel.value = prefill.type || 'highlight';
+        draft.appendChild(typeSel);
+
+        // Pattern
+        const patInput = document.createElement('textarea');
+        patInput.className = 'hl-draft-pattern';
+        patInput.placeholder = 'keyword or pattern';
+        patInput.maxLength = 1000;
+        patInput.autocomplete = 'off';
+        patInput.rows = 2;
+        patInput.value = prefill.keyword || '';
+        draft.appendChild(patInput);
+
+        // Regex toggle
+        const regexBtn = document.createElement('button');
+        regexBtn.type = 'button';
+        const regexOn = !!prefill.is_regex;
+        regexBtn.className = 'hl-regex-toggle' + (regexOn ? ' active' : '');
+        regexBtn.setAttribute('aria-pressed', String(regexOn));
+        regexBtn.title = 'Enable regex matching';
+        regexBtn.textContent = '.*';
+        regexBtn.addEventListener('click', () => {
+          const on = regexBtn.getAttribute('aria-pressed') !== 'true';
+          regexBtn.setAttribute('aria-pressed', String(on));
+          regexBtn.classList.toggle('active', on);
+        });
+        draft.appendChild(regexBtn);
+
+        // Search in
+        const searchInSel = document.createElement('select');
+        searchInSel.className = 'hl-draft-select hl-search-in-select';
+        for (const [val, label] of [['title','Title'],['body','Body'],['both','Title + Body']]) {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          searchInSel.appendChild(opt);
+        }
+        searchInSel.value = prefill.search_in || 'title';
+        draft.appendChild(searchInSel);
+
+        // Scope: folder
+        const folderSel = document.createElement('select');
+        folderSel.className = 'hl-draft-select hl-folder-select';
+        const allFolderOpt = document.createElement('option');
+        allFolderOpt.value = '';
+        allFolderOpt.textContent = 'All Feeds';
+        folderSel.appendChild(allFolderOpt);
         for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
           const opt = document.createElement('option');
           opt.value = el.getAttribute('data-folder-id');
           opt.textContent = el.getAttribute('data-folder-name');
-          draftFolder.appendChild(opt);
+          folderSel.appendChild(opt);
         }
-      }
+        if (prefill.scope === 'folder') {
+          folderSel.value = prefill.scope_id || '';
+        } else if (prefill.scope === 'feed') {
+          for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
+            if (el.getAttribute('data-feed-url') === prefill.scope_id) {
+              folderSel.value = el.getAttribute('data-folder-id') || '';
+              break;
+            }
+          }
+        }
+        draft.appendChild(folderSel);
 
-      function hlPopulateFeeds(folderId) {
-        if (!draftFeed) return;
-        while (draftFeed.options.length > 1) draftFeed.remove(1);
-        if (!folderId) { draftFeed.disabled = true; draftFeed.value = ''; return; }
-        const feeds = [];
-        for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
-          const url = el.getAttribute('data-feed-url');
-          if (url && !feeds.some(f => f.url === url)) feeds.push({ url, title: el.textContent.trim() });
+        // Scope: feed
+        const feedSel = document.createElement('select');
+        feedSel.className = 'hl-draft-select hl-feed-select';
+        const allFeedOpt = document.createElement('option');
+        allFeedOpt.value = '';
+        allFeedOpt.textContent = 'All in folder';
+        feedSel.appendChild(allFeedOpt);
+
+        function populateFeeds(folderId) {
+          while (feedSel.options.length > 1) feedSel.remove(1);
+          if (!folderId) { feedSel.disabled = true; feedSel.value = ''; return; }
+          const feeds = [];
+          for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
+            const url = el.getAttribute('data-feed-url');
+            if (url && !feeds.some(f => f.url === url)) feeds.push({ url, title: el.textContent.trim() });
+          }
+          feeds.sort((a, b) => a.title.localeCompare(b.title));
+          for (const f of feeds) {
+            const opt = document.createElement('option');
+            opt.value = f.url;
+            opt.textContent = f.title;
+            feedSel.appendChild(opt);
+          }
+          feedSel.disabled = feeds.length === 0;
         }
-        feeds.sort((a, b) => a.title.localeCompare(b.title));
-        for (const f of feeds) {
+
+        populateFeeds(folderSel.value);
+        if (prefill.scope === 'feed') feedSel.value = prefill.scope_id || '';
+        folderSel.addEventListener('change', () => populateFeeds(folderSel.value));
+        draft.appendChild(feedSel);
+
+        // Match method (Deduplicate only)
+        const matchMethodSel = document.createElement('select');
+        matchMethodSel.className = 'hl-draft-select hl-match-method-select';
+        for (const [val, label] of [['safe','Safe (recommended)'],['slug','URL Slug'],['title','Title'],['both','Slug + Title'],['fuzzy','Fuzzy Title']]) {
           const opt = document.createElement('option');
-          opt.value = f.url;
-          opt.textContent = f.title;
-          draftFeed.appendChild(opt);
+          opt.value = val;
+          opt.textContent = label;
+          matchMethodSel.appendChild(opt);
         }
-        draftFeed.disabled = feeds.length === 0;
+        matchMethodSel.value = prefill.keyword || 'slug';
+        draft.appendChild(matchMethodSel);
+
+        // Window hours (Deduplicate, title/both only)
+        const windowHoursWrap = document.createElement('label');
+        windowHoursWrap.className = 'hl-draft-field-label hl-draft-window-wrap';
+        windowHoursWrap.textContent = 'within ';
+        const windowHoursInput = document.createElement('input');
+        windowHoursInput.type = 'number';
+        windowHoursInput.className = 'hl-draft-batch-count hl-draft-window-hours';
+        windowHoursInput.min = '1';
+        windowHoursInput.max = '365';
+        windowHoursInput.value = Math.round((prefill.dedup_window_hours || 168) / 24);
+        windowHoursInput.title = 'Match articles published within this many days of each other';
+        windowHoursWrap.appendChild(windowHoursInput);
+        const windowHrsSuffix = document.createTextNode(' days');
+        windowHoursWrap.appendChild(windowHrsSuffix);
+        draft.appendChild(windowHoursWrap);
+
+        // Exclude folders token-input sub-row (Deduplicate + global scope only)
+        const excludeRow = document.createElement('div');
+        excludeRow.className = 'hl-draft-form-subrow hl-draft-exclude-row';
+        const excludeRowLabel = document.createElement('span');
+        excludeRowLabel.className = 'hl-draft-field-label';
+        excludeRowLabel.textContent = 'Exclude:';
+        excludeRow.appendChild(excludeRowLabel);
+
+        const allFoldersList = [];
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+          allFoldersList.push({ id: el.getAttribute('data-folder-id'), name: el.getAttribute('data-folder-name') });
+        }
+        const selectedExcludeIds = new Set((prefill.exclude_scope_ids || '').split(',').map(s => s.trim()).filter(Boolean));
+        function getExcludeIds() { return [...selectedExcludeIds].join(','); }
+
+        const tokenWrap = document.createElement('div');
+        tokenWrap.className = 'hl-token-input-wrap';
+
+        const tokenSearch = document.createElement('input');
+        tokenSearch.type = 'text';
+        tokenSearch.className = 'hl-token-input-field';
+        tokenSearch.placeholder = 'Add folder…';
+        tokenSearch.setAttribute('autocomplete', 'off');
+
+        const tokenDropdown = document.createElement('div');
+        tokenDropdown.className = 'hl-token-input-dropdown';
+        tokenDropdown.hidden = true;
+
+        function renderExcludeDropdown() {
+          const q = tokenSearch.value.toLowerCase();
+          tokenDropdown.innerHTML = '';
+          const available = allFoldersList.filter(f => !selectedExcludeIds.has(f.id) && f.name.toLowerCase().includes(q));
+          if (available.length === 0) { tokenDropdown.hidden = true; return; }
+          for (const folder of available) {
+            const opt = document.createElement('div');
+            opt.className = 'hl-token-input-option';
+            opt.textContent = folder.name;
+            opt.addEventListener('mousedown', e => {
+              e.preventDefault();
+              selectedExcludeIds.add(folder.id);
+              tokenSearch.value = '';
+              renderExcludeTags();
+              renderExcludeDropdown();
+              tokenSearch.focus();
+            });
+            tokenDropdown.appendChild(opt);
+          }
+          tokenDropdown.hidden = false;
+        }
+
+        function renderExcludeTags() {
+          tokenWrap.querySelectorAll('.hl-folder-tag').forEach(t => t.remove());
+          for (const fid of selectedExcludeIds) {
+            const folder = allFoldersList.find(f => f.id === fid);
+            const tag = document.createElement('span');
+            tag.className = 'hl-folder-tag';
+            tag.textContent = (folder ? folder.name : '#' + fid);
+            const x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'hl-folder-tag-remove';
+            x.textContent = '×';
+            x.setAttribute('aria-label', 'Remove');
+            x.addEventListener('click', e => {
+              e.stopPropagation();
+              selectedExcludeIds.delete(fid);
+              renderExcludeTags();
+              renderExcludeDropdown();
+            });
+            tag.appendChild(x);
+            tokenWrap.insertBefore(tag, tokenSearch);
+          }
+        }
+
+        tokenSearch.addEventListener('focus', renderExcludeDropdown);
+        tokenSearch.addEventListener('input', renderExcludeDropdown);
+        tokenSearch.addEventListener('blur', () => { tokenDropdown.hidden = true; tokenSearch.value = ''; });
+        tokenWrap.addEventListener('click', () => tokenSearch.focus());
+
+        tokenWrap.appendChild(tokenSearch);
+        tokenWrap.appendChild(tokenDropdown);
+        renderExcludeTags();
+        excludeRow.appendChild(tokenWrap);
+        draft.appendChild(excludeRow);
+
+        // Color (Highlight only)
+        const colorSel = document.createElement('select');
+        colorSel.className = 'hl-draft-select hl-color-select';
+        for (const [val, label] of [['yellow','Yellow'],['green','Green'],['blue','Blue'],['pink','Pink'],['orange','Orange']]) {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          colorSel.appendChild(opt);
+        }
+        colorSel.value = prefill.color || 'yellow';
+        draft.appendChild(colorSel);
+
+        // Delivery (Email Article only)
+        const deliverySel = document.createElement('select');
+        deliverySel.className = 'hl-draft-select hl-delivery-select';
+        for (const [val, label] of [['immediately','Send immediately'],['batch','Batch digest']]) {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          deliverySel.appendChild(opt);
+        }
+        deliverySel.value = prefill.delivery || 'immediately';
+        draft.appendChild(deliverySel);
+
+        // Save + Cancel (in main row)
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'hl-draft-save';
+        saveBtn.textContent = saveLabel;
+        draft.appendChild(saveBtn);
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'hl-draft-cancel';
+        cancelBtn.setAttribute('aria-label', 'Cancel');
+        cancelBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+        draft.appendChild(cancelBtn);
+
+        // ── Email row: To address ─────────────────────────────────────
+        // ── To: label + contact select (in main row, Email Article only) ─
+        const toLabel = document.createElement('span');
+        toLabel.className = 'hl-draft-field-label';
+        toLabel.textContent = 'To:';
+        draft.appendChild(toLabel);
+
+        const contactSel = document.createElement('select');
+        contactSel.className = 'hl-draft-select hl-contact-select';
+
+        function populateContacts() {
+          while (contactSel.options.length) contactSel.remove(0);
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = '— select address —';
+          contactSel.appendChild(placeholder);
+          if (window.PROFILE_EMAIL) {
+            const meOpt = document.createElement('option');
+            meOpt.value = window.PROFILE_EMAIL;
+            meOpt.textContent = 'Me (' + window.PROFILE_EMAIL + ')';
+            contactSel.appendChild(meOpt);
+          }
+          for (const c of (window.EMAIL_CONTACTS || [])) {
+            const opt = document.createElement('option');
+            opt.value = c.address;
+            opt.textContent = c.label + ' (' + c.address + ')';
+            contactSel.appendChild(opt);
+          }
+          const addOpt = document.createElement('option');
+          addOpt.value = '__add__';
+          addOpt.textContent = '＋ Add address…';
+          contactSel.appendChild(addOpt);
+          contactSel.value = prefill.email_to || '';
+        }
+        populateContacts();
+        draft.appendChild(contactSel);
+
+        // ── Cc me checkbox (in main row, Email Article + profile email) ─
+        const ccMeWrap = document.createElement('label');
+        ccMeWrap.className = 'hl-draft-cc-wrap';
+        const ccMeCheck = document.createElement('input');
+        ccMeCheck.type = 'checkbox';
+        ccMeCheck.checked = !!prefill.cc_me;
+        ccMeWrap.appendChild(ccMeCheck);
+        const ccMeText = document.createTextNode(' Cc me');
+        ccMeWrap.appendChild(ccMeText);
+        draft.appendChild(ccMeWrap);
+
+        // ── Add-contact form sub-row (pops out below when __add__ selected)
+        const contactFormRow = document.createElement('div');
+        contactFormRow.className = 'hl-draft-form-subrow';
+        contactFormRow.style.display = 'none';
+
+        const cfLabelInput = document.createElement('input');
+        cfLabelInput.type = 'text';
+        cfLabelInput.className = 'hl-draft-pattern';
+        cfLabelInput.placeholder = 'Label (e.g. Kindle)';
+        cfLabelInput.maxLength = 80;
+        contactFormRow.appendChild(cfLabelInput);
+
+        const cfAddrInput = document.createElement('input');
+        cfAddrInput.type = 'email';
+        cfAddrInput.className = 'hl-draft-pattern';
+        cfAddrInput.placeholder = 'email@example.com';
+        cfAddrInput.maxLength = 200;
+        contactFormRow.appendChild(cfAddrInput);
+
+        const cfSaveBtn = document.createElement('button');
+        cfSaveBtn.type = 'button';
+        cfSaveBtn.className = 'hl-draft-save';
+        cfSaveBtn.textContent = 'Add';
+        contactFormRow.appendChild(cfSaveBtn);
+
+        const cfCancelBtn = document.createElement('button');
+        cfCancelBtn.type = 'button';
+        cfCancelBtn.className = 'hl-draft-cancel';
+        cfCancelBtn.setAttribute('aria-label', 'Cancel');
+        cfCancelBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+        contactFormRow.appendChild(cfCancelBtn);
+
+        draft.appendChild(contactFormRow);
+
+        contactSel.addEventListener('change', () => {
+          if (contactSel.value === '__add__') {
+            contactSel.value = '';
+            contactFormRow.style.display = '';
+            cfLabelInput.focus();
+          }
+        });
+        cfCancelBtn.addEventListener('click', () => {
+          contactFormRow.style.display = 'none';
+          cfLabelInput.value = '';
+          cfAddrInput.value = '';
+        });
+        cfSaveBtn.addEventListener('click', async () => {
+          const lbl = cfLabelInput.value.trim();
+          const addr = cfAddrInput.value.trim();
+          if (!lbl || !addr) { (lbl ? cfAddrInput : cfLabelInput).focus(); return; }
+          try {
+            const body = new URLSearchParams({ label: lbl, address: addr });
+            const resp = await fetch('/email-contacts/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+            if (!resp.ok) throw new Error('failed');
+            const data = await resp.json();
+            if (!window.EMAIL_CONTACTS) window.EMAIL_CONTACTS = [];
+            window.EMAIL_CONTACTS.push(data.contact);
+            window.EMAIL_CONTACTS.sort((a, b) => a.label.localeCompare(b.label));
+            populateContacts();
+            contactSel.value = data.contact.address;
+            contactFormRow.style.display = 'none';
+            cfLabelInput.value = '';
+            cfAddrInput.value = '';
+          } catch { window.alert('Failed to add contact'); }
+        });
+
+        // ── Batch sub-row: time + count ───────────────────────────────
+        const batchRow = document.createElement('div');
+        batchRow.className = 'hl-draft-form-subrow';
+
+        const btAtLabel = document.createElement('span');
+        btAtLabel.className = 'hl-draft-field-label';
+        btAtLabel.textContent = 'At:';
+        batchRow.appendChild(btAtLabel);
+
+        const batchTimeInput = document.createElement('input');
+        batchTimeInput.type = 'time';
+        batchTimeInput.className = 'hl-draft-batch-time';
+        batchTimeInput.value = prefill.batch_time || '';
+        batchTimeInput.title = 'Send digest at this time each day (leave blank to disable)';
+        batchRow.appendChild(batchTimeInput);
+
+        const btOrLabel = document.createElement('span');
+        btOrLabel.className = 'hl-draft-field-label';
+        btOrLabel.textContent = 'or after';
+        batchRow.appendChild(btOrLabel);
+
+        const batchCountInput = document.createElement('input');
+        batchCountInput.type = 'number';
+        batchCountInput.className = 'hl-draft-batch-count';
+        batchCountInput.min = '1';
+        batchCountInput.max = '500';
+        batchCountInput.placeholder = 'N';
+        batchCountInput.value = prefill.batch_count && prefill.batch_count > 0 ? prefill.batch_count : '';
+        batchCountInput.title = 'Send when N articles have accumulated (leave blank to disable)';
+        batchRow.appendChild(batchCountInput);
+
+        const btArticlesLabel = document.createElement('span');
+        btArticlesLabel.className = 'hl-draft-field-label';
+        btArticlesLabel.textContent = 'articles';
+        batchRow.appendChild(btArticlesLabel);
+
+        draft.appendChild(batchRow);
+
+        // ── Sync visibility ───────────────────────────────────────────
+        function syncTypeControls() {
+          const t = typeSel.value;
+          const isEmail = t === 'email_article';
+          const isDedup = t === 'deduplicate';
+          const isBatch = isEmail && deliverySel.value === 'batch';
+          const dedupNeedsWindow = isDedup && !['slug', 'safe'].includes(matchMethodSel.value);
+          const isGlobalDedup = isDedup && !folderSel.value;
+          patInput.style.display = isDedup ? 'none' : '';
+          regexBtn.style.display = isDedup ? 'none' : '';
+          searchInSel.style.display = isDedup ? 'none' : '';
+          colorSel.style.display = t === 'highlight' ? '' : 'none';
+          deliverySel.style.display = isEmail ? '' : 'none';
+          toLabel.style.display = isEmail ? '' : 'none';
+          contactSel.style.display = isEmail ? '' : 'none';
+          ccMeWrap.style.display = (isEmail && window.PROFILE_EMAIL) ? '' : 'none';
+          batchRow.style.display = isBatch ? '' : 'none';
+          if (!isEmail) contactFormRow.style.display = 'none';
+          matchMethodSel.style.display = isDedup ? '' : 'none';
+          windowHoursWrap.style.display = dedupNeedsWindow ? '' : 'none';
+          excludeRow.style.display = isGlobalDedup ? '' : 'none';
+          if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
+          else { populateFeeds(folderSel.value); }
+        }
+        syncTypeControls();
+        typeSel.addEventListener('change', syncTypeControls);
+        deliverySel.addEventListener('change', syncTypeControls);
+        matchMethodSel.addEventListener('change', syncTypeControls);
+        folderSel.addEventListener('change', syncTypeControls);
+
+        cancelBtn.addEventListener('click', hlHideDraft);
+        patInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); } });
+
+        saveBtn.addEventListener('click', async () => {
+          const ruleType = typeSel.value || 'highlight';
+          const folderId = folderSel.value || '';
+
+          if (ruleType === 'deduplicate') {
+            const matchMethod = matchMethodSel.value || 'slug';
+            const windowHours = (parseInt(windowHoursInput.value || '7', 10) || 7) * 24;
+            const scope = folderId ? 'folder' : 'global';
+            const scopeId = folderId || '';
+            const excludeIds = getExcludeIds();
+            await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
+                           is_regex: 0, type: 'deduplicate', search_in: 'title',
+                           delivery: 'immediately', email_to: '', batch_time: '', batch_count: 0,
+                           cc_me: 0, dedup_window_hours: windowHours, exclude_scope_ids: excludeIds });
+            return;
+          }
+
+          const pattern = patInput.value.trim();
+          if (!pattern) { patInput.focus(); return; }
+          if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
+          const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
+          const feedUrl  = feedSel.value || '';
+          const color    = colorSel.value || 'yellow';
+          const searchIn = searchInSel.value || 'title';
+          const delivery = deliverySel.value || 'immediately';
+          const emailTo  = contactSel.value || '';
+          const batchTime  = batchTimeInput.value || '';
+          const batchCount = parseInt(batchCountInput.value || '0', 10) || 0;
+          const ccMe = ccMeCheck.checked ? 1 : 0;
+          let scope, scopeId;
+          if (!folderId)     { scope = 'global'; scopeId = ''; }
+          else if (!feedUrl) { scope = 'folder'; scopeId = folderId; }
+          else               { scope = 'feed';   scopeId = feedUrl; }
+          await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
+                         type: ruleType, search_in: searchIn, delivery,
+                         email_to: emailTo, batch_time: batchTime, batch_count: batchCount, cc_me: ccMe,
+                         dedup_window_hours: 24 });
+        });
+
+        return draft;
       }
 
-      draftRegex?.addEventListener('click', () => {
-        const on = draftRegex.getAttribute('aria-pressed') !== 'true';
-        draftRegex.setAttribute('aria-pressed', String(on));
-        draftRegex.classList.toggle('active', on);
+      function hlRuleToParams(r) {
+        return new URLSearchParams({
+          scope: r.scope, scope_id: r.scope_id, keyword: r.keyword,
+          color: r.color || 'yellow', is_regex: r.is_regex || 0,
+          type: r.type || 'highlight', search_in: r.search_in || 'title',
+          delivery: r.delivery || 'immediately',
+          email_to: r.email_to || '', batch_time: r.batch_time || '',
+          batch_count: r.batch_count || 0, cc_me: r.cc_me || 0,
+          enabled: r.enabled !== undefined ? r.enabled : 0,
+          dedup_window_hours: r.dedup_window_hours || 168,
+          exclude_scope_ids: r.exclude_scope_ids || '',
+        });
+      }
+
+      addRuleBtn?.addEventListener('click', () => {
+        const draft = hlBuildDraft({}, 'Add', async (newRule) => {
+          try {
+            const params = hlRuleToParams({ ...newRule, enabled: 0 });
+            const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: params.toString() });
+            if (!resp.ok) throw new Error('failed');
+            const idx = hlRules.findIndex(r => r.scope === newRule.scope && r.scope_id === newRule.scope_id && r.keyword === newRule.keyword);
+            if (idx < 0) hlRules.push({ ...newRule, enabled: 0 });
+            else Object.assign(hlRules[idx], { ...newRule, enabled: 0 });
+            hlHideDraft();
+            hlRenderRules();
+            applyHighlights();
+          } catch { window.alert('Failed to add rule'); }
+        });
+        hlInsertDraft(draft, null);
       });
 
-      draftFolder?.addEventListener('change', () => hlPopulateFeeds(draftFolder.value));
-
-      function hlShowDraft(folderId = '', feedUrl = '') {
-        hlPopulateFolders();
-        if (draftFolder) draftFolder.value = folderId;
-        hlPopulateFeeds(folderId);
-        if (draftFeed && feedUrl) draftFeed.value = feedUrl;
-        if (draftRegex) { draftRegex.setAttribute('aria-pressed', 'false'); draftRegex.classList.remove('active'); }
-        if (draftPat) draftPat.value = '';
-        if (draftColor) draftColor.value = 'yellow';
-        draftRow?.removeAttribute('hidden');
-        addRuleBtn?.setAttribute('hidden', '');
-        draftPat?.focus();
-      }
-
-      function hlHideDraft() {
-        draftRow?.setAttribute('hidden', '');
-        addRuleBtn?.removeAttribute('hidden');
-      }
-
-      addRuleBtn?.addEventListener('click', () => hlShowDraft());
-      draftCancel?.addEventListener('click', hlHideDraft);
-      draftPat?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); draftSave?.click(); } });
-
-      draftSave?.addEventListener('click', async () => {
-        const pattern = (draftPat?.value || '').trim();
-        if (!pattern) { draftPat?.focus(); return; }
-        const isRegex = draftRegex?.getAttribute('aria-pressed') === 'true' ? 1 : 0;
-        const folderId = draftFolder?.value || '';
-        const feedUrl  = draftFeed?.value || '';
-        const color    = draftColor?.value || 'yellow';
-        let scope, scopeId;
-        if (!folderId)      { scope = 'global'; scopeId = ''; }
-        else if (!feedUrl)  { scope = 'folder'; scopeId = folderId; }
-        else                { scope = 'feed';   scopeId = feedUrl; }
-        const body = new URLSearchParams({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex });
-        try {
-          const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-          if (!resp.ok) throw new Error('failed');
-          const idx = hlRules.findIndex(r => r.scope === scope && r.scope_id === scopeId && r.keyword === pattern);
-          if (idx < 0) hlRules.push({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex });
-          else { hlRules[idx].color = color; hlRules[idx].is_regex = isRegex; }
-          hlHideDraft();
-          hlRenderRules();
-          applyHighlights();
-        } catch { window.alert('Failed to add rule'); }
-      });
-
-      function openHighlightsModal(folderId = '', feedUrl = '') {
-        hlRenderRules();
+      function openHighlightsModal() {
         hlHideDraft();
+        hlLoadFalseMatches();
+        hlRenderRules();
         hlModal?.removeAttribute('hidden');
-        if (folderId || feedUrl) hlShowDraft(folderId, feedUrl);
       }
 
       highlightsButton?.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
         hideAllContextMenus();
-        if (contextTargetType === 'feed') {
-          openHighlightsModal(String(contextFolderId || ''), contextFeedUrl || '');
-        } else {
-          openHighlightsModal(String(contextFolderId || ''), '');
-        }
+        openHighlightsModal();
       });
 
       document.getElementById('menu-highlights-btn')?.addEventListener('click', () => openHighlightsModal());
+    }
+
+    // ── Profile modal ────────────────────────────────────────────────────────
+    {
+      const profileModal = document.getElementById('profile-modal');
+      const profileNameInput = document.getElementById('profile-name-input');
+      const profileEmailInput = document.getElementById('profile-email-input');
+      const profileSaveBtn = document.getElementById('profile-save-btn');
+
+      if (profileNameInput) profileNameInput.value = window.PROFILE_NAME || '';
+      if (profileEmailInput) profileEmailInput.value = window.PROFILE_EMAIL || '';
+
+      document.getElementById('menu-profile-btn')?.addEventListener('click', () => {
+        profileModal?.removeAttribute('hidden');
+      });
+
+      profileSaveBtn?.addEventListener('click', async () => {
+        const name = profileNameInput?.value?.trim() || '';
+        const email = profileEmailInput?.value?.trim() || '';
+        try {
+          const body = new URLSearchParams({ name, email });
+          await fetch('/settings/profile', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+          window.PROFILE_NAME = name;
+          window.PROFILE_EMAIL = email;
+          profileModal?.setAttribute('hidden', '');
+        } catch { window.alert('Failed to save profile'); }
+      });
     }
 
     // ── Highlight engine (applies <mark> to post titles) ────────────────────
@@ -5716,7 +7219,7 @@
         el.appendChild(frag);
       }
 
-      const activeRules = rules.filter(r => r.enabled !== 0);
+      const activeRules = rules.filter(r => r.enabled !== 0 && (r.type || 'highlight') === 'highlight');
 
       for (const postItem of document.querySelectorAll('.post-item')) {
         const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
@@ -6112,6 +7615,11 @@
       }
       postsContainer.dataset.chunkBound = '1';
 
+      // In single-pane mode .pane-posts scrolls; in multi-pane .posts scrolls.
+      const scrollEl = (window.isSingleMode && window.isSingleMode())
+        ? (document.querySelector('.pane-posts') || postsContainer)
+        : postsContainer;
+
       const chunkSize = Number.parseInt(postsContainer.getAttribute('data-chunk-size') || '10', 10) || 10;
       let visibleCount = chunkSize;
 
@@ -6185,7 +7693,7 @@
             return;
           }
 
-          const remaining = postsContainer.scrollHeight - postsContainer.scrollTop - postsContainer.clientHeight;
+          const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
           if (remaining > 24) {
             return;
           }
@@ -6208,13 +7716,13 @@
           return;
         }
 
-        const remaining = postsContainer.scrollHeight - postsContainer.scrollTop - postsContainer.clientHeight;
+        const remaining = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
         if (remaining < 180) {
           revealNextChunk();
         }
       }
 
-      postsContainer.addEventListener('scroll', maybeRevealOnScroll);
+      scrollEl.addEventListener('scroll', maybeRevealOnScroll);
       postsContainer._revealNextChunk = revealNextChunk;
 
       // If items are removed from the top (e.g., unread view interactions), keep the window filled.
@@ -6328,6 +7836,13 @@
 
     function deactivateSourceView() {
       frameCheckRequestToken += 1;
+      // Hide readability container
+      try {
+        if (entryReadabilityContainer) {
+          entryReadabilityContainer.setAttribute('hidden', '');
+          entryReadabilityContainer.innerHTML = '';
+        }
+      } catch (e) {}
       // Hide iframe via attribute first
       try { entrySourceFrame.setAttribute('hidden', ''); } catch (e) {}
       // Remove any inline styles we applied so the iframe does not stay visible
@@ -6426,7 +7941,10 @@
       }
 
       event.preventDefault();
-      loadScopePanesWithoutFullRefresh(targetUrl.toString());
+      link.closest('.hamburger-menu')?.removeAttribute('open');
+      loadScopePanesWithoutFullRefresh(targetUrl.toString()).then(() => {
+        try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(1); } catch(e) {}
+      }).catch(() => {});
     });
 
     const topbarSearchForm = document.querySelector('.topbar-search-form');
@@ -7042,7 +8560,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #dedupe-log-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');
