@@ -182,6 +182,15 @@ EMAIL_TO_SETTING_KEY = "email_to"
 EMAIL_BCC_SETTING_KEY = "email_bcc_address"
 PROFILE_NAME_SETTING_KEY = "profile_name"
 PROFILE_EMAIL_SETTING_KEY = "profile_email"
+SETTING_TZ_DISPLAY = "tz_display"
+SETTING_MAINTENANCE_HOUR = "maintenance_hour"
+SETTING_YT_API_KEY = "yt_api_key"
+SETTING_YT_CHANNEL_ID = "yt_channel_id"
+SETTING_YT_FOLDER_NAME = "yt_folder_name"
+SETTING_RESEND_API_KEY = "resend_api_key"
+SETTING_EMAIL_FROM = "email_from"
+SETTING_INSTAPAPER_USERNAME = "instapaper_username"
+SETTING_INSTAPAPER_PASSWORD = "instapaper_password"
 AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -193,33 +202,65 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520i")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520j")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
-# --- Email (Resend) config ---
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-RESEND_FROM = os.getenv("LECTIO_EMAIL_FROM", "").strip()
-RESEND_TO_DEFAULT = os.getenv("LECTIO_EMAIL_TO", "").strip()
-EMAIL_CONFIGURED = bool(RESEND_API_KEY and RESEND_FROM)
+# --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
+_ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+_ENV_RESEND_FROM = os.getenv("LECTIO_EMAIL_FROM", "").strip()
+# LECTIO_EMAIL_TO removed — use profile email / Contacts instead
 
-# --- YouTube subscription sync config ---
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
-# Channel handle (@username), username, or raw channel ID (UCxxxxxx).
-# The channel's subscriptions must be set to Public on YouTube.
-YOUTUBE_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
-# Folder name to sync subscriptions into. Created if it doesn't exist.
-YOUTUBE_FOLDER_NAME = os.getenv("YOUTUBE_FOLDER_NAME", "YouTube Subscriptions").strip() or "YouTube Subscriptions"
-# Hour of day (0–23, local server time) to auto-sync. Blank or 0-string disables.
+
+def get_resend_api_key() -> str:
+    return get_runtime_setting(SETTING_RESEND_API_KEY, _ENV_RESEND_API_KEY)
+
+
+def get_resend_from() -> str:
+    return get_runtime_setting(SETTING_EMAIL_FROM, _ENV_RESEND_FROM)
+
+
+def is_email_configured() -> bool:
+    return bool(get_resend_api_key() and get_resend_from())
+
+
+# --- YouTube subscription sync config — env vars are fallbacks; DB settings take precedence ---
+_ENV_YT_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+_ENV_YT_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
+_ENV_YT_FOLDER_NAME = (os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube Subscriptions")
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
-YOUTUBE_SYNC_HOUR: int | None = None
+_ENV_MAINTENANCE_HOUR: int | None = None
 if _yt_sync_hour_raw:
     try:
         _h = int(_yt_sync_hour_raw)
         if 0 <= _h <= 23:
-            YOUTUBE_SYNC_HOUR = _h
+            _ENV_MAINTENANCE_HOUR = _h
     except ValueError:
         pass
+
+
+def get_yt_api_key() -> str:
+    return get_runtime_setting(SETTING_YT_API_KEY, _ENV_YT_API_KEY)
+
+
+def get_yt_channel_id() -> str:
+    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _ENV_YT_CHANNEL_ID)
+
+
+def get_yt_folder_name() -> str:
+    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _ENV_YT_FOLDER_NAME) or "YouTube Subscriptions"
+
+
+def get_maintenance_hour() -> int | None:
+    val = get_runtime_setting(SETTING_MAINTENANCE_HOUR, "")
+    if val:
+        try:
+            h = int(val)
+            if 0 <= h <= 23:
+                return h
+        except ValueError:
+            pass
+    return _ENV_MAINTENANCE_HOUR
 
 # --- Auth config ---
 # Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
@@ -321,6 +362,10 @@ async def lifespan(app: FastAPI):
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
+        # Pre-load settings cache so get_cached_setting works before first request.
+        global _app_settings_cache
+        with _app_settings_cache_lock:
+            _app_settings_cache = _load_app_settings_cache(conn)
     app.state.last_scheduled_refresh_started_at = time.monotonic()
 
     # Ensure reader db is created at startup.
@@ -444,35 +489,15 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_backfill_read_history, daemon=True, name="read-history-backfill").start()
 
-    # YouTube subscription auto-sync: runs daily at YOUTUBE_SYNC_HOUR (local time).
-    if YOUTUBE_SYNC_HOUR is not None and YOUTUBE_API_KEY and YOUTUBE_CHANNEL_ID:
-        yt_stop_event = threading.Event()
-
-        def _youtube_sync_loop(stop: threading.Event) -> None:
-            LOGGER.info("YouTube auto-sync thread started (hour=%d)", YOUTUBE_SYNC_HOUR)
-            while not stop.is_set():
-                now = time.localtime()
-                if now.tm_hour == YOUTUBE_SYNC_HOUR and now.tm_min == 0:
-                    LOGGER.info("YouTube auto-sync: starting scheduled sync")
-                    result = _run_youtube_sync()
-                    if result["error"]:
-                        LOGGER.error("YouTube auto-sync error: %s", result["error"])
-                    else:
-                        LOGGER.info(
-                            "YouTube auto-sync complete: +%d -%d total=%d",
-                            result["added"], result["removed"], result["total"],
-                        )
-                    stop.wait(61)  # skip remainder of the minute
-                else:
-                    stop.wait(30)
-
-        app.state.yt_stop_event = yt_stop_event
-        threading.Thread(
-            target=_youtube_sync_loop,
-            args=(yt_stop_event,),
-            daemon=True,
-            name="youtube-sync",
-        ).start()
+    # Daily Maintenance loop — runs once per day at the configured maintenance hour.
+    maint_stop_event = threading.Event()
+    app.state.maint_stop_event = maint_stop_event
+    threading.Thread(
+        target=_daily_maintenance_loop,
+        args=(maint_stop_event,),
+        daemon=True,
+        name="daily-maintenance",
+    ).start()
 
     try:
         yield
@@ -1359,10 +1384,7 @@ def ensure_meta_schema() -> None:
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
             (GLOBAL_NOTE_SETTING_KEY, ""),
         )
-        conn.execute(
-            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-            (EMAIL_TO_SETTING_KEY, RESEND_TO_DEFAULT),
-        )
+        pass  # email_to seeding removed; Contacts tab manages recipients
 
 
 _app_settings_cache: dict[str, str] | None = None
@@ -1405,6 +1427,30 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
         (key, value),
     )
+
+
+def get_cached_setting(key: str) -> str | None:
+    """Read from in-memory cache without a DB connection. Returns None if cache unloaded."""
+    with _app_settings_cache_lock:
+        if _app_settings_cache is None:
+            return None
+        return _app_settings_cache.get(key)
+
+
+def get_runtime_setting(key: str, env_fallback: str = "") -> str:
+    """DB setting takes precedence; env_fallback (typically os.getenv) is the fallback."""
+    val = get_cached_setting(key)
+    if val is not None:
+        return val
+    return env_fallback
+
+
+def delete_setting(conn: sqlite3.Connection, key: str) -> None:
+    global _app_settings_cache
+    with _app_settings_cache_lock:
+        if _app_settings_cache is not None:
+            _app_settings_cache.pop(key, None)
+    conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption"})
@@ -4941,10 +4987,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
 
 def _get_email_to_default() -> str:
-    if not EMAIL_CONFIGURED:
+    if not is_email_configured():
         return ""
     with get_meta_connection() as conn:
-        return get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT
+        return get_setting(conn, EMAIL_TO_SETTING_KEY) or ""
 
 
 @app.get("/entries/pane", response_class=HTMLResponse)
@@ -5002,7 +5048,7 @@ def entry_pane(
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
             "feed_to_folder": feed_to_folder,
-            "email_configured": EMAIL_CONFIGURED,
+            "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
         },
     )
@@ -5164,20 +5210,23 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
 def _run_youtube_sync(folder_id: int | None = None) -> dict:
     """Run YouTube subscription sync, creating the target folder if needed.
 
-    If folder_id is None, looks up or creates YOUTUBE_FOLDER_NAME.
+    If folder_id is None, looks up or creates yt_folder_name.
     Returns the result dict from sync_youtube_folder.
     """
-    if not YOUTUBE_API_KEY:
-        return {"added": 0, "removed": 0, "total": 0, "error": "YOUTUBE_API_KEY is not set."}
-    if not YOUTUBE_CHANNEL_ID:
-        return {"added": 0, "removed": 0, "total": 0, "error": "YOUTUBE_CHANNEL_ID is not set."}
+    yt_api_key = get_yt_api_key()
+    yt_channel_id = get_yt_channel_id()
+    yt_folder_name = get_yt_folder_name()
+    if not yt_api_key:
+        return {"added": 0, "removed": 0, "total": 0, "error": "YouTube API key is not configured."}
+    if not yt_channel_id:
+        return {"added": 0, "removed": 0, "total": 0, "error": "YouTube channel ID is not configured."}
 
     # Resolve or create the target folder.
     if folder_id is None:
         with get_meta_connection() as conn:
             row = conn.execute(
                 "SELECT id FROM folders WHERE name = ? LIMIT 1",
-                (YOUTUBE_FOLDER_NAME,),
+                (yt_folder_name,),
             ).fetchone()
             if row:
                 folder_id = int(row["id"])
@@ -5185,7 +5234,7 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
                 root_id = get_root_folder_id(conn)
                 conn.execute(
                     "INSERT INTO folders (name, parent_id) VALUES (?, ?)",
-                    (YOUTUBE_FOLDER_NAME, root_id),
+                    (yt_folder_name, root_id),
                 )
                 folder_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         invalidate_meta_structure_cache()
@@ -5199,8 +5248,8 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
         return [str(r["feed_url"]) for r in rows]
 
     result = sync_youtube_folder(
-        api_key=YOUTUBE_API_KEY,
-        channel_identifier=YOUTUBE_CHANNEL_ID,
+        api_key=yt_api_key,
+        channel_identifier=yt_channel_id,
         folder_id=folder_id,
         get_folder_feed_urls=_get_folder_feed_urls,
         add_feed=add_feed_to_folder,
@@ -5344,6 +5393,113 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
         app.state.last_scheduled_refresh_started_at = time.monotonic()
         feed_refresh_service.update_feeds(feed_urls)
         _run_automation_after_refresh(feed_urls)
+
+
+def _run_daily_maintenance() -> None:
+    """Nightly cleanup: VACUUM DBs, prune old logs, purge orphaned rows, sync YouTube."""
+    LOGGER.info("[maintenance] starting daily maintenance")
+
+    # 1. Prune rule_run_log older than 90 days.
+    try:
+        cutoff = int(time.time()) - 90 * 86400
+        with get_meta_connection() as conn:
+            old_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM rule_run_log WHERE ran_at < ?", (cutoff,)
+            ).fetchall()]
+            if old_ids:
+                placeholders = ",".join("?" * len(old_ids))
+                conn.execute(f"DELETE FROM rule_run_log_entries WHERE log_id IN ({placeholders})", old_ids)
+                conn.execute(f"DELETE FROM rule_run_log WHERE id IN ({placeholders})", old_ids)
+                LOGGER.info("[maintenance] pruned %d old rule run log entries", len(old_ids))
+    except Exception:
+        LOGGER.exception("[maintenance] rule log prune failed")
+
+    # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
+    try:
+        with get_reader() as reader:
+            live_urls = {f.url for f in reader.get_feeds()}
+        with get_meta_connection() as conn:
+            for table, col in [
+                ("feed_strategy_cache", "feed_url"),
+                ("feed_display_prefs", "feed_url"),
+                ("feed_failure_state", "feed_url"),
+            ]:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE {col} NOT IN "
+                    f"(SELECT feed_url FROM folder_feeds)",
+                )
+            # domain_failure_state: remove domains with no remaining feeds
+            live_domains = {urlparse(u).netloc.lower() for u in live_urls}
+            rows = conn.execute("SELECT domain FROM domain_failure_state").fetchall()
+            stale_domains = [r["domain"] for r in rows if r["domain"] not in live_domains]
+            if stale_domains:
+                conn.executemany(
+                    "DELETE FROM domain_failure_state WHERE domain = ?",
+                    [(d,) for d in stale_domains],
+                )
+        LOGGER.info("[maintenance] orphaned row cleanup done")
+    except Exception:
+        LOGGER.exception("[maintenance] orphan cleanup failed")
+
+    # 3. VACUUM all app-owned SQLite DBs.
+    for label, path in [
+        ("meta", META_DB_PATH),
+        ("thumb", THUMB_DB_PATH),
+    ]:
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.execute("VACUUM")
+            conn.close()
+            LOGGER.info("[maintenance] VACUUM %s done", label)
+        except Exception:
+            LOGGER.exception("[maintenance] VACUUM %s failed", label)
+
+    # Starred archive DB (may not exist).
+    try:
+        archive_path = getattr(starred_archive_service, "db_path", None)
+        if archive_path and Path(archive_path).exists():
+            conn = sqlite3.connect(str(archive_path))
+            conn.execute("VACUUM")
+            conn.close()
+            LOGGER.info("[maintenance] VACUUM starred-archive done")
+    except Exception:
+        LOGGER.exception("[maintenance] VACUUM starred-archive failed")
+
+    # 4. YouTube subscription sync (if configured).
+    if get_yt_api_key() and get_yt_channel_id():
+        try:
+            result = _run_youtube_sync()
+            if result.get("error"):
+                LOGGER.error("[maintenance] YouTube sync error: %s", result["error"])
+            else:
+                LOGGER.info(
+                    "[maintenance] YouTube sync complete: +%d -%d total=%d",
+                    result["added"], result["removed"], result["total"],
+                )
+        except Exception:
+            LOGGER.exception("[maintenance] YouTube sync failed")
+
+    LOGGER.info("[maintenance] daily maintenance complete")
+    with get_meta_connection() as conn:
+        set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
+
+
+def _daily_maintenance_loop(stop_event: threading.Event) -> None:
+    """Thread that fires _run_daily_maintenance() once per day at the configured hour."""
+    last_ran_date: str | None = None
+    while not stop_event.wait(30):
+        maint_hour = get_maintenance_hour()
+        if maint_hour is None:
+            continue
+        now = time.localtime()
+        today = time.strftime("%Y-%m-%d")
+        if now.tm_hour == maint_hour and last_ran_date != today:
+            last_ran_date = today
+            try:
+                _run_daily_maintenance()
+            except Exception:
+                LOGGER.exception("[maintenance] unhandled error in daily maintenance")
+            stop_event.wait(61)  # skip rest of the minute
 
 
 def check_and_mark_manual_refresh() -> int:
@@ -5737,7 +5893,7 @@ def home(
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
-        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or RESEND_TO_DEFAULT if EMAIL_CONFIGURED else ""
+        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
         highlight_rules = get_highlight_keywords(conn)
         email_contacts = get_email_contacts(conn)
         email_bcc = get_setting(conn, EMAIL_BCC_SETTING_KEY) or ""
@@ -5954,7 +6110,7 @@ def home(
             "selected_star_only": selected_star_only,
             "selected_resume_read_filter": selected_resume_read_filter,
             "global_note": global_note,
-            "email_configured": EMAIL_CONFIGURED,
+            "email_configured": is_email_configured(),
             "email_to_default": email_to_default,
             "youtube_sync_last_at": youtube_sync_last_at,
             "youtube_sync_last_result": youtube_sync_last_result,
@@ -6606,6 +6762,87 @@ def save_profile_route(name: str = Form(""), email: str = Form("")):
         set_setting(conn, PROFILE_NAME_SETTING_KEY, name.strip())
         set_setting(conn, PROFILE_EMAIL_SETTING_KEY, email.strip())
     return JSONResponse({"ok": True})
+
+
+@app.get("/settings/all")
+def get_all_settings():
+    """Return all user-configurable settings. Sensitive values are masked if set."""
+    def _masked(val: str) -> str:
+        return "••••••••" if val else ""
+
+    with get_meta_connection() as conn:
+        contacts_raw = get_setting(conn, "email_contacts") or "[]"
+        profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
+        profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+        maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
+
+    yt_api_key = get_yt_api_key()
+    resend_key = get_resend_api_key()
+    instapaper_pw = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
+
+    import json as _json
+    try:
+        contacts = _json.loads(contacts_raw)
+    except Exception:
+        contacts = []
+
+    return JSONResponse({
+        "profile_name": profile_name,
+        "profile_email": profile_email,
+        "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
+        "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
+        "maintenance_last_ran_at": maint_last,
+        "yt_api_key_set": bool(yt_api_key),
+        "yt_api_key_masked": _masked(yt_api_key),
+        "yt_channel_id": get_yt_channel_id(),
+        "yt_folder_name": get_yt_folder_name(),
+        "resend_api_key_set": bool(resend_key),
+        "resend_api_key_masked": _masked(resend_key),
+        "email_from": get_resend_from(),
+        "instapaper_username": get_runtime_setting(SETTING_INSTAPAPER_USERNAME),
+        "instapaper_password_set": bool(instapaper_pw),
+        "instapaper_password_masked": _masked(instapaper_pw),
+        "contacts": contacts,
+    })
+
+
+@app.post("/settings/all")
+async def save_all_settings(request: Request):
+    """Save any subset of user-configurable settings. Empty string clears a value."""
+    import json as _json
+    body = await request.json()
+
+    _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD}
+    _ALLOWED = {
+        PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
+        SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
+        SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
+        SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
+        SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
+        "email_contacts",
+    }
+
+    with get_meta_connection() as conn:
+        for key, value in body.items():
+            if key not in _ALLOWED:
+                continue
+            str_val = str(value).strip() if value is not None else ""
+            # Don't overwrite a real secret with the masked placeholder
+            if key in _SENSITIVE and str_val.startswith("••"):
+                continue
+            if str_val:
+                set_setting(conn, key, str_val)
+            else:
+                delete_setting(conn, key)
+
+    return JSONResponse({"ok": True})
+
+
+@app.post("/settings/maintenance/run-now")
+def run_maintenance_now():
+    """Trigger daily maintenance immediately (for testing / manual runs)."""
+    threading.Thread(target=_run_daily_maintenance, daemon=True, name="maintenance-manual").start()
+    return JSONResponse({"ok": True, "message": "Maintenance started in background."})
 
 
 @app.post("/feeds/strategy-refresh")
@@ -7664,7 +7901,7 @@ def email_entry(
     entry_id: str = Form(...),
     to_addr: str = Form(...),
 ):
-    if not EMAIL_CONFIGURED:
+    if not is_email_configured():
         return JSONResponse({"ok": False, "error": "Email not configured."}, status_code=503)
 
     to_addr = to_addr.strip()
@@ -7694,8 +7931,8 @@ def email_entry(
         excerpt = excerpt[:297] + "…"
 
     ok, error = send_article_email(
-        api_key=RESEND_API_KEY,
-        from_addr=RESEND_FROM,
+        api_key=get_resend_api_key(),
+        from_addr=get_resend_from(),
         to_addr=to_addr,
         title=title,
         feed_title=feed_title,

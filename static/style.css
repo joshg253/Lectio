@@ -4613,3 +4613,149 @@ textarea.hl-draft-pattern {
   color: var(--accent, #2060cc);
 }
 
+
+/* ── Topbar avatar + icon buttons ───────────────────────────────────── */
+.topbar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pane-heading-height);
+  height: var(--pane-heading-height);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+.topbar-icon-btn:hover { background: var(--hover-bg); color: var(--ink); }
+.topbar-overflow-btn { list-style: none; }
+.topbar-overflow-btn::-webkit-details-marker { display: none; }
+.topbar-avatar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pane-heading-height);
+  height: var(--pane-heading-height);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+.topbar-avatar-btn .material-symbols-rounded { font-size: 1.6rem; font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24; }
+.topbar-avatar-btn:hover { background: var(--hover-bg); }
+
+/* ── Settings modal ─────────────────────────────────────────────────── */
+.settings-modal-panel {
+  min-width: min(520px, 100%);
+  max-width: 680px;
+  width: 94vw;
+}
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+.settings-tab-bar { margin-bottom: 0.75rem; flex-wrap: wrap; }
+.settings-tab-panel { display: flex; flex-direction: column; gap: 0; }
+.settings-section {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+  padding: 0.1rem 0 0.5rem;
+}
+.settings-label {
+  font-size: 0.84rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.settings-input {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 0.88rem;
+  background: var(--bg);
+  color: var(--ink);
+  width: 100%;
+}
+.settings-input--short { max-width: 5rem; }
+.settings-input--secret { letter-spacing: 0.05em; }
+.settings-section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0.8rem 0 0.3rem;
+}
+.settings-hint {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0.1rem 0 0;
+  line-height: 1.4;
+}
+.settings-maint-last { font-style: italic; }
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0 0.25rem;
+  flex-wrap: wrap;
+}
+.settings-save-btn {
+  padding: 0.35rem 0.9rem;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-save-btn:hover { background: var(--accent-dark, #2a5a7a); }
+.settings-secondary-btn {
+  padding: 0.35rem 0.8rem;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+.settings-secondary-btn:hover { background: var(--hover-bg); }
+
+/* Contacts list */
+.sett-contacts-list { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.5rem; min-height: 1rem; }
+.sett-contact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 0.85rem;
+  background: var(--surface);
+}
+.sett-contact-label { flex: 1; display: flex; align-items: center; gap: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sett-contact-default-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  flex-shrink: 0;
+}
+.sett-contact-del { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0.1rem; display: flex; align-items: center; }
+.sett-contact-del:hover { color: var(--danger, #c00); }
+.sett-contact-del .material-symbols-rounded { font-size: 1rem; }
+.sett-contact-form { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0 0; }

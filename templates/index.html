@@ -120,10 +120,11 @@
         />
       </form>
       <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
-      <details class="hamburger-menu app-menu topbar-menu">
-        <summary title="Menu" aria-label="Open menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
+      <button type="button" class="topbar-icon-btn" id="menu-highlights-btn" title="Automation" aria-label="Automation"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span></button>
+      <button type="button" class="topbar-icon-btn" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
+      <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu">
+        <summary class="topbar-icon-btn topbar-overflow-btn" title="More" aria-label="More options"><span class="material-symbols-rounded" aria-hidden="true">more_horiz</span></summary>
         <div class="menu-popover">
-          <button type="button" class="menu-item" id="menu-profile-btn"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Profile</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -131,14 +132,12 @@
               <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
             </div>
           </div>
-          <button type="button" class="menu-item" id="menu-highlights-btn"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
           <a
             class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
             href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
             title="Global history"
             aria-label="Global history"
           ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
-          <button type="button" class="menu-item" data-toggle-panel="global-note-modal"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -165,6 +164,9 @@
           </div>
         </div>
       </details>
+      <button type="button" id="topbar-avatar-btn" class="topbar-avatar-btn" title="Settings" aria-label="Settings">
+        <span class="material-symbols-rounded" aria-hidden="true">account_circle</span>
+      </button>
     </div>
   </header>
 
@@ -1570,20 +1572,104 @@
     </div>
   </div>
 
-  <div id="profile-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
-      <div class="modal-header-row">
-        <h3 id="profile-modal-title" class="action-modal-title">Profile</h3>
-        <button type="button" class="modal-close" data-close-modal="profile-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+  <div id="settings-modal" class="action-modal" hidden>
+    <div class="action-modal-panel settings-modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+      <div class="settings-modal-header">
+        <h3 id="settings-modal-title" class="action-modal-title">Settings</h3>
+        <button type="button" class="modal-close" data-close-modal="settings-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <p class="highlights-hint">Your name and email are used as the "Cc me" address in Automation email rules.</p>
-      <div class="profile-form">
-        <label class="profile-label" for="profile-name-input">Name</label>
-        <input type="text" id="profile-name-input" class="profile-input" placeholder="Your name" maxlength="200" />
-        <label class="profile-label" for="profile-email-input">Email</label>
-        <input type="email" id="profile-email-input" class="profile-input" placeholder="you@example.com" maxlength="200" />
-        <button type="button" id="profile-save-btn" class="hl-draft-save">Save</button>
+      <div class="hl-tab-bar settings-tab-bar" role="tablist">
+        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-settings-tab="profile" role="tab" aria-selected="true">Profile</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="app" role="tab" aria-selected="false">Settings</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="contacts" role="tab" aria-selected="false">Contacts</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="email" role="tab" aria-selected="false">Email</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations</button>
       </div>
+
+      <!-- Profile tab -->
+      <div id="settings-tab-profile" class="settings-tab-panel">
+        <div class="settings-section">
+          <label class="settings-label" for="sett-profile-name">Name</label>
+          <input type="text" id="sett-profile-name" class="settings-input" placeholder="Your name" maxlength="200" />
+          <label class="settings-label" for="sett-profile-email">Email</label>
+          <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="profile">Save</button>
+        </div>
+      </div>
+
+      <!-- App Settings tab -->
+      <div id="settings-tab-app" class="settings-tab-panel" hidden>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-tz-display">Timezone display</label>
+          <input type="text" id="sett-tz-display" class="settings-input" placeholder="e.g. America/Los_Angeles (leave blank for server default)" />
+          <label class="settings-label" for="sett-maint-hour">Daily maintenance hour (0–23)</label>
+          <input type="number" id="sett-maint-hour" class="settings-input settings-input--short" min="0" max="23" placeholder="3" />
+          <p class="settings-hint">Maintenance runs once per day at this hour (server local time). It vacuums databases, prunes old logs, and syncs YouTube subscriptions.</p>
+          <div id="sett-maint-last" class="settings-hint settings-maint-last" hidden></div>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="app">Save</button>
+          <button type="button" id="sett-maint-run-now" class="settings-secondary-btn">Run maintenance now</button>
+        </div>
+      </div>
+
+      <!-- Contacts tab -->
+      <div id="settings-tab-contacts" class="settings-tab-panel" hidden>
+        <p class="settings-hint">Email addresses available when sending articles. The first entry is the default.</p>
+        <div id="sett-contacts-list" class="sett-contacts-list"></div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="contacts">Save contacts</button>
+          <button type="button" id="sett-contact-add-btn" class="settings-secondary-btn">+ Add</button>
+        </div>
+        <div id="sett-contact-form" class="sett-contact-form" hidden>
+          <input type="text" id="sett-contact-label" class="settings-input" placeholder="Label (e.g. Me, Work)" maxlength="80" />
+          <input type="email" id="sett-contact-email" class="settings-input" placeholder="address@example.com" maxlength="200" />
+          <div class="settings-actions">
+            <button type="button" id="sett-contact-save" class="settings-save-btn">Add</button>
+            <button type="button" id="sett-contact-cancel" class="settings-secondary-btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Email tab -->
+      <div id="settings-tab-email" class="settings-tab-panel" hidden>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-resend-key">Resend API key</label>
+          <input type="password" id="sett-resend-key" class="settings-input settings-input--secret" placeholder="re_…" autocomplete="new-password" />
+          <label class="settings-label" for="sett-email-from">From address</label>
+          <input type="email" id="sett-email-from" class="settings-input" placeholder="lectio@yourdomain.com" maxlength="200" />
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="email">Save</button>
+        </div>
+      </div>
+
+      <!-- Integrations tab -->
+      <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
+        <h4 class="settings-section-title">YouTube</h4>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-yt-key">API key</label>
+          <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
+          <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
+          <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
+          <label class="settings-label" for="sett-yt-folder">Folder name</label>
+          <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
+          <p class="settings-hint">Subscriptions are synced during daily maintenance. Your channel's subscriptions must be set to Public on YouTube.</p>
+        </div>
+        <h4 class="settings-section-title">Instapaper</h4>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-ip-user">Username</label>
+          <input type="text" id="sett-ip-user" class="settings-input" placeholder="your@email.com" maxlength="200" autocomplete="off" />
+          <label class="settings-label" for="sett-ip-pass">Password</label>
+          <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="(leave blank to keep existing)" autocomplete="new-password" />
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -2323,7 +2409,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -7150,29 +7236,182 @@
 
     // ── Profile modal ────────────────────────────────────────────────────────
     {
-      const profileModal = document.getElementById('profile-modal');
-      const profileNameInput = document.getElementById('profile-name-input');
-      const profileEmailInput = document.getElementById('profile-email-input');
-      const profileSaveBtn = document.getElementById('profile-save-btn');
+      // ── Settings modal ────────────────────────────────────────────────────
+      const settingsModal = document.getElementById('settings-modal');
+      let settingsData = null;
+      let settContacts = [];
 
-      if (profileNameInput) profileNameInput.value = window.PROFILE_NAME || '';
-      if (profileEmailInput) profileEmailInput.value = window.PROFILE_EMAIL || '';
+      function openSettingsModal(tab) {
+        if (!settingsModal) return;
+        settingsModal.removeAttribute('hidden');
+        settSwitchTab(tab || 'profile');
+        loadSettingsData();
+      }
 
-      document.getElementById('menu-profile-btn')?.addEventListener('click', () => {
-        profileModal?.removeAttribute('hidden');
+      function settSwitchTab(tabName) {
+        document.querySelectorAll('[data-settings-tab]').forEach(btn => {
+          const active = btn.getAttribute('data-settings-tab') === tabName;
+          btn.classList.toggle('hl-tab-btn--active', active);
+          btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.settings-tab-panel').forEach(panel => {
+          panel.hidden = panel.id !== `settings-tab-${tabName}`;
+        });
+      }
+
+      document.querySelectorAll('[data-settings-tab]').forEach(btn => {
+        btn.addEventListener('click', () => settSwitchTab(btn.getAttribute('data-settings-tab')));
       });
 
-      profileSaveBtn?.addEventListener('click', async () => {
-        const name = profileNameInput?.value?.trim() || '';
-        const email = profileEmailInput?.value?.trim() || '';
+      async function loadSettingsData() {
         try {
-          const body = new URLSearchParams({ name, email });
-          await fetch('/settings/profile', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-          window.PROFILE_NAME = name;
-          window.PROFILE_EMAIL = email;
-          profileModal?.setAttribute('hidden', '');
-        } catch { window.alert('Failed to save profile'); }
+          const resp = await fetch('/settings/all', { credentials: 'same-origin' });
+          settingsData = await resp.json();
+          settPopulate(settingsData);
+        } catch { /* silently fail on load */ }
+      }
+
+      function settPopulate(d) {
+        const v = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+        v('sett-profile-name', d.profile_name);
+        v('sett-profile-email', d.profile_email);
+        v('sett-tz-display', d.tz_display);
+        v('sett-maint-hour', d.maintenance_hour);
+        const maintLast = document.getElementById('sett-maint-last');
+        if (maintLast) {
+          if (d.maintenance_last_ran_at) {
+            maintLast.textContent = `Last ran: ${d.maintenance_last_ran_at}`;
+            maintLast.hidden = false;
+          } else {
+            maintLast.hidden = true;
+          }
+        }
+        // Sensitive fields: show placeholder if set, blank if not
+        const secretField = (id, isSet, masked) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          el.value = '';
+          el.placeholder = isSet ? masked : el.placeholder;
+        };
+        secretField('sett-resend-key', d.resend_api_key_set, d.resend_api_key_masked);
+        v('sett-email-from', d.email_from);
+        secretField('sett-yt-key', d.yt_api_key_set, d.yt_api_key_masked);
+        v('sett-yt-channel', d.yt_channel_id);
+        v('sett-yt-folder', d.yt_folder_name);
+        v('sett-ip-user', d.instapaper_username);
+        secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
+        settContacts = d.contacts || [];
+        settRenderContacts();
+      }
+
+      function settRenderContacts() {
+        const list = document.getElementById('sett-contacts-list');
+        if (!list) return;
+        list.innerHTML = '';
+        settContacts.forEach((c, idx) => {
+          const row = document.createElement('div');
+          row.className = 'sett-contact-row';
+          const lbl = document.createElement('span');
+          lbl.className = 'sett-contact-label';
+          lbl.textContent = c.label ? `${c.label} <${c.address}>` : c.address;
+          if (idx === 0) {
+            const badge = document.createElement('span');
+            badge.className = 'sett-contact-default-badge';
+            badge.textContent = 'default';
+            lbl.appendChild(badge);
+          }
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'sett-contact-del';
+          del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
+          del.addEventListener('click', () => {
+            settContacts.splice(idx, 1);
+            settRenderContacts();
+          });
+          row.appendChild(lbl);
+          row.appendChild(del);
+          list.appendChild(row);
+        });
+      }
+
+      document.getElementById('sett-contact-add-btn')?.addEventListener('click', () => {
+        const form = document.getElementById('sett-contact-form');
+        if (form) { form.hidden = false; document.getElementById('sett-contact-label')?.focus(); }
       });
+      document.getElementById('sett-contact-cancel')?.addEventListener('click', () => {
+        const form = document.getElementById('sett-contact-form');
+        if (form) form.hidden = true;
+      });
+      document.getElementById('sett-contact-save')?.addEventListener('click', () => {
+        const label = document.getElementById('sett-contact-label')?.value.trim() || '';
+        const address = document.getElementById('sett-contact-email')?.value.trim() || '';
+        if (!address) return;
+        settContacts.push({ label, address });
+        settRenderContacts();
+        const form = document.getElementById('sett-contact-form');
+        if (form) form.hidden = true;
+        const li = document.getElementById('sett-contact-label');
+        const ei = document.getElementById('sett-contact-email');
+        if (li) li.value = '';
+        if (ei) ei.value = '';
+      });
+
+      async function settSave(scope) {
+        const g = id => document.getElementById(id)?.value?.trim() || '';
+        let payload = {};
+        if (scope === 'profile') {
+          payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };
+        } else if (scope === 'app') {
+          payload = { tz_display: g('sett-tz-display'), maintenance_hour: g('sett-maint-hour') };
+        } else if (scope === 'contacts') {
+          payload = { email_contacts: JSON.stringify(settContacts) };
+        } else if (scope === 'email') {
+          payload = { resend_api_key: g('sett-resend-key'), email_from: g('sett-email-from') };
+        } else if (scope === 'integrations') {
+          payload = {
+            yt_api_key: g('sett-yt-key'),
+            yt_channel_id: g('sett-yt-channel'),
+            yt_folder_name: g('sett-yt-folder'),
+            instapaper_username: g('sett-ip-user'),
+            instapaper_password: g('sett-ip-pass'),
+          };
+        }
+        try {
+          const resp = await fetch('/settings/all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) throw new Error('failed');
+          // Update profile globals if saved
+          if (scope === 'profile') {
+            window.PROFILE_NAME = payload.profile_name;
+            window.PROFILE_EMAIL = payload.profile_email;
+          }
+          showToastMessage('Settings saved.');
+        } catch { showToastMessage('Failed to save settings.'); }
+      }
+
+      document.querySelectorAll('[data-settings-save]').forEach(btn => {
+        btn.addEventListener('click', () => settSave(btn.getAttribute('data-settings-save')));
+      });
+
+      // Contacts tab save is triggered by the Contacts save button
+      document.getElementById('settings-tab-contacts')?.addEventListener('click', e => {
+        if (e.target.closest('[data-settings-save="contacts"]')) settSave('contacts');
+      });
+
+      document.getElementById('sett-maint-run-now')?.addEventListener('click', async () => {
+        try {
+          await fetch('/settings/maintenance/run-now', { method: 'POST', credentials: 'same-origin' });
+          showToastMessage('Maintenance started in background.');
+        } catch { showToastMessage('Failed to start maintenance.'); }
+      });
+
+      // Avatar / settings button
+      document.getElementById('topbar-avatar-btn')?.addEventListener('click', () => openSettingsModal('profile'));
+      document.getElementById('menu-profile-btn')?.addEventListener('click', () => openSettingsModal('profile'));
     }
 
     // ── Highlight engine (applies <mark> to post titles) ────────────────────

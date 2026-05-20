@@ -12,9 +12,9 @@ def _build_app(monkeypatch, *, configured: bool = True, entry=None, send_result=
     app = FastAPI()
     app.post("/entries/email")(main.email_entry)
 
-    monkeypatch.setattr(main, "EMAIL_CONFIGURED", configured)
-    monkeypatch.setattr(main, "RESEND_API_KEY", "re_test" if configured else "")
-    monkeypatch.setattr(main, "RESEND_FROM", "from@example.com" if configured else "")
+    monkeypatch.setattr(main, "is_email_configured", lambda: configured)
+    monkeypatch.setattr(main, "get_resend_api_key", lambda: "re_test" if configured else "")
+    monkeypatch.setattr(main, "get_resend_from", lambda: "from@example.com" if configured else "")
 
     class _FakeReader:
         def __enter__(self):
