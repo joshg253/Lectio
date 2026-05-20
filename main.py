@@ -42,7 +42,7 @@ from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from services.email import send_article_email
+from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
@@ -202,7 +202,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520m")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520n")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -1366,6 +1366,30 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_batch_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_scope TEXT NOT NULL,
+                rule_scope_id TEXT NOT NULL,
+                rule_keyword TEXT NOT NULL,
+                queued_at TEXT NOT NULL,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                title TEXT,
+                link TEXT,
+                feed_title TEXT,
+                excerpt TEXT,
+                email_to TEXT NOT NULL,
+                cc_me INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)
+            )
+            """
+        )
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1460,8 +1484,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption"})
-_DISPLAY_PREF_DEFAULTS = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1}
+_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
+_DISPLAY_PREF_DEFAULTS = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0}
 
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -2767,10 +2791,48 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
         )
 
 
+def _is_youtube_short(entry: object) -> bool:
+    """Return True if the entry is a YouTube Short (link contains /shorts/)."""
+    link = str(getattr(entry, "link", None) or "")
+    return "youtube.com/shorts/" in link
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
-    """Run enabled mark_as_read and deduplicate rules for freshly-refreshed feeds."""
+    """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
         return
+
+    # Hide Shorts: auto-mark Shorts as read for YouTube feeds that have it enabled.
+    try:
+        global _unread_counts_generation
+        with get_meta_connection() as conn:
+            shorts_urls = {
+                str(r["feed_url"])
+                for r in conn.execute(
+                    "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
+                ).fetchall()
+            }
+        shorts_targets = refreshed_feed_urls & shorts_urls
+        if shorts_targets:
+            now_str = datetime.now().isoformat()
+            with get_reader() as reader:
+                to_mark = []
+                for feed_url in shorts_targets:
+                    for entry in reader.get_entries(feed=feed_url, read=False):
+                        if _is_youtube_short(entry):
+                            to_mark.append((str(entry.feed_url), str(entry.id)))
+                for fu, eid in to_mark:
+                    reader.mark_entry_as_read((fu, eid))
+            if to_mark:
+                with get_meta_connection() as conn:
+                    conn.executemany(
+                        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+                        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+                        [(fu, eid, now_str) for fu, eid in to_mark],
+                    )
+                _unread_counts_generation += 1
+    except Exception:
+        LOGGER.exception("[automation] error applying hide-shorts")
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
@@ -2786,7 +2848,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         enabled_rules = [
             r for r in all_rules
-            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate")
+            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article")
         ]
         if not enabled_rules:
             return
@@ -2855,10 +2917,276 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                         )
                         if "error" not in result and result.get("count", 0) > 0:
                             _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
+                elif rule_type == "email_article":
+                    pass  # handled separately by _run_email_rules_after_refresh below
             except Exception:
                 LOGGER.exception("[automation] error processing rule %s/%s/%s", rule_type, scope, keyword)
+
+        # Email rules run after mark_as_read/dedup to avoid re-emailing articles
+        # that were just auto-marked as read.
+        _run_email_rules_after_refresh(refreshed_feed_urls)
     except Exception:
         LOGGER.exception("[automation] error running automation rules after refresh")
+
+
+def _get_entry_excerpt(entry: object) -> str:
+    """Return a short plain-text excerpt from an entry's content or summary."""
+    import re as _re
+    raw = ""
+    content = getattr(entry, "content", None) or []
+    for c in content:
+        val = getattr(c, "value", None) or ""
+        if val:
+            raw = val
+            break
+    if not raw:
+        raw = str(getattr(entry, "summary", None) or "")
+    # Strip HTML tags
+    plain = _re.sub(r"<[^>]+>", " ", raw)
+    plain = " ".join(plain.split())
+    return plain[:300]
+
+
+def _is_local_dev_feed(feed_url: str) -> bool:
+    """Return True for feeds served by Lectio itself (bypass refresh cooldown)."""
+    try:
+        return urlparse(feed_url).path.startswith("/dev/feeds/")
+    except Exception:
+        return False
+
+
+def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
+    import re as _re
+    if not keyword:
+        return False
+    try:
+        if is_regex:
+            pattern = _re.compile(keyword, _re.IGNORECASE)
+            match_fn = lambda t: bool(pattern.search(t)) if t else False
+        else:
+            kw_lower = keyword.lower()
+            match_fn = lambda t: kw_lower in (t or "").lower()
+    except _re.error:
+        return False
+
+    title = str(getattr(entry, "title", None) or "")
+    body = ""
+    if search_in in ("body", "both"):
+        for c in (getattr(entry, "content", None) or []):
+            body += (getattr(c, "value", None) or "") + " "
+        body += str(getattr(entry, "summary", None) or "")
+
+    if search_in == "body":
+        return match_fn(body)
+    if search_in == "both":
+        return match_fn(title) or match_fn(body)
+    return match_fn(title)
+
+
+_EMAIL_AUTO_PER_RUN_CAP = 10  # max immediate emails per refresh cycle
+
+
+def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Send or queue email_article rule matches for freshly-refreshed feeds."""
+    if not is_email_configured():
+        return
+    if not refreshed_feed_urls:
+        return
+
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder"
+                and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        email_rules = [
+            r for r in all_rules
+            if r.get("enabled") and r.get("type") == "email_article" and r.get("email_to")
+        ]
+        if not email_rules:
+            return
+
+        immediate_sent = 0
+        now_str = datetime.now().isoformat()
+
+        for rule in email_rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                delivery = str(rule.get("delivery") or "immediately")
+                email_to = str(rule.get("email_to") or "")
+                batch_count = int(rule.get("batch_count") or 0)
+                cc_me = bool(rule.get("cc_me"))
+                # Suppress Cc when profile email is already the To recipient
+                cc_addr = (
+                    profile_email
+                    if cc_me and profile_email and profile_email.lower() != email_to.lower()
+                    else None
+                )
+
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+
+                    for feed_url in refreshed_feed_urls:
+                        # Scope check
+                        if scope == "global":
+                            in_scope = True
+                        elif scope == "folder":
+                            try:
+                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
+                            except (ValueError, TypeError):
+                                in_scope = False
+                        elif scope == "feed":
+                            in_scope = scope_id == feed_url
+                        else:
+                            in_scope = False
+                        if not in_scope:
+                            continue
+
+                        for entry in reader.get_entries(feed=feed_url):
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    f = reader.get_feed(fu)
+                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+
+                            article = {
+                                "feed_url": fu,
+                                "entry_id": str(entry.id),
+                                "title": str(entry.title or ""),
+                                "link": str(entry.link or ""),
+                                "feed_title": feed_title_cache.get(fu, fu),
+                                "excerpt": _get_entry_excerpt(entry),
+                            }
+
+                            if delivery == "immediately":
+                                if immediate_sent >= _EMAIL_AUTO_PER_RUN_CAP:
+                                    continue
+                                ok, err = send_article_email(
+                                    get_resend_api_key(), get_resend_from(), email_to,
+                                    article["title"], article["feed_title"],
+                                    article["link"], article["excerpt"],
+                                    cc_addr=cc_addr,
+                                )
+                                if ok:
+                                    immediate_sent += 1
+                                    with get_meta_connection() as conn:
+                                        _log_auto_run(conn, now_str, "email_article", scope, scope_id, keyword, {
+                                            "count": 1,
+                                            "entries": [article],
+                                        })
+                                else:
+                                    LOGGER.warning("[email-auto] send failed: %s", err)
+                            else:
+                                # batch mode — queue for digest
+                                with get_meta_connection() as conn:
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO email_batch_queue"
+                                        " (rule_scope, rule_scope_id, rule_keyword, queued_at,"
+                                        "  feed_url, entry_id, title, link, feed_title, excerpt,"
+                                        "  email_to, cc_me)"
+                                        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                        (scope, scope_id, keyword, now_str,
+                                         fu, article["entry_id"], article["title"],
+                                         article["link"], article["feed_title"], article["excerpt"],
+                                         email_to, 1 if cc_me else 0),
+                                    )
+                                    # Flush immediately if batch_count threshold is reached
+                                    if batch_count > 0:
+                                        pending = conn.execute(
+                                            "SELECT COUNT(*) FROM email_batch_queue"
+                                            " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=?"
+                                            " AND email_to=?",
+                                            (scope, scope_id, keyword, email_to),
+                                        ).fetchone()[0]
+                                        if pending >= batch_count:
+                                            _flush_email_batch_for_rule(
+                                                conn, scope, scope_id, keyword, email_to,
+                                                cc_addr, now_str,
+                                            )
+            except Exception:
+                LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[email-auto] error in _run_email_rules_after_refresh")
+
+
+def _flush_email_batch_for_rule(
+    conn: "sqlite3.Connection",
+    scope: str, scope_id: str, keyword: str, email_to: str,
+    cc_addr: str | None, now_str: str,
+) -> None:
+    """Send a digest email for one rule's queued entries and clear the queue."""
+    rows = conn.execute(
+        "SELECT id, title, link, feed_title, excerpt, cc_me FROM email_batch_queue"
+        " WHERE rule_scope=? AND rule_scope_id=? AND rule_keyword=? AND email_to=?",
+        (scope, scope_id, keyword, email_to),
+    ).fetchall()
+    if not rows:
+        return
+    articles = [
+        {"title": r["title"], "link": r["link"], "feed_title": r["feed_title"], "excerpt": r["excerpt"]}
+        for r in rows
+    ]
+    use_cc = cc_addr if any(r["cc_me"] for r in rows) else None
+    ok, err = send_digest_email(
+        get_resend_api_key(), get_resend_from(), email_to, articles, cc_addr=use_cc,
+    )
+    if ok:
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM email_batch_queue WHERE id IN ({placeholders})", ids)
+        _log_auto_run(conn, now_str, "email_article", scope, scope_id, keyword, {
+            "count": len(articles),
+            "entries": [{"feed_url": "", "entry_id": "", "title": a["title"],
+                         "link": a["link"], "feed_title": a["feed_title"]} for a in articles],
+        })
+    else:
+        LOGGER.warning("[email-auto] digest send failed for %s/%s: %s", scope, keyword, err)
+
+
+def _flush_all_email_batches() -> None:
+    """Flush all pending batch queues — called by daily maintenance."""
+    if not is_email_configured():
+        return
+    try:
+        with get_meta_connection() as conn:
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+            groups = conn.execute(
+                "SELECT DISTINCT rule_scope, rule_scope_id, rule_keyword, email_to, MAX(cc_me) as cc_me"
+                " FROM email_batch_queue GROUP BY rule_scope, rule_scope_id, rule_keyword, email_to",
+            ).fetchall()
+        for g in groups:
+            cc_addr = profile_email if g["cc_me"] and profile_email else None
+            with get_meta_connection() as conn:
+                _flush_email_batch_for_rule(
+                    conn,
+                    str(g["rule_scope"]), str(g["rule_scope_id"]),
+                    str(g["rule_keyword"]), str(g["email_to"]),
+                    cc_addr, datetime.now().isoformat(),
+                )
+    except Exception:
+        LOGGER.exception("[email-auto] error flushing all email batches")
 
 
 reader_api = ReaderApi(READER_DB_PATH)
@@ -3364,6 +3692,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_lead_image_in_article": bool(_disp.get("show_lead_image_in_article", 1)),
             "show_lead_image_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)),
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
+            "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "backoff_active": _backoff_active,
@@ -5531,7 +5861,14 @@ def _run_daily_maintenance() -> None:
     except Exception:
         LOGGER.exception("[maintenance] VACUUM starred-archive failed")
 
-    # 4. YouTube subscription sync (if configured).
+    # 4. Flush pending email batch queues.
+    try:
+        _flush_all_email_batches()
+        LOGGER.info("[maintenance] email batch flush done")
+    except Exception:
+        LOGGER.exception("[maintenance] email batch flush failed")
+
+    # 5. YouTube subscription sync (if configured).
     if get_yt_api_key() and get_yt_channel_id():
         try:
             result = _run_youtube_sync()
@@ -6198,6 +6535,75 @@ def home(
             "profile_email": profile_email,
         },
     )
+
+
+@app.get("/dev/feeds/email-match.xml")
+def dev_feed_email_match():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed(
+        feed_id="email-match",
+        title="Lectio Dev — Email Match",
+        item_title_prefix="MATCH",
+        count=5,
+    )
+
+
+@app.get("/dev/feeds/email-skip.xml")
+def dev_feed_email_skip():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed(
+        feed_id="email-skip",
+        title="Lectio Dev — Email Skip",
+        item_title_prefix="SKIP",
+        count=5,
+    )
+
+
+def _make_dev_feed(feed_id: str, title: str, item_title_prefix: str, count: int) -> Response:
+    """Generate a fresh RSS 2.0 feed on every request (new GUIDs + pub dates)."""
+    import uuid
+    now_ts = time.time()
+    items_xml = ""
+    for i in range(count):
+        guid = str(uuid.uuid4())
+        pub_date = time.strftime(
+            "%a, %d %b %Y %H:%M:%S +0000",
+            time.gmtime(now_ts - i * 60),
+        )
+        items_xml += (
+            f"<item>"
+            f"<title>{item_title_prefix}: Dev article {i + 1} ({int(now_ts)})</title>"
+            f"<link>https://example.com/dev/{feed_id}/{int(now_ts)}/{i}</link>"
+            f"<guid isPermaLink='false'>{guid}</guid>"
+            f"<pubDate>{pub_date}</pubDate>"
+            f"<description>This is a dev test entry for rule testing.</description>"
+            f"</item>\n"
+        )
+    pub_date_feed = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now_ts))
+    rss = (
+        "<?xml version='1.0' encoding='UTF-8'?>\n"
+        "<rss version='2.0'><channel>\n"
+        f"<title>{title}</title>\n"
+        "<link>https://example.com</link>\n"
+        f"<description>{title}</description>\n"
+        f"<lastBuildDate>{pub_date_feed}</lastBuildDate>\n"
+        f"{items_xml}"
+        "</channel></rss>"
+    )
+    return Response(content=rss, media_type="application/rss+xml")
+
+
+@app.post("/dev/flush-email-batch")
+def dev_flush_email_batch():
+    if not DEBUG_MODE:
+        return JSONResponse({"ok": False, "error": "Debug mode not enabled."}, status_code=403)
+    try:
+        _flush_all_email_batches()
+        return JSONResponse({"ok": True})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.get("/debug/starred-archive/largest")
@@ -7296,7 +7702,7 @@ def refresh_feed(
     normalized_read_filter = normalize_read_filter(read_filter)
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
-    retry_after_seconds = check_and_mark_manual_refresh()
+    retry_after_seconds = 0 if _is_local_dev_feed(feed_url) else check_and_mark_manual_refresh()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = (

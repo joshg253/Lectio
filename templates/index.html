@@ -1876,44 +1876,63 @@
         </div>
       </div>
       <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>
-        <dl class="feed-properties-grid">
-          <dt>Thumbnails</dt>
-          <dd>
-            <select id="feed-prop-strategy" class="feed-prop-strategy-select">
-              <option value="auto">Auto-detect</option>
-              <option value="inline">Feed content only</option>
-              <option value="og_scrape">Source scraping</option>
-              <option value="none">None</option>
-            </select>
-            <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
-          </dd>
-        </dl>
-        <h4 class="feed-prop-section-title">Image display</h4>
-        <div class="feed-prop-toggles">
-          <label class="feed-prop-toggle-row">
-            <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
-            <span>Use as thumbnail in post list</span>
-          </label>
-          <label class="feed-prop-toggle-row">
-            <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
-            <span>Show image at top of article</span>
-          </label>
-          <label class="feed-prop-toggle-row">
-            <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
-              <option value="-1">Caption: auto (suppress junk)</option>
-              <option value="1">Caption: always show</option>
-              <option value="0">Caption: never show</option>
-            </select>
-          </label>
+        <!-- YouTube feeds: simplified controls -->
+        <div id="feed-prop-yt-section" hidden>
+          <h4 class="feed-prop-section-title">YouTube options</h4>
+          <div class="feed-prop-toggles">
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-hide-shorts" class="feed-prop-checkbox" />
+              <span>Hide Shorts (auto-mark as read at fetch time)</span>
+            </label>
+          </div>
         </div>
-        <h4 class="feed-prop-section-title">
-          Strategy comparison
-          <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
-            <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
-          </button>
-        </h4>
-        <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
-        <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
+        <!-- Non-YouTube feeds: image strategy + display controls -->
+        <div id="feed-prop-img-section">
+          <dl class="feed-properties-grid">
+            <dt>Thumbnails</dt>
+            <dd>
+              <select id="feed-prop-strategy" class="feed-prop-strategy-select">
+                <option value="auto">Auto-detect</option>
+                <option value="inline">Feed content only</option>
+                <option value="og_scrape">Source scraping</option>
+                <option value="none">None</option>
+              </select>
+              <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
+            </dd>
+          </dl>
+          <h4 class="feed-prop-section-title">Image display</h4>
+          <div class="feed-prop-toggles">
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
+              <span>Use as thumbnail in post list</span>
+            </label>
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
+              <span>Show image at top of article</span>
+            </label>
+            <label class="feed-prop-toggle-row">
+              <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
+                <option value="-1">Caption: auto (suppress junk)</option>
+                <option value="1">Caption: always show</option>
+                <option value="0">Caption: never show</option>
+              </select>
+            </label>
+          </div>
+          <h4 class="feed-prop-section-title">
+            Strategy comparison
+            <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
+              <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
+            </button>
+          </h4>
+          <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
+          <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
+        </div>
+        <!-- Dev feed: manual batch flush -->
+        <div id="feed-prop-dev-section" hidden>
+          <h4 class="feed-prop-section-title">Dev tools</h4>
+          <button type="button" id="feed-prop-flush-batch-btn" class="feed-prop-refresh-btn">Flush email batch queue</button>
+          <span id="feed-prop-flush-batch-status" class="feed-prop-strategy-hint"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -3113,6 +3132,12 @@
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
     const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
+    const feedPropYtSection = document.getElementById('feed-prop-yt-section');
+    const feedPropImgSection = document.getElementById('feed-prop-img-section');
+    const feedPropDevSection = document.getElementById('feed-prop-dev-section');
+    const feedPropHideShorts = document.getElementById('feed-prop-hide-shorts');
+    const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
+    const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
     document.querySelectorAll('[data-feed-prop-tab]').forEach(btn => {
       btn.addEventListener('click', () => {
         const tab = btn.getAttribute('data-feed-prop-tab');
@@ -4028,6 +4053,11 @@
       if (feedPropShowThumb) feedPropShowThumb.checked = true;
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropCaptionMode) feedPropCaptionMode.value = '-1';
+      if (feedPropHideShorts) feedPropHideShorts.checked = false;
+      if (feedPropYtSection) feedPropYtSection.hidden = true;
+      if (feedPropImgSection) feedPropImgSection.hidden = false;
+      if (feedPropDevSection) feedPropDevSection.hidden = true;
+      if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
       if (feedPropUnsubscribeBtn) feedPropUnsubscribeBtn.setAttribute('hidden', '');
       const activePost = document.querySelector('.post-item.active');
       const activeEntryId = (activePost?.getAttribute('data-post-feed-url') === feedUrl)
@@ -4090,30 +4120,52 @@
         setFeedPropText(feedPropReceived, data.last_received);
         setFeedPropText(feedPropLastPost, data.last_post);
 
-        if (feedPropStrategy) {
-          feedPropStrategy.value = data.image_strategy || 'auto';
-          feedPropStrategy.dataset.feedUrl = feedUrl;
-        }
-        if (feedPropStrategyHint) {
-          const detected = data.image_strategy_detected;
-          const isAuto = data.image_strategy === 'auto';
-          feedPropStrategyHint.textContent = (isAuto && detected && detected !== 'unknown')
-            ? `detected: ${detected}` : '';
-        }
+        // Toggle YouTube vs standard tuning sections
+        const isYoutubeFeed = !!data.is_youtube_feed;
+        const isDevFeed = feedUrl.includes('/dev/feeds/');
+        if (feedPropYtSection) feedPropYtSection.hidden = !isYoutubeFeed;
+        if (feedPropImgSection) feedPropImgSection.hidden = isYoutubeFeed;
+        if (feedPropDevSection) feedPropDevSection.hidden = !isDevFeed;
 
-        if (feedPropShowThumb) {
-          feedPropShowThumb.checked = data.show_lead_image_as_thumb !== false;
-          feedPropShowThumb.dataset.feedUrl = feedUrl;
+        if (feedPropHideShorts) {
+          feedPropHideShorts.checked = !!data.hide_shorts;
+          feedPropHideShorts.dataset.feedUrl = feedUrl;
         }
-        if (feedPropShowInArticle) {
-          feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
-          feedPropShowInArticle.dataset.feedUrl = feedUrl;
+        if (feedPropFlushBatchBtn) feedPropFlushBatchBtn.dataset.feedUrl = feedUrl;
+        if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
+
+        if (!isYoutubeFeed) {
+          if (feedPropStrategy) {
+            feedPropStrategy.value = data.image_strategy || 'auto';
+            feedPropStrategy.dataset.feedUrl = feedUrl;
+          }
+          if (feedPropStrategyHint) {
+            const detected = data.image_strategy_detected;
+            const isAuto = data.image_strategy === 'auto';
+            feedPropStrategyHint.textContent = (isAuto && detected && detected !== 'unknown')
+              ? `detected: ${detected}` : '';
+          }
+
+          if (feedPropShowThumb) {
+            feedPropShowThumb.checked = data.show_lead_image_as_thumb !== false;
+            feedPropShowThumb.dataset.feedUrl = feedUrl;
+          }
+          if (feedPropShowInArticle) {
+            feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
+            feedPropShowInArticle.dataset.feedUrl = feedUrl;
+          }
+          if (feedPropCaptionMode) {
+            feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
+            feedPropCaptionMode.dataset.feedUrl = feedUrl;
+          }
+          if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
+
+          if (activeEntryId) {
+            doStrategyRefresh(feedUrl, activeEntryId);
+          } else {
+            renderStrategyGrid(data.strategy_cache || []);
+          }
         }
-        if (feedPropCaptionMode) {
-          feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
-          feedPropCaptionMode.dataset.feedUrl = feedUrl;
-        }
-        if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
 
         if (feedPropUnsubscribeBtn) {
           const folderIds = data.folder_ids || [];
@@ -4124,12 +4176,6 @@
           } else {
             feedPropUnsubscribeBtn.setAttribute('hidden', '');
           }
-        }
-
-        if (activeEntryId) {
-          doStrategyRefresh(feedUrl, activeEntryId);
-        } else {
-          renderStrategyGrid(data.strategy_cache || []);
         }
       } catch (error) {
         setFeedPropText(feedPropTitle, feedUrl);
@@ -4422,6 +4468,28 @@
       const feedUrl = feedPropRefreshBtn.dataset.feedUrl;
       if (!feedUrl) return;
       doStrategyRefresh(feedUrl, feedPropRefreshBtn.dataset.entryId || '');
+    });
+
+    feedPropHideShorts?.addEventListener('change', async () => {
+      const feedUrl = feedPropHideShorts.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'hide_shorts', feedPropHideShorts.checked ? 1 : 0); }
+      catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
+    });
+
+    feedPropFlushBatchBtn?.addEventListener('click', async () => {
+      if (!feedPropFlushBatchStatus) return;
+      feedPropFlushBatchBtn.disabled = true;
+      feedPropFlushBatchStatus.textContent = 'Flushing…';
+      try {
+        const resp = await fetch('/dev/flush-email-batch', { method: 'POST' });
+        const json = await resp.json();
+        feedPropFlushBatchStatus.textContent = json.ok ? 'Done.' : `Error: ${json.error}`;
+      } catch (e) {
+        feedPropFlushBatchStatus.textContent = `Error: ${e.message}`;
+      } finally {
+        feedPropFlushBatchBtn.disabled = false;
+      }
     });
 
     feedPropStratGrid?.addEventListener('click', (e) => {

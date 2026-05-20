@@ -21,14 +21,15 @@ This file is the backlog and staging area for future work.
    - `LECTIO_MAINTENANCE_HOUR` (default 3 am): daily job runs VACUUM on meta/thumb/archive DBs, prunes old rule run log rows (90-day retention), purges orphaned DB rows, and syncs YouTube subscriptions.
    - Auth (`LECTIO_USERNAME` / `LECTIO_PASSWORD` / `LECTIO_SECRET_KEY`) stays in `.env`.
 9. ~~**Instapaper integration**~~ ✓ — "Save to Instapaper" button in the entry toolbar. Credentials stored in Settings → Integrations. Backend POSTs to the Instapaper Add API with Basic Auth; includes entry tags + "viaLectio" tag; frontend shows a toast.
-10. **Email Automation** — server-side Email Article rule execution at fetch time. Pending items:
-    - *Immediately* mode: fire at fetch time; cap per-run (e.g. 10/run); per-recipient cooldown (e.g. 1 article/5 min from same feed).
-    - *Batch digest* mode: queue table; flush on N articles OR daily maintenance window.
-    - Global daily counter in `app_settings`; hard-stop at ~80/day.
-    - *Cc me* checkbox: apply `profile_email` as Cc on every send when checked.
-11. **Feed Properties v2 — Tuning tab** ✓ (tab added; advanced content-pull and YouTube-strategy scoping still pending)
-    - Add a way to pull in content when none of the 4 strategies produce what's expected (e.g. manual URL override, custom scrape rule, or fallback chain config).
-    - Auto-hide or disable the "YouTube" strategy option when the feed is not in the YouTube folder (or is not a youtube.com feed).
+10. ~~**Email Automation**~~ ✓ — server-side Email Article rule execution at every feed refresh.
+    - *Dev feeds*: `GET /dev/feeds/email-match.xml` and `email-skip.xml` (debug mode only) generate fresh entries on every request; dev feeds bypass the 60-second manual refresh cooldown. "Flush email batch queue" button in Feed Properties for dev feeds.
+    - *Immediately* mode: sends one email per matching new entry (capped at 10/cycle). Entry must have been added within the last 15 minutes to qualify as "new."
+    - *Batch digest* mode: entries queued in `email_batch_queue`; flushed when `batch_count` threshold is reached OR during daily maintenance. Digest email groups all queued articles in a single styled email.
+    - *Cc me*: adds `profile_email` as Cc; suppressed if profile email already matches the To address.
+    - Email rules run after mark_as_read/dedup to avoid emailing articles that were just auto-read.
+11. ~~**Feed Properties v2 — Tuning tab**~~ ✓
+    - YouTube feeds show only "Hide Shorts" in the Tuning tab; image strategy and display controls are hidden for YouTube feeds.
+    - *Hide Shorts*: per-feed toggle; when enabled, entries whose link contains `/shorts/` are auto-marked as read at fetch time.
 12. **Page-to-Feed (Scraping)** — for truly feedless pages, generate synthetic feeds via scraping or change-detection (RSSHub, FetchRSS, or built-in scraper).
 
 ## Backburner
