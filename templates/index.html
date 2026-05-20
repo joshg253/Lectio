@@ -7089,6 +7089,8 @@
             contactSel.appendChild(meOpt);
           }
           for (const c of (window.EMAIL_CONTACTS || [])) {
+            // Skip contacts that duplicate the profile email (already shown as "Me")
+            if (window.PROFILE_EMAIL && c.address.toLowerCase() === window.PROFILE_EMAIL.toLowerCase()) continue;
             const opt = document.createElement('option');
             opt.value = c.address;
             opt.textContent = c.label + ' (' + c.address + ')';
@@ -7444,13 +7446,17 @@
         meLbl.appendChild(meBadge);
         meRow.appendChild(meLbl);
         list.appendChild(meRow);
+        const meEmailLower = (settingsData?.profile_email || window.PROFILE_EMAIL || '').toLowerCase();
+        let displayIdx = 0;
         settContacts.forEach((c, idx) => {
+          // Skip contacts that duplicate the profile email (already shown as "Me")
+          if (meEmailLower && c.address.toLowerCase() === meEmailLower) return;
           const row = document.createElement('div');
           row.className = 'sett-contact-row';
           const lbl = document.createElement('span');
           lbl.className = 'sett-contact-label';
           lbl.textContent = c.label ? `${c.label} <${c.address}>` : c.address;
-          if (idx === 0) {
+          if (displayIdx === 0) {
             const badge = document.createElement('span');
             badge.className = 'sett-contact-default-badge';
             badge.textContent = 'default';
@@ -7467,6 +7473,7 @@
           row.appendChild(lbl);
           row.appendChild(del);
           list.appendChild(row);
+          displayIdx++;
         });
       }
 

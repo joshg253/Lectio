@@ -7244,20 +7244,22 @@ def get_all_settings():
         return "••••••••" if val else ""
 
     with get_meta_connection() as conn:
-        contacts_raw = get_setting(conn, "email_contacts") or "[]"
         profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
         profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
         maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
+        # Contacts live in the email_contacts table; filter out the profile email
+        # since it's already represented by the synthetic "Me" row in the UI.
+        all_contacts = get_email_contacts(conn)
+        profile_lower = profile_email.lower()
+        contacts = [
+            {"label": c["label"], "address": c["address"]}
+            for c in all_contacts
+            if c["address"].lower() != profile_lower
+        ]
 
     yt_api_key = get_yt_api_key()
     resend_key = get_resend_api_key()
     instapaper_pw = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
-
-    import json as _json
-    try:
-        contacts = _json.loads(contacts_raw)
-    except Exception:
-        contacts = []
 
     return JSONResponse({
         "profile_name": profile_name,
@@ -7295,9 +7297,31 @@ async def save_all_settings(request: Request):
         "email_contacts",
     }
 
+    import json as _json
     with get_meta_connection() as conn:
         for key, value in body.items():
             if key not in _ALLOWED:
+                continue
+            if key == "email_contacts":
+                # Contacts are stored in the email_contacts table, not app_settings.
+                # The payload is a JSON array of {label, address} objects.
+                try:
+                    incoming = _json.loads(str(value)) if isinstance(value, str) else list(value)
+                except Exception:
+                    incoming = []
+                profile_email_lower = (get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or "").lower()
+                # Clear all existing contacts, then re-insert the full list.
+                # Keep entries whose address matches profile_email out — they're synthetic "Me".
+                conn.execute("DELETE FROM email_contacts")
+                for c in incoming:
+                    addr = str(c.get("address") or "").strip()
+                    label = str(c.get("label") or "").strip()
+                    if not addr or addr.lower() == profile_email_lower:
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO email_contacts (label, address) VALUES (?, ?)",
+                        (label, addr),
+                    )
                 continue
             str_val = str(value).strip() if value is not None else ""
             # Don't overwrite a real secret with the masked placeholder
