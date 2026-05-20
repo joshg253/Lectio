@@ -1620,16 +1620,11 @@
       <div id="settings-tab-contacts" class="settings-tab-panel" hidden>
         <p class="settings-hint">Email addresses available when sending articles. The first entry is the default. <strong>~Me</strong> is always available and uses your Profile email.</p>
         <div id="sett-contacts-list" class="sett-contacts-list"></div>
-        <div class="settings-actions">
-          <button type="button" class="settings-save-btn" data-settings-save="contacts">Save contacts</button>
-          <button type="button" id="sett-contact-add-btn" class="settings-secondary-btn">+ Add</button>
-        </div>
-        <div id="sett-contact-form" class="sett-contact-form" hidden>
+        <div class="sett-contact-form">
           <input type="text" id="sett-contact-label" class="settings-input" placeholder="Label (e.g. Work, Family)" maxlength="80" />
           <input type="email" id="sett-contact-email" class="settings-input" placeholder="address@example.com" maxlength="200" />
           <div class="settings-actions">
             <button type="button" id="sett-contact-save" class="settings-save-btn">Add</button>
-            <button type="button" id="sett-contact-cancel" class="settings-secondary-btn">Cancel</button>
           </div>
         </div>
       </div>
@@ -7426,81 +7421,83 @@
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
         settContacts = d.contacts || [];
+        settDefaultAddress = d.email_to_default || '';
         settRenderContacts();
       }
+
+      let settDefaultAddress = '';
 
       function settRenderContacts() {
         const list = document.getElementById('sett-contacts-list');
         if (!list) return;
         list.innerHTML = '';
-        // ~Me row (always first, read-only, derived from profile email)
         const meEmail = settingsData?.profile_email || window.PROFILE_EMAIL || '';
+        const meEmailLower = meEmail.toLowerCase();
+        const currentDefault = settDefaultAddress || settingsData?.email_to_default || '';
+
+        function makeSetDefaultBtn(address) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'sett-contact-set-default' + (address.toLowerCase() === currentDefault.toLowerCase() ? ' sett-contact-set-default--active' : '');
+          btn.title = address.toLowerCase() === currentDefault.toLowerCase() ? 'Default' : 'Set as default';
+          btn.textContent = address.toLowerCase() === currentDefault.toLowerCase() ? '★' : '☆';
+          btn.addEventListener('click', async () => {
+            settDefaultAddress = address;
+            settRenderContacts();
+            await settSave('default');
+          });
+          return btn;
+        }
+
+        // Me row (always first, derived from profile email)
         const meRow = document.createElement('div');
         meRow.className = 'sett-contact-row sett-contact-row--me';
         const meLbl = document.createElement('span');
         meLbl.className = 'sett-contact-label';
         meLbl.textContent = meEmail ? `Me <${meEmail}>` : 'Me (set your Profile email first)';
-        const meBadge = document.createElement('span');
-        meBadge.className = 'sett-contact-default-badge';
-        meBadge.textContent = 'auto';
-        meLbl.appendChild(meBadge);
         meRow.appendChild(meLbl);
+        if (meEmail) meRow.appendChild(makeSetDefaultBtn(meEmail));
         list.appendChild(meRow);
-        const meEmailLower = (settingsData?.profile_email || window.PROFILE_EMAIL || '').toLowerCase();
-        let displayIdx = 0;
+
         settContacts.forEach((c, idx) => {
-          // Skip contacts that duplicate the profile email (already shown as "Me")
           if (meEmailLower && c.address.toLowerCase() === meEmailLower) return;
           const row = document.createElement('div');
           row.className = 'sett-contact-row';
           const lbl = document.createElement('span');
           lbl.className = 'sett-contact-label';
           lbl.textContent = c.label ? `${c.label} <${c.address}>` : c.address;
-          if (displayIdx === 0) {
-            const badge = document.createElement('span');
-            badge.className = 'sett-contact-default-badge';
-            badge.textContent = 'default';
-            lbl.appendChild(badge);
-          }
+          row.appendChild(lbl);
+          row.appendChild(makeSetDefaultBtn(c.address));
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'sett-contact-del';
           del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">close</span>';
-          del.addEventListener('click', () => {
+          del.addEventListener('click', async () => {
             settContacts.splice(idx, 1);
             settRenderContacts();
+            await settSave('contacts');
           });
-          row.appendChild(lbl);
           row.appendChild(del);
           list.appendChild(row);
-          displayIdx++;
         });
       }
 
-      document.getElementById('sett-contact-add-btn')?.addEventListener('click', () => {
-        const form = document.getElementById('sett-contact-form');
-        if (form) { form.hidden = false; document.getElementById('sett-contact-label')?.focus(); }
-      });
-      document.getElementById('sett-contact-cancel')?.addEventListener('click', () => {
-        const form = document.getElementById('sett-contact-form');
-        if (form) form.hidden = true;
-      });
-      document.getElementById('sett-contact-save')?.addEventListener('click', () => {
+      document.getElementById('sett-contact-save')?.addEventListener('click', async () => {
         const label = document.getElementById('sett-contact-label')?.value.trim() || '';
         const address = document.getElementById('sett-contact-email')?.value.trim() || '';
-        if (!address) return;
+        if (!address) { document.getElementById('sett-contact-email')?.focus(); return; }
         if (label.toLowerCase() === 'me') {
           showToastMessage('"Me" is reserved for your Profile email — choose a different label.');
           return;
         }
         settContacts.push({ label, address });
         settRenderContacts();
-        const form = document.getElementById('sett-contact-form');
-        if (form) form.hidden = true;
         const li = document.getElementById('sett-contact-label');
         const ei = document.getElementById('sett-contact-email');
         if (li) li.value = '';
         if (ei) ei.value = '';
+        li?.focus();
+        await settSave('contacts');
       });
 
       async function settSave(scope) {
@@ -7512,6 +7509,8 @@
           payload = { tz_display: g('sett-tz-display'), maintenance_hour: g('sett-maint-hour') };
         } else if (scope === 'contacts') {
           payload = { email_contacts: JSON.stringify(settContacts) };
+        } else if (scope === 'default') {
+          payload = { email_to: settDefaultAddress };
         } else if (scope === 'email') {
           payload = { resend_api_key: g('sett-resend-key'), email_from: g('sett-email-from') };
         } else if (scope === 'integrations') {

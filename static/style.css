@@ -4764,5 +4764,8 @@ textarea.hl-draft-pattern {
 .sett-contact-del { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0.1rem; display: flex; align-items: center; }
 .sett-contact-del:hover { color: var(--danger, #c00); }
 .sett-contact-del .material-symbols-rounded { font-size: 1rem; }
-.sett-contact-row--me { opacity: 0.65; font-style: italic; }
+.sett-contact-set-default { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0.1rem 0.25rem; font-size: 1rem; line-height: 1; }
+.sett-contact-set-default--active { color: var(--accent); }
+.sett-contact-set-default:not(.sett-contact-set-default--active):hover { color: var(--accent); opacity: 0.6; }
+.sett-contact-row--me { font-style: italic; }
 .sett-contact-form { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0 0; }

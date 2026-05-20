@@ -202,7 +202,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520n")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520o")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -7251,6 +7251,7 @@ def get_all_settings():
         profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
         profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
         maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
+        email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or ""
         # Contacts live in the email_contacts table; filter out the profile email
         # since it's already represented by the synthetic "Me" row in the UI.
         all_contacts = get_email_contacts(conn)
@@ -7282,6 +7283,7 @@ def get_all_settings():
         "instapaper_password_set": bool(instapaper_pw),
         "instapaper_password_masked": _masked(instapaper_pw),
         "contacts": contacts,
+        "email_to_default": email_to_default,
     })
 
 
@@ -7298,7 +7300,7 @@ async def save_all_settings(request: Request):
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
-        "email_contacts",
+        "email_contacts", EMAIL_TO_SETTING_KEY,
     }
 
     import json as _json
