@@ -6298,10 +6298,14 @@ def home(
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
         highlight_rules = get_highlight_keywords(conn)
-        email_contacts = get_email_contacts(conn)
-        email_bcc = get_setting(conn, EMAIL_BCC_SETTING_KEY) or ""
         profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
         profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+        _profile_lower = profile_email.lower()
+        email_contacts = [
+            c for c in get_email_contacts(conn)
+            if c["address"].lower() != _profile_lower
+        ]
+        email_bcc = get_setting(conn, EMAIL_BCC_SETTING_KEY) or ""
         youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
         youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
         # Build inactive feed list (feed_url + folder membership).
