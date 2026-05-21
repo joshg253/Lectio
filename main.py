@@ -7020,9 +7020,8 @@ def create_scraped_feed_route(
     if mode not in ("change_detect", "link_list"):
         mode = "change_detect"
 
-    if not folder_id:
-        return RedirectResponse(url="/?message=Folder+required", status_code=303)
-    target_folder_id = folder_id
+    with get_meta_connection() as conn:
+        target_folder_id = folder_id or get_root_folder_id(conn)
 
     try:
         with get_meta_connection() as conn:
