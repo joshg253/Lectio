@@ -42,6 +42,7 @@ from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import scraper_service
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
@@ -166,6 +167,9 @@ THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
 STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
 THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
 ROOT_FOLDER_NAME = "All Feeds"
+_LECTIO_FOLDER_NAME = "_Lectio"
+
+scraper_service.init(DATA_DIR)
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 15
 MANUAL_REFRESH_COOLDOWN_SECONDS = 60
@@ -202,7 +206,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521u")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521v")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -505,6 +509,26 @@ async def lifespan(app: FastAPI):
         daemon=True,
         name="daily-maintenance",
     ).start()
+
+    # In debug mode, auto-subscribe dev feeds to the _Lectio folder.
+    if DEBUG_MODE:
+        def _subscribe_dev_feeds() -> None:
+            base = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+            dev_urls = [
+                f"{base}/dev/feeds/email-match.xml",
+                f"{base}/dev/feeds/email-skip.xml",
+            ]
+            with get_meta_connection() as conn:
+                folder_id = _get_lectio_folder_id(conn)
+            if not folder_id:
+                return
+            for url in dev_urls:
+                try:
+                    add_feed_to_folder(url, folder_id)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_subscribe_dev_feeds, daemon=True, name="dev-feeds-subscribe").start()
 
     try:
         yield
@@ -1386,6 +1410,34 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scraped_feeds (
+                id TEXT PRIMARY KEY,
+                source_url TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                selector TEXT,
+                feed_title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_scraped_at TEXT,
+                last_content_hash TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scraped_entries (
+                id TEXT PRIMARY KEY,
+                scraped_feed_id TEXT NOT NULL REFERENCES scraped_feeds(id),
+                entry_url TEXT,
+                title TEXT NOT NULL,
+                content TEXT,
+                published_at TEXT NOT NULL,
+                hidden INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(scraped_feed_id, entry_url)
+            )
+            """
+        )
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -1398,6 +1450,15 @@ def ensure_meta_schema() -> None:
             conn.execute(
                 "INSERT INTO folders (name, parent_id) VALUES (?, NULL)",
                 (ROOT_FOLDER_NAME,),
+            )
+        # Ensure the _Lectio system folder exists (used for FakeFeedz and dev feeds).
+        root_id = conn.execute(
+            "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL", (ROOT_FOLDER_NAME,)
+        ).fetchone()
+        if root_id:
+            conn.execute(
+                "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
+                (_LECTIO_FOLDER_NAME, int(root_id["id"])),
             )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
@@ -1724,6 +1785,15 @@ def get_root_folder_id(conn: sqlite3.Connection) -> int:
     if not row:
         raise RuntimeError("Root folder is missing.")
     return int(row["id"])
+
+
+def _get_lectio_folder_id(conn: sqlite3.Connection) -> int | None:
+    root_id = get_root_folder_id(conn)
+    row = conn.execute(
+        "SELECT id FROM folders WHERE name = ? AND parent_id = ?",
+        (_LECTIO_FOLDER_NAME, root_id),
+    ).fetchone()
+    return int(row["id"]) if row else None
 
 
 def get_descendant_folder_ids(conn: sqlite3.Connection, folder_id: int) -> list[int]:
@@ -5620,8 +5690,13 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
             (feed_url,),
         ).fetchone()
     if not still_exists:
+        feed_id = scraper_service.scraped_feed_id_from_url(feed_url)
         with get_reader() as reader:
-            reader.delete_feed(feed_url, missing_ok=True)
+            if feed_id:
+                with get_meta_connection() as _conn:
+                    scraper_service.delete_scraped_feed(_conn, reader, feed_id)
+            else:
+                reader.delete_feed(feed_url, missing_ok=True)
     invalidate_meta_structure_cache()
 
 
@@ -5809,6 +5884,8 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
                 len(feed_urls),
             )
         app.state.last_scheduled_refresh_started_at = time.monotonic()
+        with get_meta_connection() as conn:
+            scraper_service.refresh_all_scraped_feeds(conn)
         feed_refresh_service.update_feeds(feed_urls)
         _run_automation_after_refresh(feed_urls)
 
@@ -6245,6 +6322,7 @@ def home(
     entry_id: str | None = None,
     q: str | None = None,
     message: str | None = None,
+    no_rss_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
 ):
@@ -6549,6 +6627,7 @@ def home(
             "posts": posts,
             "selected_entry": selected_entry,
             "message": message,
+            "no_rss_url": no_rss_url,
             "auto_refresh_enabled": getattr(app.state, "auto_refresh_minutes", 0) > 0,
             "auto_refresh_minutes": getattr(app.state, "auto_refresh_minutes", 0),
             "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
@@ -6903,7 +6982,11 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         candidates = discover_feed_urls(url)
         if not candidates:
             return RedirectResponse(
-                url=f"/?folder_id={folder_id}&message={quote_plus('No RSS/Atom feed found at that URL. Try pasting the feed URL directly.')}",
+                url=(
+                    f"/?folder_id={folder_id}"
+                    f"&message={quote_plus('No RSS/Atom feed found at that URL.')}"
+                    f"&no_rss_url={quote_plus(url)}"
+                ),
                 status_code=303,
             )
         target_url = candidates[0]
@@ -6919,6 +7002,71 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         message = f"Feed add failed: {exc}"
     return RedirectResponse(
         url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@app.post("/scraped-feeds")
+def create_scraped_feed_route(
+    source_url: str = Form(...),
+    mode: str = Form(...),
+    selector: str = Form(default=""),
+    feed_title: str = Form(default=""),
+    folder_id: int | None = Form(default=None),
+):
+    source_url = source_url.strip()
+    if not source_url:
+        return RedirectResponse(url="/?message=URL+required", status_code=303)
+    if mode not in ("change_detect", "link_list"):
+        mode = "change_detect"
+
+    with get_meta_connection() as conn:
+        target_folder_id = folder_id or _get_lectio_folder_id(conn)
+    if not target_folder_id:
+        return RedirectResponse(
+            url=f"/?message={quote_plus('Could not find the _Lectio folder.')}",
+            status_code=303,
+        )
+
+    try:
+        with get_meta_connection() as conn:
+            with get_reader() as reader:
+                feed_id, file_url = scraper_service.create_scraped_feed(
+                    conn, reader, source_url, mode,
+                    selector.strip() or None,
+                    feed_title.strip() or None,
+                )
+            conn.execute(
+                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                (target_folder_id, file_url),
+            )
+    except Exception as exc:
+        LOGGER.warning("[scraper] create failed for %s: %s", source_url, exc)
+        return RedirectResponse(
+            url=f"/?folder_id={target_folder_id}&message={quote_plus(f'Page feed failed: {exc}')}",
+            status_code=303,
+        )
+
+    invalidate_meta_structure_cache()
+    return RedirectResponse(
+        url=f"/?folder_id={target_folder_id}&message={quote_plus('Page feed created.')}",
+        status_code=303,
+    )
+
+
+@app.post("/scraped-feeds/delete")
+def delete_scraped_feed_route(
+    feed_id: str = Form(...),
+    folder_id: int = Form(...),
+):
+    with get_meta_connection() as conn:
+        file_url = scraper_service.feed_file_url(feed_id)
+        conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (file_url,))
+        with get_reader() as reader:
+            scraper_service.delete_scraped_feed(conn, reader, feed_id)
+    invalidate_meta_structure_cache()
+    return RedirectResponse(
+        url=f"/?folder_id={folder_id}&message={quote_plus('Page feed removed.')}",
         status_code=303,
     )
 
@@ -7727,6 +7875,8 @@ def refresh(
             list_feed_url,
             normalized_tag,
         )
+    with get_meta_connection() as conn:
+        scraper_service.refresh_all_scraped_feeds(conn)
     feed_refresh_service.update_feeds(feed_urls)
     _run_automation_after_refresh(feed_urls)
     return RedirectResponse(
@@ -7782,6 +7932,10 @@ def refresh_feed(
             list_feed_url,
             normalized_tag,
         )
+    feed_id = scraper_service.scraped_feed_id_from_url(feed_url)
+    if feed_id:
+        with get_meta_connection() as conn:
+            scraper_service.refresh_scraped_feed_by_id(conn, feed_id)
     feed_refresh_service.update_feeds([feed_url])
     _run_automation_after_refresh({feed_url})
     return RedirectResponse(

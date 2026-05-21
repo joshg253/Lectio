@@ -2997,9 +2997,21 @@ button:hover, .button-link:hover {
   box-shadow: var(--shadow);
   z-index: 1200;
   opacity: 1;
-  pointer-events: none;
+  pointer-events: auto;
   text-align: center;
   transition: opacity 0.5s ease;
+}
+
+.toast-action-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88em;
+  padding: 0;
+  margin-left: 0.4em;
+  text-decoration: underline;
 }
 
 .toast-message.fade-out {
@@ -3184,6 +3196,28 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .action-modal-label {
   font-size: 0.86rem;
   color: var(--muted);
+}
+
+.action-modal-label-hint {
+  font-weight: normal;
+  opacity: 0.75;
+}
+
+.action-modal-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.fakefeedz-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.fakefeedz-mode-label {
+  font-size: 0.9rem;
+  cursor: pointer;
 }
 
 .action-modal-actions {

@@ -130,6 +130,7 @@
             <div class="flyout-panel">
               <button type="button" class="menu-item" data-toggle-panel="add-folder-modal">Folder</button>
               <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
+              <button type="button" class="menu-item" data-toggle-panel="fakefeedz-modal">Page Feed</button>
             </div>
           </div>
           <a
@@ -1252,7 +1253,7 @@
   </script>
 
   {% if message %}
-  <div id="toast-message" class="toast-message">{{ message }}</div>
+  <div id="toast-message" class="toast-message">{{ message }}{% if no_rss_url %} <button type="button" class="toast-action-btn" id="toast-page-feed-btn">Create page feed</button>{% endif %}</div>
   {% endif %}
 
   <form id="context-add-feed-form" method="post" action="/feeds" hidden>
@@ -1500,6 +1501,34 @@
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="add-feed-modal">Cancel</button>
           <button type="submit">Add Feed</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="fakefeedz-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="fakefeedz-modal-title">
+      <div class="modal-header-row">
+        <h3 id="fakefeedz-modal-title" class="action-modal-title">Create Page Feed</h3>
+        <button type="button" class="modal-close" data-close-modal="fakefeedz-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <form method="post" action="/scraped-feeds" class="action-modal-form">
+        <input type="hidden" name="folder_id" id="fakefeedz-folder-id" value="{{ selected_folder_id }}" />
+        <label for="fakefeedz-url" class="action-modal-label">Page URL</label>
+        <input id="fakefeedz-url" name="source_url" type="url" placeholder="https://example.com/" required />
+        <label for="fakefeedz-title" class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional — auto-detected)</span></label>
+        <input id="fakefeedz-title" name="feed_title" placeholder="Detected from page title" />
+        <label class="action-modal-label">Scraping mode</label>
+        <div class="fakefeedz-modes">
+          <label class="fakefeedz-mode-label"><input type="radio" name="mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
+          <label class="fakefeedz-mode-label"><input type="radio" name="mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
+        </div>
+        <label for="fakefeedz-selector" class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
+        <input id="fakefeedz-selector" name="selector" placeholder="e.g. .changelog a, article a" />
+        <p class="action-modal-hint">Narrows what is scraped. For link list, selects the link elements. For change detect, selects the content region to watch.</p>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" data-close-modal="fakefeedz-modal">Cancel</button>
+          <button type="submit">Create Feed</button>
         </div>
       </form>
     </div>
@@ -2425,7 +2454,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #fakefeedz-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -8834,6 +8863,27 @@
         modal.removeAttribute('hidden');
         modal.querySelector('input[name="feed_url"]')?.focus();
       }
+    }
+
+    function openFakeFeedzModal(prefillUrl) {
+      const modal = document.getElementById('fakefeedz-modal');
+      if (!modal) return;
+      if (prefillUrl) {
+        const urlInput = modal.querySelector('#fakefeedz-url');
+        if (urlInput) urlInput.value = prefillUrl;
+      }
+      const folderInput = modal.querySelector('#fakefeedz-folder-id');
+      if (folderInput) folderInput.value = '{{ selected_folder_id }}';
+      modal.removeAttribute('hidden');
+      modal.querySelector('#fakefeedz-url')?.focus();
+    }
+
+    // "Create page feed" button inside the no-RSS toast.
+    const toastPageFeedBtn = document.getElementById('toast-page-feed-btn');
+    if (toastPageFeedBtn) {
+      toastPageFeedBtn.addEventListener('click', () => {
+        openFakeFeedzModal({{ no_rss_url | tojson }});
+      });
     }
 
     async function submitRefreshFormAsync(form) {
