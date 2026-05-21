@@ -206,7 +206,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521w")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521x")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -513,10 +513,14 @@ async def lifespan(app: FastAPI):
     # In debug mode, auto-subscribe dev feeds to the _Lectio folder.
     if DEBUG_MODE:
         def _subscribe_dev_feeds() -> None:
-            base = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+            base = "http://127.0.0.1:8000"
             dev_urls = [
                 f"{base}/dev/feeds/email-match.xml",
+                f"{base}/dev/feeds/email-match.atom",
+                f"{base}/dev/feeds/email-match.json",
                 f"{base}/dev/feeds/email-skip.xml",
+                f"{base}/dev/feeds/email-skip.atom",
+                f"{base}/dev/feeds/email-skip.json",
             ]
             with get_meta_connection() as conn:
                 folder_id = _get_lectio_folder_id(conn)
@@ -6643,61 +6647,137 @@ def home(
 
 
 @app.get("/dev/feeds/email-match.xml")
-def dev_feed_email_match():
+@app.get("/dev/feeds/email-match.rss")
+def dev_feed_email_match_rss():
     if not DEBUG_MODE:
         return Response(status_code=404)
-    return _make_dev_feed(
-        feed_id="email-match",
-        title="Lectio Dev — Email Match",
-        item_title_prefix="MATCH",
-        count=5,
-    )
+    return _make_dev_feed("email-match", "Lectio Dev — Email Match (RSS)", "MATCH", 5, "rss")
+
+
+@app.get("/dev/feeds/email-match.atom")
+def dev_feed_email_match_atom():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed("email-match", "Lectio Dev — Email Match (Atom)", "MATCH", 5, "atom")
+
+
+@app.get("/dev/feeds/email-match.json")
+def dev_feed_email_match_json():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed("email-match", "Lectio Dev — Email Match (JSON Feed)", "MATCH", 5, "json")
 
 
 @app.get("/dev/feeds/email-skip.xml")
-def dev_feed_email_skip():
+@app.get("/dev/feeds/email-skip.rss")
+def dev_feed_email_skip_rss():
     if not DEBUG_MODE:
         return Response(status_code=404)
-    return _make_dev_feed(
-        feed_id="email-skip",
-        title="Lectio Dev — Email Skip",
-        item_title_prefix="SKIP",
-        count=5,
-    )
+    return _make_dev_feed("email-skip", "Lectio Dev — Email Skip (RSS)", "SKIP", 5, "rss")
 
 
-def _make_dev_feed(feed_id: str, title: str, item_title_prefix: str, count: int) -> Response:
-    """Generate a fresh RSS 2.0 feed on every request (new GUIDs + pub dates)."""
-    import uuid
+@app.get("/dev/feeds/email-skip.atom")
+def dev_feed_email_skip_atom():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed("email-skip", "Lectio Dev — Email Skip (Atom)", "SKIP", 5, "atom")
+
+
+@app.get("/dev/feeds/email-skip.json")
+def dev_feed_email_skip_json():
+    if not DEBUG_MODE:
+        return Response(status_code=404)
+    return _make_dev_feed("email-skip", "Lectio Dev — Email Skip (JSON Feed)", "SKIP", 5, "json")
+
+
+def _make_dev_feed(feed_id: str, title: str, prefix: str, count: int, fmt: str) -> Response:
+    """Generate a dev feed in RSS, Atom, or JSON Feed format.
+
+    GUIDs are keyed to the current minute so all three formats produce identical
+    entry IDs when fetched in the same minute — they all advance together.
+    """
+    import json as _json
     now_ts = time.time()
-    items_xml = ""
+    minute = int(now_ts / 60) * 60  # floor to minute boundary
+
+    entries = []
     for i in range(count):
-        guid = str(uuid.uuid4())
-        pub_date = time.strftime(
-            "%a, %d %b %Y %H:%M:%S +0000",
-            time.gmtime(now_ts - i * 60),
+        entry_minute = minute - i * 60
+        entries.append({
+            "id": f"urn:lectio-dev:{feed_id}:{entry_minute}:{i}",
+            "title": f"{prefix}: Dev article {i + 1} ({entry_minute})",
+            "url": f"https://example.com/dev/{feed_id}/{entry_minute}/{i}",
+            "iso": datetime.fromtimestamp(entry_minute, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rfc": time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(entry_minute)),
+        })
+
+    if fmt == "atom":
+        items_xml = ""
+        for e in entries:
+            items_xml += (
+                f"<entry>"
+                f"<id>{e['id']}</id>"
+                f"<title>{e['title']}</title>"
+                f"<link href='{e['url']}' rel='alternate'/>"
+                f"<published>{e['iso']}</published>"
+                f"<updated>{e['iso']}</updated>"
+                f"<content type='text'>Dev test entry for rule testing.</content>"
+                f"</entry>\n"
+            )
+        body = (
+            "<?xml version='1.0' encoding='UTF-8'?>\n"
+            "<feed xmlns='http://www.w3.org/2005/Atom'>\n"
+            f"<title>{title}</title>\n"
+            "<link href='https://example.com' rel='alternate'/>\n"
+            f"<id>urn:lectio-dev:{feed_id}-atom</id>\n"
+            f"<updated>{entries[0]['iso']}</updated>\n"
+            f"{items_xml}"
+            "</feed>"
         )
+        return Response(content=body, media_type="application/atom+xml")
+
+    if fmt == "json":
+        items = [
+            {
+                "id": e["id"],
+                "title": e["title"],
+                "url": e["url"],
+                "date_published": e["iso"],
+                "content_text": "Dev test entry for rule testing.",
+            }
+            for e in entries
+        ]
+        body = _json.dumps({
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": title,
+            "home_page_url": "https://example.com",
+            "items": items,
+        })
+        return Response(content=body, media_type="application/feed+json")
+
+    # RSS 2.0 (default)
+    items_xml = ""
+    for e in entries:
         items_xml += (
             f"<item>"
-            f"<title>{item_title_prefix}: Dev article {i + 1} ({int(now_ts)})</title>"
-            f"<link>https://example.com/dev/{feed_id}/{int(now_ts)}/{i}</link>"
-            f"<guid isPermaLink='false'>{guid}</guid>"
-            f"<pubDate>{pub_date}</pubDate>"
-            f"<description>This is a dev test entry for rule testing.</description>"
+            f"<title>{e['title']}</title>"
+            f"<link>{e['url']}</link>"
+            f"<guid isPermaLink='false'>{e['id']}</guid>"
+            f"<pubDate>{e['rfc']}</pubDate>"
+            f"<description>Dev test entry for rule testing.</description>"
             f"</item>\n"
         )
-    pub_date_feed = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now_ts))
-    rss = (
+    body = (
         "<?xml version='1.0' encoding='UTF-8'?>\n"
         "<rss version='2.0'><channel>\n"
         f"<title>{title}</title>\n"
         "<link>https://example.com</link>\n"
         f"<description>{title}</description>\n"
-        f"<lastBuildDate>{pub_date_feed}</lastBuildDate>\n"
+        f"<lastBuildDate>{entries[0]['rfc']}</lastBuildDate>\n"
         f"{items_xml}"
         "</channel></rss>"
     )
-    return Response(content=rss, media_type="application/rss+xml")
+    return Response(content=body, media_type="application/rss+xml")
 
 
 @app.post("/dev/flush-email-batch")
