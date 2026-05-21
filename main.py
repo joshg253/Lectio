@@ -3245,7 +3245,7 @@ def _flush_email_batch_for_rule(
 
 
 def _flush_all_email_batches() -> None:
-    """Flush all pending batch queues — called by daily maintenance."""
+    """Flush all pending batch queues — called by daily maintenance as a safety net."""
     if not is_email_configured():
         return
     try:
@@ -3266,6 +3266,48 @@ def _flush_all_email_batches() -> None:
                 )
     except Exception:
         LOGGER.exception("[email-auto] error flushing all email batches")
+
+
+def _check_and_flush_batch_times() -> None:
+    """Flush email batch queues whose batch_time matches the current local HH:MM.
+
+    Called every minute by the maintenance loop. Each rule's batch_time is a
+    "HH:MM" string (24-hour, local time); when the clock matches, the pending
+    queue for that rule is flushed and an email digest is sent.
+    """
+    if not is_email_configured():
+        return
+    try:
+        now_hhmm = time.strftime("%H:%M")
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+        for rule in all_rules:
+            if not (rule.get("enabled") and rule.get("delivery") == "batch"):
+                continue
+            bt = str(rule.get("batch_time") or "").strip()
+            if bt != now_hhmm:
+                continue
+            email_to = str(rule.get("email_to") or "").strip()
+            if not email_to:
+                continue
+            scope = str(rule.get("scope", ""))
+            scope_id = str(rule.get("scope_id") or "")
+            keyword = str(rule.get("keyword", ""))
+            cc_me = bool(rule.get("cc_me"))
+            cc_addr = (
+                profile_email
+                if cc_me and profile_email and profile_email.lower() != email_to.lower()
+                else None
+            )
+            with get_meta_connection() as conn:
+                _flush_email_batch_for_rule(
+                    conn, scope, scope_id, keyword, email_to,
+                    cc_addr, datetime.now().isoformat(),
+                )
+            LOGGER.info("[email-batch] flushed batch for %s/%s at %s", scope, keyword, now_hhmm)
+    except Exception:
+        LOGGER.exception("[email-batch] error in _check_and_flush_batch_times")
 
 
 reader_api = ReaderApi(READER_DB_PATH)
@@ -5996,15 +6038,24 @@ def _run_daily_maintenance() -> None:
 
 
 def _daily_maintenance_loop(stop_event: threading.Event) -> None:
-    """Thread that fires _run_daily_maintenance() once per day at the configured hour."""
+    """Thread that fires _run_daily_maintenance() once per day and flushes email
+    batch queues at their configured batch_time each minute."""
     last_ran_date: str | None = None
+    last_batch_check_hhmm: str | None = None
     while not stop_event.wait(30):
+        # Flush email batches at their configured batch_time (once per clock minute).
+        now_hhmm = time.strftime("%H:%M")
+        if now_hhmm != last_batch_check_hhmm:
+            last_batch_check_hhmm = now_hhmm
+            _check_and_flush_batch_times()
+
+        # Daily maintenance once per day at configured hour.
         maint_hour = get_maintenance_hour()
         if maint_hour is None:
             continue
-        now = time.localtime()
+        now_lt = time.localtime()
         today = time.strftime("%Y-%m-%d")
-        if now.tm_hour == maint_hour and last_ran_date != today:
+        if now_lt.tm_hour == maint_hour and last_ran_date != today:
             last_ran_date = today
             try:
                 _run_daily_maintenance()
