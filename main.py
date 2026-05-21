@@ -201,8 +201,8 @@ MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
-TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260520o")
+TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521u")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -4414,6 +4414,24 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         }
 
 
+def _bs4_main_fallback(raw_html: str) -> str:
+    """Return the inner HTML of <main> stripped of nav/header/footer/script/style, or ''."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
+            tag.decompose()
+        main = soup.find("main")
+        if not main:
+            return ""
+        # Remove the nav <div> (first column) if present (common skeleton layout)
+        for nav_div in main.find_all("div", class_=lambda c: c and "nav" in c.split()):
+            nav_div.decompose()
+        return str(main)
+    except Exception:
+        return ""
+
+
 def build_readability_response(source_url: str) -> HTMLResponse:
     parsed = urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
@@ -4423,10 +4441,16 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             response = client.get(source_url)
         response.raise_for_status()
-        doc = Document(response.text)
+        raw_html = response.text
+        doc = Document(raw_html)
         title = doc.short_title() or source_url
         summary = doc.summary(html_partial=True)
         article_html = sanitize_readability_html(summary).strip()
+        if len(article_html) < 100:
+            # Readability couldn't find a meaningful article block; fall back to <main>
+            fallback = _bs4_main_fallback(raw_html)
+            if fallback:
+                article_html = sanitize_readability_html(fallback).strip()
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -5115,17 +5139,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # some feeds embed as the first image; prefer no image over a face.
         if lead_image_url and lead_image_service._AVATAR_HINT_PATTERNS.search(lead_image_url):
             lead_image_url = None
-        # If no inline image found, try the source page when either:
-        #   (a) entry has never been processed by the lead image service, OR
-        #   (b) it was processed but stored None (e.g. backfill ran before the
-        #       inline→source fallback was added, or the source page was
-        #       temporarily unavailable). Store the result immediately so future
-        #       opens don't re-fetch.
+        # If no inline image found, try the source page — but only if this
+        # entry has NEVER been processed before (key absent from cache).
+        # Using `not in` (not `.get() is None`) avoids re-fetching entries
+        # that were already processed and found to have no image (None stored).
         _cache_key = (str(entry.feed_url), str(entry.id))
-        if lead_image_url is None and entry.link and lead_image_service._cache.get(_cache_key) is None:
+        if lead_image_url is None and entry.link and _cache_key not in lead_image_service._cache:
             lead_image_url = lead_image_service._fetch_source_lead_image(entry.link)
-            if lead_image_url:
-                lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+            # Always store (even None) so subsequent opens skip the HTTP round-trip.
+            lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
         # If we injected a YouTube embed for this entry, avoid showing a
         # separate lead image (typically the video thumbnail) above the
         # embedded player — it looks redundant and visually noisy.
@@ -7966,6 +7988,7 @@ def toggle_entry_saved(
 
 @app.post("/entries/tags")
 def set_entry_manual_tags(
+    request: Request,
     folder_id: int = Form(...),
     feed_url: str = Form(...),
     entry_id: str = Form(...),
@@ -7985,8 +8008,8 @@ def set_entry_manual_tags(
         appended_tags = parse_manual_hashtags(tags_text)
         merged_tags: list[str] = []
         seen: set[str] = set()
-        for tag in existing_tags + appended_tags:
-            normalized = normalize_tag_value(tag)
+        for _tok in existing_tags + appended_tags:
+            normalized = normalize_tag_value(_tok)
             if not normalized or normalized in seen:
                 continue
             seen.add(normalized)
@@ -7996,7 +8019,7 @@ def set_entry_manual_tags(
         tags = set_manual_tags_for_entry(feed_url, entry_id, " ".join(merged_tags))
     else:
         tags = set_manual_tags_for_entry(feed_url, entry_id, tags_text)
-    normalized_tag = normalize_tag_value(tag)
+    normalized_tag = normalize_tag_value(tag)  # `tag` = the active tag filter, not the loop var
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
@@ -8007,6 +8030,9 @@ def set_entry_manual_tags(
 
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
     message = "Tags updated." if tags else "Tags cleared."
+
+    if request.headers.get("X-Requested-With") == "lectio-ajax":
+        return JSONResponse({"ok": True, "tags": tags})
 
     return RedirectResponse(
         url=(
@@ -8470,21 +8496,17 @@ def save_to_instapaper(
 
     try:
         import urllib.request, urllib.parse, urllib.error
-        tag_names = {t.name for t in (entry.tags or []) if t.name}
-        tag_names.add("viaLectio")
         data = urllib.parse.urlencode({
+            "username": username,
+            "password": password,
             "url": url,
             "title": entry.title or "",
-            "tags": ",".join(sorted(tag_names)),
         }).encode()
         req = urllib.request.Request(
             "https://www.instapaper.com/api/add",
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        import base64
-        creds = base64.b64encode(f"{username}:{password}".encode()).decode()
-        req.add_header("Authorization", f"Basic {creds}")
         with urllib.request.urlopen(req, timeout=10) as resp:
             status = resp.status
         if status in (200, 201):
@@ -8492,7 +8514,7 @@ def save_to_instapaper(
         return JSONResponse({"ok": False, "error": f"Instapaper returned {status}."}, status_code=502)
     except Exception as exc:
         LOGGER.warning("Instapaper save failed for %s: %s", url, exc)
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": False, "error": str(exc) or "Request failed."}, status_code=502)
 
 
 @app.post("/opml/import")

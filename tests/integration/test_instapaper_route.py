@@ -110,8 +110,8 @@ def test_successful_save_returns_ok(monkeypatch):
     assert r.json()["ok"] is True
 
 
-def test_tags_and_via_lectio_sent(monkeypatch):
-    """Tags from the entry plus 'viaLectio' must be included in the request."""
+def test_url_and_title_sent(monkeypatch):
+    """URL and title must be included in the request body."""
     sent_data: list[bytes] = []
 
     class _CapturingResponse:
@@ -130,9 +130,10 @@ def test_tags_and_via_lectio_sent(monkeypatch):
 
     assert sent_data, "urlopen was not called"
     body = sent_data[0].decode()
-    assert "viaLectio" in body
-    assert "python" in body
-    assert "rss" in body
+    assert "url=" in body
+    assert "title=" in body
+    assert "username=" in body
+    assert "password=" in body
 
 
 def test_instapaper_api_error_returns_502(monkeypatch):

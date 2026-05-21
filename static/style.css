@@ -2751,6 +2751,18 @@ button:hover, .button-link:hover {
 
 .entry-content {
   line-height: 1.45;
+  /* Prevent fixed-width HTML elements (tables, pre) from expanding the viewport */
+  overflow-x: auto;
+}
+
+.entry-content table {
+  max-width: 100%;
+}
+
+.entry-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
 }
 
 .entry-lead-image {

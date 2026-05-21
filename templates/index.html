@@ -7571,6 +7571,7 @@
     function applyHighlights() {
       const rules = window.HIGHLIGHT_RULES || [];
 
+      // Flat-text highlight for single-line elements (titles) — replaces all content.
       function highlightEl(el, matchRules) {
         if (!el) return;
         el.querySelectorAll('.highlight-mark').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
@@ -7611,6 +7612,69 @@
         el.appendChild(frag);
       }
 
+      // Structure-preserving highlight for rich HTML bodies — walks text nodes.
+      function highlightBody(el, matchRules) {
+        if (!el || matchRules.length === 0) return;
+        // Clear previous highlights
+        el.querySelectorAll('.highlight-mark').forEach(m => m.replaceWith(document.createTextNode(m.textContent)));
+        el.normalize();
+        const patterns = [];
+        for (const rule of matchRules) {
+          try {
+            patterns.push({
+              re: rule.is_regex
+                ? new RegExp(rule.keyword, 'gi')
+                : new RegExp(rule.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+              color: rule.color,
+            });
+          } catch { /* invalid regex */ }
+        }
+        if (patterns.length === 0) return;
+
+        function walkNode(node) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.nodeValue;
+            if (!text) return;
+            const matches = [];
+            for (const { re, color } of patterns) {
+              re.lastIndex = 0;
+              let m;
+              while ((m = re.exec(text)) !== null) {
+                if (m[0].length === 0) { re.lastIndex++; continue; }
+                matches.push({ start: m.index, end: m.index + m[0].length, color });
+              }
+            }
+            if (matches.length === 0) return;
+            matches.sort((a, b) => a.start - b.start);
+            // Deduplicate overlapping ranges
+            const deduped = [];
+            for (const m of matches) {
+              if (deduped.length > 0 && m.start < deduped[deduped.length - 1].end) continue;
+              deduped.push(m);
+            }
+            const frag = document.createDocumentFragment();
+            let pos = 0;
+            for (const r of deduped) {
+              if (r.start > pos) frag.appendChild(document.createTextNode(text.slice(pos, r.start)));
+              const mark = document.createElement('mark');
+              mark.className = `highlight-mark highlight-mark-${r.color}`;
+              mark.textContent = text.slice(r.start, r.end);
+              frag.appendChild(mark);
+              pos = r.end;
+            }
+            if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+            node.parentNode.replaceChild(frag, node);
+            return;
+          }
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const tag = node.tagName.toLowerCase();
+            if (tag === 'mark' || tag === 'script' || tag === 'style') return;
+          }
+          for (const child of [...node.childNodes]) walkNode(child);
+        }
+        walkNode(el);
+      }
+
       const activeRules = rules.filter(r => r.enabled !== 0 && (r.type || 'highlight') === 'highlight');
 
       for (const postItem of document.querySelectorAll('.post-item')) {
@@ -7621,11 +7685,13 @@
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
           (r.scope === 'feed' && r.scope_id === feedUrl)
         );
-        highlightEl(postItem.querySelector('.post-title'), matchRules);
+        const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
+        highlightEl(postItem.querySelector('.post-title'), titleRules);
       }
 
       const entryTitleEl = document.querySelector('.entry-pane-title-link');
-      if (entryTitleEl) {
+      const entryBodyEl = document.getElementById('entry-body');
+      if (entryTitleEl || entryBodyEl) {
         const feedUrl = document.querySelector('.entry-pane-title')?.getAttribute('data-post-feed-url') || '';
         const folderIdStr = document.querySelector('.entry-feed-link')?.getAttribute('data-folder-id') || '';
         const matchRules = activeRules.filter(r =>
@@ -7633,7 +7699,10 @@
           (r.scope === 'folder' && r.scope_id === folderIdStr) ||
           (r.scope === 'feed' && r.scope_id === feedUrl)
         );
-        highlightEl(entryTitleEl, matchRules);
+        const titleRules = matchRules.filter(r => (r.search_in || 'title') !== 'body');
+        const bodyRules = matchRules.filter(r => { const s = r.search_in || 'title'; return s === 'body' || s === 'both'; });
+        highlightEl(entryTitleEl, titleRules);
+        highlightBody(entryBodyEl, bodyRules);
       }
     }
 
@@ -8474,34 +8543,70 @@
 
       if (entryTagsForm && !entryTagsForm.dataset.boundSubmit) {
         entryTagsForm.dataset.boundSubmit = '1';
-        entryTagsForm.addEventListener('submit', (event) => {
+        entryTagsForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+
           if (!(entryTagsInput instanceof HTMLInputElement) || !(entryTagsMergedInput instanceof HTMLInputElement)) {
             return;
           }
 
           const existingTokens = tokenizeTags(entryTagsMergedInput.value);
-          const addedTokens = tokenizeTags(entryTagsInput.value);
+          const rawInput = entryTagsInput.value.trim();
+          const addedTokens = tokenizeTags(rawInput);
 
-          if (addedTokens.length === 0) {
-            event.preventDefault();
+          if (addedTokens.length === 0 && !rawInput) {
             entryTagsInput.focus();
+            return;
+          }
+
+          // Validate against server's TAG_VALUE_PATTERN: letters, digits, _ - + . #
+          const TAG_VALID_RE = /^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$/;
+          const invalidTokens = addedTokens.filter(t => !TAG_VALID_RE.test(t));
+          if (invalidTokens.length > 0 || (rawInput && addedTokens.length === 0)) {
+            showToastMessage('Tags may only contain letters, numbers, and: - _ + . #');
+            entryTagsInput.select();
             return;
           }
 
           const merged = [];
           const seen = new Set();
           for (const token of [...existingTokens, ...addedTokens]) {
-            if (seen.has(token)) {
-              continue;
-            }
+            if (seen.has(token)) continue;
             seen.add(token);
             merged.push(token);
-            if (merged.length >= 12) {
-              break;
-            }
+            if (merged.length >= 12) break;
           }
 
           entryTagsMergedInput.value = merged.join(' ');
+
+          const body = new URLSearchParams(new FormData(entryTagsForm));
+          try {
+            const resp = await fetch('/entries/tags', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+              credentials: 'same-origin',
+              body: body.toString(),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+              entryTagsInput.value = '';
+              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            } else {
+              showToastMessage(data.error || 'Failed to save tags.');
+            }
+          } catch {
+            showToastMessage('Failed to save tags.');
+          }
+        });
+      }
+
+      if (entryTagsInput && !entryTagsInput.dataset.boundKeydown) {
+        entryTagsInput.dataset.boundKeydown = '1';
+        entryTagsInput.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          // Explicitly click Apply so the submit handler reliably fires and merges tokens.
+          entryTagsForm?.querySelector('button[type="submit"]')?.click();
         });
       }
 
