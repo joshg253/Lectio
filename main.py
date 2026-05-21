@@ -512,27 +512,33 @@ async def lifespan(app: FastAPI):
 
     # In debug mode, auto-subscribe dev feeds to the _Lectio folder.
     if DEBUG_MODE:
-        def _subscribe_dev_feeds() -> None:
-            base = "http://127.0.0.1:8000"
-            dev_urls = [
-                f"{base}/dev/feeds/email-match.xml",
-                f"{base}/dev/feeds/email-match.atom",
-                f"{base}/dev/feeds/email-match.json",
-                f"{base}/dev/feeds/email-skip.xml",
-                f"{base}/dev/feeds/email-skip.atom",
-                f"{base}/dev/feeds/email-skip.json",
-            ]
-            with get_meta_connection() as conn:
-                folder_id = _get_lectio_folder_id(conn)
-            if not folder_id:
-                return
-            for url in dev_urls:
+        _dev_base = "http://127.0.0.1:8000"
+        _dev_urls = [
+            f"{_dev_base}/dev/feeds/email-match.xml",
+            f"{_dev_base}/dev/feeds/email-match.atom",
+            f"{_dev_base}/dev/feeds/email-match.json",
+            f"{_dev_base}/dev/feeds/email-skip.xml",
+            f"{_dev_base}/dev/feeds/email-skip.atom",
+            f"{_dev_base}/dev/feeds/email-skip.json",
+        ]
+        with get_meta_connection() as conn:
+            _lectio_folder_id = _get_lectio_folder_id(conn)
+        if _lectio_folder_id:
+            _dev_newly_added: list[str] = []
+            for _dev_url in _dev_urls:
                 try:
-                    add_feed_to_folder(url, folder_id)
+                    with get_meta_connection() as _c:
+                        _already = _c.execute(
+                            "SELECT 1 FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                            (_lectio_folder_id, _dev_url),
+                        ).fetchone()
+                    if not _already:
+                        add_feed_to_folder(_dev_url, _lectio_folder_id)
+                        _dev_newly_added.append(_dev_url)
                 except Exception:
-                    pass
-
-        threading.Thread(target=_subscribe_dev_feeds, daemon=True, name="dev-feeds-subscribe").start()
+                    LOGGER.exception("[dev-feeds] failed to subscribe %s", _dev_url)
+            if _dev_newly_added:
+                feed_refresh_service.update_feeds(_dev_newly_added)
 
     try:
         yield
