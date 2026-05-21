@@ -306,6 +306,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "beautifulsoup4" },
     { name = "fastapi" },
     { name = "feedparser" },
     { name = "httpx" },
@@ -332,6 +333,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite" },
+    { name = "beautifulsoup4" },
     { name = "fastapi" },
     { name = "feedparser" },
     { name = "httpx" },

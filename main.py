@@ -206,7 +206,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521x")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521y")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -292,7 +292,7 @@ SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 *
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/dev/feeds/")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -675,10 +675,9 @@ class _AccessLogMiddleware:
             http_version = scope.get("http_version", "1.1")
             request_line = f"{method} {request_path} HTTP/{http_version}"
             # Suppression: prefetch 204/503 with list_feed_url= are pure noise.
-            if status in self._SUPPRESS_STATUSES and "list_feed_url=" in request_path:
-                return
-            reason = self._STATUS_REASONS.get(status, "")
-            LOGGER.info('%s - "%s" %d %s', client_addr, request_line, status, reason)
+            if not (status in self._SUPPRESS_STATUSES and "list_feed_url=" in request_path):
+                reason = self._STATUS_REASONS.get(status, "")
+                LOGGER.info('%s - "%s" %d %s', client_addr, request_line, status, reason)
 
 
 class _RejectPrefetchMiddleware:
