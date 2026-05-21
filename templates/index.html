@@ -163,6 +163,13 @@
               <button type="button" class="menu-item" id="dedup-feeds-btn">Remove duplicate feeds</button>
             </div>
           </div>
+          <div class="flyout-menu">
+            <div class="flyout-trigger menu-item"><span class="flyout-label">Takeout</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+            <div class="flyout-panel">
+              <a class="menu-item" href="/takeout/export"><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px" aria-hidden="true">download</span> Export ZIP</a>
+              <label for="takeout-file-input" class="menu-item file-item"><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px" aria-hidden="true">upload</span> Import ZIP</label>
+            </div>
+          </div>
         </div>
       </details>
       <button type="button" id="topbar-avatar-btn" class="topbar-avatar-btn" title="Settings" aria-label="Settings">
@@ -174,6 +181,10 @@
   <form id="opml-import-form" method="post" action="/opml/import" enctype="multipart/form-data" hidden>
     {{ csrf_input(request)|safe }}
     <input id="opml-file-input" type="file" name="opml_file" accept=".opml,.xml,text/xml,application/xml" required />
+  </form>
+  <form id="takeout-import-form" method="post" action="/takeout/import" enctype="multipart/form-data" hidden>
+    {{ csrf_input(request)|safe }}
+    <input id="takeout-file-input" type="file" name="takeout_file" accept=".zip,application/zip" required />
   </form>
 
   <div id="medium-pane-backdrop" class="medium-pane-backdrop" hidden></div>
@@ -2559,6 +2570,14 @@
     opmlInput?.addEventListener('change', () => {
       if (opmlInput.files && opmlInput.files.length > 0) {
         opmlForm?.submit();
+      }
+    });
+
+    const takeoutInput = document.getElementById('takeout-file-input');
+    const takeoutForm = document.getElementById('takeout-import-form');
+    takeoutInput?.addEventListener('change', () => {
+      if (takeoutInput.files && takeoutInput.files.length > 0) {
+        takeoutForm?.submit();
       }
     });
 

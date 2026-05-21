@@ -39,15 +39,16 @@ This file is the backlog and staging area for future work.
     - Tag input: Enter key now reliably submits; AJAX save replaces full-page refresh; `+`, `.`, `#` allowed in tag names; invalid chars shown as a toast.
     - Fixed variable shadowing in tag route that caused posts list to filter by the last loop token.
 13. ~~**Page-to-Feed / FakeFeedz**~~ ✓ — built-in page scraper for feedless pages. Two modes: *New links* (link_list) seeds existing links as hidden on first subscribe, surfaces only newly-appeared links thereafter; *Content changes* (change_detect) hashes the page and creates an entry on each change. Optional CSS selector narrows the watched region. Feeds stored as `file://` RSS 2.0 XML under `DATA_DIR/scraped-feeds/`; reader treats them identically to remote feeds. Delete removes DB rows, XML file, and reader subscription. Toast shown when RSS auto-discovery fails, with direct shortcut to FakeFeedz modal pre-filled with the URL.
-14. **Data Export / Takeout** — portable export of all user data beyond OPML and raw SQLite backup. Motivation: RSS services (e.g. Inoreader) often omit disabled feeds, tags, and starred articles from their takeout exports; Lectio should do better.
-    - *OPML* — already done (feeds + folder structure).
-    - *Tagged entries* — all entries with manual tags: title, link, date, tags.
-    - *Starred entries* — same shape.
-    - *Read history* — the 2,000-entry history log.
-    - *Automation rules* — highlights, mark-as-read, dedup, email rules.
-    - *Settings / contacts* — profile, email config, contacts list.
-    - Delivered as a single ZIP download with one JSON file per category. Triggered from the main menu or Settings.
-    - **Import** — upload a previously-exported ZIP to restore: rules and contacts merge (no duplicates), history appends, tagged/starred entries preserved in the archive.
+14. ~~**Data Export / Takeout**~~ ✓ — portable ZIP export of all user data; importable on any Lectio instance.
+    - *OPML* — already done (feeds + folder structure), included in ZIP as `opml.xml`.
+    - *Tagged entries* — all entries with manual tags: feed_url, entry_id, title, link, published, tags array.
+    - *Starred entries* — same shape plus saved_at.
+    - *Read history* — full history log (feed_url, entry_id, title, link, read_at).
+    - *Automation rules* — all highlight_keywords rows.
+    - *Contacts* — email contacts list.
+    - *Settings* — app_settings (sensitive credentials excluded from export).
+    - ZIP: `lectio-takeout-YYYYMMDD.zip` via `GET /takeout/export` (main menu → Takeout → Export ZIP).
+    - **Import**: `POST /takeout/import` (main menu → Takeout → Import ZIP). Merges non-destructively: rules INSERT OR IGNORE (primary key scope+keyword), contacts by address, history appends, tagged/starred entries re-applied to any matching reader entry. Future-version ZIPs are rejected with an error.
 
 ## Backburner
 

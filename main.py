@@ -43,6 +43,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import scraper_service
+from services import takeout_service
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
@@ -206,7 +207,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521y")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521z")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -8825,6 +8826,37 @@ def opml_export():
         media_type="application/xml",
         headers={"Content-Disposition": "attachment; filename=lectio-export.opml"},
     )
+
+
+@app.get("/takeout/export")
+def takeout_export():
+    with get_meta_connection() as conn:
+        opml_text = export_opml_text(conn)
+        zip_bytes = takeout_service.build_takeout_zip(
+            conn, READER_DB_PATH, opml_text, app_version=STATIC_ASSET_VERSION
+        )
+    date_str = datetime.now().strftime("%Y%m%d")
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=lectio-takeout-{date_str}.zip"},
+    )
+
+
+@app.post("/takeout/import")
+async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, File(...)]):
+    data = await takeout_file.read()
+    try:
+        with get_meta_connection() as conn:
+            summary = takeout_service.import_takeout_zip(conn, READER_DB_PATH, data)
+    except ValueError as exc:
+        return RedirectResponse(
+            url=f"/?message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    parts = [f"{v} {k.replace('_', ' ')}" for k, v in summary.items() if v]
+    msg = "Takeout imported: " + ", ".join(parts) if parts else "Takeout imported (nothing new to add)."
+    return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 
 @app.get("/healthz")
