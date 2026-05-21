@@ -22,9 +22,9 @@ This file is the backlog and staging area for future work.
    - Auth (`LECTIO_USERNAME` / `LECTIO_PASSWORD` / `LECTIO_SECRET_KEY`) stays in `.env`.
 9. ~~**Instapaper integration**~~ ✓ — "Save to Instapaper" button in the entry toolbar. Credentials stored in Settings → Integrations. Backend POSTs to the Instapaper Simple API (`/api/add`) with credentials in the POST body; frontend shows a toast.
 10. ~~**Email Automation**~~ ✓ — server-side Email Article rule execution at every feed refresh.
-    - *Dev feeds*: `GET /dev/feeds/email-match.xml` and `email-skip.xml` (debug mode only) generate fresh entries on every request; dev feeds bypass the 60-second manual refresh cooldown. "Flush email batch queue" button in Feed Properties for dev feeds.
+    - *Dev feeds*: `GET /dev/feeds/email-match.{xml,atom,json}` and `email-skip.{xml,atom,json}` (debug mode only, `LECTIO_DEBUG=1`) generate fresh entries on every request; dev feeds bypass the 60-second manual refresh cooldown. "Flush email batch queue" button in Feed Properties for dev feeds. `/dev/feeds/` path is exempt from auth so the reader fetcher can access it.
     - *Immediately* mode: sends one email per matching new entry (capped at 10/cycle). Entry must have been added within the last 15 minutes to qualify as "new."
-    - *Batch digest* mode: entries queued in `email_batch_queue`; flushed when `batch_count` threshold is reached OR during daily maintenance. Digest email groups all queued articles in a single styled email.
+    - *Batch digest* mode: entries queued in `email_batch_queue`; flushed when `batch_count` threshold is reached OR when the current local time matches the rule's `batch_time` (HH:MM, checked every 30 s by `_daily_maintenance_loop`). Daily maintenance is a final safety-net flush.
     - *Cc me*: adds `profile_email` as Cc; suppressed if profile email already matches the To address.
     - Email rules run after mark_as_read/dedup to avoid emailing articles that were just auto-read.
 11. ~~**Feed Properties v2 — Tuning tab**~~ ✓
@@ -38,15 +38,16 @@ This file is the backlog and staging area for future work.
     - Lead image source fetch skipped for entries with a cached miss (was re-fetching on every open).
     - Tag input: Enter key now reliably submits; AJAX save replaces full-page refresh; `+`, `.`, `#` allowed in tag names; invalid chars shown as a toast.
     - Fixed variable shadowing in tag route that caused posts list to filter by the last loop token.
-13. **Page-to-Feed / FakeFeedz** — for truly feedless pages, generate synthetic feeds via scraping or change-detection (RSSHub, FetchRSS, or built-in scraper).
+13. ~~**Page-to-Feed / FakeFeedz**~~ ✓ — built-in page scraper for feedless pages. Two modes: *New links* (link_list) seeds existing links as hidden on first subscribe, surfaces only newly-appeared links thereafter; *Content changes* (change_detect) hashes the page and creates an entry on each change. Optional CSS selector narrows the watched region. Feeds stored as `file://` RSS 2.0 XML under `DATA_DIR/scraped-feeds/`; reader treats them identically to remote feeds. Delete removes DB rows, XML file, and reader subscription. Toast shown when RSS auto-discovery fails, with direct shortcut to FakeFeedz modal pre-filled with the URL.
 14. **Data Export / Takeout** — portable export of all user data beyond OPML and raw SQLite backup. Motivation: RSS services (e.g. Inoreader) often omit disabled feeds, tags, and starred articles from their takeout exports; Lectio should do better.
     - *OPML* — already done (feeds + folder structure).
-    - *Tagged entries* — all entries with manual tags: title, link, date, tags (JSON + optional CSV).
+    - *Tagged entries* — all entries with manual tags: title, link, date, tags.
     - *Starred entries* — same shape.
     - *Read history* — the 2,000-entry history log.
     - *Automation rules* — highlights, mark-as-read, dedup, email rules.
     - *Settings / contacts* — profile, email config, contacts list.
     - Delivered as a single ZIP download with one JSON file per category. Triggered from the main menu or Settings.
+    - **Import** — upload a previously-exported ZIP to restore: rules and contacts merge (no duplicates), history appends, tagged/starred entries preserved in the archive.
 
 ## Backburner
 
