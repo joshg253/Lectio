@@ -1513,7 +1513,6 @@
         <button type="button" class="modal-close" data-close-modal="fakefeedz-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <form method="post" action="/scraped-feeds" class="action-modal-form">
-        <input type="hidden" name="folder_id" id="fakefeedz-folder-id" value="{{ selected_folder_id }}" />
         <label for="fakefeedz-url" class="action-modal-label">Page URL</label>
         <input id="fakefeedz-url" name="source_url" type="url" placeholder="https://example.com/" required />
         <label for="fakefeedz-title" class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional — auto-detected)</span></label>
@@ -1526,6 +1525,16 @@
         <label for="fakefeedz-selector" class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
         <input id="fakefeedz-selector" name="selector" placeholder="e.g. .changelog a, article a" />
         <p class="action-modal-hint">Narrows what is scraped. For link list, selects the link elements. For change detect, selects the content region to watch.</p>
+        <label for="fakefeedz-folder" class="action-modal-label">Folder</label>
+        <select id="fakefeedz-folder" name="folder_id">
+          {% for folder in folder_options %}
+          {% if folder.depth == 0 %}
+          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
+          {% else %}
+          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="fakefeedz-modal">Cancel</button>
           <button type="submit">Create Feed</button>
@@ -8872,8 +8881,8 @@
         const urlInput = modal.querySelector('#fakefeedz-url');
         if (urlInput) urlInput.value = prefillUrl;
       }
-      const folderInput = modal.querySelector('#fakefeedz-folder-id');
-      if (folderInput) folderInput.value = '{{ selected_folder_id }}';
+      const folderSelect = modal.querySelector('#fakefeedz-folder');
+      if (folderSelect) folderSelect.value = '{{ selected_folder_id }}';
       modal.removeAttribute('hidden');
       modal.querySelector('#fakefeedz-url')?.focus();
     }

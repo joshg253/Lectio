@@ -206,7 +206,7 @@ MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521v")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521w")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -7020,13 +7020,9 @@ def create_scraped_feed_route(
     if mode not in ("change_detect", "link_list"):
         mode = "change_detect"
 
-    with get_meta_connection() as conn:
-        target_folder_id = folder_id or _get_lectio_folder_id(conn)
-    if not target_folder_id:
-        return RedirectResponse(
-            url=f"/?message={quote_plus('Could not find the _Lectio folder.')}",
-            status_code=303,
-        )
+    if not folder_id:
+        return RedirectResponse(url="/?message=Folder+required", status_code=303)
+    target_folder_id = folder_id
 
     try:
         with get_meta_connection() as conn:
