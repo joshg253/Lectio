@@ -4709,6 +4709,38 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
+        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32:
+            # ASC (oldest-first) with many feeds: reader only supports newest-first,
+            # so normally we'd pull everything into Python and sort. Instead, use a
+            # direct SQL query sorted ASC and fetch Entry objects only for matched rows.
+            # Uses a 4× buffer to absorb feed_urls filtering without an IN clause
+            # (which would exceed SQLite's 999-variable limit at scale).
+            read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
+            read_clause = read_sql.get(reader_read_filter, "")
+            sql_limit = max(fetch_limit * 4, fetch_limit + 500)
+            try:
+                _rconn = sqlite3.connect(str(READER_DB_PATH), timeout=5.0)
+                _rconn.row_factory = sqlite3.Row
+                rows = _rconn.execute(
+                    f"SELECT feed, id FROM entries WHERE 1=1{read_clause}"
+                    f" ORDER BY published ASC LIMIT ?",
+                    (sql_limit,),
+                ).fetchall()
+                _rconn.close()
+                for row in rows:
+                    if str(row["feed"]) not in feed_urls:
+                        continue
+                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    if e is not None:
+                        all_feed_entries.append(e)
+                    if len(all_feed_entries) >= fetch_limit:
+                        break
+            except Exception:
+                LOGGER.exception("[perf] asc-sql fast path failed, falling back")
+                for entry in reader.get_entries(read=reader_read_filter):
+                    if entry.feed_url not in feed_urls:
+                        continue
+                    all_feed_entries.append(entry)
         else:
             # Two strategies:
             #   - few feeds (e.g. user clicked one feed): query per feed with the
