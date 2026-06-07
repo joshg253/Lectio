@@ -2,6 +2,10 @@
 
 This file is the backlog and staging area for future work.
 
+## Recently Completed
+
+
+
 ## Up next (ordered)
 
 1. ~~**Email Article**~~ — share button in entry toolbar; sends link + summary via Resend. ✓
