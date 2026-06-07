@@ -62,6 +62,7 @@ def _make_conn(db_path: Path):
             feed_url TEXT NOT NULL,
             entry_id TEXT NOT NULL,
             image_url TEXT,
+            image_alt TEXT,
             fetched_at REAL,
             PRIMARY KEY(feed_url, entry_id)
         )
@@ -160,7 +161,7 @@ def test_fetch_and_store_lead_images_backfills_missing_inline(tmp_path: Path, mo
     )
     service = _build_service(db_path, [entry])
 
-    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link: "https://cdn.example.com/source-hero.jpg")
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link, **kw: "https://cdn.example.com/source-hero.jpg")
 
     service.fetch_and_store_lead_images_for_feed("https://example.com/feed.xml", force_retry_negative=True)
 
@@ -188,7 +189,7 @@ def test_negative_retry_window_skips_recent_null(tmp_path: Path):
     service = _build_service(db_path, [entry])
 
     fetched = []
-    service._fetch_source_lead_image = lambda link: fetched.append(link) or None
+    service._fetch_source_lead_image = lambda link, **kw: fetched.append(link) or None
 
     # Store NULL less than 4 hours ago.
     with _make_conn(db_path) as conn:
@@ -215,7 +216,7 @@ def test_negative_retry_window_retries_after_4h(tmp_path: Path):
         content_html="<p>no images</p>",
     )
     service = _build_service(db_path, [entry])
-    service._fetch_source_lead_image = lambda link: "https://cdn.example.com/late.jpg"
+    service._fetch_source_lead_image = lambda link, **kw: "https://cdn.example.com/late.jpg"
 
     # Store NULL more than 4 hours ago.
     with _make_conn(db_path) as conn:
@@ -273,3 +274,25 @@ def test_og_image_extensionless_cdn_url_accepted():
     )
     result = service._extract_meta_image_url_from_html(html, "https://example.com/article")
     assert result == "https://community-cdn-example.global.ssl.fastly.net/ABC123"
+
+
+# --- _AVATAR_HINT_PATTERNS word-boundary fix ---
+
+def test_avatar_hint_does_not_match_authorities():
+    """'author' in _AVATAR_HINT_PATTERNS must not match substrings like 'authorities'."""
+    service = _build_service(Path("/tmp"), [])
+    # 'authorities' must NOT trigger the avatar filter
+    assert not service._AVATAR_HINT_PATTERNS.search("Neither Bee nor the Bajoran authorities")
+
+
+def test_avatar_hint_matches_author_standalone():
+    service = _build_service(Path("/tmp"), [])
+    assert service._AVATAR_HINT_PATTERNS.search("article-author")
+    assert service._AVATAR_HINT_PATTERNS.search("author-image")
+    assert service._AVATAR_HINT_PATTERNS.search("author bio section")
+
+
+def test_avatar_hint_does_not_match_authoritative():
+    service = _build_service(Path("/tmp"), [])
+    assert not service._AVATAR_HINT_PATTERNS.search("authoritative source")
+    assert not service._AVATAR_HINT_PATTERNS.search("authorization required")

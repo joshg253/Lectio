@@ -57,7 +57,7 @@ Use plugin/adapter style for non-native behavior instead of hardwired branching.
 
 `LeadImageService` (services/lead_images.py) resolves a hero image for each entry using a layered strategy:
 
-1. **Feed-level strategy** (`feed_lead_image_strategy` table) — detected automatically and cached weekly. Values: `og_scrape`, `inline`, `media_rss`, `youtube`, `unknown`.
+1. **Feed-level strategy** (`feed_lead_image_strategy` table) — detected automatically and cached weekly. Values: `og_scrape`, `inline`, `media_rss`, `youtube`, `artwork`, `webcomic`, `none`, `unknown`. Two auto-taggers run at startup: `_auto_tag_artwork_feeds` (matches `artstation.com` URLs → `artwork`) and `_auto_tag_webcomic_feeds` (folder name contains "comic" → `webcomic`). Artwork wins over webcomic when both conditions apply. Manual overrides (`manual=1`) are never overwritten by either tagger.
 2. **Plugin fallbacks** — site-specific handlers (e.g. YouTube thumbnail from video ID).
 3. **Source-page scraping** — fetches the article URL, checks `og:image` / `twitter:image` meta tags (both `property=` and `name=` attribute order), preload hints, then scored in-page images.
 4. **Inline feed content** — images embedded in `<content>` or `<summary>` elements.

@@ -607,12 +607,14 @@ class TheRockCocksPlugin:
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
         if not self._is_target(entry_link):
             return False
-        # Bypass comicsthumbs thumbnails (age-gated /comics/ entries got stashed here;
-        # re-resolve so source scraping can find the real og:image URL).
-        # Also bypass promotional/off-domain images.
-        return self._THUMB_PATH in cached_url or "slipshine.net" in cached_url or (
-            self.host not in urlparse(cached_url).netloc.lower()
-            and "patreon" in cached_url.lower()
+        # Bypass feed thumbnails, promotional/off-domain images, and CMS template
+        # assets (e.g. Pillowfort promo image stored as og:image for age-gated pages).
+        parsed_path = urlparse(cached_url).path
+        return (
+            self._THUMB_PATH in cached_url
+            or "slipshine.net" in cached_url
+            or "/templates/" in parsed_path
+            or (self.host not in urlparse(cached_url).netloc.lower() and "patreon" in cached_url.lower())
         )
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
@@ -625,6 +627,8 @@ class TheRockCocksPlugin:
             return -100
         if "/uploads/" in resolved_url:
             return -50
+        if "/templates/" in urlparse(resolved_url).path:
+            return -200
         return 0
 
     def should_skip_source_lookup(self, *, entry_link: str) -> bool:
@@ -717,54 +721,92 @@ class ComicFuryPlugin:
         return None
 
 
+_OGLAF_COMIC_ACCESSIBLE: dict[str, bool] = {}  # slug → True/False, in-process cache
+
+
 @dataclass(frozen=True)
 class OglafPlugin:
-    """Oglaf — use the story thumbnail from the feed (media.oglaf.com/story/tt*.jpg).
-    The full comic URL (media.oglaf.com/comic/) returns 403 for the current strip
-    until it rotates out.  Source-page scraping returns the masthead logo instead."""
+    """Oglaf — try the full comic URL (media.oglaf.com/comic/*.jpg) first.
+    The current unrotated strip may return 403; fall back to the story thumbnail
+    (media.oglaf.com/story/tt*.jpg) embedded in the feed.  The static.oglaf.com
+    domain serves only site chrome (masthead, icons) — downrank those in scoring."""
 
     host: str = "oglaf.com"
     _MEDIA_HOST: str = "media.oglaf.com"
     _STORY_PATH: str = "/story/tt"
+    _COMIC_PATH: str = "/comic/"
 
     def _is_target(self, url: str) -> bool:
         return self.host in urlparse(url).netloc.lower()
 
+    def _slug(self, entry_link: str) -> str | None:
+        slug = urlparse(entry_link).path.strip("/")
+        return slug if slug and "/" not in slug else None
+
+    def _comic_url(self, entry_link: str) -> str | None:
+        slug = self._slug(entry_link)
+        return f"https://{self._MEDIA_HOST}{self._COMIC_PATH}{slug}.jpg" if slug else None
+
     def _story_url(self, entry_link: str) -> str | None:
-        parsed = urlparse(entry_link)
-        if not self._is_target(entry_link):
-            return None
-        slug = parsed.path.strip("/")
-        if not slug or "/" in slug:
-            return None
-        return f"https://{self._MEDIA_HOST}{self._STORY_PATH}{slug}.jpg"
+        slug = self._slug(entry_link)
+        return f"https://{self._MEDIA_HOST}{self._STORY_PATH}{slug}.jpg" if slug else None
 
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
         if not self._is_target(entry_link):
             return False
-        return self._MEDIA_HOST not in urlparse(cached_url).netloc.lower()
+        # Bypass story thumbnails (story/tt*) so the full comic URL is tried next open.
+        # Also bypass anything not from media.oglaf.com (e.g., site masthead logo).
+        parsed = urlparse(cached_url)
+        if self._MEDIA_HOST not in parsed.netloc.lower():
+            return True
+        return self._STORY_PATH in parsed.path
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()
 
     def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        if not self._is_target(source_url):
+            return 0
+        parsed = urlparse(resolved_url)
+        # Strongly prefer full comic images from media.oglaf.com/comic/.
+        if self._MEDIA_HOST in parsed.netloc and self._COMIC_PATH in parsed.path:
+            return 100
+        # Downrank story thumbnails (tt*) — they're feed previews, not the full comic.
+        if self._MEDIA_HOST in parsed.netloc and self._STORY_PATH in parsed.path:
+            return -50
+        # Downrank static.oglaf.com (masthead, icons, vote buttons — never article images).
+        if "static.oglaf.com" in parsed.netloc:
+            return -200
         return 0
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
         if not self._is_target(entry_link):
             return None
-        # Prefer story thumbnail explicitly embedded in feed content.
+        # Try the full comic URL.  It's 403 for the current unrotated strip but
+        # 200 once it rotates out.  Cache the result per slug for this process run.
+        comic_url = self._comic_url(entry_link)
+        if comic_url:
+            slug = self._slug(entry_link) or ""
+            if slug not in _OGLAF_COMIC_ACCESSIBLE:
+                try:
+                    resp = httpx.head(comic_url, follow_redirects=False, timeout=2.0,
+                                      headers={"User-Agent": "Mozilla/5.0"})
+                    _OGLAF_COMIC_ACCESSIBLE[slug] = resp.status_code == 200
+                except Exception:
+                    _OGLAF_COMIC_ACCESSIBLE[slug] = False
+            if _OGLAF_COMIC_ACCESSIBLE.get(slug):
+                return comic_url
+        # Fall back to story thumbnail from feed content.
         for source in (content_html, summary):
             if not isinstance(source, str):
                 continue
             m = re.search(
-                r'src=["\']([^"\']*' + re.escape(self._MEDIA_HOST) + re.escape(self._STORY_PATH) + r'[^"\']+\.jpg)["\']',
+                r'src=["\']([^"\']*' + re.escape(self._MEDIA_HOST) + re.escape(self._STORY_PATH) + r'[^"\']+\.(?:jpg|gif|png|bmp))["\']',
                 source,
                 re.IGNORECASE,
             )
             if m:
                 return html.unescape(m.group(1).strip())
-        # Derive story thumbnail from entry link slug as fallback.
         return self._story_url(entry_link)
 
 
@@ -789,7 +831,11 @@ class ComicEaselPlugin:
     def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
         if not self._is_target(entry_link):
             return False
-        return self._THUMB_PATH in cached_url
+        # Bypass feed thumbnails — the full comic lives at /comics/.
+        # Also bypass CMS-uploaded branding images (e.g. Hiveworks logo at /uploads/)
+        # that the source scraper may have stored by mistake.
+        parsed_path = urlparse(cached_url).path
+        return self._THUMB_PATH in cached_url or "/uploads/" in parsed_path
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()
@@ -799,6 +845,8 @@ class ComicEaselPlugin:
             return 0
         if self._THUMB_PATH in resolved_url:
             return -100
+        if "/uploads/" in urlparse(resolved_url).path:
+            return -150
         return 0
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Sequence, cast
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 
 import feedparser
 import httpx
@@ -202,12 +202,15 @@ DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
 CHUNK_SIZE = 10
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
+# In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
+# Values: True = same-site/same-origin (proxy needed), False = no restriction.
+_CORP_DOMAIN_CACHE: dict[str, bool] = {}
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
 FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
-STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260521z")
+STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION", "20260527t")
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 
@@ -293,7 +296,7 @@ SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 *
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/dev/feeds/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/dev/feeds/")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -389,6 +392,12 @@ async def lifespan(app: FastAPI):
 
     # Warm lead image cache from DB so thumbnails are available on first render.
     lead_image_service.warm_cache_from_db()
+
+    # Artwork tagger runs first so webcomic tagger won't clobber ArtStation feeds
+    # that live in folders whose name also contains "comic".
+    _auto_tag_artwork_feeds()
+    # Auto-tag feeds in "comic*" folders with strategy='webcomic'.
+    _auto_tag_webcomic_feeds()
 
     # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
     # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
@@ -589,7 +598,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz")
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img")
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
@@ -694,7 +703,7 @@ class _RejectPrefetchMiddleware:
        and /static bypass both layers so probes and asset prefetches still work.
     """
 
-    PASSTHROUGH_PREFIXES = ("/healthz", "/static", "/login")
+    PASSTHROUGH_PREFIXES = ("/healthz", "/static", "/login", "/api/img")
 
     def __init__(self, app):
         self.app = app
@@ -1261,6 +1270,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_lead_image_strategy ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE entry_lead_images ADD COLUMN image_alt TEXT")
+        except Exception:
+            pass  # column already exists
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS disabled_feeds (
@@ -1452,6 +1465,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN feed_thumbnail_url TEXT")
+        except Exception:
+            pass
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -1461,15 +1478,16 @@ def ensure_meta_schema() -> None:
                 "INSERT INTO folders (name, parent_id) VALUES (?, NULL)",
                 (ROOT_FOLDER_NAME,),
             )
-        # Ensure the _Lectio system folder exists (used for FakeFeedz and dev feeds).
-        root_id = conn.execute(
-            "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL", (ROOT_FOLDER_NAME,)
-        ).fetchone()
-        if root_id:
-            conn.execute(
-                "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
-                (_LECTIO_FOLDER_NAME, int(root_id["id"])),
-            )
+        if DEBUG_MODE:
+            # Ensure the _Lectio system folder exists (used for dev feeds).
+            root_id = conn.execute(
+                "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL", (ROOT_FOLDER_NAME,)
+            ).fetchone()
+            if root_id:
+                conn.execute(
+                    "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
+                    (_LECTIO_FOLDER_NAME, int(root_id["id"])),
+                )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
             (AUTO_REFRESH_SETTING_KEY, str(AUTO_REFRESH_MINUTES)),
@@ -1556,7 +1574,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0}
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None}
 
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -1579,6 +1597,17 @@ def upsert_feed_display_pref(conn: sqlite3.Connection, feed_url: str, key: str, 
         (feed_url,),
     )
     conn.execute(f"UPDATE feed_display_prefs SET {key} = ? WHERE feed_url = ?", (value, feed_url))
+
+
+def upsert_feed_thumbnail_url(conn: sqlite3.Connection, feed_url: str, thumbnail_url: str | None) -> None:
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET feed_thumbnail_url = ? WHERE feed_url = ?",
+        (thumbnail_url or None, feed_url),
+    )
 
 
 _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
@@ -1824,8 +1853,12 @@ def get_descendant_folder_ids(conn: sqlite3.Connection, folder_id: int) -> list[
 
 
 def get_folder_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    debug_clause = "" if DEBUG_MODE else " AND f.name != :exclude"
+    params: dict = {"root": ROOT_FOLDER_NAME}
+    if not DEBUG_MODE:
+        params["exclude"] = _LECTIO_FOLDER_NAME
     return conn.execute(
-        """
+        f"""
         SELECT
             f.id,
             f.name,
@@ -1838,18 +1871,22 @@ def get_folder_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             ) AS feed_count
         FROM folders f
         LEFT JOIN folders root ON f.parent_id = root.id
-        WHERE f.parent_id IS NULL OR f.parent_id = (
-            SELECT id FROM folders WHERE name = ? AND parent_id IS NULL
-        )
+        WHERE (f.parent_id IS NULL OR f.parent_id = (
+            SELECT id FROM folders WHERE name = :root AND parent_id IS NULL
+        )){debug_clause}
         ORDER BY path
         """,
-        (ROOT_FOLDER_NAME,),
+        params,
     ).fetchall()
 
 
 def get_folder_options(conn: sqlite3.Connection) -> list[FolderOption]:
+    debug_clause = "" if DEBUG_MODE else " AND f.name != :exclude"
+    params: dict = {"root": ROOT_FOLDER_NAME}
+    if not DEBUG_MODE:
+        params["exclude"] = _LECTIO_FOLDER_NAME
     rows = conn.execute(
-        """
+        f"""
         SELECT
             f.id,
             f.name,
@@ -1857,12 +1894,12 @@ def get_folder_options(conn: sqlite3.Connection) -> list[FolderOption]:
             CASE WHEN f.parent_id IS NULL THEN f.name ELSE root.name || ' / ' || f.name END AS path
         FROM folders f
         LEFT JOIN folders root ON f.parent_id = root.id
-        WHERE f.parent_id IS NULL OR f.parent_id = (
-            SELECT id FROM folders WHERE name = ? AND parent_id IS NULL
-        )
+        WHERE (f.parent_id IS NULL OR f.parent_id = (
+            SELECT id FROM folders WHERE name = :root AND parent_id IS NULL
+        )){debug_clause}
         ORDER BY path
         """,
-        (ROOT_FOLDER_NAME,),
+        params,
     ).fetchall()
     return [FolderOption(id=int(r["id"]), name=r["name"], path=r["path"], depth=int(r["depth"])) for r in rows]
 
@@ -2645,7 +2682,15 @@ def _run_now_dedup(
                 [(fu, eid, when) for fu, eid in to_mark],
             )
             _unread_counts_generation += 1
-        return {"count": len(to_mark)}
+        rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
+        matched_entries = [
+            {"feed_url": fu, "entry_id": eid,
+             "title": rec_map.get((fu, eid), {}).get("title", ""),
+             "link": rec_map.get((fu, eid), {}).get("link", ""),
+             "feed_title": rec_map.get((fu, eid), {}).get("feed_title", "")}
+            for fu, eid in to_mark
+        ]
+        return {"count": len(to_mark), "entries": matched_entries}
 
     slug_index: dict[str, list[dict]] = {}
     title_index: dict[str, list[dict]] = {}
@@ -2663,6 +2708,8 @@ def _run_now_dedup(
                         "feed_url": str(entry.feed_url or ""),
                         "entry_id": str(entry.id),
                         "link": str(entry.link or ""),
+                        "title": str(entry.title or ""),
+                        "feed_title": str(getattr(entry, "feed_resolved_title", None) or entry.feed_url or ""),
                         "published_ts": published.timestamp() if published else 0.0,
                     }
                     if match_method == "slug" and entry.link:
@@ -2747,7 +2794,21 @@ def _run_now_dedup(
         )
         _unread_counts_generation += 1
 
-    return {"count": len(to_mark)}
+    all_info = (
+        list(slug_index.get(k, []) for k in slug_index)
+        + list(title_index.get(k, []) for k in title_index)
+        + list(combined_index.get(k, []) for k in combined_index)
+        + list(fuzzy_entries.get(k, []) for k in fuzzy_entries)
+    )
+    entry_map = {(r["feed_url"], r["entry_id"]): r for sublist in all_info for r in sublist}
+    matched_entries = [
+        {"feed_url": fu, "entry_id": eid,
+         "title": entry_map.get((fu, eid), {}).get("title", ""),
+         "link": entry_map.get((fu, eid), {}).get("link", ""),
+         "feed_title": entry_map.get((fu, eid), {}).get("feed_title", "")}
+        for fu, eid in to_mark
+    ]
+    return {"count": len(to_mark), "entries": matched_entries}
 
 
 def _run_now_pattern(
@@ -3799,6 +3860,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "feed_url": feed_url,
             "found": True,
             "title": getattr(feed_obj, "resolved_title", None) or getattr(feed_obj, "title", None) or feed_url,
+            "user_title": getattr(feed_obj, "user_title", None),
+            "real_title": getattr(feed_obj, "title", None),
             "website": getattr(feed_obj, "link", None),
             "added": format_datetime_for_ui(getattr(feed_obj, "added", None)),
             "last_updated": format_datetime_for_ui(getattr(feed_obj, "last_updated", None)),
@@ -3815,6 +3878,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_lead_image_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)),
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -3857,6 +3921,8 @@ def get_feed_properties(feed_url: str) -> dict:
                             fetched_title = html.unescape(str(fetched_title).strip())
                             if fetched_title and fetched_title != current_title:
                                 props["title"] = fetched_title
+                                if not props.get("real_title"):
+                                    props["real_title"] = fetched_title
                 except Exception:
                     # Don't fail the request for a metadata fetch error.
                     pass
@@ -4536,22 +4602,112 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         }
 
 
-def _bs4_main_fallback(raw_html: str) -> str:
-    """Return the inner HTML of <main> stripped of nav/header/footer/script/style, or ''."""
+def _bs4_content_fallback(raw_html: str) -> str:
+    """Extract article content via BS4 using known content-area selectors.
+
+    Tries selectors in priority order and returns the cleaned HTML of the first
+    matching element. Used when readability fails (too short) or strips images.
+    """
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
         for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
-        main = soup.find("main")
-        if not main:
-            return ""
-        # Remove the nav <div> (first column) if present (common skeleton layout)
-        for nav_div in main.find_all("div", class_=lambda c: c and "nav" in c.split()):
-            nav_div.decompose()
-        return str(main)
+        for selector_type, value in [
+            ("class", "post-body"),       # Blogger
+            ("class", "entry-content"),   # WordPress / Blogger
+            ("class", "post-content"),    # Ghost, common themes
+            ("class", "article-body"),
+            ("tag",   "article"),
+            ("tag",   "main"),
+        ]:
+            if selector_type == "class":
+                elem = soup.find(class_=lambda c, v=value: c and v in c.split())
+            else:
+                elem = soup.find(value)
+            if elem:
+                for nav_div in elem.find_all("div", class_=lambda c: c and "nav" in c.split()):
+                    nav_div.decompose()
+                return str(elem)
+        return ""
     except Exception:
         return ""
+
+
+def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
+    """Remove the lead-image opener from content HTML using BeautifulSoup.
+
+    Regex stripping leaves orphaned closing tags when the opener is nested inside
+    a container that also holds sibling elements (e.g. Tumblr npf_row with multiple
+    figures). BS4 removes the image and walks up to clean empty parent containers
+    without breaking the surrounding HTML structure.
+
+    Returns the stripped HTML string (may be empty), or None if the lead image
+    URL was not found in the content (caller should not strip anything).
+    """
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+        soup = BeautifulSoup(content_html, "html.parser")
+        target_img: object = None
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            if src == lead_image_url or html.unescape(src) == lead_image_url:
+                target_img = img
+                break
+        if target_img is None:
+            # Exact URL not found. Try Tumblr CDN size-variant matching:
+            # URLs share https://64.media.tumblr.com/{media_hash}/{token}/ across sizes,
+            # so a cached s1280x1920 lead can be matched to the s640x960 content image.
+            _TUMBLR_CDN_PREFIX_RE = re.compile(
+                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE
+            )
+            _lead_prefix_m = _TUMBLR_CDN_PREFIX_RE.match(lead_image_url)
+            if _lead_prefix_m:
+                _lead_prefix = _lead_prefix_m.group(1) + "/"
+                for img in soup.find_all("img"):
+                    src = img.get("src", "")
+                    if src.startswith(_lead_prefix):
+                        target_img = img
+                        break
+        if target_img is None:
+            # Blogger CDN size-variant matching: URLs differ only in the size
+            # segment before the filename.  Supports both simple size codes
+            # (s320, s500, s1600) and complex crop codes (w1200-h630-p-k-no-nu).
+            _BLOGGER_CDN_RE = re.compile(
+                r"^(https://(?:\d+\.bp\.blogspot\.com|(?:blogger|lh\d+)\.googleusercontent\.com)/.+?)/[sw]\d+[^/]*/(.+)$",
+                re.IGNORECASE,
+            )
+            _lead_blogger_m = _BLOGGER_CDN_RE.match(lead_image_url)
+            if _lead_blogger_m:
+                _lead_base = _lead_blogger_m.group(1)
+                _lead_file = _lead_blogger_m.group(2)
+                for img in soup.find_all("img"):
+                    src = img.get("src", "")
+                    _src_m = _BLOGGER_CDN_RE.match(src)
+                    if _src_m and _src_m.group(1) == _lead_base and _src_m.group(2) == _lead_file:
+                        target_img = img
+                        break
+        if target_img is None:
+            return None  # Lead URL not in content — caller should clear lead_image_url
+        node_to_remove = target_img
+        while True:
+            parent = node_to_remove.parent
+            if parent is None or getattr(parent, "name", None) == "[document]":
+                break
+            meaningful = [
+                c for c in parent.children
+                if not (isinstance(c, NavigableString) and not str(c).strip())
+            ]
+            if len(meaningful) == 1:
+                node_to_remove = parent  # Container becomes empty — hoist removal
+            else:
+                break  # Siblings exist — remove only the current node
+        node_to_remove.decompose()
+        body = soup.body
+        result = body.decode_contents().strip() if body else str(soup).strip()
+        return result
+    except Exception:
+        return None
 
 
 def build_readability_response(source_url: str) -> HTMLResponse:
@@ -4568,11 +4724,27 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         title = doc.short_title() or source_url
         summary = doc.summary(html_partial=True)
         article_html = sanitize_readability_html(summary).strip()
-        if len(article_html) < 100:
-            # Readability couldn't find a meaningful article block; fall back to <main>
-            fallback = _bs4_main_fallback(raw_html)
+        _bs4_fallback_used = False
+        if len(article_html) < 300:
+            # Readability found nothing meaningful (or just a short tagline/subtitle).
+            fallback = _bs4_content_fallback(raw_html)
             if fallback:
-                article_html = sanitize_readability_html(fallback).strip()
+                fallback_clean = sanitize_readability_html(fallback).strip()
+                if fallback_clean and len(fallback_clean) > len(article_html):
+                    article_html = fallback_clean
+                    _bs4_fallback_used = True
+        if not _bs4_fallback_used and "<img" in raw_html:
+            raw_img_count = raw_html.lower().count("<img")
+            art_img_count = article_html.lower().count("<img")
+            # Fall back if readability stripped all images, or if the page is
+            # image-heavy (>4 imgs) and readability kept fewer than half of them.
+            needs_fallback = art_img_count == 0 or (
+                raw_img_count > 4 and art_img_count < raw_img_count // 2
+            )
+            if needs_fallback:
+                fallback = _bs4_content_fallback(raw_html)
+                if fallback and fallback.lower().count("<img") > art_img_count:
+                    article_html = sanitize_readability_html(fallback).strip()
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -4604,6 +4776,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
+            "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
             f"<body><main><header><h1>{escaped_title}</h1>"
             f"<a href='{escaped_source}' target='_blank' rel='noopener noreferrer'>"
@@ -4713,19 +4886,30 @@ def list_entries_for_feeds(
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
             # direct SQL query sorted ASC and fetch Entry objects only for matched rows.
-            # Uses a 4× buffer to absorb feed_urls filtering without an IN clause
-            # (which would exceed SQLite's 999-variable limit at scale).
+            # When feed count fits within SQLite's 999-variable limit use an IN clause
+            # so only the target folder's entries are scanned (avoids returning the
+            # globally-oldest rows from unrelated feeds). For >999 feeds fall back to
+            # a buffer-based global scan.
             read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
-            sql_limit = max(fetch_limit * 4, fetch_limit + 500)
             try:
                 _rconn = sqlite3.connect(str(READER_DB_PATH), timeout=5.0)
                 _rconn.row_factory = sqlite3.Row
-                rows = _rconn.execute(
-                    f"SELECT feed, id FROM entries WHERE 1=1{read_clause}"
-                    f" ORDER BY published ASC LIMIT ?",
-                    (sql_limit,),
-                ).fetchall()
+                if len(feed_urls) <= 999:
+                    _feed_list = list(feed_urls)
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rconn.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY published ASC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    sql_limit = max(fetch_limit * 4, fetch_limit + 500)
+                    rows = _rconn.execute(
+                        f"SELECT feed, id FROM entries WHERE 1=1{read_clause}"
+                        f" ORDER BY published ASC LIMIT ?",
+                        (sql_limit,),
+                    ).fetchall()
                 _rconn.close()
                 for row in rows:
                     if str(row["feed"]) not in feed_urls:
@@ -4813,7 +4997,7 @@ def list_entries_for_feeds(
                         str(title_text or ""),
                         str(entry.feed_resolved_title or entry.feed_url or ""),
                         str(entry.link or ""),
-                        str(getattr(entry, "author", None) or ""),
+                        str(getattr(entry, "authors_str", None) or ""),
                         str(entry.summary or ""),
                     ]
                 ).lower()
@@ -4911,10 +5095,17 @@ def list_entries_for_feeds(
 
         _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
         _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
-        _thumb = _raw_thumb if _feed_prefs.get("show_lead_image_as_thumb", 1) else None
+        _feed_thumb_setting = _feed_prefs.get("feed_thumbnail_url")
+        _show_thumb = bool(_feed_prefs.get("show_lead_image_as_thumb", 1))
+        if _feed_thumb_setting == "__favicon__":
+            _raw_thumb = None  # let favicon fallback show via show_thumbnail=True
+        elif _feed_thumb_setting:
+            _raw_thumb = str(_feed_thumb_setting)  # override per-entry
+        _thumb = _raw_thumb if _show_thumb else None
         rec.update(
             {
                 "thumbnail_url": _thumb,
+                "show_thumbnail": _show_thumb,
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
                 "manual_tags": manual_tags,
@@ -5139,6 +5330,39 @@ def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link
     return entry_link
 
 
+def _lead_image_display_url(image_url: str | None) -> str | None:
+    """Return the URL to use in the browser for a lead image.
+
+    Some sites set Cross-Origin-Resource-Policy: same-site on their images,
+    which modern browsers enforce for cross-origin <img> loads — the image
+    appears as a broken icon even though the server returns HTTP 200.
+    For such domains we route the image through our server-side proxy so the
+    browser only ever sees a same-origin request.
+
+    Results are cached in _CORP_DOMAIN_CACHE (per process, per domain) so only
+    the first new domain incurs a HEAD request.
+    """
+    if not image_url:
+        return None
+    domain = urlparse(image_url).netloc
+    if domain not in _CORP_DOMAIN_CACHE:
+        # Optimistically return the direct URL and check CORP in the background.
+        # First render may show a broken image for CORP-gated domains; subsequent
+        # renders proxy correctly once the cache is warm.
+        def _check_corp(url: str = image_url, d: str = domain) -> None:
+            try:
+                resp = httpx.head(url, follow_redirects=True, timeout=3.0, headers={"User-Agent": READABILITY_USER_AGENT})
+                corp = resp.headers.get("cross-origin-resource-policy", "").strip().lower()
+                _CORP_DOMAIN_CACHE[d] = corp in ("same-site", "same-origin")
+            except Exception:
+                _CORP_DOMAIN_CACHE[d] = False
+        threading.Thread(target=_check_corp, daemon=True).start()
+        return image_url
+    if _CORP_DOMAIN_CACHE.get(domain):
+        return f"/api/img?u={quote(image_url)}"
+    return image_url
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -5146,7 +5370,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             return _build_orphan_entry_detail(feed_url, entry_id)
 
         published_dt = entry.published or entry.updated or entry.added
-        author_name = (getattr(entry, "author", None) or "").strip() or None
+        author_name = (getattr(entry, "authors_str", None) or "").strip() or None
 
         content = entry.get_content(prefer_summary=False)
         content_html = None
@@ -5291,22 +5515,40 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         # Discard avatar/portrait images (author headshots, profile pics) that
         # some feeds embed as the first image; prefer no image over a face.
-        if lead_image_url and lead_image_service._AVATAR_HINT_PATTERNS.search(lead_image_url):
-            lead_image_url = None
-        # If no inline image found, try the source page — but only if this
-        # entry has NEVER been processed before (key absent from cache).
-        # Using `not in` (not `.get() is None`) avoids re-fetching entries
-        # that were already processed and found to have no image (None stored).
+        # Check path only — CDN domains like "googleusercontent.com" contain
+        # "user" and would false-positive on a full-URL search.
+        if lead_image_url:
+            _lead_parsed = urlparse(lead_image_url)
+            if lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path):
+                lead_image_url = None
+        # Try source scraping when the entry has never been processed (ABSENT cache)
+        # and the feed provides no inline image — covers article-only feeds where
+        # the best image lives on the source page, not in the feed content.
+        # (The previous Condition B — "None stored but feed now has image" — was
+        # removed: it conflated auto-discovered None with user-cleared None,
+        # causing the OG to pop back whenever the user cleared an entry's image.
+        # The background job handles auto-retry of negative entries on its own schedule.)
         _cache_key = (str(entry.feed_url), str(entry.id))
-        if lead_image_url is None and entry.link and _cache_key not in lead_image_service._cache:
-            lead_image_url = lead_image_service._fetch_source_lead_image(entry.link)
-            # Always store (even None) so subsequent opens skip the HTTP round-trip.
-            lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+        _cached_val = lead_image_service._cache.get(_cache_key, "ABSENT")
+        _should_source_fetch = (
+            _cached_val == "ABSENT"
+            and lead_image_url is None
+            and not lead_image_service._is_feed_none_strategy(str(entry.feed_url))
+        )
+        _pending_lead_image = False
+        if _should_source_fetch and entry.link:
+            # Don't block the request on a source-page HTTP fetch.  Queue it in
+            # the background; the result is persisted and will appear next open.
+            lead_image_service.queue_source_fetch(
+                str(entry.feed_url), str(entry.id), entry.link
+            )
+            _pending_lead_image = _show_lead_in_article and not video_id
         # If we injected a YouTube embed for this entry, avoid showing a
         # separate lead image (typically the video thumbnail) above the
         # embedded player — it looks redundant and visually noisy.
         if video_id:
             lead_image_url = None
+            _pending_lead_image = False
 
         # Remove inline images whose src URL is a logo, tracker, or avatar — these
         # are typically brand assets or analytics pixels embedded by feed publishers
@@ -5317,14 +5559,86 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 if not src_m:
                     return m.group(0)
                 src = src_m.group(1) or src_m.group(2) or ""
+                _src_parsed = urlparse(src)
+                # Check avatar hints against path only — CDN domains like
+                # "googleusercontent.com" contain "user" and would false-positive
+                # on the full URL.
                 if (
                     lead_image_service._LOGO_URL_PATTERNS.search(src)
-                    or lead_image_service._TRACKER_URL_PATTERNS.search(src)
-                    or lead_image_service._AVATAR_HINT_PATTERNS.search(src)
+                    or lead_image_service._TRACKER_URL_PATTERNS.search(_src_parsed.netloc)
+                    or lead_image_service._TRACKER_URL_PATTERNS.search(_src_parsed.path)
+                    or lead_image_service._AVATAR_HINT_PATTERNS.search(_src_parsed.path)
+                    or lead_image_service._SITE_CHROME_DOMAIN_PATTERNS.search(_src_parsed.netloc)
+                    or lead_image_service._SITE_CHROME_PATH_PATTERNS.search(_src_parsed.path)
                 ):
                     return ""
                 return m.group(0)
             content_html = re.sub(r"<img\b[^>]*/?>", _strip_bad_img, content_html, flags=re.IGNORECASE) or None
+
+        # Strip orphaned <source> elements (meaningless outside <picture>/<video>,
+        # but some feeds — notably Substack — include them for WebP alternatives).
+        # Safe to remove: the <img> fallback still renders the image.
+        # Skip <source> elements inside <video> or <picture> — those are required.
+        if isinstance(content_html, str) and "<source" in content_html.lower():
+            try:
+                from bs4 import BeautifulSoup as _BS4
+                _src_soup = _BS4(content_html, "html.parser")
+                for _src_tag in _src_soup.find_all("source"):
+                    if getattr(_src_tag.parent, "name", None) not in ("video", "picture"):
+                        _src_tag.decompose()
+                content_html = (
+                    _src_soup.body.decode_contents() if _src_soup.body else str(_src_soup)
+                ).strip() or None
+            except Exception:
+                content_html = re.sub(r"<source\b[^>]*/?>", "", content_html, flags=re.IGNORECASE) or None
+
+        # Steam CDN serves localized images as /hash/english.png (404s for non-English)
+        # with an onerror fallback to /hash.png (200). Strip the language subfolder so
+        # the image loads directly without needing the stripped onerror handler.
+        if isinstance(content_html, str) and "clan.fastly.steamstatic.com" in content_html:
+            content_html = re.sub(
+                r"(https://clan\.fastly\.steamstatic\.com/images/\d+/[a-f0-9]{40})/[a-z]+(\.\w+)",
+                r"\1\2",
+                content_html,
+                flags=re.IGNORECASE,
+            )
+
+        # Flat-text feeds (e.g. forum/tracker news) use <br> for line breaks with no
+        # <p> structure.  When there are at least 3 <br> tags and more <br>s than <p>s,
+        # promote consecutive <br> runs to paragraph breaks so the entry renders as
+        # readable paragraphs instead of a wall of text.
+        if isinstance(content_html, str):
+            # Some feeds (e.g. Orpheus) double-encode <br> as &lt;br&gt; inside CDATA;
+            # normalize those to actual <br> tags before the conversion check.
+            if content_html.lower().count("&lt;br") >= 3:
+                content_html = re.sub(r"&lt;br\s*/?\s*&gt;", "<br>", content_html, flags=re.IGNORECASE)
+            _br_count = content_html.lower().count("<br")
+            _p_count = content_html.lower().count("<p")
+            if _br_count >= 3 and _br_count > _p_count:
+                content_html = re.sub(
+                    r"(?:<br\s*/?>\s*){2,}",
+                    "</p><p>",
+                    content_html,
+                    flags=re.IGNORECASE,
+                )
+                if not content_html.startswith("<p"):
+                    content_html = "<p>" + content_html
+                if not content_html.rstrip().endswith("</p>"):
+                    content_html = content_html + "</p>"
+
+        # Strip Substack React UI chrome elements that render as broken/orphaned
+        # widgets without Substack's CSS (expand buttons, pencraft layout divs).
+        if isinstance(content_html, str) and (
+            "image-link-expand" in content_html or "pencraft" in content_html
+        ):
+            try:
+                from bs4 import BeautifulSoup
+                _cs = BeautifulSoup(content_html, "html.parser")
+                for _junk in _cs.select(".image-link-expand, [class*=pencraft]"):
+                    _junk.decompose()
+                content_html = (_cs.body.decode_contents() if _cs.body else str(_cs)).strip() or None
+            except Exception:
+                pass
 
         # Extract img title/alt text before opener stripping so content_html is intact.
         # Useful for comics where the hover text is the punchline (xkcd, etc.).
@@ -5347,105 +5661,164 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     image_title_text = _candidate
                     break
 
+        # Check persisted alt text (from a previous background HTML fetch).
+        if image_title_text is None:
+            image_title_text = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
+
+        with get_meta_connection() as _prefs_conn:
+            _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
+        _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
+
         # Strip the opener thumbnail and dedup against the remaining content.
+        # Only when we will actually display the lead image at the top — if
+        # show_lead_image_in_article is off the image should stay in place.
         # Order matters: strip the leading <img> first, then check if the lead
         # image URL still appears in what remains.  This prevents the case where
         # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
         # incorrectly suppressed just because it appears at the top of content.
         _LEAD_IMG_OPENER_RE = re.compile(
             r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
+            r"(?:<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>\s*)*"  # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>)
             r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
             r"(?:<a\b[^>]*>\s*)?"
+            r"(?:<div\b[^>]*>\s*)?"   # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
             r"<img\b[^>]*/?>",
             re.IGNORECASE | re.DOTALL,
         )
         _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
-        if lead_image_url and isinstance(content_html, str):
+        if _show_lead_in_article and lead_image_url and isinstance(content_html, str):
             _m = _LEAD_IMG_OPENER_RE.match(content_html)
             if _m:
-                _matched_opener = _m.group(0)
-                content_html = content_html[_m.end() :].lstrip() or None
-                # If the opener consumed an <a> tag, check whether there is text
-                # content between the stripped <img> and the closing </a>.  If so,
-                # that text is a hyperlink (e.g. "Click here to see the bonus
-                # panel!" or "New comic!") — restore the <a> so it stays linked.
-                _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
-                if _a_opener_m and content_html:
-                    _close_m = _CLOSE_A_RE.search(content_html)
-                    if _close_m:
-                        _between_text = re.sub(r"<[^>]+>", "", content_html[: _close_m.start()]).strip()
-                        if _between_text:
-                            # Text exists — restore <a> so it wraps that text
-                            content_html = _a_opener_m.group(0) + content_html
-                        else:
-                            # No text — remove the orphaned </a> at the start
-                            content_html = content_html[_close_m.end() :].lstrip() or None
-                if content_html and (
+                # Use BS4 for structurally-safe opener removal. Regex stripping
+                # leaves orphaned closing tags when the opener is nested inside a
+                # container with siblings (e.g. Tumblr npf_row with 2 figures —
+                # stripping "<div><figure><img/>" leaves "</figure></div>" which
+                # the browser uses to close .entry-content, pushing remaining
+                # images outside the constrained container). BS4 walks up and
+                # removes exactly the empty ancestor containers without touching
+                # siblings.  Anchored-link text ("New comic!") is preserved
+                # automatically: BS4 removes only the <img> (or its empty parent
+                # chain) and leaves surrounding text + <a> intact.
+                _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
+                if _bs4_stripped is not None:
+                    content_html = _bs4_stripped or None
+                    # Strip blank artifacts (empty paragraphs, lone <br>s, &nbsp;-only
+                    # paragraphs) left at the top after the image container is removed.
+                    if content_html:
+                        content_html = re.sub(
+                            r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
+                            "",
+                            content_html,
+                            flags=re.IGNORECASE,
+                        ).strip() or None
+                else:
+                    # BS4 returned None — lead_image_url is not in any <img> src in
+                    # the opener.  This means the opener is a *different* image (e.g.
+                    # a comicsthumbs placeholder) while lead_image_url is the full-size
+                    # source page image.  Fall back to raw regex strip of the opener so
+                    # lead_image_url still shows at top and the thumbnail is removed.
+                    # The <a>-restoration logic preserves any "New comic!" link text.
+                    _matched_opener = _m.group(0)
+                    content_html = content_html[_m.end():].lstrip() or None
+                    _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
+                    if _a_opener_m and content_html:
+                        _close_m = _CLOSE_A_RE.search(content_html)
+                        if _close_m:
+                            _between_text = re.sub(r"<[^>]+>", "", content_html[:_close_m.start()]).strip()
+                            if _between_text:
+                                content_html = _a_opener_m.group(0) + content_html
+                            else:
+                                content_html = content_html[_close_m.end():].lstrip() or None
+                if content_html and lead_image_url and (
                     lead_image_url in content_html or lead_image_url in html.unescape(content_html)
                 ):
                     lead_image_url = None
-            elif lead_image_url in content_html or lead_image_url in html.unescape(content_html):
-                # Lead URL is buried in the content (not at the opener position).
-                # Hoist it to the top by keeping lead_image_url and stripping the
-                # inline occurrence — along with its enclosing block — so the image
-                # doesn't render twice and doesn't leave an empty card shell.
-                _fig_with_lead_re = re.compile(r'<figure\b[^>]*>.*?</figure\s*>', re.IGNORECASE | re.DOTALL)
-                content_html = _fig_with_lead_re.sub(
-                    lambda _m: '' if (lead_image_url in _m.group(0) or lead_image_url in html.unescape(_m.group(0))) else _m.group(0),
-                    content_html,
-                )
-                # If still present, strip the entire enclosing <div> block rather
-                # than just the <img> tag to avoid leaving empty card shells behind.
-                if lead_image_url in content_html or lead_image_url in html.unescape(content_html):
-                    _DIV_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
-                    _img_idx = content_html.find(lead_image_url)
-                    if _img_idx < 0:
-                        _img_idx = html.unescape(content_html).find(lead_image_url)
-                    if _img_idx >= 0:
-                        _prefix = content_html[:_img_idx]
-                        _div_start = None
-                        for _dm in _DIV_RE.finditer(_prefix):
-                            if not _dm.group(1):
-                                _div_start = _dm.start()
-                        if _div_start is not None:
-                            _depth = 0
-                            _div_end = None
-                            for _dm in _DIV_RE.finditer(content_html, _div_start):
-                                _depth += -1 if _dm.group(1) else 1
-                                if _depth == 0:
-                                    _div_end = _dm.end()
-                                    break
-                            if _div_end is not None:
-                                content_html = content_html[:_div_start] + content_html[_div_end:]
-                # Strip any remaining bare <img> with this URL as a final fallback.
-                content_html = re.sub(
-                    r'<img\b[^>]*/?>',
-                    lambda _m: '' if (lead_image_url in _m.group(0) or lead_image_url in html.unescape(_m.group(0))) else _m.group(0),
-                    content_html, flags=re.IGNORECASE,
-                )
-                content_html = content_html.strip() or None
+            elif lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
+                _entry_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
+                if _entry_strategy == "artwork":
+                    # Artwork mode: the image appears after the description (e.g. ArtStation).
+                    # Hoist it to the top by stripping it from its position in the content.
+                    _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
+                    if _bs4_stripped is not None:
+                        content_html = _bs4_stripped or None
+                    else:
+                        lead_image_url = None
+                else:
+                    # Lead URL is buried in the content (not at the opener position).
+                    # The image was intentionally placed mid-article by the author —
+                    # don't move it. Show it in its natural position only.
+                    lead_image_url = None
+
+        # Tumblr CDN size-variant dedup: the background job may cache a s1280x1920 lead
+        # while the feed content has the same photo at s640x960.  String equality misses
+        # this so the normal dedup above doesn't fire.  Check by the shared
+        # {media_hash}/{token} URL prefix — if that prefix is still present in the
+        # (possibly BS4-stripped) content the photo was NOT removed from the article,
+        # so showing it again as a separate lead image would be a duplicate.
+        if _show_lead_in_article and lead_image_url and isinstance(content_html, str):
+            _tumblr_prefix_m = re.match(
+                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", lead_image_url, re.IGNORECASE
+            )
+            if _tumblr_prefix_m:
+                _tumblr_prefix = _tumblr_prefix_m.group(1) + "/"
+                if _tumblr_prefix in content_html or _tumblr_prefix in html.unescape(content_html):
+                    lead_image_url = None
 
         # If lead_image_url came from source scraping and the remaining content
         # is essentially just a thumbnail wrapper (minimal text after stripping
         # all imgs), strip the inline img tags so thumbnails don't appear below
         # the full-size lead image.
-        if lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
-            _no_imgs = re.sub(r"<img\b[^>]*/?>", "", content_html, flags=re.IGNORECASE)
-            _text_only = re.sub(r"<[^>]+>", " ", _no_imgs)
-            _text_only = html.unescape(re.sub(r"\s+", " ", _text_only)).strip()
-            if len(_text_only) < 120:
-                content_html = _no_imgs.strip() or None
+        if _show_lead_in_article and lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
+            _remaining_imgs = len(re.findall(r"<img\b", content_html, re.IGNORECASE))
+            if _remaining_imgs <= 1:
+                # Tumblr guard: a remaining image with a different media hash/token
+                # prefix than the lead image is a genuine second photo — keep it.
+                _skip_strip = False
+                if _remaining_imgs == 1 and lead_image_url:
+                    _tumblr_lead_m = re.match(
+                        r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/",
+                        lead_image_url, re.IGNORECASE,
+                    )
+                    if _tumblr_lead_m:
+                        _lead_pfx = _tumblr_lead_m.group(1)
+                        _rem_src_m = re.search(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html, re.IGNORECASE)
+                        if _rem_src_m:
+                            _rem_url = html.unescape(_rem_src_m.group(1))
+                            _tumblr_rem_m = re.match(
+                                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/",
+                                _rem_url, re.IGNORECASE,
+                            )
+                            if _tumblr_rem_m and _tumblr_rem_m.group(1) != _lead_pfx:
+                                _skip_strip = True
+                if not _skip_strip:
+                    _no_imgs = re.sub(r"<img\b[^>]*/?>", "", content_html, flags=re.IGNORECASE)
+                    _text_only = re.sub(r"<[^>]+>", " ", _no_imgs)
+                    _text_only = html.unescape(re.sub(r"\s+", " ", _text_only)).strip()
+                    if len(_text_only) < 120:
+                        content_html = _no_imgs.strip() or None
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
         # where the alt text lives on the full-size img on the article page.
-        # Uses the source HTML cache from lead image resolution — no extra HTTP call
-        # when the entry was just opened for the first time.
+        # If the source HTML is already in-memory (same session as the lead-image
+        # fetch) run synchronously — no network cost.  Otherwise queue a background
+        # fetch so the render doesn't block on a slow HTTP GET; alt text will appear
+        # on the next open once the background thread stores it in the DB.
         if image_title_text is None and lead_image_url and entry.link:
-            _fetched_alt = lead_image_service.fetch_entry_image_alt(entry.link, lead_image_url=lead_image_url)
-            if _fetched_alt:
-                _fetched_alt = re.sub(r"<[^>]+>", "", _fetched_alt).strip() or None
-            image_title_text = _fetched_alt or None
+            if entry.link in lead_image_service._source_html_cache:
+                _fetched_alt = lead_image_service.fetch_entry_image_alt(entry.link, lead_image_url=lead_image_url)
+                if _fetched_alt:
+                    _fetched_alt = re.sub(r"<[^>]+>", "", _fetched_alt).strip() or None
+                image_title_text = _fetched_alt or None
+                if image_title_text:
+                    lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), image_title_text)
+            else:
+                lead_image_service.queue_source_html_fetch(
+                    entry.link,
+                    feed_url=str(entry.feed_url),
+                    entry_id=str(entry.id),
+                    lead_image_url=lead_image_url,
+                )
 
         # Drop trivially generic alt texts that add no information (e.g. Bootstrap
         # class names used as alt values, or single-word placeholder strings).
@@ -5489,6 +5862,17 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             if _bonus_url:
                 _bonus_img = f'<p><img src="{html.escape(_bonus_url, quote=False)}" alt="Bonus panel" /></p>'
                 content_html = (content_html or "") + _bonus_img
+            # The SMBC feed wraps the comic <img> in an <a> with the text
+            # "Click here to go see the bonus panel!".  After the lead-image
+            # opener strip removes the <img>, that link text is left as an
+            # orphaned anchor.  It's redundant because we show the panel inline.
+            if isinstance(content_html, str):
+                content_html = re.sub(
+                    r'<a\b[^>]*>(?:\s*<br\s*/?>\s*)*Click here to go see the bonus panel!\s*</a\s*>',
+                    '',
+                    content_html,
+                    flags=re.IGNORECASE,
+                ).strip() or None
 
         lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
 
@@ -5505,9 +5889,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
 
-        with get_meta_connection() as _prefs_conn:
-            _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
-        if not _disp.get("show_lead_image_in_article", 1):
+        if not _show_lead_in_article:
             lead_image_url = None
         if not should_show_caption(
             image_title_text,
@@ -5538,7 +5920,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
-            "lead_image_url": lead_image_url,
+            "lead_image_url": _lead_image_display_url(lead_image_url),
+            "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
@@ -5554,6 +5937,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
+            "pending_lead_image": _pending_lead_image,
         }
 
 
@@ -5593,6 +5977,10 @@ def entry_pane(
             upsert_entry_read_state(feed_url, entry_id)
         except Exception:
             LOGGER.warning("upsert_entry_read_state failed (db contention?); entry still marked read in reader", exc_info=True)
+        with unread_counts_cache_lock:
+            global _unread_counts_generation
+            _unread_counts_generation += 1
+            unread_counts_cache.clear()
         selected_entry["read"] = True
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
@@ -5705,18 +6093,46 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
     return feed_url
 
 
-def normalize_feed_url(feed_url: str) -> str:
-    """Normalize a feed URL for consistent storage.
+_FORMAT_SELECTOR_PARAMS = frozenset({"alt"})
+_FORMAT_SELECTOR_VALUES = frozenset({"rss", "rss2", "atom"})
 
-    - Strips trailing slashes from paths longer than "/", so that
-      "/feed" and "/feed/" are treated as the same feed.
+
+def normalize_feed_url(feed_url: str) -> str:
+    """Normalize a feed URL for consistent storage and deduplication.
+
+    - Strips trailing slashes from paths longer than "/".
+    - Strips format-selector query params (e.g. Blogger's ?alt=rss) that
+      select a serialization format without changing the feed content, so
+      the Atom and RSS variants of the same Blogger feed are treated as one.
+    - Rewrites ArtStation subdomain feeds (username.artstation.com/rss) to the
+      main-domain form (www.artstation.com/username.rss) which works for all
+      usernames including those with underscores that fail TLS hostname validation.
     - Other normalization (YouTube links) is handled separately.
     """
+    import re as _re
+    _as_m = _re.match(r'(https?)://([^.]+)\.artstation\.com/rss$', feed_url.strip(), _re.IGNORECASE)
+    if _as_m:
+        feed_url = f'{_as_m.group(1)}://www.artstation.com/{_as_m.group(2)}.rss'
     try:
         parsed = urlparse(feed_url)
         path = parsed.path
         if path and path != "/" and path.endswith("/"):
             path = path.rstrip("/")
+        # Strip pure format-selector params (alt=rss, alt=atom, etc.) only when
+        # at least one such param is actually present — avoids re-encoding the
+        # query string (which would turn e.g. ":" into "%3A" unnecessarily).
+        path_changed = path != parsed.path
+        if parsed.query:
+            from urllib.parse import parse_qsl, urlencode
+            all_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+            kept = [(k, v) for k, v in all_pairs
+                    if not (k in _FORMAT_SELECTOR_PARAMS and v.lower() in _FORMAT_SELECTOR_VALUES)]
+            if len(kept) != len(all_pairs):
+                new_query = urlencode(kept)
+                feed_url = parsed._replace(path=path, query=new_query).geturl()
+            elif path_changed:
+                feed_url = parsed._replace(path=path).geturl()
+        elif path_changed:
             feed_url = parsed._replace(path=path).geturl()
     except Exception:
         pass
@@ -6254,6 +6670,23 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
 # Startup/shutdown handled by the lifespan() context manager above.
 
 
+@app.get("/entries/lead-image")
+def entry_lead_image_status(feed_url: str, entry_id: str):
+    """Lightweight polling endpoint for background lead-image fetch status.
+
+    Returns {"status": "pending"|"none"|"ready", "url": str|null}.
+    """
+    key = (feed_url, entry_id)
+    cached = lead_image_service._cache.get(key, "ABSENT")
+    in_progress = key in lead_image_service._source_fetch_in_progress
+    if cached != "ABSENT" and cached is not None:
+        display_url = _lead_image_display_url(cached)
+        return JSONResponse({"status": "ready", "url": display_url})
+    if in_progress:
+        return JSONResponse({"status": "pending", "url": None})
+    return JSONResponse({"status": "none", "url": None})
+
+
 @app.get("/entries/readability")
 def entry_readability(
     url: str,
@@ -6289,6 +6722,7 @@ def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
+            "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
             f"<body><main><header>"
             f"<a href='{escaped_source}' target='_blank' rel='noopener noreferrer'>Open original</a>"
@@ -6679,7 +7113,14 @@ def home(
         if selected_entry and not selected_entry["read"]:
             with get_reader() as reader:
                 reader.mark_entry_as_read((feed_url, entry_id))
-            upsert_entry_read_state(feed_url, entry_id)
+            try:
+                upsert_entry_read_state(feed_url, entry_id)
+            except Exception:
+                LOGGER.warning("upsert_entry_read_state failed in home (db contention?); entry still marked read in reader", exc_info=True)
+            with unread_counts_cache_lock:
+                global _unread_counts_generation
+                _unread_counts_generation += 1
+                unread_counts_cache.clear()
             selected_entry["read"] = True
             for post in posts:
                 if post["feed_url"] == feed_url and post["id"] == entry_id:
@@ -7240,12 +7681,114 @@ def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
 
 
+@app.post("/feeds/set-user-title")
+def set_feed_user_title_route(feed_url: str = Form(...), user_title: str = Form(...)):
+    with get_reader() as reader:
+        title_to_set = user_title.strip() or None
+        reader.set_feed_user_title(feed_url, title_to_set)
+    with feed_title_map_cache_lock:
+        feed_title_map_cache.clear()
+    return JSONResponse({"ok": True, "user_title": user_title.strip() or None})
+
+
 @app.get("/folders/properties")
 def folder_properties(folder_id: int):
     return JSONResponse(get_folder_properties(folder_id))
 
 
-_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "none"}
+_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "none", "webcomic", "artwork"}
+
+
+def _auto_tag_webcomic_feeds() -> None:
+    """Set strategy='webcomic' for all feeds in folders whose name contains 'comic'.
+
+    Only sets non-manually-locked feeds so user overrides are respected.
+    Runs at startup so new feeds added to comics folders are tagged immediately.
+    """
+    try:
+        with get_meta_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ff.feed_url
+                FROM folder_feeds ff
+                JOIN folders f ON ff.folder_id = f.id
+                WHERE lower(f.name) LIKE '%comic%'
+                """
+            ).fetchall()
+            feed_urls = [str(r["feed_url"]) for r in rows]
+            if not feed_urls:
+                return
+            now = time.time()
+            for feed_url in feed_urls:
+                existing = conn.execute(
+                    "SELECT strategy, manual FROM feed_lead_image_strategy WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchone()
+                if existing and existing["manual"]:
+                    continue
+                if existing and existing["strategy"] in ("webcomic", "artwork"):
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at, manual)
+                    VALUES (?, 'webcomic', ?, 0)
+                    ON CONFLICT(feed_url) DO UPDATE SET
+                        strategy = 'webcomic',
+                        detected_at = excluded.detected_at
+                    WHERE manual = 0
+                    """,
+                    (feed_url, now),
+                )
+                lead_image_service.store_feed_strategy(feed_url, "webcomic", manual=False)
+    except Exception:
+        LOGGER.exception("_auto_tag_webcomic_feeds failed")
+
+
+# Domains whose feeds use the artwork image layout (image appended after text).
+# Feed URLs matching any of these get strategy='artwork' automatically.
+_ARTWORK_FEED_DOMAINS = (
+    "artstation.com",
+)
+
+
+def _auto_tag_artwork_feeds() -> None:
+    """Set strategy='artwork' for feeds from known art-portfolio domains.
+
+    Matches on feed URL, not folder name.  Skips manually-locked strategies.
+    Runs at startup so new and existing feeds are migrated automatically.
+    """
+    try:
+        with get_meta_connection() as conn:
+            now = time.time()
+            for domain in _ARTWORK_FEED_DOMAINS:
+                rows = conn.execute(
+                    "SELECT DISTINCT feed_url FROM folder_feeds WHERE lower(feed_url) LIKE ?",
+                    (f"%{domain}%",),
+                ).fetchall()
+                for row in rows:
+                    feed_url = str(row["feed_url"])
+                    existing = conn.execute(
+                        "SELECT strategy, manual FROM feed_lead_image_strategy WHERE feed_url = ?",
+                        (feed_url,),
+                    ).fetchone()
+                    if existing and existing["manual"]:
+                        continue
+                    if existing and existing["strategy"] == "artwork":
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at, manual)
+                        VALUES (?, 'artwork', ?, 0)
+                        ON CONFLICT(feed_url) DO UPDATE SET
+                            strategy = 'artwork',
+                            detected_at = excluded.detected_at
+                        WHERE manual = 0
+                        """,
+                        (feed_url, now),
+                    )
+                    lead_image_service.store_feed_strategy(feed_url, "artwork", manual=False)
+    except Exception:
+        LOGGER.exception("_auto_tag_artwork_feeds failed")
 
 
 @app.post("/feeds/strategy")
@@ -7299,6 +7842,16 @@ def set_feed_display_pref_route(
     with get_meta_connection() as conn:
         upsert_feed_display_pref(conn, feed_url, key, value)
     return JSONResponse({"ok": True, "key": key, "value": value})
+
+
+@app.post("/feeds/thumbnail-url")
+def set_feed_thumbnail_url_route(
+    feed_url: str = Form(...),
+    thumbnail_url: str = Form(default=""),
+):
+    with get_meta_connection() as conn:
+        upsert_feed_thumbnail_url(conn, feed_url, thumbnail_url.strip() or None)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/highlights")
@@ -7919,19 +8472,38 @@ def get_feed_duplicates():
                     ),
                 })
 
-    return JSONResponse({"same_folder": same_folder, "cross_folder": cross_folder})
+    # Upgradable: URL carries a format-selector query param (e.g. ?alt=rss)
+    # whose canonical form is not already subscribed anywhere.
+    # Trailing-slash-only differences are intentionally excluded — those are
+    # handled by the same/cross-folder dedup logic above.
+    upgradable: list[dict] = []
+    for url, folders in url_folders.items():
+        canonical = normalize_feed_url(url)
+        if canonical == url or canonical in url_folders:
+            continue
+        # Skip if only the path changed (trailing slash stripped) — query is unchanged.
+        if urlparse(url).query == urlparse(canonical).query:
+            continue
+        upgradable.append({
+            "current": url,
+            "upgrade_to": canonical,
+            "folders": [{"id": fid, "name": fname} for fid, fname in folders],
+        })
+
+    return JSONResponse({"same_folder": same_folder, "cross_folder": cross_folder, "upgradable": upgradable})
 
 
 @app.post("/feeds/deduplicate")
 async def deduplicate_feeds(request: Request):
-    """Remove slash-duplicate feeds.
+    """Remove slash-duplicate feeds and optionally upgrade format-selector URLs.
 
     Body (JSON):
-      same_folder: handled automatically — remove slash variant from shared folders.
       cross_folder_choices: list of {keep, remove, folder_ids} — user-selected folder assignments.
+      upgrade_choices: list of {current, upgrade_to} — feeds to switch from RSS to Atom URL.
     """
     body = await request.json()
     cross_choices: list[dict] = body.get("cross_folder_choices", [])
+    upgrade_choices: list[dict] = body.get("upgrade_choices", [])
 
     data = get_feed_duplicates()
     import json as _json
@@ -7984,8 +8556,38 @@ async def deduplicate_feeds(request: Request):
         removed.append({"removed": remove, "kept": keep, "folders": target_folder_ids})
         LOGGER.info("[deduplicate] cross-folder: removed %s, kept %s in folders %s", remove, keep, target_folder_ids)
 
+    # Format upgrades: replace the RSS-variant URL with its Atom canonical in-place.
+    upgraded: list[dict] = []
+    for choice in upgrade_choices:
+        current = choice["current"]
+        upgrade_to = choice["upgrade_to"]
+        with get_meta_connection() as conn:
+            folder_ids = [r[0] for r in conn.execute(
+                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (current,)
+            ).fetchall()]
+        # Add canonical Atom URL to the same folders.
+        with get_reader() as reader:
+            reader.add_feed(upgrade_to, exist_ok=True)
+        with get_meta_connection() as conn:
+            for fid in folder_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (fid, upgrade_to),
+                )
+        # Remove the RSS variant from all folders; delete if no longer referenced.
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (current,))
+            still_used = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (current,)
+            ).fetchone()
+        if not still_used:
+            with get_reader() as reader:
+                reader.delete_feed(current, missing_ok=True)
+        upgraded.append({"from": current, "to": upgrade_to})
+        LOGGER.info("[deduplicate] upgraded %s → %s", current, upgrade_to)
+
     invalidate_meta_structure_cache()
-    return JSONResponse({"removed": removed, "count": len(removed)})
+    return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded)})
 
 
 @app.post("/refresh")
@@ -8205,7 +8807,10 @@ def mark_entry_read(
     with get_reader() as reader:
         if read:
             reader.mark_entry_as_read((feed_url, entry_id))
-            upsert_entry_read_state(feed_url, entry_id)
+            try:
+                upsert_entry_read_state(feed_url, entry_id)
+            except Exception:
+                LOGGER.warning("upsert_entry_read_state failed in mark_entry_read (db contention?)", exc_info=True)
             if is_async_action_request(request, "lectio-entry-read-toggle"):
                 entry_obj = reader.get_entry((feed_url, entry_id), None)
                 feed_obj = reader.get_feed(feed_url, None)
@@ -8218,7 +8823,10 @@ def mark_entry_read(
                 )
         else:
             reader.mark_entry_as_unread((feed_url, entry_id))
-            delete_entry_read_state(feed_url, entry_id)
+            try:
+                delete_entry_read_state(feed_url, entry_id)
+            except Exception:
+                LOGGER.warning("delete_entry_read_state failed in mark_entry_read (db contention?)", exc_info=True)
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -8889,6 +9497,57 @@ async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, F
     parts = [f"{v} {k.replace('_', ' ')}" for k, v in summary.items() if v]
     msg = "Takeout imported: " + ", ".join(parts) if parts else "Takeout imported (nothing new to add)."
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
+
+
+@app.get("/api/unread-counts")
+def api_unread_counts() -> JSONResponse:
+    """Return per-feed unread counts. Used by the client to refresh sidebar
+    badges after bulk mark-read actions that may affect off-screen entries."""
+    counts = get_unread_counts_by_feed()
+    return JSONResponse(counts)
+
+
+@app.get("/api/img")
+async def api_img_proxy(u: str) -> Response:
+    """Server-side image proxy.
+
+    Fetches external images on behalf of the browser so that
+    Cross-Origin-Resource-Policy restrictions (same-site / same-origin) set by
+    the image server do not prevent them from loading in the entry pane.
+    Only http:// and https:// URLs are accepted; private / loopback addresses
+    are blocked to prevent SSRF.
+    """
+    import ipaddress
+    import socket as _socket
+    parsed = urlparse(u)
+    if parsed.scheme not in ("http", "https"):
+        return Response(status_code=400)
+    host = parsed.hostname or ""
+    try:
+        addr_infos = _socket.getaddrinfo(host, None, type=_socket.SOCK_STREAM)
+        for _fam, _typ, _proto, _can, _sockaddr in addr_infos:
+            ip = ipaddress.ip_address(_sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return Response(status_code=403)
+    except Exception:
+        return Response(status_code=400)
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
+            resp = await client.get(
+                u,
+                headers={"User-Agent": READABILITY_USER_AGENT},
+            )
+            content_type = resp.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                return Response(status_code=422)
+            cache_ctrl = resp.headers.get("cache-control", "public, max-age=86400")
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={"Cache-Control": cache_ctrl},
+            )
+    except Exception:
+        return Response(status_code=502)
 
 
 @app.get("/healthz")

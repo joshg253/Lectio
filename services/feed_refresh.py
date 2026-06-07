@@ -109,13 +109,17 @@ class FeedRefreshService:
         if "certificate" in lowered or "ssl" in lowered or "tls" in lowered:
             return "TLS/SSL handshake failed while connecting to the feed URL."
         if "403" in lowered or "forbidden" in lowered:
-            return "The feed server denied access (HTTP 403 Forbidden)."
+            return "The feed server denied access (HTTP 403 Forbidden). The server may be blocking this IP or user-agent."
+        if "410" in lowered or "gone" in lowered:
+            return "The feed has been permanently removed (HTTP 410 Gone). Feed updates have been disabled."
         if "404" in lowered or "not found" in lowered:
             return "The feed URL returned not found (HTTP 404)."
         if "401" in lowered or "unauthorized" in lowered:
             return "The feed requires authentication (HTTP 401 Unauthorized)."
         if "429" in lowered or "too many requests" in lowered:
             return "The feed server is rate-limiting requests (HTTP 429)."
+        if "text/html" in lowered or "no parser for mime type" in lowered:
+            return "The feed URL returned an HTML page instead of RSS/Atom. The server may be blocking automated requests or the URL may be wrong."
         if "parseerror" in lowered or "xml" in lowered or "invalid" in lowered:
             return "The feed response could not be parsed as a valid RSS/Atom document."
 
@@ -177,10 +181,22 @@ class FeedRefreshService:
                     # Skip if either the feed-level or domain-level backoff is active.
                     feed_next_retry = cast(float | None, feed_state.get("next_retry_at"))
                     domain_next_retry = cast(float | None, domain_state.get("next_retry_at"))
+
+                    # Also respect reader's built-in update_after, which captures
+                    # Retry-After from 429/503 responses and Cache-Control max-age.
+                    reader_update_after: float | None = None
+                    try:
+                        _feed_obj = reader.get_feed(feed_url, None)
+                        if _feed_obj and _feed_obj.update_after:
+                            reader_update_after = _feed_obj.update_after.timestamp()
+                    except Exception:
+                        pass
+
                     effective_next_retry = (
                         max(
                             feed_next_retry if feed_next_retry is not None else 0.0,
                             domain_next_retry if domain_next_retry is not None else 0.0,
+                            reader_update_after if reader_update_after is not None else 0.0,
                         )
                         or None
                     )
@@ -188,7 +204,13 @@ class FeedRefreshService:
                         skipped_count += 1
                         if self._refresh_debug_enabled:
                             retry_in_seconds = int(max(1, effective_next_retry - now_ts))
-                            source = "domain" if (domain_next_retry or 0) >= (feed_next_retry or 0) else "feed"
+                            _rua = reader_update_after or 0.0
+                            if _rua >= (feed_next_retry or 0) and _rua >= (domain_next_retry or 0):
+                                source = "reader(429/cache-control)"
+                            elif (domain_next_retry or 0) >= (feed_next_retry or 0):
+                                source = "domain"
+                            else:
+                                source = "feed"
                             self._logger.info(
                                 "[refresh] skipping %d/%d for %ds %s-backoff: %s",
                                 idx,
@@ -236,6 +258,33 @@ class FeedRefreshService:
                             )
                             domain_state_map.pop(domain, None)
                     except Exception as exc:
+                        # 410 Gone: the feed is permanently removed. Disable updates
+                        # immediately instead of backing off and retrying forever.
+                        try:
+                            _http_info = getattr(exc, 'http_info', None)
+                            if _http_info and getattr(_http_info, 'status', None) == 410:
+                                try:
+                                    reader.disable_feed_updates(feed_url)
+                                except Exception:
+                                    pass
+                                self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
+                                error_count += 1
+                                conn.execute(
+                                    """
+                                    INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
+                                    VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
+                                    ON CONFLICT(feed_url) DO UPDATE SET
+                                        consecutive_failures = excluded.consecutive_failures,
+                                        next_retry_at = NULL,
+                                        last_error = excluded.last_error,
+                                        last_failure_at = excluded.last_failure_at
+                                    """,
+                                    (feed_url, now_ts),
+                                )
+                                continue
+                        except Exception:
+                            pass
+
                         error_count += 1
                         raw_failures = feed_state.get("consecutive_failures")
                         if isinstance(raw_failures, (int, float, str)):

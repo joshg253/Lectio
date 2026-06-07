@@ -54,10 +54,48 @@ class LeadImageService:
     )
     _TAG_RE = re.compile(r"<[^>]+>", re.IGNORECASE)
     _HREF_IMAGE_RE = re.compile(r'href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif)(?:\?[^"\']*)?)["\']', re.IGNORECASE)
-    _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|sponsor|/flags/)",
+    # Blogger CDN w{W}-h{H} crop-format URLs (used for social share cards) distort
+    # square app icons into 16:9 aspect ratio.  Normalise to s1600 to get the
+    # full uncropped image.  Matches both blogger.googleusercontent.com and *.bp.blogspot.com.
+    _BLOGGER_CROP_RE = re.compile(
+        r"^(https://(?:\d+\.bp\.blogspot\.com|(?:blogger|lh\d+)\.googleusercontent\.com)/.+?)/w\d+-h\d+[^/]*/(.+)$",
         re.IGNORECASE,
     )
+    _LOGO_URL_PATTERNS = re.compile(
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        re.IGNORECASE,
+    )
+    # Catches pixel/spacer images encoded with tiny dimensions in the filename
+    # (e.g. p_1x1a.jpg, blank-2x2.gif). The lookahead is lenient to handle
+    # names like "1x1a" where a letter follows the dimension.
+    _TINY_DIM_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,2})x([0-9]{1,2})(?:[/_.\-a-z]|$)", re.IGNORECASE)
+    # CMS theme/plugin directories and known CMS admin resource CDNs are never
+    # article images — always site-level assets. Checked even when skip_logo_patterns=True.
+    # Path patterns checked against parsed.path; domain patterns against parsed.netloc.
+    _SITE_CHROME_PATH_PATTERNS = re.compile(
+        r"/wp-content/(?:themes|plugins)/|/e107_(?:images|themes|plugins)/|hamburger|keyboard[-_]arrow"
+        r"|/social/(?:facebook|twitter|instagram|linkedin|youtube|pinterest|reddit|tiktok|discord|digg|tumblr|whatsapp|rss|email|telegram|snapchat|twitterx|bluesky)\."
+        # "/social-media/social-*" — per-platform sharing cards (e.g. krita's social-youtube.png)
+        r"|/social-media/social-"
+        # Theme/static asset product directories (e.g. pythonguis /static/theme/images/products/)
+        r"|/(?:static|assets?)/(?:themes?)/images?/products?/"
+        # Sidebar widgets and OG/social-share card images are site chrome, not article content.
+        # "sidebar" catches CMS sidebar images (e.g. cad-comic.com/wp-content/uploads/.../sidebar.png).
+        # "opengraph" catches brand og:image files stored under a predictable URL
+        # (e.g. logo_opengraph.jpg) that slip through the logo-pattern check.
+        r"|sidebar|opengraph",
+        re.IGNORECASE,
+    )
+    # Domains that serve only CMS admin/template assets (never user content images).
+    # Also includes YouTube image CDNs — YouTube thumbnails are handled explicitly for
+    # YouTube feeds (early-return in extract_entry_thumbnail_url lines 343-351); for all
+    # other feeds they represent embedded video thumbnails, not the article's lead image.
+    _SITE_CHROME_DOMAIN_PATTERNS = re.compile(
+        r"(?:resources\.blogblog\.com|i\.ytimg\.com|img\.youtube\.com)",
+        re.IGNORECASE,
+    )
+    # Keep old name as alias so callers outside this class still work.
+    _SITE_CHROME_URL_PATTERNS = _SITE_CHROME_PATH_PATTERNS
     _URL_DIMENSION_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,4})x([0-9]{1,4})(?:[/_.-]|$)")
     # WordPress responsive-image width-only suffix, e.g. "photo-1000w.jpeg"
     _URL_WIDTH_HINT_RE = re.compile(r"(?:^|[-_.])([0-9]{2,4})w(?:[-_.]|$)", re.IGNORECASE)
@@ -69,11 +107,11 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(
-        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics)",
+        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image)",
         re.IGNORECASE,
     )
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
+        r"(?:avatar|author(?:-image)?\b|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
         re.IGNORECASE,
     )
     # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
@@ -82,9 +120,32 @@ class LeadImageService:
         r'class=["\'][^"\']*(?:\bauthor\b|\bbio\b|\bbyline\b|\bspeaker\b|\bcontributor\b)',
         re.IGNORECASE,
     )
+    # Detects site-chrome structural elements (header logo, branding, navigation,
+    # and related/recent-post sidebars) that contain decorative images, not article content.
+    _SITE_CHROME_CONTEXT_RE = re.compile(
+        r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b)',
+        re.IGNORECASE,
+    )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
     # param like =s1600 rather than appearing at the end of the path.
     _IMAGE_PATH_SUFFIX_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif|bmp)(?:[=?#]|$)", re.IGNORECASE)
+    # Finds CSS background-image: url(...) values in inline style attributes.
+    _CSS_BG_IMAGE_RE = re.compile(
+        r'\bstyle=["\'][^"\']*background(?:-image)?\s*:\s*url\(["\']?([^"\')\s]+)["\']?\)',
+        re.IGNORECASE,
+    )
+
+    # Comic-specific image element identifiers.  When a feed is in webcomic mode
+    # these IDs/classes receive a large score bonus so the main comic panel wins
+    # over nav buttons, site chrome, and vote/promotion images.
+    _WEBCOMIC_IMG_ID_RE = re.compile(
+        r'^(?:strip|cc-comic|comic|comicimg|comic-image|comic_image|comicImage|woo-entry-image)$',
+        re.IGNORECASE,
+    )
+    _WEBCOMIC_IMG_CLASS_RE = re.compile(
+        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic)\b',
+        re.IGNORECASE,
+    )
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
@@ -120,12 +181,21 @@ class LeadImageService:
         self._extract_video_id = extract_video_id
         self._cache = cache if cache is not None else {}
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
+        self._alt_cache: dict[tuple[str, str], str | None] = {}
+        self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
         # Semaphore ensures at most one chunk-backfill thread runs at a time;
         # subsequent chunk requests skip rather than pile up.
         self._chunk_backfill_sem = threading.Semaphore(1)
+        # Tracks (feed_url, entry_id) pairs for which a background source-page
+        # fetch is already in flight, so opening the same entry twice quickly
+        # doesn't spawn duplicate fetches.
+        self._source_fetch_in_progress: set[tuple[str, str]] = set()
         # In-memory set of feed URLs whose cache should be bypassed (debug only).
         self._debug_bypass_feeds: set[str] = set()
+        # Feeds manually locked to strategy='none' — no lead image for any entry.
+        # Loaded from DB on first access; updated when store_feed_strategy is called.
+        self._none_strategy_feeds: set[str] | None = None
         # Small bounded cache of recently-fetched source HTML (entry_link → (final_url, html)).
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
@@ -168,6 +238,32 @@ class LeadImageService:
             html = "".join(result)
         return html
 
+    def _is_feed_none_strategy(self, feed_url: str) -> bool:
+        """Return True if this feed is manually locked to strategy='none' (no lead images)."""
+        if self._none_strategy_feeds is None:
+            try:
+                with self._get_meta_connection() as conn:
+                    rows = conn.execute(
+                        "SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'none' AND manual = 1"
+                    ).fetchall()
+                self._none_strategy_feeds = {str(r["feed_url"]) for r in rows}
+            except Exception:
+                self._none_strategy_feeds = set()
+        return feed_url in self._none_strategy_feeds
+
+    def _is_feed_webcomic(self, feed_url: str) -> bool:
+        """Return True if this feed has strategy='webcomic' (auto or manual)."""
+        if self._webcomic_feeds is None:
+            try:
+                with self._get_meta_connection() as conn:
+                    rows = conn.execute(
+                        "SELECT feed_url FROM feed_lead_image_strategy WHERE strategy = 'webcomic'"
+                    ).fetchall()
+                self._webcomic_feeds = {str(r["feed_url"]) for r in rows}
+            except Exception:
+                self._webcomic_feeds = set()
+        return feed_url in self._webcomic_feeds
+
     def get_feed_strategy(self, feed_url: str) -> tuple[str, float, bool]:
         """Return (strategy, detected_at, manual) from DB, or ('unknown', 0.0, False)."""
         try:
@@ -202,16 +298,27 @@ class LeadImageService:
                 )
         except Exception:
             pass
+        # Keep in-memory none-strategy and webcomic-strategy sets in sync.
+        if self._none_strategy_feeds is not None:
+            if strategy == "none" and manual:
+                self._none_strategy_feeds.add(feed_url)
+            else:
+                self._none_strategy_feeds.discard(feed_url)
+        if self._webcomic_feeds is not None:
+            if strategy == "webcomic":
+                self._webcomic_feeds.add(feed_url)
+            else:
+                self._webcomic_feeds.discard(feed_url)
 
     def warm_cache_from_db(self) -> None:
         """Load stored lead-image records into in-memory caches."""
         try:
             with self._get_meta_connection() as conn:
-                rows = conn.execute("SELECT feed_url, entry_id, image_url, fetched_at FROM entry_lead_images").fetchall()
+                rows = conn.execute("SELECT feed_url, entry_id, image_url, image_alt, fetched_at FROM entry_lead_images").fetchall()
             for row in rows:
                 url = row["image_url"]
                 key = (str(row["feed_url"]), str(row["entry_id"]))
-                if url and not self._is_image_url_acceptable(str(url), None, None, allow_extensionless=True):
+                if url and not self._is_image_url_acceptable(str(url), None, None, allow_extensionless=True, skip_logo_patterns=True):
                     try:
                         with self._get_meta_connection() as conn:
                             conn.execute(
@@ -222,10 +329,34 @@ class LeadImageService:
                         pass
                     continue
                 self._cache[key] = url
+                alt = row["image_alt"]
+                if alt is not None:
+                    self._alt_cache[key] = str(alt)
                 try:
                     self._fetched_at_cache[key] = float(row["fetched_at"])
                 except Exception:
                     self._fetched_at_cache[key] = 0.0
+        except Exception:
+            pass
+
+    def get_entry_image_alt(self, feed_url: str, entry_id: str) -> str | None:
+        """Return the persisted alt text for an entry's lead image, or None."""
+        return self._alt_cache.get((feed_url, entry_id))
+
+    def store_entry_image_alt(self, feed_url: str, entry_id: str, alt_text: str | None) -> None:
+        """Persist alt text for an entry's lead image to DB and in-memory cache."""
+        key = (feed_url, entry_id)
+        self._alt_cache[key] = alt_text
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, image_alt, fetched_at)
+                    VALUES (?, ?, NULL, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET image_alt = excluded.image_alt
+                    """,
+                    (feed_url, entry_id, alt_text, time.time()),
+                )
         except Exception:
             pass
 
@@ -320,13 +451,21 @@ class LeadImageService:
             if video_id:
                 return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
+        # Respect manual 'none' strategy — skip lead images entirely for this feed.
+        if feed_url and self._is_feed_none_strategy(feed_url):
+            return None
+
         entry_id = str(getattr(entry, "id", "") or "")
         if entry_id and feed_url not in self._debug_bypass_feeds and (feed_url, entry_id) in self._cache:
             cached = self._cache[(feed_url, entry_id)]
+            if cached is None:
+                # Explicitly cached as "no image" — don't fall through to feed scan.
+                # Background job retries negatives on its own schedule.
+                return None
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
                     cached = None
-                elif not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True):
+                elif not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True, skip_logo_patterns=True):
                     cached = None
                 else:
                     return cached
@@ -364,6 +503,21 @@ class LeadImageService:
                         if url and (mtype.startswith("image") or self._is_image_url_acceptable(url, None, None)):
                             if not self._should_bypass_cached_url(entry_link=entry_link, cached_url=url):
                                 return url
+
+            # reader stores enclosures on entry.enclosures (tuple of Enclosure objects).
+            enclosures = getattr(entry, "enclosures", None)
+            if enclosures and isinstance(enclosures, (list, tuple)):
+                for enc in enclosures:
+                    try:
+                        url = enc.url if hasattr(enc, "url") else (enc.get("url") if isinstance(enc, dict) else None)
+                        etype = enc.type if hasattr(enc, "type") else (enc.get("type") if isinstance(enc, dict) else "") or ""
+                    except Exception:
+                        continue
+                    if url and etype.startswith("image"):
+                        if self._is_image_url_acceptable(url, None, None) and not self._should_bypass_cached_url(
+                            entry_link=entry_link, cached_url=url
+                        ):
+                            return url
 
             # Some parsers expose enclosure/link entries on `links`.
             links = getattr(entry, "links", None)
@@ -478,7 +632,7 @@ class LeadImageService:
             if cached:
                 if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
                     pass  # stale/wrong URL — re-run full resolution (plugin fallback first)
-                elif not self._is_image_url_acceptable(cached, None, None):
+                elif not self._is_image_url_acceptable(cached, None, None, skip_logo_patterns=True):
                     pass  # cached URL now fails our filter (rules may have changed) — re-resolve
                 else:
                     should_revalidate = (
@@ -522,7 +676,7 @@ class LeadImageService:
         # Prefer source-page metadata/image selection when available.
         # This usually picks a truer hero image than the first inline body image.
         strategy_for_feed, _, _ = self.get_feed_strategy(feed_url_str)
-        skip_source = strategy_for_feed in ("inline", "youtube")
+        skip_source = strategy_for_feed in ("inline", "artwork", "youtube")
         if not cached_negative and entry_link:
             plugin_fallback = self._plugin_fallback_lead_image_url(entry_link=entry_link, content_html=content_html, summary=summary)
             if plugin_fallback and self._is_image_url_acceptable(plugin_fallback, None, None):
@@ -572,10 +726,12 @@ class LeadImageService:
         positive_revalidated = 0
         feed_media_thumbs: dict[str, str] | None = None  # lazy: fetched once if needed
 
-        # Load stored strategy; skip YouTube feeds entirely (thumbnail from video ID).
+        # Load stored strategy; skip YouTube and manually-locked none feeds entirely.
         strategy, detected_at, manual = self.get_feed_strategy(feed_url)
         need_redetect = not manual and (strategy == "unknown" or now - detected_at > self._STRATEGY_REDETECT_AFTER_SECONDS)
         if strategy == "youtube":
+            return
+        if strategy == "none" and manual:
             return
 
         # Track which methods actually yield images so we can store/update strategy.
@@ -671,14 +827,15 @@ class LeadImageService:
             # Exception: still try source as a fallback when inline extraction
             # found nothing (e.g. the artist omitted the image for this entry
             # or it's behind an age gate that doesn't include it in the feed).
-            if strategy == "inline" and not need_redetect:
-                image_url = self._fetch_source_lead_image(entry_link)
+            is_wc = strategy == "webcomic"
+            if strategy in ("inline", "artwork") and not need_redetect:
+                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
                     _found_og_scrape = True
                 self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
                 time.sleep(0.15)
                 continue
-            image_url = self._fetch_source_lead_image(entry_link)
+            image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
             if image_url:
                 _found_og_scrape = True
             self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
@@ -776,10 +933,11 @@ class LeadImageService:
                         continue
 
                 # For inline/none-classified feeds, source scraping won't help.
-                if strategy in ("inline", "none"):
+                if strategy in ("inline", "artwork", "none"):
                     continue
 
-                image_url = self._fetch_source_lead_image(entry_link)
+                is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
+                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 self.store_entry_lead_image(feed_url, entry_id, image_url)
                 time.sleep(0.15)
 
@@ -963,6 +1121,11 @@ class LeadImageService:
         )
         if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
             return False
+        # Reject images whose alt or title text explicitly calls them a logo/icon,
+        # even when the URL path doesn't contain those terms.
+        alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}".strip()
+        if alt_title and self._LOGO_URL_PATTERNS.search(alt_title):
+            return False
 
         # Percentage-based height (e.g. height="60%") marks decorative dividers
         # or banner images sized by CSS — not article content images.
@@ -997,8 +1160,17 @@ class LeadImageService:
 
         return True
 
-    def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str) -> int:
+    def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str, is_webcomic: bool = False) -> int:
         score = 0
+
+        if is_webcomic:
+            img_id = (attrs.get("id") or "").strip()
+            if self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id):
+                score += 200
+            img_class = (attrs.get("class") or "").strip()
+            if self._WEBCOMIC_IMG_CLASS_RE.search(img_class):
+                score += 80
+
         class_attr = (attrs.get("class") or "").lower()
         alt_attr = (attrs.get("alt") or "").strip()
         # Fall back to title if alt is empty — some CMS themes use title as the
@@ -1012,6 +1184,8 @@ class LeadImageService:
             score += 40
         if any(token in class_attr for token in ("featured", "lead", "article-image", "main-image", "entry-image")):
             score += 30
+        if any(token in class_attr for token in ("topic_icon", "topic-icon", "category-icon", "tag-icon")):
+            score += 60
         if (attrs.get("fetchpriority") or "").strip().lower() == "high":
             score += 40
         if (attrs.get("data-component-name") or "").strip().lower() == "image":
@@ -1035,11 +1209,11 @@ class LeadImageService:
 
         return score
 
-    def _extract_preferred_source_image_url(self, html_text: str, base_url: str, source_url: str) -> str | None:
-        url, _ = self._extract_preferred_source_image_data(html_text, base_url, source_url)
+    def _extract_preferred_source_image_url(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> str | None:
+        url, _ = self._extract_preferred_source_image_data(html_text, base_url, source_url, is_webcomic=is_webcomic)
         return url
 
-    def _extract_preferred_source_image_data(self, html_text: str, base_url: str, source_url: str) -> tuple[str | None, str | None]:
+    def _extract_preferred_source_image_data(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> tuple[str | None, str | None]:
         """Like _extract_preferred_source_image_url but also returns the winning img's alt text."""
         best_url: str | None = None
         best_alt: str | None = None
@@ -1047,8 +1221,23 @@ class LeadImageService:
 
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             # Skip images inside author/speaker/bio sections — they are headshots.
+            # Skip images inside site-chrome branding elements (logo, nav header).
             context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
-            if self._AUTHOR_CONTEXT_RE.search(context_before):
+            _am = self._AUTHOR_CONTEXT_RE.search(context_before)
+            if _am:
+                # If the matched element was an <address> that closed before reaching
+                # this img, the img is in a sibling element — don't skip it.
+                # (e.g. <address class="article-author">...</address> followed by
+                # <figure><img .../></figure> on the same page.)
+                _tag_start = context_before.rfind('<', 0, _am.start())
+                _in_address = (
+                    _tag_start != -1
+                    and context_before[_tag_start:_tag_start + 8].lower().startswith('<address')
+                )
+                _after = context_before[_am.end():]
+                if not (_in_address and re.search(r'</address\b', _after, re.IGNORECASE)):
+                    continue
+            if self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             tag = tag_match.group(0)
             attrs: dict[str, str] = {}
@@ -1067,16 +1256,27 @@ class LeadImageService:
                 if not self._is_image_url_acceptable(resolved, None, None):
                     continue
 
-                score = self._score_source_image_tag(attrs, resolved, source_url)
+                score = self._score_source_image_tag(attrs, resolved, source_url, is_webcomic=is_webcomic)
                 if score > best_score:
                     best_score = score
                     best_url = resolved
                     _alt = (attrs.get("alt") or attrs.get("title") or "").strip()
                     best_alt = _alt if _alt else None
 
-        if best_url and best_score >= 10:
+        if best_url and best_score >= 0:
             return best_url, best_alt
         return None, None
+
+    def _extract_css_background_image_url(self, html_text: str, base_url: str) -> str | None:
+        """Return the first acceptable CSS background-image URL found in inline style attributes."""
+        for m in self._CSS_BG_IMAGE_RE.finditer(html_text):
+            raw = m.group(1).strip()
+            if not raw or raw.startswith("data:"):
+                continue
+            resolved = urljoin(base_url, raw)
+            if self._is_image_url_acceptable(resolved, None, None):
+                return resolved
+        return None
 
     def _extract_preloaded_image_url(self, html_text: str, base_url: str) -> str | None:
         for tag_match in self._LINK_TAG_RE.finditer(html_text):
@@ -1193,10 +1393,23 @@ class LeadImageService:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
-        if self._TRACKER_URL_PATTERNS.search(parsed.netloc) or self._TRACKER_URL_PATTERNS.search(parsed.path):
+        if (self._TRACKER_URL_PATTERNS.search(parsed.netloc)
+                or self._TRACKER_URL_PATTERNS.search(parsed.path)
+                or self._TRACKER_URL_PATTERNS.search(image_url)):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
+        if self._SITE_CHROME_PATH_PATTERNS.search(parsed.path):
+            return False
+        if self._SITE_CHROME_DOMAIN_PATTERNS.search(parsed.netloc):
+            return False
+        _path_no_qs = parsed.path.lower()
+        for _m in self._TINY_DIM_RE.finditer(_path_no_qs):
+            try:
+                if int(_m.group(1)) <= 10 and int(_m.group(2)) <= 10:
+                    return False
+            except ValueError:
+                pass
 
         if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
             # Allow logo-pattern URLs when the path encodes a large enough dimension —
@@ -1273,10 +1486,16 @@ class LeadImageService:
 
         if width is None or height is None:
             url_path_no_query = image_url.split("?")[0]
+            # Skip URL-dimension filtering for paths that are specifically
+            # content/download thumbnail directories — their small dimensions
+            # are intentional and they represent the article's primary image.
+            _is_download_thumb = bool(re.search(
+                r'/(?:download|file|product|entry)?thumbs?(?:nail)?s?/', url_path_no_query, re.IGNORECASE
+            ))
             for m in self._URL_DIMENSION_RE.finditer(url_path_no_query):
                 try:
                     w, h = int(m.group(1)), int(m.group(2))
-                    if w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT:
+                    if not _is_download_thumb and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
                         return False
                 except ValueError:
                     pass
@@ -1424,14 +1643,18 @@ class LeadImageService:
         re.IGNORECASE,
     )
 
-    def _fetch_page_html(self, url: str) -> tuple[str, str] | None:
+    def _fetch_page_html(self, url: str) -> tuple[str, str, bool] | None:
         """Fetch a page, handling JS cookie challenges (e.g. BlueHost humans_XXXXX).
 
-        Returns (html, final_url) or None on failure.
+        Returns (html, final_url, corp_restricted) or None on failure.
+        corp_restricted is True when the response has Cross-Origin-Resource-Policy:
+        same-site or same-origin, meaning browsers will block cross-origin image loads
+        from this domain and images should not be used as lead-image candidates.
         Falls back to urllib when the server disconnects on httpx (e.g. Tumblr
         rejects httpx's TLS fingerprint but accepts stdlib connections).
         """
         _use_urllib = False
+        _corp_restricted = False
         try:
             with httpx.Client(follow_redirects=True, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
                 response = client.get(url)
@@ -1446,6 +1669,8 @@ class LeadImageService:
                             client.cookies.set(cname.strip(), cval.strip(), domain=domain)
                         response = client.get(url)
                 response.raise_for_status()
+                _corp = response.headers.get("cross-origin-resource-policy", "").lower()
+                _corp_restricted = _corp in ("same-site", "same-origin")
         except httpx.RemoteProtocolError:
             _use_urllib = True
         except Exception:
@@ -1458,13 +1683,40 @@ class LeadImageService:
                 with _ureq.urlopen(_req, timeout=10) as _resp:
                     _html = _resp.read().decode("utf-8", errors="replace")
                     _final = _resp.url
-                return _html, _final
+                    _corp = _resp.headers.get("cross-origin-resource-policy", "").lower()
+                    _corp_restricted = _corp in ("same-site", "same-origin")
+                return _html, _final, _corp_restricted
             except Exception:
                 return None
 
-        return response.text, str(response.url)
+        return response.text, str(response.url), _corp_restricted
 
-    def _fetch_source_lead_image(self, entry_link: str) -> str | None:
+    def _is_image_url_fetchable(
+        self, image_url: str, domain_cache: dict[str, bool] | None = None
+    ) -> bool:
+        """Return True if a server-side HEAD request to image_url succeeds (HTTP < 400).
+
+        Uses an optional per-call domain_cache dict so that all images from the
+        same CDN domain share a single HEAD result within one background job run.
+        """
+        domain = urlparse(image_url).netloc
+        if domain_cache is not None and domain in domain_cache:
+            return domain_cache[domain]
+        try:
+            resp = httpx.head(
+                image_url,
+                follow_redirects=True,
+                timeout=4.0,
+                headers={"User-Agent": self._user_agent},
+            )
+            ok = resp.status_code < 400
+        except Exception:
+            ok = False
+        if domain_cache is not None:
+            domain_cache[domain] = ok
+        return ok
+
+    def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
         parsed = urlparse(entry_link)
         if parsed.scheme not in {"http", "https"}:
             return None
@@ -1475,30 +1727,165 @@ class LeadImageService:
         if result is None:
             return None
 
-        source_html, final_url = result
+        source_html, final_url, corp_restricted = result
+        if corp_restricted:
+            # The server sent Cross-Origin-Resource-Policy: same-site/same-origin.
+            # Browsers will block cross-origin image loads from this domain, so any
+            # image URL we return would appear broken in the reader.
+            return None
         # Cache for alt-text lookup without a second HTTP fetch.
         self._source_html_cache[entry_link] = (final_url, source_html)
         self._source_html_cache.move_to_end(entry_link)
         if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
             self._source_html_cache.popitem(last=False)
 
-        # og:image is explicitly curated by the publisher for this article and
-        # is more reliable than preload links, which often point at site-chrome
-        # images (navigation graphics, sidebar thumbnails, LCP elements).
+        # og:image is explicitly curated by the publisher for this article.
+        og_width, og_height = self._extract_og_image_dimensions(source_html)
         meta_image = self._extract_meta_image_url_from_html(source_html, final_url)
+        # Blogger CDN w{W}-h{H} crop URLs (used for og:image social cards) distort
+        # square images into 16:9. Normalise to s1600 to display the full image.
         if meta_image:
-            return meta_image
+            _bc = self._BLOGGER_CROP_RE.match(meta_image)
+            if _bc:
+                meta_image = f"{_bc.group(1)}/s1600/{_bc.group(2)}"
+                og_width = og_height = None  # dimensions are for the cropped version
+        # Filter out logo/tracker/avatar og:images early so all the return paths
+        # below don't need individual checks.  skip_logo_patterns=False so that
+        # site brand images like logo_opengraph.jpg are rejected unless they
+        # declare large explicit dimensions (the logo-pattern safety-valve inside
+        # _is_image_url_acceptable still allows e.g. logo-design-1200x630.jpg).
+        if meta_image and not self._is_image_url_acceptable(
+            meta_image, og_width, og_height, allow_extensionless=True, skip_logo_patterns=False
+        ):
+            meta_image = None
+
+        _og_extreme_ratio = False
+        if meta_image and og_width is not None and og_height is not None:
+            _og_ratio = og_width / og_height if og_height else 1.0
+            if 0.4 <= _og_ratio <= 2.5:
+                # Publisher declared explicit dimensions — strong curation signal, trust it.
+                return meta_image
+            # Extreme aspect ratio (banner/screenshot) — fall through to body scan.
+            _og_extreme_ratio = True
+
         preload_image = self._extract_preloaded_image_url(source_html, final_url)
         if preload_image:
             return preload_image
-        preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link)
-        if preferred_image:
-            return preferred_image
+
+        css_bg_image = self._extract_css_background_image_url(source_html, final_url)
+
+        # If OG image and CSS background-image agree on the same path, both
+        # publisher curation signals point to the same image — trust it without
+        # scanning body <img> tags (which may only contain nav/chrome icons).
+        if meta_image and css_bg_image:
+            if urlparse(meta_image).path == urlparse(css_bg_image).path:
+                return meta_image
+
+        preferred_image = self._extract_preferred_source_image_url(source_html, final_url, entry_link, is_webcomic=is_webcomic)
+
+        if meta_image and preferred_image and preferred_image != meta_image:
+            # og:image has no declared dimensions. If the preferred page image
+            # appears before the og:image in the body HTML it is more likely
+            # to be the article's primary visual (the og:image may be a later
+            # image that the CMS happened to pick for the share preview).
+            body_start = source_html.lower().find('<body')
+            body_html = source_html[body_start:] if body_start != -1 else source_html
+            meta_fname = meta_image.rstrip('/').split('/')[-1].split('?')[0]
+            pref_fname = preferred_image.rstrip('/').split('/')[-1].split('?')[0]
+            meta_body_pos = body_html.find(meta_fname)
+            pref_body_pos = body_html.find(pref_fname)
+            if pref_body_pos != -1 and meta_body_pos != -1 and pref_body_pos < meta_body_pos:
+                return preferred_image
+
+            # Astro/Vite hashed filenames use the same base stem with different
+            # hash suffixes (e.g. foo.D9sM0Dvc_1b0SmR.png vs foo.D9sM0Dvc_1NFnGy.png).
+            # The exact filename lookup fails, but the stem before the first dot
+            # still matches — confirming the OG is article-specific.
+            meta_stem = meta_fname.split('.')[0]
+            if len(meta_stem) >= 10 and meta_stem.lower() in body_html.lower():
+                return meta_image
+
+        # At this point no strong inline signal (position comparison or Astro stem
+        # match) favoured preferred_image over the publisher-curated og:image.
+        # Default to og:image — it is the publisher's explicit designation for this
+        # article.  preferred_image (first large body image) is a fallback only when
+        # og:image is absent.
         # Do NOT call _extract_linked_image_url_from_html on source pages:
         # full-page HTML contains <link rel="apple-touch-icon|icon"> in <head>
         # which would be found as hrefs and mistakenly used as lead images.
         # That method is appropriate only for feed-content HTML snippets.
-        return None
+        if _og_extreme_ratio:
+            return preferred_image or meta_image or css_bg_image
+        return meta_image or preferred_image or css_bg_image
+
+    def queue_source_fetch(self, feed_url: str, entry_id: str, entry_link: str) -> None:
+        """Fetch the source-page lead image in a background thread and persist it.
+
+        Returns immediately. Deduplicates: if a fetch for this entry is already
+        in flight, the call is a no-op.
+        """
+        key = (feed_url, entry_id)
+        if key in self._source_fetch_in_progress:
+            return
+        self._source_fetch_in_progress.add(key)
+        is_wc = self._is_feed_webcomic(feed_url)
+
+        def _bg() -> None:
+            try:
+                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                self.store_entry_lead_image(feed_url, entry_id, image_url)
+            except Exception:
+                pass
+            finally:
+                self._source_fetch_in_progress.discard(key)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def queue_source_html_fetch(
+        self,
+        entry_link: str,
+        feed_url: str | None = None,
+        entry_id: str | None = None,
+        lead_image_url: str | None = None,
+    ) -> None:
+        """Fetch the source-page HTML in a background thread.
+
+        Primes _source_html_cache so fetch_entry_image_alt can run on the next
+        render without blocking.  When feed_url, entry_id, and lead_image_url are
+        provided, also extracts the image alt/title text and persists it to the DB
+        so it survives server restarts.
+        Returns immediately; deduplicates concurrent requests for the same URL.
+        """
+        already_cached = entry_link in self._source_html_cache
+        alt_already_set = (feed_url and entry_id) and (feed_url, entry_id) in self._alt_cache
+        if already_cached and alt_already_set:
+            return
+        html_key = ("__html__", entry_link)
+        if html_key in self._source_fetch_in_progress:
+            return
+        self._source_fetch_in_progress.add(html_key)
+
+        def _bg() -> None:
+            try:
+                result = self._fetch_page_html(entry_link)
+                if result:
+                    source_html, final_url, _ = result
+                    self._source_html_cache[entry_link] = (final_url, source_html)
+                    self._source_html_cache.move_to_end(entry_link)
+                    if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                        self._source_html_cache.popitem(last=False)
+                    if feed_url and entry_id and lead_image_url:
+                        alt = self.fetch_entry_image_alt(entry_link, lead_image_url=lead_image_url)
+                        if alt:
+                            import re as _re
+                            alt = _re.sub(r"<[^>]+>", "", alt).strip() or None
+                        self.store_entry_image_alt(feed_url, entry_id, alt)
+            except Exception:
+                pass
+            finally:
+                self._source_fetch_in_progress.discard(html_key)
+
+        threading.Thread(target=_bg, daemon=True).start()
 
     def test_entry_strategies(self, entry: object) -> list[dict]:
         """Test each lead-image strategy against a single entry in isolation.
@@ -1606,7 +1993,7 @@ class LeadImageService:
             result = self._fetch_page_html(entry_link)
             if result is None:
                 return None
-            source_html, final_url = result
+            source_html, final_url, _corp = result
             self._source_html_cache[entry_link] = (final_url, source_html)
             self._source_html_cache.move_to_end(entry_link)
             if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
@@ -1671,7 +2058,7 @@ class LeadImageService:
             result = self._fetch_page_html(entry_link)
             if result is None:
                 return None
-            source_html, final_url = result
+            source_html, final_url, _corp = result
             self._source_html_cache[entry_link] = (final_url, source_html)
             self._source_html_cache.move_to_end(entry_link)
             if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:

@@ -120,11 +120,13 @@
         />
       </form>
       <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
-      <button type="button" class="topbar-icon-btn" id="menu-highlights-btn" title="Automation" aria-label="Automation"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span></button>
       <button type="button" class="topbar-icon-btn" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
       <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu">
-        <summary class="topbar-icon-btn topbar-overflow-btn" title="More" aria-label="More options"><span class="material-symbols-rounded" aria-hidden="true">more_horiz</span></summary>
+        <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
         <div class="menu-popover">
+          <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
+          <button type="button" id="menu-highlights-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
+          <hr class="menu-divider" />
           <div class="flyout-item">
             <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
             <div class="flyout-panel">
@@ -153,28 +155,8 @@
             </div>
           </div>
           <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
-          <button type="button" id="menu-problematic-toggle" class="menu-item" data-toggle-panel="problematic-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">warning</span> Problem Feeds{% if problematic_unseen_count > 0 %} ({{ problematic_unseen_count }}){% endif %}</button>
-          {% if inactive_feed_count > 0 %}<button type="button" class="menu-item" data-toggle-panel="inactive-feeds-modal"><span class="material-symbols-rounded" aria-hidden="true">pause_circle</span> Inactive Feeds ({{ inactive_feed_count }})</button>{% endif %}
-          <div class="flyout-item">
-            <div class="flyout-trigger menu-item"><span class="flyout-label">OPML</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
-            <div class="flyout-panel">
-              <label for="opml-file-input" class="menu-item file-item">Import</label>
-              <a class="menu-item" href="/opml/export">Export</a>
-              <button type="button" class="menu-item" id="dedup-feeds-btn">Remove duplicate feeds</button>
-            </div>
-          </div>
-          <div class="flyout-item">
-            <div class="flyout-trigger menu-item"><span class="flyout-label">Takeout</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
-            <div class="flyout-panel">
-              <a class="menu-item" href="/takeout/export"><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px" aria-hidden="true">download</span> Export ZIP</a>
-              <label for="takeout-file-input" class="menu-item file-item"><span class="material-symbols-rounded" style="font-size:16px;vertical-align:-3px" aria-hidden="true">upload</span> Import ZIP</label>
-            </div>
-          </div>
         </div>
       </details>
-      <button type="button" id="topbar-avatar-btn" class="topbar-avatar-btn" title="Settings" aria-label="Settings">
-        <span class="material-symbols-rounded" aria-hidden="true">account_circle</span>
-      </button>
     </div>
   </header>
 
@@ -354,35 +336,6 @@
             title="Toggle tags"
           ><span class="material-symbols-rounded" aria-hidden="true">edit_note</span></button>
 
-          <button
-            type="button"
-            class="folders-utility-btn"
-            data-toggle-panel="global-note-modal"
-            aria-label="Open global note"
-            title="Open global note"
-          ><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
-
-          <button
-            id="folders-problematic-toggle"
-            type="button"
-            class="folders-utility-btn {% if problematic_unseen_count > 0 %}has-alert{% endif %}"
-            data-toggle-panel="problematic-feeds-modal"
-            aria-label="Open problematic feeds"
-            title="Open problematic feeds"
-          >
-            <span class="material-symbols-rounded" aria-hidden="true">warning</span>
-            {% if problematic_unseen_count > 0 %}
-            <span id="folders-problematic-badge" class="folders-utility-badge" aria-hidden="true">{{ problematic_unseen_count }}</span>
-            {% endif %}
-          </button>
-
-          <a
-            href="{{ scope_base }}history&star_only=0&resume_read_filter={{ resume_filter }}"
-            class="folders-utility-btn{% if selected_read_filter == 'history' %} active{% endif %}"
-            title="View history"
-            aria-label="View history"
-          ><span class="material-symbols-rounded" aria-hidden="true">history</span></a>
-
           <button id="folders-collapse-btn" class="folders-collapse-btn folders-utility-btn" type="button"
             aria-label="Collapse folders pane" title="Collapse folders pane">
             <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
@@ -543,10 +496,10 @@
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
         >
-          <div class="post-thumbnail {% if not post.thumbnail_url and not post.feed_icon_url %}is-empty{% endif %}">
+          <div class="post-thumbnail {% if not post.thumbnail_url and (not post.feed_icon_url or not post.show_thumbnail) %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
-            {% elif post.feed_icon_url %}
+            {% elif post.feed_icon_url and post.show_thumbnail %}
             <img class="post-thumbnail-image post-thumbnail-icon-fallback" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
             <span class="post-thumbnail-fallback material-symbols-rounded" aria-hidden="true">image</span>
@@ -555,7 +508,8 @@
             <div class="post-content">
               <div class="post-title-row">
                 <a class="post-main-link"
-                  href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}">
+                  href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}"
+                  data-article-url="{{ post.link or '' }}">
                   <div class="post-title" title="{{ post.link or '' }}">{{ post.title or "(untitled)" }}</div>
                 </a>
               </div>
@@ -808,34 +762,37 @@
       bodyEl.setAttribute('data-single-pane-level', String(level));
     }
 
-    // Topbar hide/show on scroll in single-pane mode
+    // Topbar hide/show on scroll in single-pane mode (direction-based, 1p only)
     let lastScrollTop = 0;
-    let scrollTimeoutId = null;
     function bindSinglePaneScrollBehavior() {
       function onScrollPane(e) {
+        if (document.body.getAttribute('data-single-mode') !== '1') return;
         const pane = e.target;
         const st = pane.scrollTop;
         const topbar = document.querySelector('.topbar');
         if (!topbar) return;
-        if (st > lastScrollTop + 10) {
+        if (st > lastScrollTop + 8) {
           topbar.classList.add('topbar-hidden');
-        } else if (st < lastScrollTop - 10) {
+        } else if (st < lastScrollTop - 4) {
           topbar.classList.remove('topbar-hidden');
         }
         lastScrollTop = st;
-        if (scrollTimeoutId) clearTimeout(scrollTimeoutId);
-        // show topbar when scroll stops briefly
-        scrollTimeoutId = window.setTimeout(() => topbar.classList.remove('topbar-hidden'), 1200);
       }
+
+      // Reset saved position whenever the visible pane changes so stale scroll
+      // position from a previous pane doesn't cause a wrong first-scroll hide/show.
+      new MutationObserver(() => {
+        lastScrollTop = 0;
+        const topbar = document.querySelector('.topbar');
+        if (topbar) topbar.classList.remove('topbar-hidden');
+      }).observe(document.body, { attributeFilter: ['data-single-pane-level'] });
 
       const postsPane = document.querySelector('.pane-posts');
       const entryPane = document.querySelector('.pane-entry');
-      if (postsPane) {
-        postsPane.addEventListener('scroll', onScrollPane, { passive: true });
-      }
-      if (entryPane) {
-        entryPane.addEventListener('scroll', onScrollPane, { passive: true });
-      }
+      const foldersTree = document.querySelector('.pane-folders .tree');
+      if (postsPane) postsPane.addEventListener('scroll', onScrollPane, { passive: true });
+      if (entryPane) entryPane.addEventListener('scroll', onScrollPane, { passive: true });
+      if (foldersTree) foldersTree.addEventListener('scroll', onScrollPane, { passive: true });
     }
 
     // Swipe gestures: post list items and entry pane navigation
@@ -1452,6 +1409,11 @@
         <p class="action-modal-label dedup-cross-intro"></p>
         <div class="dedup-cross-list"></div>
       </div>
+      <div class="dedup-upgrade-section" hidden>
+        <p class="action-modal-label dedup-upgrade-intro"></p>
+        <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
+        <div class="dedup-upgrade-list"></div>
+      </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="dedup-modal">Cancel</button>
         <button type="button" id="dedup-modal-ok" class="danger">Remove duplicates</button>
@@ -1633,6 +1595,8 @@
         <button type="button" class="hl-tab-btn" data-settings-tab="contacts" role="tab" aria-selected="false">Contacts</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="email" role="tab" aria-selected="false">Email</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="feeds" role="tab" aria-selected="false">Feeds</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
       </div>
 
       <!-- Profile tab -->
@@ -1716,163 +1680,110 @@
         </div>
       </div>
 
-    </div>
-  </div>
+      <!-- Feeds tab -->
+      <div id="settings-tab-feeds" class="settings-tab-panel" hidden>
+        {% set failing_feeds = problematic_feeds | selectattr("acknowledged_at", "none") | list %}
+        {% set acked_feeds = problematic_feeds | rejectattr("acknowledged_at", "none") | list %}
+        <div class="feeds-tab-bar" role="tablist">
+          <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
+        </div>
 
-  <div id="inactive-feeds-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="inactive-feeds-modal-title">
-      <div class="modal-header-row">
-        <h3 id="inactive-feeds-modal-title" class="action-modal-title">Inactive Feeds</h3>
-        <button type="button" class="modal-close" data-close-modal="inactive-feeds-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      {% if inactive_feeds %}
-      <ul class="problem-feed-list">
-        {% for feed in inactive_feeds %}
-        <li class="problem-feed-item">
-          <div class="problem-feed-row">
-            <span class="problem-feed-title">{{ feed.feed_title }}</span>
-            {% if feed.folder_name %}<span class="problem-feed-meta">{{ feed.folder_name }}</span>{% endif %}
-          </div>
-          <div class="problem-feed-actions">
-            <form method="post" action="/feeds/enable" style="display:inline">
-              <input type="hidden" name="feed_url" value="{{ feed.feed_url }}" />
-              {% if feed.folder_id %}<input type="hidden" name="folder_id" value="{{ feed.folder_id }}" />{% endif %}
-              <button type="submit" class="problem-feed-action-btn">Enable</button>
-            </form>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="action-modal-empty">No inactive feeds.</p>
-      {% endif %}
-      <div class="action-modal-actions">
-        <button type="button" class="action-modal-cancel" data-close-modal="inactive-feeds-modal">Close</button>
-      </div>
-    </div>
-  </div>
+        <div class="feeds-tab-panel" data-feeds-panel="folders">
+          <p class="muted" style="padding:0.5rem 0">Folder list coming soon.</p>
+        </div>
 
-  <div id="problematic-feeds-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="problematic-feeds-modal-title">
-      <div class="modal-header-row">
-        <h3 id="problematic-feeds-modal-title" class="action-modal-title">Problematic Feeds</h3>
-        <button type="button" class="modal-close" data-close-modal="problematic-feeds-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      {% set failing_feeds = problematic_feeds | selectattr("acknowledged_at", "none") | list %}
-      {% set acked_feeds = problematic_feeds | rejectattr("acknowledged_at", "none") | list %}
-      <div class="problem-feed-tabs" role="tablist">
-        <button type="button" class="problem-tab-btn active" data-problem-tab="failing" role="tab" aria-selected="true">Failing{% if failing_feeds %} <span class="problem-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
-        <button type="button" class="problem-tab-btn" data-problem-tab="acked" role="tab" aria-selected="false">Checked OK{% if acked_feeds %} <span class="problem-tab-count">{{ acked_feeds | length }}</span>{% endif %}</button>
-      </div>
-      <div class="problem-tab-panel" data-problem-panel="failing">
-        {% if failing_feeds %}
-        <ul class="problem-feed-list">
-          {% for row in failing_feeds %}
-          <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
-            <div class="problem-feed-row">
-              <button
-                type="button"
-                class="problem-feed-link"
-                data-problem-feed-properties
-                data-feed-url="{{ row.feed_url }}"
-                title="{{ row.feed_url }}"
-              >{{ row.feed_title }}</button>
-              <div class="problem-feed-actions">
-                <a
-                  class="problem-feed-action"
-                  href="{{ row.feed_url }}"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Open feed URL in new tab"
-                  aria-label="Open feed URL in new tab"
-                ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
-                <button
-                  type="button"
-                  class="problem-feed-action problem-feed-action-ack"
-                  data-problem-feed-ack
-                  data-feed-url="{{ row.feed_url }}"
-                  title="Mark as manually checked OK (e.g. bot-blocked)"
-                  aria-label="Mark as checked OK"
-                ><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
-                <button
-                  type="button"
-                  class="problem-feed-action problem-feed-action-danger"
-                  data-problem-feed-unsubscribe
-                  data-feed-url="{{ row.feed_url }}"
-                  data-folder-id="{{ row.folder_id or selected_folder_id }}"
-                  title="Unsubscribe from feed"
-                  aria-label="Unsubscribe from feed"
-                ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
-              </div>
+        <div id="problematic-feeds-modal">
+          <div class="feeds-tab-panel" data-feeds-panel="failing" hidden>
+            <div data-problem-panel="failing">
+              {% if failing_feeds %}
+              <ul class="problem-feed-list">
+                {% for row in failing_feeds %}
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                  <div class="problem-feed-row">
+                    <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+                    <div class="problem-feed-actions">
+                      <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                      <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Mark as checked OK" aria-label="Mark as checked OK"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                    </div>
+                  </div>
+                  <div class="problem-feed-meta">
+                    <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
+                    {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+                  </div>
+                  {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="muted">No failing feeds right now.</p>
+              {% endif %}
             </div>
-            <div class="problem-feed-meta">
-              <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
-              {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+            <div class="problem-feed-section-divider" {% if not acked_feeds %}hidden{% endif %}>Checked OK</div>
+            <div data-problem-panel="acked">
+              {% if acked_feeds %}
+              <ul class="problem-feed-list">
+                {% for row in acked_feeds %}
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                  <div class="problem-feed-row">
+                    <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+                    <div class="problem-feed-actions">
+                      <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                      <button type="button" class="problem-feed-action" data-problem-feed-unack data-feed-url="{{ row.feed_url }}" title="Move back to Failing" aria-label="Move back to Failing"><span class="material-symbols-rounded" aria-hidden="true">undo</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                    </div>
+                  </div>
+                  <div class="problem-feed-meta">
+                    <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
+                    {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+                  </div>
+                  {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% endif %}
             </div>
-            {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted">No failing feeds right now.</p>
-        {% endif %}
+          </div>
+        </div>
+
+        <div id="inactive-feeds-modal" class="feeds-tab-panel" data-feeds-panel="deactivated" hidden>
+          {% if inactive_feeds %}
+          <ul class="inactive-feed-list">
+            {% for feed in inactive_feeds %}
+            <li class="inactive-feed-row">
+              {% if feed.folder_name %}<span class="inactive-feed-folder">{{ feed.folder_name }}</span>{% endif %}
+              <span class="inactive-feed-name">{{ feed.feed_title }}</span>
+              <form method="post" action="/feeds/enable" style="display:contents">
+                <input type="hidden" name="feed_url" value="{{ feed.feed_url }}" />
+                {% if feed.folder_id %}<input type="hidden" name="folder_id" value="{{ feed.folder_id }}" />{% endif %}
+                <button type="submit" class="inactive-feed-enable-btn">Enable</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">No deactivated feeds.</p>
+          {% endif %}
+        </div>
       </div>
-      <div class="problem-tab-panel" data-problem-panel="acked" hidden>
-        {% if acked_feeds %}
-        <ul class="problem-feed-list">
-          {% for row in acked_feeds %}
-          <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
-            <div class="problem-feed-row">
-              <button
-                type="button"
-                class="problem-feed-link"
-                data-problem-feed-properties
-                data-feed-url="{{ row.feed_url }}"
-                title="{{ row.feed_url }}"
-              >{{ row.feed_title }}</button>
-              <div class="problem-feed-actions">
-                <a
-                  class="problem-feed-action"
-                  href="{{ row.feed_url }}"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Open feed URL in new tab"
-                  aria-label="Open feed URL in new tab"
-                ><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
-                <button
-                  type="button"
-                  class="problem-feed-action"
-                  data-problem-feed-unack
-                  data-feed-url="{{ row.feed_url }}"
-                  title="Move back to Failing"
-                  aria-label="Move back to Failing"
-                ><span class="material-symbols-rounded" aria-hidden="true">undo</span></button>
-                <button
-                  type="button"
-                  class="problem-feed-action problem-feed-action-danger"
-                  data-problem-feed-unsubscribe
-                  data-feed-url="{{ row.feed_url }}"
-                  data-folder-id="{{ row.folder_id or selected_folder_id }}"
-                  title="Unsubscribe from feed"
-                  aria-label="Unsubscribe from feed"
-                ><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
-              </div>
-            </div>
-            <div class="problem-feed-meta">
-              <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
-              {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
-            </div>
-            {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted">No feeds marked as checked OK.</p>
-        {% endif %}
+
+      <!-- Import/Export tab -->
+      <div id="settings-tab-importexport" class="settings-tab-panel" hidden>
+        <h4 class="settings-section-title">OPML</h4>
+        <div class="settings-section settings-importexport-group">
+          <label for="opml-file-input" class="settings-secondary-btn" style="cursor:pointer">Import OPML</label>
+          <a class="settings-secondary-btn" href="/opml/export">Export OPML</a>
+          <button type="button" class="settings-secondary-btn" id="dedup-feeds-btn">Remove duplicate feeds</button>
+        </div>
+        <h4 class="settings-section-title" style="margin-top:1.25rem">Takeout</h4>
+        <div class="settings-section settings-importexport-group">
+          <a class="settings-secondary-btn" href="/takeout/export"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">download</span> Export ZIP</a>
+          <label for="takeout-file-input" class="settings-secondary-btn" style="cursor:pointer"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">upload</span> Import ZIP</label>
+        </div>
       </div>
-      <div class="action-modal-actions">
-        <button type="button" class="action-modal-cancel" data-close-modal="problematic-feeds-modal">Close</button>
-      </div>
+
     </div>
   </div>
 
@@ -1902,7 +1813,14 @@
       </div>
       <div id="feed-prop-tab-info" class="feed-prop-tab-panel">
         <dl class="feed-properties-grid">
-          <dt>Title</dt><dd id="feed-prop-title">-</dd>
+          <dt>Display name</dt>
+          <dd>
+            <span class="feed-prop-name-wrap">
+              <input type="text" id="feed-prop-user-title" class="feed-prop-title-input" placeholder="" autocomplete="off" />
+              <button type="button" id="feed-prop-reset-title-btn" class="feed-prop-reset-title" title="Reset to feed title" hidden>×</button>
+            </span>
+          </dd>
+          <dt>Feed title</dt><dd id="feed-prop-real-title">-</dd>
           <dt>Website</dt><dd id="feed-prop-website">-</dd>
           <dt>XML address</dt><dd id="feed-prop-xml">-</dd>
           <dt>Health</dt><dd id="feed-prop-health">-</dd>
@@ -1932,24 +1850,23 @@
         </div>
         <!-- Non-YouTube feeds: image strategy + display controls -->
         <div id="feed-prop-img-section">
+          <h4 class="feed-prop-section-title">Article image</h4>
           <dl class="feed-properties-grid">
-            <dt>Thumbnails</dt>
+            <dt>Source</dt>
             <dd>
               <select id="feed-prop-strategy" class="feed-prop-strategy-select">
                 <option value="auto">Auto-detect</option>
+                <option value="webcomic">Webcomic</option>
+                <option value="artwork">Artwork</option>
                 <option value="inline">Feed content only</option>
                 <option value="og_scrape">Source scraping</option>
+                <option value="media_rss">Media RSS</option>
                 <option value="none">None</option>
               </select>
               <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
             </dd>
           </dl>
-          <h4 class="feed-prop-section-title">Image display</h4>
           <div class="feed-prop-toggles">
-            <label class="feed-prop-toggle-row">
-              <input type="checkbox" id="feed-prop-show-thumb" class="feed-prop-checkbox" />
-              <span>Use as thumbnail in post list</span>
-            </label>
             <label class="feed-prop-toggle-row">
               <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
               <span>Show image at top of article</span>
@@ -1961,6 +1878,23 @@
                 <option value="0">Caption: never show</option>
               </select>
             </label>
+          </div>
+          <h4 class="feed-prop-section-title">Post thumbnail</h4>
+          <div class="feed-prop-thumb-override">
+            <select id="feed-prop-thumb-source" class="feed-prop-strategy-select">
+              <option value="__disabled__">Disabled</option>
+              <option value="">Per-entry image (auto)</option>
+              <option value="__favicon__">Feed favicon</option>
+              <optgroup id="feed-prop-thumb-strategies-group" label="Pin a strategy image"></optgroup>
+              <option value="__custom__">Custom URL…</option>
+            </select>
+            <div id="feed-prop-thumb-custom-row" style="display:none;margin-top:0.4rem;">
+              <input type="url" id="feed-prop-thumbnail-url" class="feed-prop-thumbnail-input" placeholder="https://…" autocomplete="off" />
+              <button type="button" id="feed-prop-thumbnail-url-save" class="feed-prop-thumbnail-save">Save</button>
+            </div>
+            <div id="feed-prop-thumb-preview" class="feed-prop-thumb-preview" style="display:none;">
+              <img id="feed-prop-thumb-preview-img" src="" alt="" />
+            </div>
           </div>
           <h4 class="feed-prop-section-title">
             Strategy comparison
@@ -2474,7 +2408,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #fakefeedz-modal, #global-note-modal, #email-article-modal, #inactive-feeds-modal, #problematic-feeds-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
+    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #fakefeedz-modal, #global-note-modal, #email-article-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
       modal.addEventListener('click', (event) => {
         if (event.target === modal) {
           modal.setAttribute('hidden', '');
@@ -2586,16 +2520,22 @@
       const data = await resp.json();
       const sameFolder = data.same_folder || [];
       const crossFolder = data.cross_folder || [];
+      const upgradable = data.upgradable || [];
       const modal = document.getElementById('dedup-modal');
       const intro = modal.querySelector('.dedup-modal-intro');
       const list = modal.querySelector('.dedup-modal-list');
       const crossSection = modal.querySelector('.dedup-cross-section');
       const crossList = modal.querySelector('.dedup-cross-list');
+      const upgradeSection = modal.querySelector('.dedup-upgrade-section');
+      const upgradeList = modal.querySelector('.dedup-upgrade-list');
 
-      if (sameFolder.length === 0 && crossFolder.length === 0) {
-        intro.textContent = 'No duplicate feeds found.';
+      const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0;
+
+      if (!hasAnything) {
+        intro.textContent = 'No duplicate or upgradable feeds found.';
         list.innerHTML = '';
         crossSection.hidden = true;
+        upgradeSection.hidden = true;
         modal.querySelector('#dedup-modal-ok').hidden = true;
       } else {
         modal.querySelector('#dedup-modal-ok').hidden = false;
@@ -2644,6 +2584,28 @@
         } else {
           crossSection.hidden = true;
         }
+
+        // Upgrade section
+        if (upgradable.length > 0) {
+          upgradeSection.hidden = false;
+          const upgradeIntro = upgradeSection.querySelector('.dedup-upgrade-intro');
+          upgradeIntro.textContent = `Found ${upgradable.length} feed(s) using an RSS format URL — check to upgrade to Atom:`;
+          upgradeList.innerHTML = upgradable.map((d, i) =>
+            `<label class="dedup-upgrade-item"><input type="checkbox" class="dedup-upgrade-check" data-current="${d.current}" data-upgrade-to="${d.upgrade_to}" checked>` +
+            `<div class="dedup-pair">` +
+            `<div class="dedup-pair-row"><span class="dedup-tag remove-tag">rss</span><span class="dedup-url">${d.current}</span></div>` +
+            `<div class="dedup-pair-row"><span class="dedup-tag keep-tag">atom</span><span class="dedup-url">${d.upgrade_to}</span></div>` +
+            `</div></label>`
+          ).join('');
+        } else {
+          upgradeSection.hidden = true;
+        }
+
+        // Update OK button label
+        const okBtn = modal.querySelector('#dedup-modal-ok');
+        const hasDedup = sameFolder.length > 0 || crossFolder.length > 0;
+        const hasUpgrade = upgradable.length > 0;
+        okBtn.textContent = hasDedup && hasUpgrade ? 'Remove duplicates & upgrade' : hasUpgrade ? 'Upgrade feeds' : 'Remove duplicates';
       }
       modal.hidden = false;
     });
@@ -2658,14 +2620,22 @@
         const folderIds = [...pair.querySelectorAll('input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
         crossChoices.push({ keep, remove, folder_ids: folderIds });
       }
+      // Collect upgrade choices (only checked ones)
+      const upgradeChoices = [];
+      for (const cb of modal.querySelectorAll('.dedup-upgrade-check:checked')) {
+        upgradeChoices.push({ current: cb.dataset.current, upgrade_to: cb.dataset.upgradeTo });
+      }
       modal.hidden = true;
       const dedupeResp = await fetch('/feeds/deduplicate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cross_folder_choices: crossChoices }),
+        body: JSON.stringify({ cross_folder_choices: crossChoices, upgrade_choices: upgradeChoices }),
       });
       const dedupeData = await dedupeResp.json();
-      alert(`Removed ${dedupeData.count} duplicate feed(s).`);
+      const parts = [];
+      if (dedupeData.count > 0) parts.push(`Removed ${dedupeData.count} duplicate feed(s)`);
+      if (dedupeData.upgraded_count > 0) parts.push(`upgraded ${dedupeData.upgraded_count} feed(s) to Atom`);
+      alert(parts.length ? parts.join(', ') + '.' : 'Nothing to do.');
       window.location.reload();
     });
 
@@ -2883,10 +2853,8 @@
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');
     const tagsToggleButton = document.getElementById('folders-tags-toggle');
-    const problematicFeedsToggle = document.getElementById('folders-problematic-toggle');
-    const problematicFeedsMenuToggle = document.getElementById('menu-problematic-toggle');
-    const problematicFeedsBadge = document.getElementById('folders-problematic-badge');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
+    let problematicFeedsViewedThisSession = false;
 
     function applyTagsCollapsed(collapsed) {
       if (!tagsTreeBlock) {
@@ -2911,9 +2879,8 @@
     }
 
     async function markProblematicFeedsViewed() {
-      if (!problematicFeedsToggle || !problematicFeedsToggle.classList.contains('has-alert')) {
-        return;
-      }
+      if (problematicFeedsViewedThisSession) return;
+      problematicFeedsViewedThisSession = true;
       try {
         await fetch('/settings/problematic-feeds/viewed', {
           method: 'POST',
@@ -2921,21 +2888,11 @@
           credentials: 'same-origin',
         });
       } catch (_err) {
-        // ignore; UI still clears local alert state
-      }
-      problematicFeedsToggle.classList.remove('has-alert');
-      if (problematicFeedsBadge) {
-        problematicFeedsBadge.remove();
+        // ignore
       }
     }
 
-    problematicFeedsToggle?.addEventListener('click', () => {
-      void markProblematicFeedsViewed();
-    });
-
-    problematicFeedsMenuToggle?.addEventListener('click', () => {
-      void markProblematicFeedsViewed();
-    });
+    // (markProblematicFeedsViewed is now called when the Feeds tab opens in Settings)
 
     const panes = document.querySelector('.panes');
     const rootStyle = document.documentElement.style;
@@ -3160,7 +3117,9 @@
     const globalNoteForm = document.getElementById('global-note-form');
     const feedPropertiesModal = document.getElementById('feed-properties-modal');
     const feedPropertiesClose = document.getElementById('feed-properties-close');
-    const feedPropTitle = document.getElementById('feed-prop-title');
+    const feedPropUserTitle = document.getElementById('feed-prop-user-title');
+    const feedPropResetTitleBtn = document.getElementById('feed-prop-reset-title-btn');
+    const feedPropRealTitle = document.getElementById('feed-prop-real-title');
     const feedPropWebsite = document.getElementById('feed-prop-website');
     const feedPropXml = document.getElementById('feed-prop-xml');
     const feedPropHealth = document.getElementById('feed-prop-health');
@@ -3793,12 +3752,28 @@
         return;
       }
 
+      // /thumb requires an absolute URL. When the server proxied the image through
+      // /api/img (CORP-restricted domains), leadImageUrl is a relative path like
+      // "/api/img?u=...". Passing that to /thumb?url= would produce a 400.
+      // Leave the existing list thumbnail in place instead.
+      if (!leadImageUrl.startsWith('http://') && !leadImageUrl.startsWith('https://')) {
+        return;
+      }
+
       const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl);
       if (existingImage instanceof HTMLImageElement) {
         if (existingImage.getAttribute('src') !== thumbedLeadUrl) {
+          const prevSrc = existingImage.getAttribute('src');
           existingImage.onerror = () => {
-            thumbnail.classList.add('is-empty');
-            existingImage.style.display = 'none';
+            // /thumb failed (remote 4xx/5xx or network). Restore the previous
+            // thumbnail rather than leaving a broken-image icon in the list.
+            if (prevSrc) {
+              existingImage.setAttribute('src', prevSrc);
+              existingImage.style.display = '';
+            } else {
+              thumbnail.classList.add('is-empty');
+              existingImage.style.display = 'none';
+            }
           };
           existingImage.setAttribute('src', thumbedLeadUrl);
         }
@@ -4089,7 +4064,9 @@
         return;
       }
 
-      setFeedPropText(feedPropTitle, 'Loading...');
+      if (feedPropUserTitle) { feedPropUserTitle.value = ''; feedPropUserTitle.placeholder = 'Loading...'; feedPropUserTitle.dataset.feedUrl = feedUrl; }
+      if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = true;
+      setFeedPropText(feedPropRealTitle, '-');
       setFeedPropText(feedPropWebsite, '-');
       setFeedPropText(feedPropXml, feedUrl);
       setFeedPropText(feedPropHealth, '-');
@@ -4102,10 +4079,16 @@
       setFeedPropText(feedPropLastPost, '-');
       if (feedPropStrategy) feedPropStrategy.value = 'auto';
       if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
-      if (feedPropShowThumb) feedPropShowThumb.checked = true;
+      // feedPropShowThumb removed — now part of thumb-source dropdown
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropCaptionMode) feedPropCaptionMode.value = '-1';
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
+      const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
+      if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; }
+      const _thumbCustomRow = document.getElementById('feed-prop-thumb-custom-row');
+      if (_thumbCustomRow) _thumbCustomRow.style.display = 'none';
+      const _thumbPreview = document.getElementById('feed-prop-thumb-preview');
+      if (_thumbPreview) _thumbPreview.style.display = 'none';
       if (feedPropYtSection) feedPropYtSection.hidden = true;
       if (feedPropImgSection) feedPropImgSection.hidden = false;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
@@ -4144,7 +4127,13 @@
           return;
         }
 
-        setFeedPropText(feedPropTitle, data.title || feedUrl);
+        if (feedPropUserTitle) {
+          feedPropUserTitle.value = data.user_title || '';
+          feedPropUserTitle.placeholder = data.real_title || data.feed_url || feedUrl;
+          feedPropUserTitle.dataset.feedUrl = feedUrl;
+        }
+        if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = !data.user_title;
+        setFeedPropText(feedPropRealTitle, data.real_title || data.feed_url || feedUrl);
         setFeedPropText(feedPropWebsite, data.website || '-');
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         setFeedPropText(feedPropHealth, data.health || '-');
@@ -4198,10 +4187,6 @@
               ? `detected: ${detected}` : '';
           }
 
-          if (feedPropShowThumb) {
-            feedPropShowThumb.checked = data.show_lead_image_as_thumb !== false;
-            feedPropShowThumb.dataset.feedUrl = feedUrl;
-          }
           if (feedPropShowInArticle) {
             feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
             feedPropShowInArticle.dataset.feedUrl = feedUrl;
@@ -4210,12 +4195,19 @@
             feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
             feedPropCaptionMode.dataset.feedUrl = feedUrl;
           }
+          const feedPropThumbUrlSave = document.getElementById('feed-prop-thumbnail-url-save');
+          if (feedPropThumbUrlSave) feedPropThumbUrlSave.dataset.feedUrl = feedUrl;
+          const thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
+          if (thumbSourceSelect) thumbSourceSelect.dataset.feedUrl = feedUrl;
           if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
 
+          const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
             doStrategyRefresh(feedUrl, activeEntryId);
+            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb);
           } else {
             renderStrategyGrid(data.strategy_cache || []);
+            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb);
           }
         }
 
@@ -4230,13 +4222,105 @@
           }
         }
       } catch (error) {
-        setFeedPropText(feedPropTitle, feedUrl);
+        if (feedPropUserTitle) feedPropUserTitle.placeholder = feedUrl;
         setFeedPropText(feedPropHealth, 'error');
         setFeedPropText(feedPropHealthDetail, `Could not load properties: ${error}`);
       }
     }
 
-    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss']);
+    async function saveFeedUserTitle(feedUrl, userTitle) {
+      const fd = new FormData();
+      fd.append('feed_url', feedUrl);
+      fd.append('user_title', userTitle);
+      try {
+        await fetch('/feeds/set-user-title', { method: 'POST', body: fd, credentials: 'same-origin' });
+        const displayTitle = userTitle || feedPropUserTitle?.placeholder || feedUrl;
+        document.querySelectorAll(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`).forEach(link => {
+          const nameSpan = link.querySelector('.feed-label > span:last-of-type');
+          if (nameSpan) nameSpan.textContent = displayTitle;
+        });
+        if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = !userTitle;
+      } catch (_err) {}
+    }
+
+    if (feedPropUserTitle) {
+      feedPropUserTitle.addEventListener('blur', () => {
+        const feedUrl = feedPropUserTitle.dataset.feedUrl;
+        if (feedUrl) saveFeedUserTitle(feedUrl, feedPropUserTitle.value.trim());
+      });
+    }
+    if (feedPropResetTitleBtn) {
+      feedPropResetTitleBtn.addEventListener('click', () => {
+        const feedUrl = feedPropUserTitle?.dataset.feedUrl;
+        if (feedPropUserTitle) feedPropUserTitle.value = '';
+        if (feedUrl) saveFeedUserTitle(feedUrl, '');
+      });
+    }
+
+    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss', 'webcomic', 'artwork']);
+
+    function applyThumbSourceUI() {
+      const select = document.getElementById('feed-prop-thumb-source');
+      const customRow = document.getElementById('feed-prop-thumb-custom-row');
+      const preview = document.getElementById('feed-prop-thumb-preview');
+      const previewImg = document.getElementById('feed-prop-thumb-preview-img');
+      if (!select) return;
+
+      const val = select.value;
+      if (customRow) customRow.style.display = val === '__custom__' ? '' : 'none';
+
+      let previewUrl = null;
+      if (val === '__custom__') {
+        previewUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
+      } else if (val.startsWith('__strat__')) {
+        previewUrl = val.slice(9);
+      }
+
+      if (preview && previewImg) {
+        if (previewUrl) {
+          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}`;
+          preview.style.display = '';
+        } else {
+          preview.style.display = 'none';
+        }
+      }
+    }
+
+    function updateThumbSourceSelect(strategyCache, currentThumbUrl, showThumb) {
+      const select = document.getElementById('feed-prop-thumb-source');
+      const group = document.getElementById('feed-prop-thumb-strategies-group');
+      if (!select || !group) return;
+
+      // Rebuild strategy options
+      group.innerHTML = '';
+      (strategyCache || []).forEach(row => {
+        if (!row.image_url) return;
+        const opt = document.createElement('option');
+        opt.value = '__strat__' + row.image_url;
+        opt.textContent = row.strategy;
+        group.appendChild(opt);
+      });
+
+      // Set current selection: showThumb=false → Disabled, otherwise use thumbUrl
+      if (!showThumb) {
+        select.value = '__disabled__';
+      } else if (!currentThumbUrl) {
+        select.value = '';
+      } else if (currentThumbUrl === '__favicon__') {
+        select.value = '__favicon__';
+      } else {
+        const matchOpt = [...select.options].find(o => o.value === '__strat__' + currentThumbUrl);
+        const input = document.getElementById('feed-prop-thumbnail-url');
+        if (matchOpt) {
+          select.value = matchOpt.value;
+          if (input) input.value = currentThumbUrl;
+        } else {
+          select.value = '__custom__';
+          if (input) input.value = currentThumbUrl;
+        }
+      }
+      applyThumbSourceUI();
+    }
 
     function renderStrategyGrid(cacheRows) {
       if (!feedPropStratGrid || !feedPropStratEmpty) return;
@@ -4263,14 +4347,32 @@
             <div class="feed-prop-strat-error">${row.error}</div>
           </div>`;
         }
+        const useAsThumbBtn = row.image_url
+          ? `<button class="feed-prop-use-as-thumb" data-url="${row.image_url}" title="Use as thumbnail">📌</button>`
+          : '';
         const img = row.image_url
-          ? `<img class="feed-prop-strat-thumb" src="${row.image_url}" alt="" loading="lazy" />`
+          ? `<img class="feed-prop-strat-thumb" src="/thumb?url=${encodeURIComponent(row.image_url)}" alt="" loading="lazy" data-full-url="${row.image_url.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" />`
           : `<div class="feed-prop-strat-thumb feed-prop-strat-thumb-empty">no image</div>`;
         return `<div class="feed-prop-strat-card${activeClass}" data-strategy="${label}" ${title}>
           ${img}
+          ${useAsThumbBtn}
           <div class="feed-prop-strat-label">${label}</div>
         </div>`;
       }).join('');
+      feedPropStratGrid.querySelectorAll('.feed-prop-strat-thumb[data-full-url]').forEach(img => {
+        const card = img.closest('.feed-prop-strat-card');
+        const fullUrl = img.getAttribute('data-full-url');
+        if (!fullUrl) return;
+        const full = new Image();
+        full.addEventListener('load', () => {
+          if (full.naturalWidth > 0) card.dataset.dims = `${full.naturalWidth}×${full.naturalHeight}`;
+        });
+        full.addEventListener('error', () => {
+          if (img.complete && img.naturalWidth > 0)
+            card.dataset.dims = `${img.naturalWidth}×${img.naturalHeight}`;
+        });
+        full.src = fullUrl;
+      });
     }
 
     async function doStrategyRefresh(feedUrl, entryId) {
@@ -4284,6 +4386,10 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         renderStrategyGrid(data.strategy_cache || []);
+        const currentThumbUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
+        const _ts = document.getElementById('feed-prop-thumb-source');
+        const _showThumb = _ts?.value !== '__disabled__';
+        updateThumbSourceSelect(data.strategy_cache || [], currentThumbUrl, _showThumb);
       } catch (e) {
         if (feedPropStratEmpty) {
           feedPropStratEmpty.textContent = `Refresh failed: ${e.message}`;
@@ -4495,12 +4601,7 @@
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     }
 
-    feedPropShowThumb?.addEventListener('change', async () => {
-      const feedUrl = feedPropShowThumb.dataset.feedUrl;
-      if (!feedUrl) return;
-      try { await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', feedPropShowThumb.checked ? 1 : 0); }
-      catch (e) { feedPropShowThumb.checked = !feedPropShowThumb.checked; }
-    });
+    // feedPropShowThumb listener removed — now handled by thumb-source dropdown
 
     feedPropShowInArticle?.addEventListener('change', async () => {
       const feedUrl = feedPropShowInArticle.dataset.feedUrl;
@@ -4514,6 +4615,47 @@
       if (!feedUrl) return;
       try { await saveDisplayPref(feedUrl, 'show_image_caption', feedPropCaptionMode.value); }
       catch (e) { /* leave select as-is, non-critical */ }
+    });
+
+    document.getElementById('feed-prop-thumbnail-url-save')?.addEventListener('click', async () => {
+      const btn = document.getElementById('feed-prop-thumbnail-url-save');
+      const input = document.getElementById('feed-prop-thumbnail-url');
+      const feedUrl = btn?.dataset.feedUrl || document.getElementById('feed-prop-thumb-source')?.dataset.feedUrl;
+      if (!feedUrl || !input) return;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: input.value.trim() });
+        const resp = await fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        btn.textContent = 'Saved';
+        applyThumbSourceUI();
+        setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+      } catch (e) {
+        btn.textContent = 'Error';
+        setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+      }
+    });
+
+    document.getElementById('feed-prop-thumb-source')?.addEventListener('change', async () => {
+      const select = document.getElementById('feed-prop-thumb-source');
+      const feedUrl = select.dataset.feedUrl;
+      applyThumbSourceUI();
+      if (!feedUrl) return;
+      const val = select.value;
+      if (val === '__custom__') return; // wait for Save button
+      if (val === '__disabled__') {
+        await Promise.all([
+          fetch('/feeds/thumbnail-url', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, thumbnail_url: '' }), credentials: 'same-origin' }),
+          saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 0),
+        ]);
+        return;
+      }
+      // Re-enable thumbnails if they were disabled
+      await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 1);
+      let url = '';
+      if (val === '__favicon__') url = '__favicon__';
+      else if (val.startsWith('__strat__')) url = val.slice(9);
+      const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: url });
+      await fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
     });
 
     feedPropRefreshBtn?.addEventListener('click', () => {
@@ -4545,6 +4687,29 @@
     });
 
     feedPropStratGrid?.addEventListener('click', (e) => {
+      // Handle "Use as thumbnail" pin button
+      const useBtn = e.target.closest('.feed-prop-use-as-thumb');
+      if (useBtn) {
+        e.stopPropagation();
+        const url = useBtn.dataset.url;
+        const select = document.getElementById('feed-prop-thumb-source');
+        const feedUrl = select?.dataset.feedUrl;
+        if (!url || !feedUrl) return;
+        // Find or create __strat__ option matching this URL
+        const matchOpt = select ? [...select.options].find(o => o.value === '__strat__' + url) : null;
+        if (matchOpt) {
+          select.value = matchOpt.value;
+        } else {
+          select.value = '__custom__';
+          const input = document.getElementById('feed-prop-thumbnail-url');
+          if (input) input.value = url;
+        }
+        applyThumbSourceUI();
+        const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: url });
+        fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
+        return;
+      }
+
       const card = e.target.closest('.feed-prop-strat-card[data-strategy]');
       if (!card || !feedPropStrategy) return;
       const strategy = card.dataset.strategy;
@@ -4970,6 +5135,45 @@
           setEntrySourceFallbackVisible(false);
         });
       }
+
+      const entryBody = document.getElementById('entry-body');
+      if (entryBody && entryBody.dataset.leadImagePending === '1' && !entryBody.dataset.leadImagePolling) {
+        entryBody.dataset.leadImagePolling = '1';
+        const pendingFeedUrl = entryBody.dataset.leadImageFeedUrl;
+        const pendingEntryId = entryBody.dataset.leadImageEntryId;
+        const pollIntervals = [2000, 3000, 4000, 5000, 6000, 8000, 10000, 12000];
+        let pollIndex = 0;
+
+        function schedulePoll() {
+          if (pollIndex >= pollIntervals.length) return;
+          const delay = pollIntervals[pollIndex++];
+          setTimeout(async () => {
+            if (document.getElementById('entry-body') !== entryBody) return;
+            try {
+              const params = new URLSearchParams({ feed_url: pendingFeedUrl, entry_id: pendingEntryId });
+              const resp = await fetch('/entries/lead-image?' + params.toString(), { credentials: 'same-origin' });
+              if (!resp.ok) return;
+              const data = await resp.json();
+              if (data.status === 'ready' && data.url) {
+                const img = document.createElement('img');
+                img.className = 'entry-lead-image entry-lead-image-popped';
+                img.src = data.url;
+                img.alt = '';
+                img.loading = 'lazy';
+                entryBody.prepend(img);
+                entryBody.removeAttribute('data-lead-image-pending');
+                const muted = entryBody.querySelector('.muted');
+                if (muted) muted.remove();
+                return;
+              }
+              if (data.status === 'pending') schedulePoll();
+            } catch (_e) {
+              schedulePoll();
+            }
+          }, delay);
+        }
+        schedulePoll();
+      }
     }
 
     bindEntryPaneInteractions();
@@ -4986,6 +5190,12 @@
           }
           event.preventDefault();
           loadEntryPaneWithoutFullRefresh(postMainLink.href);
+        });
+        postMainLink.addEventListener('auxclick', (event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          const url = postMainLink.dataset.articleUrl;
+          if (url) window.open(url, '_blank', 'noopener');
         });
       }
 
@@ -5376,6 +5586,39 @@
       if (rootItem) adjustCountBadge(rootItem, delta);
     }
 
+    // Zero out sidebar count badges for a folder (or all folders when isRoot=true).
+    // Called after submitMarkReadAsync so off-screen unread posts don't leave stale counts.
+    function clearFolderBadges(folderId, isRoot) {
+      const feedLinks = isRoot
+        ? document.querySelectorAll('.feed-link')
+        : document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`);
+      let remaining = 0;
+      for (const feedLink of feedLinks) {
+        const badge = feedLink.querySelector(':scope > .count');
+        if (badge) {
+          remaining += Number(badge.textContent) || 0;
+          badge.remove();
+        }
+        feedLink.closest('.tree-feed-item')?.setAttribute('data-unread-count', '0');
+      }
+      if (isRoot) {
+        document.querySelectorAll('.tree-item:not(.root-item) > .count').forEach(b => b.remove());
+        document.querySelectorAll('.tree-folder-group').forEach(g => g.setAttribute('data-unread-count', '0'));
+        const rootItem = document.querySelector('.root-item.tree-item');
+        rootItem?.querySelector(':scope > .count')?.remove();
+      } else {
+        const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item)`);
+        if (folderItem) {
+          folderItem.querySelector(':scope > .count')?.remove();
+          folderItem.closest('.tree-folder-group')?.setAttribute('data-unread-count', '0');
+        }
+        if (remaining > 0) {
+          const rootItem = document.querySelector('.root-item.tree-item');
+          if (rootItem) adjustCountBadge(rootItem, -remaining);
+        }
+      }
+    }
+
     function applyPostItemReadState(postItem, isRead) {
       if (!postItem) {
         return false;
@@ -5410,7 +5653,7 @@
       const deltaByFeed = {};
       for (const item of postItems) {
         const itemFeedUrl = item.getAttribute('data-post-feed-url') || '';
-        if (feedUrlFilter && itemFeedUrl !== feedUrlFilter) continue;
+        if (feedUrlFilter instanceof Set ? !feedUrlFilter.has(itemFeedUrl) : (feedUrlFilter && itemFeedUrl !== feedUrlFilter)) continue;
         if (item.getAttribute('data-post-read') === '1') continue;
         if (cutoff !== null) {
           // Mirror the server logic: skip entries with no date, skip entries newer than cutoff.
@@ -5467,6 +5710,27 @@
       } catch (_err) {
         // Network error — UI already updated optimistically, silently ignore.
       }
+      // After any bulk mark-read, refresh sidebar counts from the server so that
+      // off-screen entries (not in the current post list) are reflected correctly.
+      _refreshSidebarCounts();
+    }
+
+    async function _refreshSidebarCounts() {
+      try {
+        const resp = await fetch('/api/unread-counts', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        const counts = await resp.json();
+        for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
+          const feedUrl = feedLink.getAttribute('data-feed-url');
+          if (!feedUrl) continue;
+          const serverCount = counts[feedUrl] ?? 0;
+          const badge = feedLink.querySelector(':scope > .count');
+          const currentCount = badge ? (Number(badge.textContent) || 0) : 0;
+          if (serverCount !== currentCount) {
+            adjustSidebarUnreadCount(feedUrl, serverCount - currentCount);
+          }
+        }
+      } catch (_e) { }
     }
 
     function applyPostItemSavedState(postItem, isSaved) {
@@ -5696,6 +5960,29 @@
         markReadListFeedUrlInput.value = contextFeedUrl;
         hideContextMenu();
         submitMarkReadAsync(markReadFeedForm, contextFeedUrl);
+        // Zero any remaining feed badge (covers off-screen unread posts)
+        const _feedLink = contextFeedUrl
+          ? document.querySelector(`.feed-link[data-feed-url="${CSS.escape(contextFeedUrl)}"]`)
+          : null;
+        if (_feedLink) {
+          const _feedBadge = _feedLink.querySelector(':scope > .count');
+          const _feedRemaining = _feedBadge ? (Number(_feedBadge.textContent) || 0) : 0;
+          if (_feedBadge) _feedBadge.remove();
+          _feedLink.closest('.tree-feed-item')?.setAttribute('data-unread-count', '0');
+          if (_feedRemaining > 0) {
+            const _feedFolderId = _feedLink.getAttribute('data-folder-id');
+            if (_feedFolderId) {
+              const _folderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(_feedFolderId)}"]:not(.root-item)`);
+              if (_folderEl) {
+                adjustCountBadge(_folderEl, -_feedRemaining);
+                const _fg = _folderEl.closest('.tree-folder-group');
+                if (_fg) _fg.setAttribute('data-unread-count', String(Math.max(0, Number(_fg.getAttribute('data-unread-count') || '0') - _feedRemaining)));
+              }
+            }
+            const _rootEl = document.querySelector('.root-item.tree-item');
+            if (_rootEl) adjustCountBadge(_rootEl, -_feedRemaining);
+          }
+        }
         return;
       }
 
@@ -5705,7 +5992,14 @@
 
       markReadFolderIdInput.value = contextFolderId;
       hideContextMenu();
-      submitMarkReadAsync(markReadFolderForm, null);
+      const isRootFolder = !!document.querySelector(`.root-item[data-folder-id="${CSS.escape(contextFolderId)}"]`);
+      const folderFeedFilter = isRootFolder ? null : new Set(
+        Array.from(document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(contextFolderId)}"]`))
+          .map(el => el.getAttribute('data-feed-url')).filter(Boolean)
+      );
+      submitMarkReadAsync(markReadFolderForm, folderFeedFilter);
+      // Zero any remaining sidebar counts (covers off-screen unread posts)
+      clearFolderBadges(contextFolderId, isRootFolder);
     });
 
     let _folderSubmenuCloseTimer = null;
@@ -5888,7 +6182,8 @@
         }
         for (const el of document.querySelectorAll('.feed-link[data-feed-url][data-folder-id]')) {
           const url = el.getAttribute('data-feed-url');
-          feedTitles[url] = el.textContent.trim();
+          const titleSpan = el.querySelector('.feed-label > span:last-child');
+          feedTitles[url] = (titleSpan || el).textContent.trim();
         }
         return { folderNames, feedTitles };
       }
@@ -6551,9 +6846,8 @@
                       let entryList = null;
                       expandBtn.addEventListener('click', async () => {
                         if (entryList) {
-                          const visible = !entryList.hidden;
-                          entryList.hidden = visible;
-                          expandBtn.querySelector('.material-symbols-rounded').textContent = visible ? 'expand_more' : 'expand_less';
+                          const collapsed = entryList.classList.toggle('is-collapsed');
+                          expandBtn.querySelector('.material-symbols-rounded').textContent = collapsed ? 'expand_more' : 'expand_less';
                           return;
                         }
                         entryList = document.createElement('div');
@@ -6928,10 +7222,16 @@
         if (prefill.scope === 'folder') {
           folderSel.value = prefill.scope_id || '';
         } else if (prefill.scope === 'feed') {
-          for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
-            if (el.getAttribute('data-feed-url') === prefill.scope_id) {
-              folderSel.value = el.getAttribute('data-folder-id') || '';
-              break;
+          // Prefer the explicit folder_id passed in the prefill (from context menu data
+          // attributes), falling back to a DOM lookup so editing existing rules still works.
+          if (prefill.folder_id) {
+            folderSel.value = String(prefill.folder_id);
+          } else {
+            for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
+              if (el.getAttribute('data-feed-url') === prefill.scope_id) {
+                folderSel.value = el.getAttribute('data-folder-id') || '';
+                break;
+              }
             }
           }
         }
@@ -7361,8 +7661,8 @@
         });
       }
 
-      addRuleBtn?.addEventListener('click', () => {
-        const draft = hlBuildDraft({}, 'Add', async (newRule) => {
+      function hlMakeAddDraft(prefill) {
+        const draft = hlBuildDraft(prefill || {}, 'Add', async (newRule) => {
           try {
             const params = hlRuleToParams({ ...newRule, enabled: 0 });
             const resp = await fetch('/highlights/add', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: params.toString() });
@@ -7376,20 +7676,26 @@
           } catch { window.alert('Failed to add rule'); }
         });
         hlInsertDraft(draft, null);
-      });
+      }
 
-      function openHighlightsModal() {
+      addRuleBtn?.addEventListener('click', () => hlMakeAddDraft({}));
+
+      function openHighlightsModal(prefill) {
         hlHideDraft();
         hlLoadFalseMatches();
         hlRenderRules();
         hlModal?.removeAttribute('hidden');
+        if (prefill) hlMakeAddDraft(prefill);
       }
 
       highlightsButton?.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
         hideAllContextMenus();
-        openHighlightsModal();
+        let prefill = null;
+        if (contextFeedUrl) prefill = { scope: 'feed', scope_id: contextFeedUrl, folder_id: contextFolderId };
+        else if (contextFolderId) prefill = { scope: 'folder', scope_id: contextFolderId };
+        openHighlightsModal(prefill);
       });
 
       document.getElementById('menu-highlights-btn')?.addEventListener('click', () => openHighlightsModal());
@@ -7423,7 +7729,11 @@
       }
 
       document.querySelectorAll('[data-settings-tab]').forEach(btn => {
-        btn.addEventListener('click', () => settSwitchTab(btn.getAttribute('data-settings-tab')));
+        btn.addEventListener('click', () => {
+          const tab = btn.getAttribute('data-settings-tab');
+          settSwitchTab(tab);
+          if (tab === 'feeds') void markProblematicFeedsViewed();
+        });
       });
       // Force hidden panels to display:none regardless of stylesheet specificity
       document.querySelectorAll('.settings-tab-panel[hidden]').forEach(p => { p.style.display = 'none'; });
@@ -7619,8 +7929,7 @@
         } catch { showToastMessage('Failed to start maintenance.'); }
       });
 
-      // Avatar / settings button
-      document.getElementById('topbar-avatar-btn')?.addEventListener('click', () => openSettingsModal('profile'));
+      document.getElementById('menu-settings-btn')?.addEventListener('click', () => openSettingsModal('profile'));
       document.getElementById('menu-profile-btn')?.addEventListener('click', () => openSettingsModal('profile'));
     }
 
@@ -7773,21 +8082,22 @@
       if (event.target === folderPropertiesModal) folderPropertiesModal.setAttribute('hidden', '');
     });
 
-    // Problematic-feeds modal: tab switching.
+    // Feeds tab: view switching (Folders / Failing / OK / Deactivated).
     document.addEventListener('click', (event) => {
-      const tabBtn = event.target.closest('[data-problem-tab]');
-      if (!tabBtn) return;
-      const tab = tabBtn.getAttribute('data-problem-tab');
-      const modal = document.getElementById('problematic-feeds-modal');
-      if (!modal || !tab) return;
-      modal.querySelectorAll('.problem-tab-btn').forEach((btn) => {
-        const active = btn.getAttribute('data-problem-tab') === tab;
-        btn.classList.toggle('active', active);
+      const viewBtn = event.target.closest('[data-feeds-view]');
+      if (!viewBtn) return;
+      const view = viewBtn.getAttribute('data-feeds-view');
+      const feedsTab = document.getElementById('settings-tab-feeds');
+      if (!feedsTab) return;
+      feedsTab.querySelectorAll('[data-feeds-view]').forEach(btn => {
+        const active = btn.getAttribute('data-feeds-view') === view;
+        btn.classList.toggle('feeds-tab-btn--active', active);
         btn.setAttribute('aria-selected', String(active));
       });
-      modal.querySelectorAll('.problem-tab-panel').forEach((panel) => {
-        panel.hidden = panel.getAttribute('data-problem-panel') !== tab;
+      feedsTab.querySelectorAll('[data-feeds-panel]').forEach(panel => {
+        panel.hidden = panel.getAttribute('data-feeds-panel') !== view;
       });
+      if (view === 'failing') void markProblematicFeedsViewed();
     });
 
     function problemFeedAckRequest(feedUrl, endpoint, headerVal) {
@@ -7803,10 +8113,11 @@
       });
     }
 
-    function updateProblemTabCount(modal, panel, delta) {
-      const btn = modal.querySelector(`[data-problem-tab="${panel}"]`);
+    function updateProblemTabCount(panel, delta) {
+      const viewKey = panel === 'acked' ? 'ok' : panel;
+      const btn = document.querySelector(`#settings-tab-feeds [data-feeds-view="${viewKey}"]`);
       if (!btn) return;
-      let countEl = btn.querySelector('.problem-tab-count');
+      let countEl = btn.querySelector('.feeds-tab-count');
       const current = countEl ? parseInt(countEl.textContent, 10) || 0 : 0;
       const next = current + delta;
       if (next <= 0) {
@@ -7814,7 +8125,7 @@
       } else {
         if (!countEl) {
           countEl = document.createElement('span');
-          countEl.className = 'problem-tab-count';
+          countEl.className = 'feeds-tab-count';
           btn.appendChild(document.createTextNode(' '));
           btn.appendChild(countEl);
         }
@@ -7870,21 +8181,19 @@
               const icon = ackTrigger.querySelector('.material-symbols-rounded');
               if (icon) icon.textContent = 'undo';
               ackTrigger.disabled = false;
+              // Reveal the "Checked OK" divider on first ack.
+              const divider = ackedPanel.previousElementSibling;
+              if (divider?.classList.contains('problem-feed-section-divider')) divider.removeAttribute('hidden');
               // Move the item into the acked panel list, creating a list if needed.
               let ackedList = ackedPanel.querySelector('.problem-feed-list');
               if (!ackedList) {
                 ackedList = document.createElement('ul');
                 ackedList.className = 'problem-feed-list';
-                const emptyMsg = ackedPanel.querySelector('.muted');
-                if (emptyMsg) emptyMsg.replaceWith(ackedList);
-                else ackedPanel.insertBefore(ackedList, ackedPanel.firstChild);
+                ackedPanel.appendChild(ackedList);
               }
               ackedList.appendChild(li);
               ensureEmptyMessage(failingPanel, 'No failing feeds right now.');
-              if (modal) {
-                updateProblemTabCount(modal, 'failing', -1);
-                updateProblemTabCount(modal, 'acked', 1);
-              }
+              if (modal) updateProblemTabCount('failing', -1);
             }
           })
           .catch(() => { ackTrigger.disabled = false; });
@@ -7923,11 +8232,12 @@
                 else failingPanel.insertBefore(failingList, failingPanel.firstChild);
               }
               failingList.appendChild(li);
-              ensureEmptyMessage(ackedPanel, 'No feeds marked as checked OK.');
-              if (modal) {
-                updateProblemTabCount(modal, 'failing', 1);
-                updateProblemTabCount(modal, 'acked', -1);
+              // Hide "Checked OK" divider when acked list becomes empty.
+              if (!ackedPanel.querySelector('.problem-feed-item')) {
+                const divider = ackedPanel.previousElementSibling;
+                if (divider?.classList.contains('problem-feed-section-divider')) divider.setAttribute('hidden', '');
               }
+              if (modal) updateProblemTabCount('failing', 1);
             }
           })
           .catch(() => { unackTrigger.disabled = false; });
@@ -7966,7 +8276,7 @@
             const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
             if (li && li.parentNode) li.parentNode.removeChild(li);
             if (modal) {
-              updateProblemTabCount(modal, panelKey, -1);
+              updateProblemTabCount(panelKey, -1);
               const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
               if (panel) ensureEmptyMessage(panel, emptyText);
             }
@@ -9162,7 +9472,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #inactive-feeds-modal:not([hidden]), #problematic-feeds-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

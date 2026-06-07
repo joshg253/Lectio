@@ -543,6 +543,48 @@ body[data-single-mode="1"] #folders-collapse-btn {
   display: none;
 }
 
+.feeds-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  border-bottom: 2px solid var(--line);
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.feeds-tab-btn {
+  padding: 0.35rem 1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.feeds-tab-btn:hover { color: var(--ink); }
+.feeds-tab-btn--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.feeds-tab-count {
+  display: inline-block;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  border-radius: 99px;
+  padding: 0 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  min-width: 1.1em;
+  text-align: center;
+}
+.feeds-tab-panel { display: block; }
+.feeds-tab-panel[hidden] { display: none; }
+
 .problem-feed-tabs {
   display: flex;
   gap: 0.15rem;
@@ -676,6 +718,66 @@ body[data-single-mode="1"] #folders-collapse-btn {
 .problem-feed-error {
   margin-top: 0.22rem;
   font-size: 0.78rem;
+}
+.problem-feed-section-divider {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  margin: 0.75rem 0 0.4rem;
+  padding-top: 0.5rem;
+}
+.inactive-feed-list {
+  list-style: none !important;
+  margin: 0;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.inactive-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.inactive-feed-row:last-child { border-bottom: 0; }
+.inactive-feed-folder {
+  font-size: 0.78rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inactive-feed-folder::after { content: " ›"; }
+.inactive-feed-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+.inactive-feed-enable-btn {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inactive-feed-enable-btn:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* Enable momentum scrolling and correct touch behavior on mobile */
@@ -946,6 +1048,7 @@ body[data-single-mode="1"] .pane-folders .tree {
 .menu-divider {
   height: 1px;
   background: var(--line);
+  border: 0;
   margin: 0.2rem 0;
 }
 
@@ -2641,6 +2744,11 @@ button:hover, .button-link:hover {
 }
 .entry-readability-content a { color: var(--link, #0a5ca4); }
 .entry-readability-content pre { white-space: pre-wrap; }
+/* Override CMS inline color/background styles (e.g. Blogger white-background spans) */
+.entry-readability-content * {
+  background-color: transparent !important;
+  color: inherit !important;
+}
 
 .entry-source-frame {
   display: none;
@@ -2771,19 +2879,82 @@ button:hover, .button-link:hover {
   width: auto;
   height: auto;
   margin: 0 0 0.85rem;
-  border-radius: 8px;
+}
+
+.entry-lead-image-popped {
+  animation: lead-image-pop-in 0.3s ease-out;
+}
+
+@keyframes lead-image-pop-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.entry-content figure {
+  margin: 0.5em 0;
+  margin-left: 0;
+  margin-right: 0;
+  margin-inline-start: 0;
+  margin-inline-end: 0;
+}
+
+/* Tumblr NPF gallery rows — render side-by-side images correctly without Tumblr's CSS */
+.entry-content .npf_row {
+  display: flex;
+  gap: 4px;
+  margin: 0.5em 0;
+  overflow: hidden;
+}
+.entry-content .npf_row figure {
+  flex: 1;
+  margin: 0;
+  margin-left: 0;
+  margin-right: 0;
+  margin-inline-start: 0;
+  margin-inline-end: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.entry-content .npf_row figure img {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .entry-content img {
   display: block;
   max-width: 100%;
-  width: auto;
   height: auto;
 }
 
-.entry-content iframe,
-.entry-content video {
+.entry-content iframe {
   max-width: 100%;
+}
+.entry-content video {
+  /* width="..." HTML attribute can override max-width; use width:100% to
+     ensure the video fills the column and never causes a horizontal scrollbar */
+  width: 100%;
+  height: auto;
+}
+.entry-content figure {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Inline SVG icons inside links/buttons (e.g. Bootstrap btn with embedded icon).
+   Without the originating site's CSS these render at their default SVG size
+   (300×150 or 300×300 for a square viewBox). Cap them to 1em so they behave
+   like normal inline icons. Standalone SVG diagrams (not wrapped in <a>/<button>)
+   fall through to the general img-style rule below. */
+.entry-content a svg,
+.entry-content button svg {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  max-width: 1em;
+  max-height: 1em;
+  overflow: hidden;
+  vertical-align: -0.15em;
 }
 
 /* PCGamer (and similar Future Publishing sites) use an aspect-ratio placeholder
@@ -3325,6 +3496,52 @@ body[data-keyboard-open="1"] .action-modal-panel {
   color: var(--text, inherit);
 }
 
+.feed-prop-thumbnail-url-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+
+.feed-prop-thumb-override {
+  margin-bottom: 0.5rem;
+}
+.feed-prop-thumb-preview {
+  margin-top: 0.4rem;
+}
+.feed-prop-thumb-preview img {
+  max-height: 80px;
+  max-width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--border, #ccc);
+}
+.feed-prop-thumbnail-label {
+  font-size: 0.8rem;
+  color: var(--muted, #888);
+  white-space: nowrap;
+}
+.feed-prop-thumbnail-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border, #ccc);
+  background: var(--bg, #fff);
+  color: var(--text, inherit);
+}
+.feed-prop-thumbnail-save {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border, #ccc);
+  background: var(--bg, #fff);
+  color: var(--text, inherit);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .feed-prop-strategy-hint {
   font-size: 0.78rem;
   color: var(--muted);
@@ -3340,7 +3557,55 @@ body[data-keyboard-open="1"] .action-modal-panel {
   .feed-properties-grid dt {
     margin-top: 0.35rem;
   }
+
+  /* Bottom-sheet layout: panel anchors to the bottom edge of the screen so the
+     close button at the top is always reachable and the panel never overflows
+     above the viewport. dvh tracks the real visible height (excl. browser
+     chrome); vh is the fallback for older browsers. */
+  .action-modal {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .action-modal-panel,
+  .feed-properties-panel {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    max-height: 92dvh;
+    min-height: 0;
+    border-radius: 14px 14px 0 0;
+    resize: none;
+  }
 }
+
+.feed-prop-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.feed-prop-title-input {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.18rem 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  background: var(--bg);
+  color: var(--ink);
+}
+.feed-prop-title-input:focus { outline: none; border-color: var(--accent); }
+.feed-prop-reset-title {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.feed-prop-reset-title:hover { color: var(--ink); }
 
 .feed-prop-section-title {
   font-size: 0.85rem;
@@ -3414,12 +3679,42 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 .feed-prop-strat-card {
+  position: relative; /* needed for dimension overlay and pin button */
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
   font-size: 0.78rem;
   cursor: pointer;
   transition: border-color 0.1s;
+}
+
+.feed-prop-strat-card[data-dims]::after {
+  content: attr(data-dims);
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 0.7rem;
+  text-align: center;
+  padding: 1px 0;
+  pointer-events: none;
+}
+
+.feed-prop-use-as-thumb {
+  position: absolute;
+  top: 2px; right: 2px;
+  background: rgba(0,0,0,0.5);
+  border: none;
+  color: #fff;
+  font-size: 0.7rem;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.feed-prop-strat-card:hover .feed-prop-use-as-thumb {
+  opacity: 1;
 }
 
 .feed-prop-strat-card.active {
@@ -3644,6 +3939,9 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 /* Dedup feeds modal */
+#dedup-modal {
+  z-index: 82;
+}
 .dedup-modal-panel {
   width: min(680px, 100%);
   max-width: calc(100vw - 1rem);
@@ -3735,6 +4033,38 @@ body[data-keyboard-open="1"] .action-modal-panel {
   gap: 0.3rem;
   font-size: 0.82rem;
   cursor: pointer;
+}
+
+.dedup-upgrade-section {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.dedup-upgrade-intro {
+  margin-bottom: 0.1rem;
+}
+.dedup-upgrade-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.dedup-upgrade-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  overflow-y: auto;
+}
+.dedup-upgrade-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+.dedup-upgrade-item input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
 }
 
 /* ── Highlights ─────────────────────────────────────────────────────────── */
@@ -4225,6 +4555,8 @@ mark.highlight-mark {
   border-left: 2px solid var(--line, #ddd);
   margin-left: 0.1rem;
 }
+.hl-hist-entry-list[hidden],
+.hl-hist-entry-list.is-collapsed { display: none; }
 .hl-hist-entry-row {
   display: flex;
   flex-direction: column;
@@ -4681,22 +5013,6 @@ textarea.hl-draft-pattern {
 .topbar-icon-btn:hover { background: var(--hover-bg); color: var(--ink); }
 .topbar-overflow-btn { list-style: none; }
 .topbar-overflow-btn::-webkit-details-marker { display: none; }
-.topbar-avatar-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--pane-heading-height);
-  height: var(--pane-heading-height);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  border-radius: 0;
-  flex-shrink: 0;
-}
-.topbar-avatar-btn .material-symbols-rounded { font-size: 1.6rem; font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24; }
-.topbar-avatar-btn:hover { background: var(--hover-bg); }
 
 /* ── Settings modal ─────────────────────────────────────────────────── */
 .settings-modal-panel {
@@ -4712,7 +5028,9 @@ textarea.hl-draft-pattern {
   justify-content: space-between;
   margin-bottom: 0.25rem;
 }
-.settings-tab-bar { margin-bottom: 0.75rem; flex-wrap: wrap; }
+.settings-tab-bar { margin-bottom: 0.75rem; overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
+.settings-tab-bar::-webkit-scrollbar { display: none; }
+.settings-tab-bar .hl-tab-btn { padding: 0.35rem 0.65rem; white-space: nowrap; flex-shrink: 0; }
 .settings-tab-panel { display: flex; flex-direction: column; gap: 0; overflow-y: auto; max-height: 70vh; }
 .settings-tab-panel[hidden] { display: none; }
 .settings-section {
@@ -4745,6 +5063,28 @@ textarea.hl-draft-pattern {
   letter-spacing: 0.06em;
   color: var(--muted);
   margin: 0.8rem 0 0.3rem;
+}
+.settings-feed-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+  margin-left: 0.3rem;
+}
+.settings-importexport-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.5rem;
 }
 .settings-hint {
   grid-column: 1 / -1;

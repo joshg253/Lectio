@@ -240,7 +240,7 @@ def test_xkcd_no_lead_image_set(tmp_path: Path, monkeypatch):
     lives inline inside content_html and should stay there."""
     service = _build_service(tmp_path / "meta.sqlite", [])
     # Ensure no source fetch is attempted (would error in tests anyway)
-    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _: None)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _, **kw: None)
 
     entry = _FakeEntry(
         feed_url=XKCD_FEED_URL,
@@ -320,7 +320,7 @@ def test_mathspp_top_img_stripped_when_og_promoted(tmp_path: Path, monkeypatch):
 def test_realpython_thumbnail_none_without_scrape(tmp_path: Path, monkeypatch):
     """Without source scraping, no inline image → thumbnail should be None."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _: None)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _, **kw: None)
 
     entry = _FakeEntry(
         feed_url=REALPYTHON_FEED_URL,
@@ -337,7 +337,7 @@ def test_realpython_resolve_uses_og_when_scraped(tmp_path: Path, monkeypatch):
     """resolve_entry_lead_image_url should return the OG image when the
     source scrape succeeds and there is no inline image."""
     service = _build_service(tmp_path / "meta.sqlite", [])
-    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link: REALPYTHON_OG_URL)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _link, **kw: REALPYTHON_OG_URL)
 
     entry = _FakeEntry(
         feed_url=REALPYTHON_FEED_URL,
@@ -452,7 +452,7 @@ def test_pcgamer_backfill_replaces_flexi_with_og(tmp_path: Path, monkeypatch):
     service.store_entry_lead_image(PCGAMER_FEED_URL, PCGAMER_ENTRY_ID, PCGAMER_FLEXI_URL)
 
     # Monkeypatch source scrape to return the real OG image
-    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _: PCGAMER_OG_URL)
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda _, **kw: PCGAMER_OG_URL)
     monkeypatch.setattr(service, "_fetch_feed_media_thumbnails", lambda _: {})
 
     posts = [

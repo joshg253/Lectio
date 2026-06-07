@@ -272,7 +272,7 @@ class StarredArchiveService:
 
         title = str(getattr(entry, "title", "") or "")
         link = str(getattr(entry, "link", "") or "")
-        author = str(getattr(entry, "author", "") or "").strip() or None
+        author = str(getattr(entry, "authors_str", "") or "").strip() or None
         feed_title = str(getattr(entry, "feed_resolved_title", "") or "") or feed_url
 
         def _to_epoch(dt: Any) -> float | None:
@@ -634,7 +634,7 @@ class StarredArchiveService:
         # Snapshot all entry metadata we'd need to render this saved entry
         # standalone (after the feed is unsubscribed and reader entries gone).
         title = str(getattr(entry, "title", "") or "")
-        author = str(getattr(entry, "author", "") or "").strip() or None
+        author = str(getattr(entry, "authors_str", "") or "").strip() or None
         feed_title = str(getattr(entry, "feed_resolved_title", "") or "")
         if not feed_title:
             feed_obj = getattr(entry, "feed", None)

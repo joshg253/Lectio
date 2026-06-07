@@ -271,15 +271,6 @@ wheels = [
 ]
 
 [[package]]
-name = "iso8601"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b9/f3/ef59cee614d5e0accf6fd0cbba025b93b272e626ca89fb70a3e9187c5d15/iso8601-2.1.0.tar.gz", hash = "sha256:6b1d3829ee8921c4301998c909f7829fa9ed3cbdac0d3b16af2d743aed1ba8df", size = 6522, upload-time = "2023-10-03T00:25:39.317Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/0c/f37b6a241f0759b7653ffa7213889d89ad49a2b76eb2ddf3b57b2738c347/iso8601-2.1.0-py3-none-any.whl", hash = "sha256:aac4145c4dcb66ad8b648a02830f5e2ff6c24af20f4f482689be402db2429242", size = 7545, upload-time = "2023-10-03T00:25:32.304Z" },
-]
-
-[[package]]
 name = "itsdangerous"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -342,7 +333,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.0" },
     { name = "python-multipart" },
     { name = "readability-lxml" },
-    { name = "reader", specifier = ">=3.23" },
+    { name = "reader", specifier = ">=3.25" },
     { name = "resend" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extras = ["standard"] },
@@ -638,19 +629,19 @@ wheels = [
 
 [[package]]
 name = "reader"
-version = "3.23"
+version = "3.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "feedparser" },
-    { name = "iso8601" },
     { name = "requests" },
+    { name = "structlog" },
     { name = "typing-extensions" },
     { name = "werkzeug" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/2e/84abd02d5957051a7b1c0dc5eb80ed60d110febfaa467d48f7e70b094cf0/reader-3.23.tar.gz", hash = "sha256:4b32e02379eff6090c10b41fd6f98b93c4de64879f5ae89ab8072ad6bd813b22", size = 1618475, upload-time = "2026-04-24T12:20:21.518Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/90/8743043dd796c1befb3531a6c04a5855a306c624f033b3fff27810cb3bad/reader-3.25.tar.gz", hash = "sha256:e5c6cb8dce7706c25edae28d8d6058143ee987e55ac4fa10d739ab43480bd7ad", size = 1732005, upload-time = "2026-05-25T12:26:54.075Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/3e/7f10345248d3cf4abb5c8f68b0ac457b85ad5526d7ae3ce466ac34149f55/reader-3.23-py3-none-any.whl", hash = "sha256:23fede64cadbc3482224076fe68b2eee7189070db025a6e7eb87671ac61095c3", size = 683016, upload-time = "2026-04-24T12:20:18.834Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/08/47cc27ea004dc30fb11f73e6f1aaa9ee0ddb748ebdcc28c9dbada3deae8c/reader-3.25-py3-none-any.whl", hash = "sha256:92c12d8d5a66e20666f9aaf00d70c9e02a7e0ac586e5999a728d9d7040986841", size = 690070, upload-time = "2026-05-25T12:26:52.012Z" },
 ]
 
 [[package]]
@@ -757,6 +748,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl", hash = "sha256:d3ec55e0bb321692d275455ddfd3df75fff145d009685eb40dc91fc66b03d38b", size = 72651, upload-time = "2026-03-22T18:29:45.111Z" },
+]
+
+[[package]]
+name = "structlog"
+version = "25.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
 ]
 
 [[package]]

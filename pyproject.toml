@@ -13,7 +13,7 @@ dependencies = [
     "itsdangerous",
     "jinja2",
     "python-multipart",
-    "reader>=3.23",
+    "reader>=3.25",
     "beautifulsoup4",
     "readability-lxml",
     "sqlalchemy",
