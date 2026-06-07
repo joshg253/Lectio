@@ -1897,33 +1897,9 @@ button:hover, .button-link:hover {
   object-fit: cover;
 }
 
-.post-thumbnail-icon-fallback {
-  object-fit: contain;
-  padding: 18%;
-  opacity: 0.72;
-}
 
-.post-thumbnail-fallback {
-  position: absolute;
-  inset: 0;
+.post-thumbnail.is-empty {
   display: none;
-  align-items: center;
-  justify-content: center;
-  color: color-mix(in srgb, var(--muted) 84%, var(--ink));
-}
-
-.post-thumbnail.is-empty .post-thumbnail-fallback {
-  display: flex;
-}
-
-.post-thumbnail:has(.post-thumbnail-icon-fallback) .post-thumbnail-fallback {
-  display: none;
-}
-
-.post-thumbnail-fallback.material-symbols-rounded {
-  font-size: 1.5rem;
-  line-height: 1;
-  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
 }
 
 .post-main-link {
@@ -2182,8 +2158,7 @@ button:hover, .button-link:hover {
 
 .post-item.is-read .feed-favicon,
 .post-item.is-read .feed-icon,
-.post-item.is-read .post-thumbnail-image,
-.post-item.is-read .post-thumbnail-fallback {
+.post-item.is-read .post-thumbnail-image {
   opacity: 0.6;
 }
 
@@ -3762,6 +3737,77 @@ body[data-keyboard-open="1"] .action-modal-panel {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.feed-prop-strat-captions {
+  margin: 0.5rem 0 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.feed-prop-strat-cap-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.feed-prop-strat-cap-name {
+  flex: 0 0 6rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feed-prop-strat-cap-texts {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.feed-prop-strat-cap-title {
+  font-style: italic;
+  color: var(--ink);
+  word-break: break-word;
+}
+.feed-prop-strat-cap-alt {
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.feed-prop-caption-source-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  flex-wrap: wrap;
+}
+.feed-prop-caption-source-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.feed-prop-caption-checks {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.feed-prop-caption-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.feed-prop-caption-auto-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.feed-prop-caption-auto-btn.active:hover {
+  background: var(--accent);
 }
 
 .folder-prop-section-title {

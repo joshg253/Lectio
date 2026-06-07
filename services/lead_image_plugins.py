@@ -721,7 +721,7 @@ class ComicFuryPlugin:
         return None
 
 
-_OGLAF_COMIC_ACCESSIBLE: dict[str, bool] = {}  # slug → True/False, in-process cache
+_OGLAF_COMIC_ACCESSIBLE: dict[str, bool | str] = {}  # slug → True/False/actual-url, in-process cache
 
 
 @dataclass(frozen=True)
@@ -779,23 +779,60 @@ class OglafPlugin:
             return -200
         return 0
 
+    def _comic_url_from_page(self, entry_link: str) -> str | None:
+        """Scrape the comic page to find the actual /comic/ image URL.
+
+        Oglaf's feed slug (e.g. 'rubsalt') doesn't always match the comic
+        filename (e.g. 'rub-that-salt.jpg'), so the guessed URL can 403 even
+        after the strip rotates.  Scraping the page gives the canonical URL.
+        """
+        try:
+            resp = httpx.get(entry_link, follow_redirects=True, timeout=4.0,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                return None
+            m = re.search(
+                r'src="(https://' + re.escape(self._MEDIA_HOST) + re.escape(self._COMIC_PATH) + r'[^"]+\.(?:jpg|gif|png|webp))"',
+                resp.text,
+                re.IGNORECASE,
+            )
+            return m.group(1) if m else None
+        except Exception:
+            return None
+
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
         if not self._is_target(entry_link):
             return None
-        # Try the full comic URL.  It's 403 for the current unrotated strip but
-        # 200 once it rotates out.  Cache the result per slug for this process run.
+        slug = self._slug(entry_link) or ""
+
+        # Check in-process cache first.
+        cached = _OGLAF_COMIC_ACCESSIBLE.get(slug)
+        if isinstance(cached, str):
+            return cached  # previously found actual URL
+        if cached is True:
+            return self._comic_url(entry_link)
+
+        # Try the slug-guessed comic URL.
         comic_url = self._comic_url(entry_link)
         if comic_url:
-            slug = self._slug(entry_link) or ""
-            if slug not in _OGLAF_COMIC_ACCESSIBLE:
-                try:
-                    resp = httpx.head(comic_url, follow_redirects=False, timeout=2.0,
-                                      headers={"User-Agent": "Mozilla/5.0"})
-                    _OGLAF_COMIC_ACCESSIBLE[slug] = resp.status_code == 200
-                except Exception:
-                    _OGLAF_COMIC_ACCESSIBLE[slug] = False
-            if _OGLAF_COMIC_ACCESSIBLE.get(slug):
-                return comic_url
+            try:
+                resp = httpx.head(comic_url, follow_redirects=False, timeout=2.0,
+                                  headers={"User-Agent": "Mozilla/5.0"})
+                if resp.status_code == 200:
+                    _OGLAF_COMIC_ACCESSIBLE[slug] = True
+                    return comic_url
+            except Exception:
+                pass
+
+        # Slug URL didn't work — scrape the page for the canonical /comic/ URL.
+        # This handles cases where the filename differs from the path slug.
+        if slug not in _OGLAF_COMIC_ACCESSIBLE:
+            page_url = self._comic_url_from_page(entry_link)
+            if page_url:
+                _OGLAF_COMIC_ACCESSIBLE[slug] = page_url
+                return page_url
+            _OGLAF_COMIC_ACCESSIBLE[slug] = False
+
         # Fall back to story thumbnail from feed content.
         for source in (content_html, summary):
             if not isinstance(source, str):

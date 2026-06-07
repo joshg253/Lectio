@@ -1274,6 +1274,22 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE entry_lead_images ADD COLUMN image_alt TEXT")
         except Exception:
             pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE entry_lead_images ADD COLUMN image_title TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE feed_strategy_cache ADD COLUMN image_alt TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE feed_strategy_cache ADD COLUMN image_title TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN caption_source TEXT")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS disabled_feeds (
@@ -3895,7 +3911,7 @@ def get_feed_properties(feed_url: str) -> dict:
         with get_meta_connection() as _pc:
             _disp = get_feed_display_prefs(_pc, feed_url)
             _strat_rows = _pc.execute(
-                "SELECT strategy, image_url, fetched_at, error FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
+                "SELECT strategy, image_url, fetched_at, error, image_alt, image_title FROM feed_strategy_cache WHERE feed_url = ? ORDER BY strategy",
                 (feed_url,),
             ).fetchall()
             _feed_backoff_row = _pc.execute(
@@ -3912,6 +3928,8 @@ def get_feed_properties(feed_url: str) -> dict:
                 "image_url": r["image_url"],
                 "fetched_at": format_datetime_for_ui(datetime.fromtimestamp(r["fetched_at"], tz=timezone.utc)) if r["fetched_at"] else None,
                 "error": r["error"],
+                "image_alt": r["image_alt"],
+                "image_title": r["image_title"],
             }
             for r in _strat_rows
         ]
@@ -3950,6 +3968,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_lead_image_in_article": bool(_disp.get("show_lead_image_in_article", 1)),
             "show_lead_image_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)),
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
+            "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
@@ -5170,10 +5189,10 @@ def list_entries_for_feeds(
         _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         _feed_thumb_setting = _feed_prefs.get("feed_thumbnail_url")
         _show_thumb = bool(_feed_prefs.get("show_lead_image_as_thumb", 1))
-        if _feed_thumb_setting == "__favicon__":
-            _raw_thumb = None  # let favicon fallback show via show_thumbnail=True
-        elif _feed_thumb_setting:
+        if _feed_thumb_setting and _feed_thumb_setting != "__favicon__":
             _raw_thumb = str(_feed_thumb_setting)  # override per-entry
+        elif _feed_thumb_setting == "__favicon__":
+            _raw_thumb = None  # favicon mode treated as no-image
         _thumb = _raw_thumb if _show_thumb else None
         rec.update(
             {
@@ -5717,26 +5736,55 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Useful for comics where the hover text is the punchline (xkcd, etc.).
         # Checks content_html first, then entry.summary (xkcd: content is stripped away
         # but summary still has the img with title= attribute).
+        #
+        # We prefer a title= found on the img whose src matches lead_image_url (high
+        # confidence — it IS the lead image).  A title= on a different img (e.g. a
+        # story-thumbnail in Oglaf's feed while the lead is the full comic from the
+        # source page) is stored as low-confidence: it shows on first open but is
+        # replaced by the source-page scrape which finds the real hovertext.
         image_title_text: str | None = None
-        _img_title_re = re.compile(
-            r'<img\b[^>]+\btitle=(?:"([^"]*)"|\x27([^\x27]*)\x27)',
+        _in_feed_title_is_lead_img = False  # True only when title= came from the lead img
+        _img_tag_re_full = re.compile(r'<img\b[^>]*/?>',  re.IGNORECASE | re.DOTALL)
+        _attr_extract_re = re.compile(
+            r'\b(src|title)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))',
             re.IGNORECASE,
         )
         for _search_html in [content_html, entry.summary]:
             if not isinstance(_search_html, str):
                 continue
-            _img_title_match = _img_title_re.search(_search_html)
-            if _img_title_match:
-                _candidate = html.unescape((_img_title_match.group(1) or _img_title_match.group(2) or "")).strip()
-                # Strip any HTML tags that may have survived entity-unescaping.
-                _candidate = re.sub(r"<[^>]+>", "", _candidate).strip()
-                if _candidate:
-                    image_title_text = _candidate
+            for _tag_m in _img_tag_re_full.finditer(_search_html):
+                _tag = _tag_m.group(0)
+                _tag_attrs: dict[str, str] = {}
+                for _am in _attr_extract_re.finditer(_tag):
+                    _k = _am.group(1).lower()
+                    _v = html.unescape((_am.group(2) or _am.group(3) or _am.group(4) or "").strip())
+                    if _k and _v:
+                        _tag_attrs[_k] = _v
+                _title_val = _tag_attrs.get("title", "")
+                _title_val = re.sub(r"<[^>]+>", "", html.unescape(_title_val)).strip()
+                if not _title_val:
+                    continue
+                _src_val = _tag_attrs.get("src", "")
+                _matches_lead = bool(lead_image_url and _src_val and
+                                     (_src_val in lead_image_url or lead_image_url in _src_val or
+                                      _src_val.split("?")[0].rstrip("/") == lead_image_url.split("?")[0].rstrip("/")))
+                if _matches_lead:
+                    image_title_text = _title_val
+                    _in_feed_title_is_lead_img = True
                     break
+                if image_title_text is None:
+                    image_title_text = _title_val  # low-confidence; may be overridden below
+            if _in_feed_title_is_lead_img:
+                break
 
         # Check persisted alt text (from a previous background HTML fetch).
-        if image_title_text is None:
-            image_title_text = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
+        # Always prefer persisted (from source-page scrape) over a low-confidence
+        # in-feed title that came from a different image.
+        _persisted_alt = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
+        if _persisted_alt:
+            image_title_text = _persisted_alt
+        elif image_title_text is None:
+            pass  # stays None; source-page scrape below will attempt to fill it
 
         with get_meta_connection() as _prefs_conn:
             _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
@@ -5873,18 +5921,25 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
         # where the alt text lives on the full-size img on the article page.
+        # Also runs when the in-feed title came from a different image than the lead
+        # (e.g. Oglaf story thumbnail in feed vs. full comic from source page) and no
+        # persisted result exists yet — source scrape may find a better hovertext.
         # If the source HTML is already in-memory (same session as the lead-image
         # fetch) run synchronously — no network cost.  Otherwise queue a background
         # fetch so the render doesn't block on a slow HTTP GET; alt text will appear
         # on the next open once the background thread stores it in the DB.
-        if image_title_text is None and lead_image_url and entry.link:
+        _needs_source_scrape = (image_title_text is None or
+                                (not _in_feed_title_is_lead_img and not _persisted_alt))
+        if _needs_source_scrape and lead_image_url and entry.link:
             if entry.link in lead_image_service._source_html_cache:
                 _fetched_alt = lead_image_service.fetch_entry_image_alt(entry.link, lead_image_url=lead_image_url)
                 if _fetched_alt:
                     _fetched_alt = re.sub(r"<[^>]+>", "", _fetched_alt).strip() or None
-                image_title_text = _fetched_alt or None
-                if image_title_text:
+                if _fetched_alt:
+                    image_title_text = _fetched_alt
                     lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), image_title_text)
+                elif image_title_text is None:
+                    pass  # nothing from either source; stays None
             else:
                 lead_image_service.queue_source_html_fetch(
                     entry.link,
@@ -5964,6 +6019,27 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         if not _show_lead_in_article:
             lead_image_url = None
+
+        # Apply caption_source preference (which raw attribute(s) to use).
+        # "auto" (default) keeps whatever was computed above (title-preferred combined).
+        _caption_source = str(_disp.get("caption_source") or "auto")
+        _entry_feed_url = str(entry.feed_url)
+        _entry_id = str(entry.id)
+        if _caption_source == "none":
+            image_title_text = None
+        elif _caption_source == "alt":
+            image_title_text = lead_image_service.get_entry_image_alt(_entry_feed_url, _entry_id)
+        elif _caption_source == "title":
+            image_title_text = lead_image_service.get_entry_image_title(_entry_feed_url, _entry_id)
+        elif _caption_source == "both":
+            _ct = lead_image_service.get_entry_image_title(_entry_feed_url, _entry_id)
+            _ca = lead_image_service.get_entry_image_alt(_entry_feed_url, _entry_id)
+            if _ct and _ca and _ct != _ca:
+                image_title_text = f"{_ct} — {_ca}"
+            else:
+                image_title_text = _ct or _ca
+        # else "auto": keep image_title_text as already computed
+
         if not should_show_caption(
             image_title_text,
             entry_title=entry.title,
@@ -7928,6 +8004,26 @@ def set_feed_thumbnail_url_route(
     return JSONResponse({"ok": True})
 
 
+@app.post("/feeds/caption-source")
+def set_feed_caption_source(
+    feed_url: str = Form(...),
+    source: str = Form(...),
+):
+    _VALID = {"auto", "alt", "title", "both", "none"}
+    if source not in _VALID:
+        return JSONResponse({"error": "invalid source"}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+            (feed_url,),
+        )
+        conn.execute(
+            "UPDATE feed_display_prefs SET caption_source = ? WHERE feed_url = ?",
+            (None if source == "auto" else source, feed_url),
+        )
+    return JSONResponse({"ok": True, "source": source})
+
+
 @app.get("/highlights")
 def get_highlights_route():
     with get_meta_connection() as conn:
@@ -8339,14 +8435,19 @@ def refresh_feed_strategy_cache_route(
     with get_meta_connection() as conn:
         for row in strategy_rows:
             conn.execute(
-                "INSERT OR REPLACE INTO feed_strategy_cache (feed_url, strategy, image_url, fetched_at, error) VALUES (?, ?, ?, ?, ?)",
-                (feed_url, row["strategy"], row["image_url"], now, row["error"]),
+                "INSERT OR REPLACE INTO feed_strategy_cache "
+                "(feed_url, strategy, image_url, fetched_at, error, image_alt, image_title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (feed_url, row["strategy"], row["image_url"], now, row["error"],
+                 row.get("image_alt"), row.get("image_title")),
             )
             results.append({
                 "strategy": row["strategy"],
                 "image_url": row["image_url"],
                 "fetched_at": formatted_now,
                 "error": row["error"],
+                "image_alt": row.get("image_alt"),
+                "image_title": row.get("image_title"),
             })
     return JSONResponse({"ok": True, "strategy_cache": results})
 

@@ -496,13 +496,10 @@
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
         >
-          <div class="post-thumbnail {% if not post.thumbnail_url and (not post.feed_icon_url or not post.show_thumbnail) %}is-empty{% endif %}">
+          <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
-            {% elif post.feed_icon_url and post.show_thumbnail %}
-            <img class="post-thumbnail-image post-thumbnail-icon-fallback" src="{{ post.feed_icon_url }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
-            <span class="post-thumbnail-fallback material-symbols-rounded" aria-hidden="true">image</span>
           </div>
           <div class="post-item-card">
             <div class="post-content">
@@ -1850,17 +1847,34 @@
         </div>
         <!-- Non-YouTube feeds: image strategy + display controls -->
         <div id="feed-prop-img-section">
+          <h4 class="feed-prop-section-title">
+            Strategy comparison
+            <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
+              <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
+            </button>
+          </h4>
+          <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
+          <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
+          <div id="feed-prop-strat-captions" class="feed-prop-strat-captions" hidden></div>
+          <div class="feed-prop-caption-source-row" id="feed-prop-caption-source-row">
+            <span class="feed-prop-caption-source-label">Caption from</span>
+            <span class="feed-prop-caption-checks">
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-title"> Title</label>
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-alt"> Alt</label>
+              <button type="button" id="feed-prop-caption-auto-btn" class="feed-prop-refresh-btn" title="Reset to auto (title preferred)">↺ Auto</button>
+            </span>
+          </div>
           <h4 class="feed-prop-section-title">Article image</h4>
           <dl class="feed-properties-grid">
             <dt>Source</dt>
             <dd>
               <select id="feed-prop-strategy" class="feed-prop-strategy-select">
                 <option value="auto">Auto-detect</option>
-                <option value="webcomic">Webcomic</option>
-                <option value="artwork">Artwork</option>
-                <option value="inline">Feed content only</option>
-                <option value="og_scrape">Source scraping</option>
-                <option value="media_rss">Media RSS</option>
+                <option value="webcomic">Webcomic — source page, comic-strip scoring</option>
+                <option value="artwork">Artwork — first image from feed content</option>
+                <option value="inline">Feed content — first image from feed HTML</option>
+                <option value="og_scrape">Source page — og:image / article hero</option>
+                <option value="media_rss">Media RSS — media:thumbnail from feed XML</option>
                 <option value="none">None</option>
               </select>
               <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
@@ -1884,7 +1898,6 @@
             <select id="feed-prop-thumb-source" class="feed-prop-strategy-select">
               <option value="__disabled__">Disabled</option>
               <option value="">Per-entry image (auto)</option>
-              <option value="__favicon__">Feed favicon</option>
               <optgroup id="feed-prop-thumb-strategies-group" label="Pin a strategy image"></optgroup>
               <option value="__custom__">Custom URL…</option>
             </select>
@@ -1896,14 +1909,6 @@
               <img id="feed-prop-thumb-preview-img" src="" alt="" />
             </div>
           </div>
-          <h4 class="feed-prop-section-title">
-            Strategy comparison
-            <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
-              <span class="material-symbols-rounded" aria-hidden="true">refresh</span> Refresh
-            </button>
-          </h4>
-          <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
-          <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>
@@ -3135,7 +3140,15 @@
     const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
     const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
     const feedPropCaptionMode = document.getElementById('feed-prop-caption-mode');
+    const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
+    const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
+    const feedPropCaptionAutoBtn = document.getElementById('feed-prop-caption-auto-btn');
+    const feedPropStratCaptions = document.getElementById('feed-prop-strat-captions');
     const feedPropRefreshBtn = document.getElementById('feed-prop-refresh-btn');
+    const STRATEGY_LABELS = {
+      inline: 'Feed content', og_scrape: 'Source page', webcomic: 'Webcomic',
+      artwork: 'Artwork', media_rss: 'Media RSS', youtube: 'YouTube',
+    };
     const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
     const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
     const feedPropUnsubscribeBtn = document.getElementById('feed-prop-unsubscribe-btn');
@@ -4195,6 +4208,15 @@
             feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
             feedPropCaptionMode.dataset.feedUrl = feedUrl;
           }
+          if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
+            const src = data.caption_source || 'auto';
+            feedPropCaptionTitle.checked = src === 'title' || src === 'both';
+            feedPropCaptionAlt.checked   = src === 'alt'   || src === 'both';
+            feedPropCaptionAutoBtn.classList.toggle('active', src === 'auto');
+            feedPropCaptionTitle.dataset.feedUrl = feedUrl;
+            feedPropCaptionAlt.dataset.feedUrl   = feedUrl;
+            feedPropCaptionAutoBtn.dataset.feedUrl = feedUrl;
+          }
           const feedPropThumbUrlSave = document.getElementById('feed-prop-thumbnail-url-save');
           if (feedPropThumbUrlSave) feedPropThumbUrlSave.dataset.feedUrl = feedUrl;
           const thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
@@ -4341,9 +4363,10 @@
         const title = isSelectable
           ? `title="Click to use ${label} strategy"`
           : `title="${label}: auto-detected only"`;
+        const friendlyLabel = STRATEGY_LABELS[label] || label;
         if (row.error) {
           return `<div class="feed-prop-strat-card feed-prop-strat-card--error${activeClass}" data-strategy="${label}" ${title}>
-            <div class="feed-prop-strat-label">${label}</div>
+            <div class="feed-prop-strat-label">${friendlyLabel}</div>
             <div class="feed-prop-strat-error">${row.error}</div>
           </div>`;
         }
@@ -4356,7 +4379,7 @@
         return `<div class="feed-prop-strat-card${activeClass}" data-strategy="${label}" ${title}>
           ${img}
           ${useAsThumbBtn}
-          <div class="feed-prop-strat-label">${label}</div>
+          <div class="feed-prop-strat-label">${friendlyLabel}</div>
         </div>`;
       }).join('');
       feedPropStratGrid.querySelectorAll('.feed-prop-strat-thumb[data-full-url]').forEach(img => {
@@ -4373,6 +4396,29 @@
         });
         full.src = fullUrl;
       });
+
+      // Per-strategy title/alt text rows below the grid.
+      if (feedPropStratCaptions) {
+        const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        const rows = cacheRows.filter(r => r.image_title || r.image_alt);
+        if (rows.length === 0) {
+          feedPropStratCaptions.hidden = true;
+          feedPropStratCaptions.innerHTML = '';
+        } else {
+          feedPropStratCaptions.hidden = false;
+          feedPropStratCaptions.innerHTML = rows.map(r => {
+            const fl = STRATEGY_LABELS[r.strategy] || r.strategy;
+            const titleHtml = r.image_title
+              ? `<span class="feed-prop-strat-cap-title" title="title attribute">${escHtml(r.image_title)}</span>` : '';
+            const altHtml = r.image_alt && r.image_alt !== r.image_title
+              ? `<span class="feed-prop-strat-cap-alt" title="alt attribute">${escHtml(r.image_alt)}</span>` : '';
+            return `<div class="feed-prop-strat-cap-row">
+              <span class="feed-prop-strat-cap-name">${escHtml(fl)}</span>
+              <span class="feed-prop-strat-cap-texts">${titleHtml}${altHtml}</span>
+            </div>`;
+          }).join('');
+        }
+      }
     }
 
     async function doStrategyRefresh(feedUrl, entryId) {
@@ -4615,6 +4661,33 @@
       if (!feedUrl) return;
       try { await saveDisplayPref(feedUrl, 'show_image_caption', feedPropCaptionMode.value); }
       catch (e) { /* leave select as-is, non-critical */ }
+    });
+
+    async function saveCaptionSource(feedUrl) {
+      if (!feedUrl) return;
+      const titleOn = feedPropCaptionTitle?.checked;
+      const altOn   = feedPropCaptionAlt?.checked;
+      const source  = titleOn && altOn ? 'both' : titleOn ? 'title' : altOn ? 'alt' : 'none';
+      feedPropCaptionAutoBtn?.classList.remove('active');
+      await fetch('/feeds/caption-source', {
+        method: 'POST',
+        body: new URLSearchParams({ feed_url: feedUrl, source }),
+        credentials: 'same-origin',
+      });
+    }
+    feedPropCaptionTitle?.addEventListener('change', () => saveCaptionSource(feedPropCaptionTitle.dataset.feedUrl));
+    feedPropCaptionAlt?.addEventListener('change',   () => saveCaptionSource(feedPropCaptionAlt.dataset.feedUrl));
+    feedPropCaptionAutoBtn?.addEventListener('click', async () => {
+      const feedUrl = feedPropCaptionAutoBtn.dataset.feedUrl;
+      if (!feedUrl) return;
+      if (feedPropCaptionTitle) feedPropCaptionTitle.checked = false;
+      if (feedPropCaptionAlt)   feedPropCaptionAlt.checked   = false;
+      feedPropCaptionAutoBtn.classList.add('active');
+      await fetch('/feeds/caption-source', {
+        method: 'POST',
+        body: new URLSearchParams({ feed_url: feedUrl, source: 'auto' }),
+        credentials: 'same-origin',
+      });
     });
 
     document.getElementById('feed-prop-thumbnail-url-save')?.addEventListener('click', async () => {

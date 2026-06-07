@@ -182,6 +182,7 @@ class LeadImageService:
         self._cache = cache if cache is not None else {}
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._alt_cache: dict[tuple[str, str], str | None] = {}
+        self._title_cache: dict[tuple[str, str], str | None] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
         # Semaphore ensures at most one chunk-backfill thread runs at a time;
@@ -332,6 +333,9 @@ class LeadImageService:
                 alt = row["image_alt"]
                 if alt is not None:
                     self._alt_cache[key] = str(alt)
+                title = row["image_title"] if "image_title" in row.keys() else None
+                if title is not None:
+                    self._title_cache[key] = str(title)
                 try:
                     self._fetched_at_cache[key] = float(row["fetched_at"])
                 except Exception:
@@ -340,22 +344,35 @@ class LeadImageService:
             pass
 
     def get_entry_image_alt(self, feed_url: str, entry_id: str) -> str | None:
-        """Return the persisted alt text for an entry's lead image, or None."""
+        """Return the persisted raw alt-attribute text for an entry's lead image, or None."""
         return self._alt_cache.get((feed_url, entry_id))
 
-    def store_entry_image_alt(self, feed_url: str, entry_id: str, alt_text: str | None) -> None:
-        """Persist alt text for an entry's lead image to DB and in-memory cache."""
+    def get_entry_image_title(self, feed_url: str, entry_id: str) -> str | None:
+        """Return the persisted raw title-attribute text for an entry's lead image, or None."""
+        return self._title_cache.get((feed_url, entry_id))
+
+    def store_entry_image_alt(
+        self,
+        feed_url: str,
+        entry_id: str,
+        alt_text: str | None,
+        title_text: str | None = None,
+    ) -> None:
+        """Persist alt and title text for an entry's lead image to DB and in-memory cache."""
         key = (feed_url, entry_id)
         self._alt_cache[key] = alt_text
+        self._title_cache[key] = title_text
         try:
             with self._get_meta_connection() as conn:
                 conn.execute(
                     """
-                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, image_alt, fetched_at)
-                    VALUES (?, ?, NULL, ?, ?)
-                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET image_alt = excluded.image_alt
+                    INSERT INTO entry_lead_images (feed_url, entry_id, image_url, image_alt, image_title, fetched_at)
+                    VALUES (?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(feed_url, entry_id) DO UPDATE SET
+                        image_alt = excluded.image_alt,
+                        image_title = excluded.image_title
                     """,
-                    (feed_url, entry_id, alt_text, time.time()),
+                    (feed_url, entry_id, alt_text, title_text, time.time()),
                 )
         except Exception:
             pass
@@ -832,12 +849,14 @@ class LeadImageService:
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
                     _found_og_scrape = True
+                    self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url)
                 self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
                 time.sleep(0.15)
                 continue
             image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
             if image_url:
                 _found_og_scrape = True
+                self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url)
             self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
             time.sleep(0.15)
 
@@ -938,6 +957,8 @@ class LeadImageService:
 
                 is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                if image_url:
+                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url)
                 self.store_entry_lead_image(feed_url, entry_id, image_url)
                 time.sleep(0.15)
 
@@ -1253,7 +1274,7 @@ class LeadImageService:
                 resolved = urljoin(base_url, image_url)
                 if not self._is_source_image_tag_acceptable(attrs, resolved):
                     continue
-                if not self._is_image_url_acceptable(resolved, None, None):
+                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True):
                     continue
 
                 score = self._score_source_image_tag(attrs, resolved, source_url, is_webcomic=is_webcomic)
@@ -1518,10 +1539,10 @@ class LeadImageService:
             return False
         return True
 
-    # Minimum for og:image — sized to allow article-specific 300×200 images
-    # (common on WordPress themes) while still blocking tiny icons.
-    _OG_IMAGE_MIN_WIDTH = 300
-    _OG_IMAGE_MIN_HEIGHT = 200
+    # Minimum for og:image — matches _LEAD_IMAGE_MIN_WIDTH so that square app
+    # icons (e.g. 200×200 declared via og:image:width/height) are not blocked.
+    _OG_IMAGE_MIN_WIDTH = 200
+    _OG_IMAGE_MIN_HEIGHT = 150
 
     def _extract_meta_image_url_from_html(self, html_text: str, base_url: str) -> str | None:
         og_width, og_height = self._extract_og_image_dimensions(html_text)
@@ -1716,6 +1737,86 @@ class LeadImageService:
             domain_cache[domain] = ok
         return ok
 
+    def fetch_entry_image_caption(
+        self, entry_link: str, lead_image_url: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Return (alt, title) attribute text separately for the lead image on the source page.
+
+        Uses the same HTML cache and scanning logic as fetch_entry_image_alt, but returns
+        the raw alt and title attributes independently instead of combining them.
+        When lead_image_url is provided, scans for that specific image URL.
+        Returns (None, None) if the image is not found or the page cannot be fetched.
+        """
+        import re as _re
+
+        _strip = lambda s: _re.sub(r"<[^>]+>", "", s).strip() or None if s else None
+
+        # Deathbulge SPA: API returns combined alt_text only; return as title, no alt.
+        _db_spa_m = re.match(r'https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)', entry_link)
+        if _db_spa_m:
+            try:
+                import json as _json
+                import urllib.request as _ureq
+                _api_url = f"http://deathbulge.com/api/comics/{_db_spa_m.group(1)}"
+                _req = _ureq.Request(_api_url, headers={"User-Agent": self._user_agent})
+                with _ureq.urlopen(_req, timeout=10) as _resp:
+                    _api_data = _json.load(_resp)
+                _text = (_api_data.get("comic", {}).get("alt_text") or "").strip() or None
+                return (None, _text)
+            except Exception:
+                pass
+            return (None, None)
+
+        cached = self._source_html_cache.get(entry_link)
+        if cached is None:
+            if not is_safe_outbound_url(entry_link):
+                return (None, None)
+            result = self._fetch_page_html(entry_link)
+            if result is None:
+                return (None, None)
+            source_html, final_url, _corp = result
+            self._source_html_cache[entry_link] = (final_url, source_html)
+            self._source_html_cache.move_to_end(entry_link)
+            if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                self._source_html_cache.popitem(last=False)
+        else:
+            final_url, source_html = cached
+
+        if lead_image_url:
+            for tag_match in self._IMG_TAG_RE.finditer(source_html):
+                tag = tag_match.group(0)
+                attrs: dict[str, str] = {}
+                for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                    k = attr_match.group(1).strip().lower()
+                    v = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                    if k and v:
+                        attrs[k] = v
+                for image_url in self._collect_img_candidate_urls(attrs):
+                    if not image_url or image_url.startswith("data:"):
+                        continue
+                    resolved = urljoin(final_url, image_url)
+                    if self._urls_equivalent(resolved, lead_image_url):
+                        return (
+                            _strip(attrs.get("alt", "")),
+                            _strip(attrs.get("title", "")),
+                        )
+            return (None, None)
+
+        # No specific URL: use scored path and return combined as title, no separate alt.
+        _, alt_text = self._extract_preferred_source_image_data(source_html, final_url, entry_link)
+        return (None, _strip(alt_text))
+
+    def _maybe_store_alt_from_cache(self, feed_url: str, entry_id: str, entry_link: str, image_url: str) -> None:
+        """If source HTML is in cache and alt not yet stored, extract and persist alt/title.
+
+        Called immediately after a source-page lead-image fetch so the caption text
+        is available on first entry open without a second HTTP round-trip.
+        """
+        if (feed_url, entry_id) in self._alt_cache:
+            return
+        alt, title = self.fetch_entry_image_caption(entry_link, lead_image_url=image_url)
+        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
+
     def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
         parsed = urlparse(entry_link)
         if parsed.scheme not in {"http", "https"}:
@@ -1834,6 +1935,10 @@ class LeadImageService:
             try:
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 self.store_entry_lead_image(feed_url, entry_id, image_url)
+                # HTML is now in _source_html_cache from the lead-image fetch.
+                # Extract and persist alt text while we have it — no second HTTP fetch.
+                if image_url:
+                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url)
             except Exception:
                 pass
             finally:
@@ -1875,11 +1980,10 @@ class LeadImageService:
                     if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
                         self._source_html_cache.popitem(last=False)
                     if feed_url and entry_id and lead_image_url:
-                        alt = self.fetch_entry_image_alt(entry_link, lead_image_url=lead_image_url)
-                        if alt:
-                            import re as _re
-                            alt = _re.sub(r"<[^>]+>", "", alt).strip() or None
-                        self.store_entry_image_alt(feed_url, entry_id, alt)
+                        alt, title = self.fetch_entry_image_caption(
+                            entry_link, lead_image_url=lead_image_url
+                        )
+                        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
             except Exception:
                 pass
             finally:
@@ -1893,34 +1997,56 @@ class LeadImageService:
         Unlike extract_entry_thumbnail_url, each result only uses sources
         specific to that strategy. Used by the Properties panel Refresh button.
 
-        Returns [{"strategy": str, "image_url": str|None, "error": str|None}].
+        Returns [{"strategy": str, "image_url": str|None, "image_alt": str|None,
+                  "image_title": str|None, "error": str|None}].
         """
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url = str(getattr(entry, "feed_url", "") or "")
         base_url = entry_link or feed_url
         results: list[dict] = []
 
+        # Build feed content HTML candidates once; reused by inline and artwork.
+        html_candidates: list[str] = []
+        try:
+            content = getattr(entry, "get_content", lambda **_: None)(prefer_summary=False)
+            if content and getattr(content, "value", None) and getattr(content, "is_html", False):
+                html_candidates.append(str(content.value))
+        except Exception:
+            pass
+        summary = getattr(entry, "summary", None)
+        if isinstance(summary, str) and summary.strip():
+            html_candidates.append(summary)
+
         # --- inline: first <img> from feed content HTML only ---
         inline_url: str | None = None
+        inline_alt: str | None = None
+        inline_title: str | None = None
         inline_error: str | None = None
         try:
-            html_candidates: list[str] = []
-            try:
-                content = getattr(entry, "get_content", lambda **_: None)(prefer_summary=False)
-                if content and getattr(content, "value", None) and getattr(content, "is_html", False):
-                    html_candidates.append(str(content.value))
-            except Exception:
-                pass
-            summary = getattr(entry, "summary", None)
-            if isinstance(summary, str) and summary.strip():
-                html_candidates.append(summary)
-
             for html_candidate in html_candidates:
                 if feed_url:
                     html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
                 img = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
                 if img:
                     inline_url = img
+                    # Extract alt/title from the matching img tag in feed HTML.
+                    for tag_match in self._IMG_TAG_RE.finditer(html_candidate):
+                        tag = tag_match.group(0)
+                        attrs: dict[str, str] = {}
+                        for am in self._IMG_ATTR_RE.finditer(tag):
+                            k = am.group(1).strip().lower()
+                            v = html.unescape((am.group(2) or am.group(3) or am.group(4) or "").strip())
+                            if k and v:
+                                attrs[k] = v
+                        for candidate_url in self._collect_img_candidate_urls(attrs):
+                            if candidate_url and self._urls_equivalent(
+                                urljoin(base_url, candidate_url), img
+                            ):
+                                inline_alt = (attrs.get("alt") or "").strip() or None
+                                inline_title = (attrs.get("title") or "").strip() or None
+                                break
+                        if inline_alt is not None or inline_title is not None:
+                            break
                     break
                 linked = self._extract_linked_image_url_from_html(html_candidate, base_url)
                 if linked:
@@ -1934,7 +2060,10 @@ class LeadImageService:
                         break
         except Exception as exc:
             inline_error = str(exc)
-        results.append({"strategy": "inline", "image_url": inline_url, "error": inline_error})
+        results.append({
+            "strategy": "inline", "image_url": inline_url,
+            "image_alt": inline_alt, "image_title": inline_title, "error": inline_error,
+        })
 
         # --- media_rss: media:thumbnail / media:content from the live feed XML ---
         media_url: str | None = None
@@ -1945,17 +2074,82 @@ class LeadImageService:
                 media_url = thumbs.get(entry_link) if entry_link else None
         except Exception as exc:
             media_error = str(exc)
-        results.append({"strategy": "media_rss", "image_url": media_url, "error": media_error})
+        results.append({
+            "strategy": "media_rss", "image_url": media_url,
+            "image_alt": None, "image_title": None, "error": media_error,
+        })
 
         # --- og_scrape: og:image / hero image from the article source page ---
         og_url: str | None = None
+        og_alt: str | None = None
+        og_title: str | None = None
         og_error: str | None = None
         try:
             if entry_link:
                 og_url = self._fetch_source_lead_image(entry_link)
+                if og_url:
+                    # HTML is already in _source_html_cache from the fetch above.
+                    og_alt, og_title = self.fetch_entry_image_caption(entry_link, lead_image_url=og_url)
         except Exception as exc:
             og_error = str(exc)
-        results.append({"strategy": "og_scrape", "image_url": og_url, "error": og_error})
+        results.append({
+            "strategy": "og_scrape", "image_url": og_url,
+            "image_alt": og_alt, "image_title": og_title, "error": og_error,
+        })
+
+        # --- webcomic: source-page scrape with comic-strip image scoring ---
+        wc_url: str | None = None
+        wc_alt: str | None = None
+        wc_title: str | None = None
+        wc_error: str | None = None
+        try:
+            if entry_link:
+                wc_url = self._fetch_source_lead_image(entry_link, is_webcomic=True)
+                if wc_url:
+                    wc_alt, wc_title = self.fetch_entry_image_caption(entry_link, lead_image_url=wc_url)
+        except Exception as exc:
+            wc_error = str(exc)
+        results.append({
+            "strategy": "webcomic", "image_url": wc_url,
+            "image_alt": wc_alt, "image_title": wc_title, "error": wc_error,
+        })
+
+        # --- artwork: first large image from feed content HTML (art-portfolio feeds) ---
+        art_url: str | None = None
+        art_alt: str | None = None
+        art_title: str | None = None
+        art_error: str | None = None
+        try:
+            for html_candidate in html_candidates:
+                if feed_url:
+                    html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+                img = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
+                if img:
+                    art_url = img
+                    for tag_match in self._IMG_TAG_RE.finditer(html_candidate):
+                        tag = tag_match.group(0)
+                        attrs: dict[str, str] = {}
+                        for am in self._IMG_ATTR_RE.finditer(tag):
+                            k = am.group(1).strip().lower()
+                            v = html.unescape((am.group(2) or am.group(3) or am.group(4) or "").strip())
+                            if k and v:
+                                attrs[k] = v
+                        for candidate_url in self._collect_img_candidate_urls(attrs):
+                            if candidate_url and self._urls_equivalent(
+                                urljoin(base_url, candidate_url), img
+                            ):
+                                art_alt = (attrs.get("alt") or "").strip() or None
+                                art_title = (attrs.get("title") or "").strip() or None
+                                break
+                        if art_url:
+                            break
+                    break
+        except Exception as exc:
+            art_error = str(exc)
+        results.append({
+            "strategy": "artwork", "image_url": art_url,
+            "image_alt": art_alt, "image_title": art_title, "error": art_error,
+        })
 
         # --- youtube: hqdefault thumbnail for YouTube video entries ---
         yt_url: str | None = None
@@ -1966,7 +2160,10 @@ class LeadImageService:
                     yt_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
         except Exception:
             pass
-        results.append({"strategy": "youtube", "image_url": yt_url, "error": None})
+        results.append({
+            "strategy": "youtube", "image_url": yt_url,
+            "image_alt": None, "image_title": None, "error": None,
+        })
 
         return results
 
@@ -2083,7 +2280,9 @@ class LeadImageService:
                         continue
                     resolved = urljoin(final_url, image_url)
                     if self._urls_equivalent(resolved, lead_image_url):
-                        return (attrs.get("alt") or attrs.get("title") or "").strip() or None
+                        # Prefer title over alt: title is the tooltip/hovertext that
+                        # users see on the real page (e.g. XKCD, Oglaf punchlines).
+                        return (attrs.get("title") or attrs.get("alt") or "").strip() or None
             return None
 
         # No specific lead URL: use the scored path for best confidence.
@@ -2108,7 +2307,7 @@ class LeadImageService:
                     continue
                 if not self._is_image_url_acceptable(resolved, None, None):
                     continue
-                candidate = (attrs.get("alt") or attrs.get("title") or "").strip()
+                candidate = (attrs.get("title") or attrs.get("alt") or "").strip()
                 if candidate:
                     return candidate
                 break  # only consider the first candidate URL per img tag
