@@ -4,6 +4,7 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
 
 ## Features
 
+- **Rachel by the Bay** support.
 - Folder tree, recursive post list, and post detail view.
 - Read/unread, saved/starred, tagging, filtering, and sorting.
 - Manual and scheduled refresh.

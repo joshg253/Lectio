@@ -1876,7 +1876,7 @@
                 <option value="media_rss">Media RSS — media:thumbnail from feed XML</option>
                 <option value="none">None</option>
               </select>
-              <span id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></span>
+              <div id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></div>
             </dd>
           </dl>
           <div class="feed-prop-toggles">
@@ -4369,7 +4369,7 @@
         return;
       }
       const currentStrategy = feedPropStrategy?.value || 'auto';
-      const visibleRows = cacheRows.filter(r => r.strategy !== 'youtube');
+      const visibleRows = cacheRows.filter(r => !['youtube', 'webcomic', 'artwork'].includes(r.strategy));
       feedPropStratEmpty.hidden = true;
       feedPropStratGrid.hidden = false;
       feedPropStratGrid.style.gridTemplateColumns = `repeat(${visibleRows.length || 1}, minmax(0, 1fr))`;
@@ -4415,25 +4415,22 @@
         full.src = fullUrl;
       });
 
-      // Per-strategy title/alt text rows below the grid.
+      // Title/alt text cells aligned under each card column.
       if (feedPropStratCaptions) {
         const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        const rows = cacheRows.filter(r => r.image_title || r.image_alt);
-        if (rows.length === 0) {
+        const hasAny = visibleRows.some(r => r.image_title || r.image_alt);
+        if (!hasAny) {
           feedPropStratCaptions.hidden = true;
           feedPropStratCaptions.innerHTML = '';
         } else {
           feedPropStratCaptions.hidden = false;
-          feedPropStratCaptions.innerHTML = rows.map(r => {
-            const fl = STRATEGY_LABELS[r.strategy] || r.strategy;
+          feedPropStratCaptions.style.gridTemplateColumns = feedPropStratGrid.style.gridTemplateColumns;
+          feedPropStratCaptions.innerHTML = visibleRows.map(r => {
             const titleHtml = r.image_title
-              ? `<span class="feed-prop-strat-cap-title" title="title attribute">${escHtml(r.image_title)}</span>` : '';
-            const altHtml = r.image_alt && r.image_alt !== r.image_title
-              ? `<span class="feed-prop-strat-cap-alt" title="alt attribute">${escHtml(r.image_alt)}</span>` : '';
-            return `<div class="feed-prop-strat-cap-row">
-              <span class="feed-prop-strat-cap-name">${escHtml(fl)}</span>
-              <span class="feed-prop-strat-cap-texts">${titleHtml}${altHtml}</span>
-            </div>`;
+              ? `<div class="feed-prop-strat-cap-title"><span class="feed-prop-strat-cap-attr">Title:</span> ${escHtml(r.image_title)}</div>` : '';
+            const altHtml = r.image_alt
+              ? `<div class="feed-prop-strat-cap-alt"><span class="feed-prop-strat-cap-attr">Alt:</span> ${escHtml(r.image_alt)}</div>` : '';
+            return `<div class="feed-prop-strat-cap-cell">${titleHtml}${altHtml}</div>`;
           }).join('');
         }
       }
@@ -4826,7 +4823,6 @@
       if (!card || !feedPropStrategy) return;
       const strategy = card.dataset.strategy;
       if (!SELECTABLE_STRATEGIES.has(strategy)) return;
-      setActivePreset('');
       feedPropStrategy.value = strategy;
       feedPropStrategy.dispatchEvent(new Event('change'));
       feedPropStratGrid.querySelectorAll('.feed-prop-strat-card').forEach(c => {

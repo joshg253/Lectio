@@ -3387,7 +3387,7 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 .feed-properties-panel {
-  width: min(860px, 100%);
+  width: min(680px, 100%);
   max-height: calc(100vh - 2rem);
   overflow: auto;
 }
@@ -3525,9 +3525,10 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 .feed-prop-strategy-hint {
+  display: block;
   font-size: 0.78rem;
   color: var(--muted);
-  margin-left: 0.4rem;
+  margin-top: 0.2rem;
 }
 
 @media (max-width: 640px) {
@@ -3658,17 +3659,21 @@ body[data-keyboard-open="1"] .action-modal-panel {
   margin-bottom: 0.5rem;
 }
 .feed-prop-preset-btn {
+  font: inherit;
   font-size: 0.82rem;
   padding: 3px 12px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: none;
+  background: transparent;
   color: var(--ink);
   cursor: pointer;
+  display: inline-block;
   transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
 .feed-prop-preset-btn:hover {
+  background: transparent;
   border-color: var(--ink);
+  opacity: 1;
 }
 .feed-prop-preset-btn.active {
   background: var(--accent);
@@ -3697,13 +3702,15 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .feed-prop-strat-card[data-dims]::after {
   content: attr(data-dims);
   position: absolute;
-  bottom: 0; left: 0; right: 0;
+  bottom: 2px; right: 3px; left: auto;
   background: rgba(0,0,0,0.55);
   color: #fff;
-  font-size: 0.7rem;
-  text-align: center;
-  padding: 1px 0;
+  font-size: 0.65rem;
+  border-radius: 3px;
+  padding: 1px 3px;
   pointer-events: none;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .feed-prop-use-as-thumb {
@@ -3772,31 +3779,21 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 .feed-prop-strat-captions {
-  margin: 0.5rem 0 0.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.feed-prop-strat-cap-row {
-  display: flex;
+  margin: 0.4rem 0 0.25rem;
+  display: grid;
   gap: 0.5rem;
-  align-items: baseline;
+  /* grid-template-columns set inline by JS to match card grid */
+}
+.feed-prop-strat-cap-cell {
   font-size: 0.78rem;
   line-height: 1.4;
-}
-.feed-prop-strat-cap-name {
-  flex: 0 0 6rem;
-  color: var(--muted);
-  font-size: 0.72rem;
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.feed-prop-strat-cap-texts {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+.feed-prop-strat-cap-attr {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 0.7rem;
+  margin-right: 0.2em;
 }
 .feed-prop-strat-cap-title {
   font-style: italic;
