@@ -246,6 +246,7 @@
                       {% endif %}
                       <span>{{ feed.title }}</span>
                     </span>
+                    {% if feed.has_error %}<span class="feed-error-badge" title="Fetch errors — right-click → Properties for details">⚠</span>{% endif %}
                     {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
                   </a>
                 </li>
@@ -273,6 +274,7 @@
                     {% endif %}
                     <span>{{ feed.title }}</span>
                   </span>
+                  {% if feed.has_error %}<span class="feed-error-badge" title="Fetch errors — right-click → Properties for details">⚠</span>{% endif %}
                   {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
                 </a>
               </li>
@@ -1859,8 +1861,8 @@
           <div class="feed-prop-caption-source-row" id="feed-prop-caption-source-row">
             <span class="feed-prop-caption-source-label">Caption from</span>
             <span class="feed-prop-caption-checks">
-              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-title"> Title</label>
-              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-alt"> Alt</label>
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-alt"> Alt: <span id="feed-prop-caption-alt-preview" class="feed-prop-caption-preview"></span></label>
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-title"> Title: <span id="feed-prop-caption-title-preview" class="feed-prop-caption-preview"></span></label>
               <button type="button" id="feed-prop-caption-auto-btn" class="feed-prop-refresh-btn" title="Reset to auto (title preferred)">↺ Auto</button>
             </span>
           </div>
@@ -3144,6 +3146,9 @@
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
     const feedPropCaptionAutoBtn = document.getElementById('feed-prop-caption-auto-btn');
     const feedPropStratCaptions = document.getElementById('feed-prop-strat-captions');
+    const feedPropCaptionAltPreview   = document.getElementById('feed-prop-caption-alt-preview');
+    const feedPropCaptionTitlePreview = document.getElementById('feed-prop-caption-title-preview');
+    let _lastStratCacheRows = [];
     const feedPropRefreshBtn = document.getElementById('feed-prop-refresh-btn');
     const STRATEGY_LABELS = {
       inline: 'Feed content', og_scrape: 'Source page', webcomic: 'Webcomic',
@@ -4344,6 +4349,14 @@
       applyThumbSourceUI();
     }
 
+    function updateCaptionPreviews(cacheRows) {
+      const active = feedPropStrategy?.value || 'auto';
+      const row = (cacheRows || []).find(r => r.strategy === active)
+               || (cacheRows || [])[0];
+      if (feedPropCaptionAltPreview)   feedPropCaptionAltPreview.textContent   = row?.image_alt   || '';
+      if (feedPropCaptionTitlePreview) feedPropCaptionTitlePreview.textContent = row?.image_title || '';
+    }
+
     function renderStrategyGrid(cacheRows) {
       if (!feedPropStratGrid || !feedPropStratEmpty) return;
       if (!cacheRows || cacheRows.length === 0) {
@@ -4353,9 +4366,11 @@
         return;
       }
       const currentStrategy = feedPropStrategy?.value || 'auto';
+      const visibleRows = cacheRows.filter(r => r.strategy !== 'youtube');
       feedPropStratEmpty.hidden = true;
       feedPropStratGrid.hidden = false;
-      feedPropStratGrid.innerHTML = cacheRows.map(row => {
+      feedPropStratGrid.style.gridTemplateColumns = `repeat(${visibleRows.length || 1}, minmax(0, 1fr))`;
+      feedPropStratGrid.innerHTML = visibleRows.map(row => {
         const label = row.strategy || '';
         const isActive = label === currentStrategy;
         const isSelectable = SELECTABLE_STRATEGIES.has(label);
@@ -4419,6 +4434,8 @@
           }).join('');
         }
       }
+      _lastStratCacheRows = cacheRows;
+      updateCaptionPreviews(cacheRows);
     }
 
     async function doStrategyRefresh(feedUrl, entryId) {
@@ -4586,10 +4603,15 @@
       closeFeedPropertiesModal();
     });
 
+    let _feedPropCloseOnClick = false;
+    feedPropertiesModal?.addEventListener('pointerdown', (event) => {
+      _feedPropCloseOnClick = event.target === feedPropertiesModal;
+    });
     feedPropertiesModal?.addEventListener('click', (event) => {
-      if (event.target === feedPropertiesModal) {
+      if (_feedPropCloseOnClick && event.target === feedPropertiesModal) {
         closeFeedPropertiesModal();
       }
+      _feedPropCloseOnClick = false;
     });
 
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
@@ -4792,6 +4814,7 @@
       feedPropStratGrid.querySelectorAll('.feed-prop-strat-card').forEach(c => {
         c.classList.toggle('active', c.dataset.strategy === strategy);
       });
+      updateCaptionPreviews(_lastStratCacheRows);
     });
 
     document.querySelector('.action-modal-panel')?.addEventListener('click', (event) => {
@@ -8151,8 +8174,13 @@
     document.getElementById('folder-properties-close')?.addEventListener('click', () => {
       folderPropertiesModal?.setAttribute('hidden', '');
     });
+    let _folderPropCloseOnClick = false;
+    folderPropertiesModal?.addEventListener('pointerdown', (event) => {
+      _folderPropCloseOnClick = event.target === folderPropertiesModal;
+    });
     folderPropertiesModal?.addEventListener('click', (event) => {
-      if (event.target === folderPropertiesModal) folderPropertiesModal.setAttribute('hidden', '');
+      if (_folderPropCloseOnClick && event.target === folderPropertiesModal) folderPropertiesModal.setAttribute('hidden', '');
+      _folderPropCloseOnClick = false;
     });
 
     // Feeds tab: view switching (Folders / Failing / OK / Deactivated).

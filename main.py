@@ -1008,6 +1008,7 @@ class FeedInFolder:
     title: str
     icon_url: str | None
     unread_count: int
+    has_error: bool = False
 
 
 _meta_conn_local = threading.local()
@@ -7157,6 +7158,11 @@ def home(
             continue
         if problematic_feeds_last_viewed_at is None or float(pf_last_failure_at) > problematic_feeds_last_viewed_at:
             problematic_unseen_count += 1
+    error_feed_urls: set[str] = {
+        cast(str, pf["feed_url"])
+        for pf in problematic_feeds
+        if not pf.get("acknowledged_at")
+    }
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     # feed_url → containing_folder_id, so feed-name links in posts/entry can
     # navigate to the feed's own folder rather than the currently-viewed one.
@@ -7170,6 +7176,7 @@ def home(
                 title=feed_title_map.get(url, url),
                 icon_url=get_favicon_url(url),
                 unread_count=unread_counts_by_feed.get(url, 0),
+                has_error=url in error_feed_urls,
             )
             for url in urls
             if url not in disabled_feed_urls
