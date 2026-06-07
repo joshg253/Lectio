@@ -6041,7 +6041,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 image_title_text = _ct or _ca
         # else "auto": keep image_title_text as already computed
 
-        if not should_show_caption(
+        # Explicit source (alt/title/both) = always show; only run auto-suppress for "auto".
+        if _caption_source == "auto" and not should_show_caption(
             image_title_text,
             entry_title=entry.title,
             content_html=content_html,

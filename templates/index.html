@@ -1858,22 +1858,19 @@
           <p id="feed-prop-strat-empty" class="feed-prop-strat-empty muted">No cached results yet — click Refresh to compare.</p>
           <div id="feed-prop-strat-grid" class="feed-prop-strat-grid" hidden></div>
           <div id="feed-prop-strat-captions" class="feed-prop-strat-captions" hidden></div>
-          <div class="feed-prop-caption-source-row" id="feed-prop-caption-source-row">
-            <span class="feed-prop-caption-source-label">Caption from</span>
-            <span class="feed-prop-caption-checks">
-              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-alt"> Alt: <span id="feed-prop-caption-alt-preview" class="feed-prop-caption-preview"></span></label>
-              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-title"> Title: <span id="feed-prop-caption-title-preview" class="feed-prop-caption-preview"></span></label>
-              <button type="button" id="feed-prop-caption-auto-btn" class="feed-prop-refresh-btn" title="Reset to auto (title preferred)">↺ Auto</button>
-            </span>
+
+          <h4 class="feed-prop-section-title">Feed type</h4>
+          <div class="feed-prop-preset-row" id="feed-prop-preset-row">
+            <button type="button" class="feed-prop-preset-btn" data-preset="webcomic">Webcomic</button>
+            <button type="button" class="feed-prop-preset-btn" data-preset="artwork">Artwork</button>
           </div>
-          <h4 class="feed-prop-section-title">Article image</h4>
+
+          <h4 class="feed-prop-section-title">Image</h4>
           <dl class="feed-properties-grid">
             <dt>Source</dt>
             <dd>
               <select id="feed-prop-strategy" class="feed-prop-strategy-select">
                 <option value="auto">Auto-detect</option>
-                <option value="webcomic">Webcomic — source page, comic-strip scoring</option>
-                <option value="artwork">Artwork — first image from feed content</option>
                 <option value="inline">Feed content — first image from feed HTML</option>
                 <option value="og_scrape">Source page — og:image / article hero</option>
                 <option value="media_rss">Media RSS — media:thumbnail from feed XML</option>
@@ -1887,13 +1884,15 @@
               <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
               <span>Show image at top of article</span>
             </label>
-            <label class="feed-prop-toggle-row">
-              <select id="feed-prop-caption-mode" class="feed-prop-strategy-select">
-                <option value="-1">Caption: auto (suppress junk)</option>
-                <option value="1">Caption: always show</option>
-                <option value="0">Caption: never show</option>
-              </select>
-            </label>
+          </div>
+
+          <div class="feed-prop-caption-source-row" id="feed-prop-caption-source-row">
+            <span class="feed-prop-caption-source-label">Caption</span>
+            <span class="feed-prop-caption-checks">
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-alt"> Alt: <span id="feed-prop-caption-alt-preview" class="feed-prop-caption-preview"></span></label>
+              <label class="feed-prop-caption-check-label"><input type="checkbox" id="feed-prop-caption-title"> Title: <span id="feed-prop-caption-title-preview" class="feed-prop-caption-preview"></span></label>
+              <button type="button" id="feed-prop-caption-auto-btn" class="feed-prop-refresh-btn" title="Reset to auto (title preferred)">↺ Auto</button>
+            </span>
           </div>
           <h4 class="feed-prop-section-title">Post thumbnail</h4>
           <div class="feed-prop-thumb-override">
@@ -3141,7 +3140,7 @@
     const feedPropStrategyHint = document.getElementById('feed-prop-strategy-hint');
     const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
     const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
-    const feedPropCaptionMode = document.getElementById('feed-prop-caption-mode');
+    const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
     const feedPropCaptionAutoBtn = document.getElementById('feed-prop-caption-auto-btn');
@@ -4097,9 +4096,8 @@
       setFeedPropText(feedPropLastPost, '-');
       if (feedPropStrategy) feedPropStrategy.value = 'auto';
       if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
-      // feedPropShowThumb removed — now part of thumb-source dropdown
+      setActivePreset('');
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
-      if (feedPropCaptionMode) feedPropCaptionMode.value = '-1';
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; }
@@ -4195,12 +4193,17 @@
 
         if (!isYoutubeFeed) {
           if (feedPropStrategy) {
-            feedPropStrategy.value = data.image_strategy || 'auto';
+            const rawStrategy = data.image_strategy || 'auto';
+            const isPreset = PRESET_STRATEGIES.has(rawStrategy);
+            setActivePreset(isPreset ? rawStrategy : '');
+            feedPropStrategy.value = isPreset ? 'auto' : rawStrategy;
             feedPropStrategy.dataset.feedUrl = feedUrl;
+            feedPropPresetBtns.forEach(btn => btn.dataset.feedUrl = feedUrl);
           }
           if (feedPropStrategyHint) {
             const detected = data.image_strategy_detected;
-            const isAuto = data.image_strategy === 'auto';
+            const rawStrategy = data.image_strategy || 'auto';
+            const isAuto = rawStrategy === 'auto' || PRESET_STRATEGIES.has(rawStrategy);
             feedPropStrategyHint.textContent = (isAuto && detected && detected !== 'unknown')
               ? `detected: ${detected}` : '';
           }
@@ -4208,10 +4211,6 @@
           if (feedPropShowInArticle) {
             feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
             feedPropShowInArticle.dataset.feedUrl = feedUrl;
-          }
-          if (feedPropCaptionMode) {
-            feedPropCaptionMode.value = String(data.show_image_caption ?? -1);
-            feedPropCaptionMode.dataset.feedUrl = feedUrl;
           }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
@@ -4284,7 +4283,11 @@
       });
     }
 
-    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss', 'webcomic', 'artwork']);
+    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss']);
+    const PRESET_STRATEGIES = new Set(['webcomic', 'artwork']);
+    function setActivePreset(presetName) {
+      feedPropPresetBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.preset === presetName));
+    }
 
     function applyThumbSourceUI() {
       const select = document.getElementById('feed-prop-thumb-source');
@@ -4650,6 +4653,7 @@
       const feedUrl = feedPropStrategy.dataset.feedUrl;
       const strategy = feedPropStrategy.value;
       if (!feedUrl) return;
+      setActivePreset('');
       try {
         const body = new URLSearchParams({ feed_url: feedUrl, strategy });
         const resp = await fetch('/feeds/strategy', { method: 'POST', body });
@@ -4661,6 +4665,25 @@
       } catch (e) {
         if (feedPropStrategyHint) feedPropStrategyHint.textContent = 'error saving';
       }
+    });
+
+    feedPropPresetBtns.forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const feedUrl = btn.dataset.feedUrl;
+        if (!feedUrl) return;
+        const preset = btn.dataset.preset;
+        const isActive = btn.classList.contains('active');
+        const strategy = isActive ? 'auto' : preset;
+        setActivePreset(isActive ? '' : preset);
+        if (feedPropStrategy) feedPropStrategy.value = 'auto';
+        if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
+        try {
+          const body = new URLSearchParams({ feed_url: feedUrl, strategy });
+          await fetch('/feeds/strategy', { method: 'POST', body });
+        } catch (e) {
+          if (feedPropStrategyHint) feedPropStrategyHint.textContent = 'error saving';
+        }
+      });
     });
 
     async function saveDisplayPref(feedUrl, key, value) {
@@ -4678,12 +4701,6 @@
       catch (e) { feedPropShowInArticle.checked = !feedPropShowInArticle.checked; }
     });
 
-    feedPropCaptionMode?.addEventListener('change', async () => {
-      const feedUrl = feedPropCaptionMode.dataset.feedUrl;
-      if (!feedUrl) return;
-      try { await saveDisplayPref(feedUrl, 'show_image_caption', feedPropCaptionMode.value); }
-      catch (e) { /* leave select as-is, non-critical */ }
-    });
 
     async function saveCaptionSource(feedUrl) {
       if (!feedUrl) return;
@@ -4809,6 +4826,7 @@
       if (!card || !feedPropStrategy) return;
       const strategy = card.dataset.strategy;
       if (!SELECTABLE_STRATEGIES.has(strategy)) return;
+      setActivePreset('');
       feedPropStrategy.value = strategy;
       feedPropStrategy.dispatchEvent(new Event('change'));
       feedPropStratGrid.querySelectorAll('.feed-prop-strat-card').forEach(c => {

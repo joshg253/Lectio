@@ -3652,6 +3652,30 @@ body[data-keyboard-open="1"] .action-modal-panel {
   margin: 0.25rem 0;
 }
 
+.feed-prop-preset-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.feed-prop-preset-btn {
+  font-size: 0.82rem;
+  padding: 3px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.feed-prop-preset-btn:hover {
+  border-color: var(--ink);
+}
+.feed-prop-preset-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .feed-prop-strat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(0, 1fr));
