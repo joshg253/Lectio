@@ -2938,14 +2938,87 @@ def _is_youtube_short(entry: object) -> bool:
     return "youtube.com/shorts/" in link
 
 
+def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
+    """Auto-mark newly-seen unread entries as read when a read entry in the same
+    feed already has the same URL slug — indicating the publisher re-issued the
+    same article with a new GUID (CMS migration, permalink rebuild, etc.).
+
+    Only URL-slug matching is used: it has near-zero false-positive rate because
+    the same slug unambiguously means the same permalink.  Title-only matching is
+    too risky for feeds that reuse titles (weekly digests, daily roundups).
+
+    Returns the number of entries suppressed.
+    """
+    from datetime import datetime, timedelta
+
+    recent_cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=90)
+
+    new_unread = [
+        e for e in reader.get_entries(feed=feed_url, read=False)
+        if getattr(e, "added", None) and e.added >= recent_cutoff
+    ]
+    if not new_unread:
+        return 0
+
+    # Build slug → True index from read entries in this feed (last 6 months, capped).
+    history_cutoff = datetime.now(tz=timezone.utc) - timedelta(days=180)
+    read_slugs: set[str] = set()
+    for entry in reader.get_entries(feed=feed_url, read=True, limit=5000):
+        pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
+        if pub and pub < history_cutoff:
+            break
+        if entry.link:
+            slug = _safe_dedup_entry_slug(entry.link)
+            if slug:
+                read_slugs.add(slug)
+
+    if not read_slugs:
+        return 0
+
+    to_suppress = []
+    for entry in new_unread:
+        if not entry.link:
+            continue
+        slug = _safe_dedup_entry_slug(entry.link)
+        if slug and slug in read_slugs:
+            to_suppress.append(entry)
+
+    if not to_suppress:
+        return 0
+
+    when = datetime.now().isoformat()
+    for entry in to_suppress:
+        reader.mark_entry_as_read((str(entry.feed_url), str(entry.id)))
+    conn.executemany(
+        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+        [(str(e.feed_url), str(e.id), when) for e in to_suppress],
+    )
+    return len(to_suppress)
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
         return
 
+    global _unread_counts_generation
+
+    # GUID-churn suppression: auto-mark re-issued entries (same slug, new GUID) as read.
+    try:
+        suppressed_total = 0
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                for feed_url in refreshed_feed_urls:
+                    suppressed_total += _suppress_guid_churn(reader, conn, feed_url)
+        if suppressed_total:
+            _unread_counts_generation += 1
+            LOGGER.info("[guid-churn] suppressed %d re-issued entries", suppressed_total)
+    except Exception:
+        LOGGER.exception("[guid-churn] error during suppression")
+
     # Hide Shorts: auto-mark Shorts as read for YouTube feeds that have it enabled.
     try:
-        global _unread_counts_generation
         with get_meta_connection() as conn:
             shorts_urls = {
                 str(r["feed_url"])
@@ -7748,6 +7821,7 @@ def _auto_tag_webcomic_feeds() -> None:
 # Feed URLs matching any of these get strategy='artwork' automatically.
 _ARTWORK_FEED_DOMAINS = (
     "artstation.com",
+    "deviantart.com",
 )
 
 
