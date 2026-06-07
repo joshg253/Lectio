@@ -4,9 +4,6 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-- **DeviantArt artwork strategy** — added `deviantart.com` to `_ARTWORK_FEED_DOMAINS`; existing DeviantArt gallery feeds auto-tagged `artwork` at next startup.
-- **GUID-churn suppression** — `_suppress_guid_churn` runs after every feed refresh; auto-marks newly-seen unread entries as read when a read entry in the same feed already has the same URL slug (publisher re-issued the same article with a new GUID). URL-slug matching only — title-only matching skipped due to false-positive risk on repetitive feeds.
-
 
 ## Up next
 
