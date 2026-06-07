@@ -50,16 +50,6 @@ This file is the backlog and staging area for future work.
     - ZIP: `lectio-takeout-YYYYMMDD.zip` via `GET /takeout/export` (main menu → Takeout → Export ZIP).
     - **Import**: `POST /takeout/import` (main menu → Takeout → Import ZIP). Merges non-destructively: rules INSERT OR IGNORE (primary key scope+keyword), contacts by address, history appends, tagged/starred entries re-applied to any matching reader entry. Future-version ZIPs are rejected with an error.
 
-## Recently shipped (not in numbered backlog)
-
-- ~~**Artwork image strategy**~~ ✓ — new `artwork` strategy hoists the first image from feed content to the top regardless of position (suited for art-portfolio feeds like ArtStation where images appear after the text). Auto-assigned to `artstation.com` feeds at startup; webcomic tagger skips feeds already tagged artwork.
-- ~~**ArtStation URL normalization**~~ ✓ — `username.artstation.com/rss` rewritten to `www.artstation.com/username.rss` at add time; all existing feeds migrated. Fixes TLS hostname validation failure for underscore usernames.
-- ~~**FRB compliance pass**~~ ✓ (partial) — Lectio now sends `Lectio/0.1 (+https://github.com/joshb253/Lectio)` as User-Agent (was `python-requests/x.x`); 410 Gone auto-disables feeds; HTML responses surface as health errors; `update_after` respected in scheduling.
-- ~~**Strategy comparison improvements**~~ ✓ — shows real source image dimensions (full-size Image() load); fixed `select.options` vs `group.options` TypeError that left dropdown stuck; fixed thumbnail persistence when reopening Properties.
-- ~~**Thumbnail override persistence**~~ ✓ — custom/favicon thumbnail override now prevents JS from clobbering the post list thumbnail when an entry is opened.
-- ~~**Dedupe history detail**~~ ✓ — all dedup match methods (slug/title/both/fuzzy/safe) now store matched entries for history drill-down; previously always showed "No detail stored for this run."
-- ~~**`_AVATAR_HINT_PATTERNS` false positive**~~ ✓ — `author` pattern now requires word boundary, preventing words like "authorities" from incorrectly triggering the avatar image filter.
-
 ## Up next
 
 - **Better tuning / live preview** — full entry preview pane with swappable strategy and display settings side by side. Goal: see exactly what an entry looks like under different combinations (strategy × show-in-article × caption mode) without saving. Probably a modal or split-pane triggered from Feed Properties Tuning tab.
