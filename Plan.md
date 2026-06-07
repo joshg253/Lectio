@@ -50,13 +50,30 @@ This file is the backlog and staging area for future work.
     - ZIP: `lectio-takeout-YYYYMMDD.zip` via `GET /takeout/export` (main menu → Takeout → Export ZIP).
     - **Import**: `POST /takeout/import` (main menu → Takeout → Import ZIP). Merges non-destructively: rules INSERT OR IGNORE (primary key scope+keyword), contacts by address, history appends, tagged/starred entries re-applied to any matching reader entry. Future-version ZIPs are rejected with an error.
 
+## Recently shipped (not in numbered backlog)
+
+- ~~**Artwork image strategy**~~ ✓ — new `artwork` strategy hoists the first image from feed content to the top regardless of position (suited for art-portfolio feeds like ArtStation where images appear after the text). Auto-assigned to `artstation.com` feeds at startup; webcomic tagger skips feeds already tagged artwork.
+- ~~**ArtStation URL normalization**~~ ✓ — `username.artstation.com/rss` rewritten to `www.artstation.com/username.rss` at add time; all existing feeds migrated. Fixes TLS hostname validation failure for underscore usernames.
+- ~~**FRB compliance pass**~~ ✓ (partial) — Lectio now sends `Lectio/0.1 (+https://github.com/joshb253/Lectio)` as User-Agent (was `python-requests/x.x`); 410 Gone auto-disables feeds; HTML responses surface as health errors; `update_after` respected in scheduling.
+- ~~**Strategy comparison improvements**~~ ✓ — shows real source image dimensions (full-size Image() load); fixed `select.options` vs `group.options` TypeError that left dropdown stuck; fixed thumbnail persistence when reopening Properties.
+- ~~**Thumbnail override persistence**~~ ✓ — custom/favicon thumbnail override now prevents JS from clobbering the post list thumbnail when an entry is opened.
+- ~~**Dedupe history detail**~~ ✓ — all dedup match methods (slug/title/both/fuzzy/safe) now store matched entries for history drill-down; previously always showed "No detail stored for this run."
+- ~~**`_AVATAR_HINT_PATTERNS` false positive**~~ ✓ — `author` pattern now requires word boundary, preventing words like "authorities" from incorrectly triggering the avatar image filter.
+
+## Up next
+
+- **Better tuning / live preview** — full entry preview pane with swappable strategy and display settings side by side. Goal: see exactly what an entry looks like under different combinations (strategy × show-in-article × caption mode) without saving. Probably a modal or split-pane triggered from Feed Properties Tuning tab.
+- **Performance investigation** — systematic baseline before enabling multi-user. Capture per-request breakdown (DB time, enrich time, refresh contention) under realistic load (concurrent page loads + active refresh cycle). Identify whether bottleneck is SQLite write contention, thumbnail enrichment, or network.
+- **FRB remaining gaps**:
+  - *Auto-disable after persistent failures* — after ~30 consecutive non-410 errors, disable the feed (user can re-enable). Reduces DB write churn from dead feeds and stops hammering blocked servers.
+  - *Adaptive polling / feed TTL hints* — honor `ttl`, `skipHours`, `skipDays`, `sy:updatePeriod` from feed XML as scheduling hints. Feeds that rarely update should be polled less frequently.
+- **DeviantArt artwork strategy** — `backend.deviantart.com/rss.xml?q=gallery:*` feeds have the same image-after-text layout as ArtStation; add to `_ARTWORK_FEED_DOMAINS`.
+
 ## Backburner
 
 - **Resurface / GUID-churn suppression** — publishers sometimes change entry GUIDs (CMS migrations, permalink changes, plugin rebuilds), causing batches of already-read articles to reappear as new. Mitigation: when a new entry arrives whose title + approximate date matches a known read entry in the same feed, auto-mark it read. Overlaps with cross-feed dedup (slug/title matching). Distinct from `updated`-timestamp changes, which don't affect read state because the GUID is unchanged.
-
-
 - Per-user vs. shared thumb cache (only relevant if multi-user is added).
 - Archive caps for starred entries.
-- Multi-user support / auth refactor.
+- Multi-user support / auth refactor — performance investigation first.
 - YunoHost or other packaging.
 - PWA features.
