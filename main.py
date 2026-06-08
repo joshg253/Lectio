@@ -51,6 +51,7 @@ from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
 from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
+from services.websub import WebSubService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -221,6 +222,9 @@ def _static_asset_version() -> str:
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION") or _static_asset_version()
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
+# Public base URL of this instance (e.g. https://lectio.example.com).
+# Required for WebSub: hubs need a reachable callback URL.  Leave blank to disable WebSub.
+LECTIO_PUBLIC_URL = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
 
 # --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
 _ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
@@ -1498,6 +1502,20 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN feed_thumbnail_url TEXT")
         except Exception:
             pass
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS websub_subscriptions (
+                feed_url      TEXT PRIMARY KEY,
+                hub_url       TEXT,
+                secret        TEXT,
+                lease_seconds INTEGER DEFAULT 0,
+                subscribed_at REAL    DEFAULT 0,
+                expires_at    REAL    DEFAULT 0,
+                verified      INTEGER DEFAULT 0,
+                hub_tried_at  REAL    DEFAULT 0
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
@@ -4529,6 +4547,17 @@ feed_refresh_service = FeedRefreshService(
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
 )
 
+websub_service: WebSubService | None = (
+    WebSubService(
+        get_meta_connection=get_meta_connection,
+        public_url=LECTIO_PUBLIC_URL,
+        user_agent=READABILITY_USER_AGENT,
+        logger=LOGGER,
+    )
+    if LECTIO_PUBLIC_URL
+    else None
+)
+
 
 def build_source_proxy_response(source_url: str) -> HTMLResponse:
     parsed = urlparse(source_url)
@@ -6373,6 +6402,12 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
             (folder_id, feed_url),
         )
     invalidate_meta_structure_cache()
+    if websub_service:
+        threading.Thread(
+            target=websub_service._discover_and_subscribe,
+            args=(feed_url,),
+            daemon=True,
+        ).start()
 
 
 def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
@@ -6397,6 +6432,8 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
                     scraper_service.delete_scraped_feed(_conn, reader, feed_id)
             else:
                 reader.delete_feed(feed_url, missing_ok=True)
+        if websub_service:
+            websub_service.unsubscribe(feed_url)
     invalidate_meta_structure_cache()
 
 
@@ -6618,6 +6655,9 @@ def scheduled_refresh_loop(stop_event: threading.Event) -> None:
             )
         feed_refresh_service.update_feeds(feeds_to_refresh)
         _run_automation_after_refresh(feeds_to_refresh)
+        if websub_service:
+            websub_service.renew_expiring_subscriptions()
+            websub_service.maybe_discover_hubs(list(feeds_to_refresh))
 
 
 def _run_daily_maintenance() -> None:
@@ -10015,6 +10055,46 @@ def get_stats():
             "starred_archive_asset_count": archive_stats["asset_count"],
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# WebSub callback routes
+# ---------------------------------------------------------------------------
+
+@app.get("/websub/callback")
+def websub_verify(
+    feed: str = Query(default=""),
+    hub_mode: str = Query(default="", alias="hub.mode"),
+    hub_topic: str = Query(default="", alias="hub.topic"),
+    hub_challenge: str = Query(default="", alias="hub.challenge"),
+    hub_lease_seconds: int | None = Query(default=None, alias="hub.lease_seconds"),
+):
+    """Hub challenge-response verification (step 2 of subscribe handshake)."""
+    if not websub_service or not feed or hub_mode != "subscribe" or not hub_challenge:
+        return Response(status_code=404)
+    challenge = websub_service.handle_verification(feed, hub_topic, hub_challenge, hub_lease_seconds)
+    if challenge is None:
+        return Response(status_code=404)
+    return Response(content=challenge, media_type="text/plain")
+
+
+@app.post("/websub/callback")
+async def websub_push(request: Request, feed: str = Query(default="")):
+    """Receive a push notification from a WebSub hub."""
+    if not websub_service or not feed:
+        return Response(status_code=400)
+    body = await request.body()
+    sig = request.headers.get("x-hub-signature-256") or request.headers.get("x-hub-signature", "")
+    if not websub_service.verify_push_signature(feed, body, sig):
+        return Response(status_code=403)
+    # Trigger an immediate feed refresh in the background so the push is processed
+    # through the normal refresh pipeline (dedup, automation, lead images, etc.).
+    threading.Thread(
+        target=feed_refresh_service.update_feeds,
+        args=([feed],),
+        daemon=True,
+    ).start()
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":
