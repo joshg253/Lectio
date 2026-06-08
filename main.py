@@ -52,6 +52,7 @@ from services.reader_api import ReaderApi
 from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
 from services.websub import WebSubService
+from services.fever import FeverService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -226,6 +227,10 @@ DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 # Required for WebSub: hubs need a reachable callback URL.  Leave blank to disable WebSub.
 LECTIO_PUBLIC_URL = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
 
+_FEVER_PASSWORD = os.getenv("LECTIO_FEVER_PASSWORD", "").strip()
+# Computed later (after AUTH_USERNAME is defined) — placeholder so it's in module scope.
+FEVER_API_KEY: str | None = None
+
 # --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
 _ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 _ENV_RESEND_FROM = os.getenv("LECTIO_EMAIL_FROM", "").strip()
@@ -298,6 +303,11 @@ def get_maintenance_hour() -> int | None:
 AUTH_USERNAME = os.getenv("LECTIO_USERNAME", "")
 AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
 AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+FEVER_API_KEY = (
+    hashlib.md5(f"{AUTH_USERNAME}:{_FEVER_PASSWORD}".encode()).hexdigest()
+    if _FEVER_PASSWORD and AUTH_USERNAME
+    else None
+)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
@@ -1515,6 +1525,36 @@ def ensure_meta_schema() -> None:
                 hub_tried_at  REAL    DEFAULT 0
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fever_feed_map (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT UNIQUE NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fever_group_map (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT UNIQUE NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fever_entry_map (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                UNIQUE(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fever_entry_map_feed"
+            " ON fever_entry_map(feed_url)"
         )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
@@ -4555,6 +4595,17 @@ websub_service: WebSubService | None = (
         logger=LOGGER,
     )
     if LECTIO_PUBLIC_URL
+    else None
+)
+
+fever_service: FeverService | None = (
+    FeverService(
+        get_meta_connection=get_meta_connection,
+        get_reader=get_reader,
+        fever_api_key=FEVER_API_KEY,
+        root_folder_name=ROOT_FOLDER_NAME,
+    )
+    if FEVER_API_KEY
     else None
 )
 
@@ -10095,6 +10146,95 @@ async def websub_push(request: Request, feed: str = Query(default="")):
         daemon=True,
     ).start()
     return Response(status_code=204)
+
+
+async def _fever_handler(request: Request) -> Response:
+    """Shared handler for GET and POST requests to the Fever API endpoint."""
+    if not fever_service:
+        return JSONResponse({"api_version": 3, "auth": 0}, status_code=503)
+
+    query_params = dict(request.query_params)
+    form_data: dict = {}
+    if request.method == "POST":
+        try:
+            body = await request.form()
+            form_data = dict(body)
+        except Exception:
+            pass
+    params = {**query_params, **form_data}
+
+    if "api" not in params:
+        return Response(status_code=404)
+
+    api_key = params.get("api_key", "")
+    if not fever_service.check_auth(api_key):
+        return JSONResponse({"api_version": 3, "auth": 0})
+
+    result: dict = {
+        "api_version": 3,
+        "auth": 1,
+        "last_refreshed_on_time": int(time.time()),
+    }
+
+    # Mark actions (processed before data requests).
+    if "mark" in params:
+        mark_type = params.get("mark", "")
+        action = params.get("as", "")
+        try:
+            item_id_raw = params.get("id", "")
+            before_raw = params.get("before", "0")
+            if mark_type == "item" and item_id_raw:
+                fever_service.mark_item(int(item_id_raw), action)
+            elif mark_type == "feed" and action == "read":
+                fever_service.mark_feed_read(int(item_id_raw), int(before_raw))
+            elif mark_type == "group" and action == "read":
+                fever_service.mark_group_read(int(item_id_raw), int(before_raw))
+        except (ValueError, Exception):
+            pass
+
+    # Data requests.
+    if "feeds" in params or "groups" in params:
+        data = fever_service.get_feeds_and_groups()
+        result["feeds_groups"] = data["feeds_groups"]
+        if "feeds" in params:
+            result["feeds"] = data["feeds"]
+        if "groups" in params:
+            result["groups"] = data["groups"]
+
+    if "items" in params:
+        try:
+            since_id = int(params["since_id"]) if "since_id" in params else None
+            max_id = int(params["max_id"]) if "max_id" in params else None
+            with_ids = params.get("with_ids")
+            result.update(fever_service.get_items(since_id=since_id, max_id=max_id, with_ids=with_ids))
+        except (ValueError, Exception) as exc:
+            LOGGER.warning("[fever] get_items error: %s", exc)
+
+    if "unread_item_ids" in params:
+        result["unread_item_ids"] = fever_service.get_unread_item_ids()
+
+    if "saved_item_ids" in params:
+        result["saved_item_ids"] = fever_service.get_saved_item_ids()
+
+    if "links" in params:
+        result["links"] = []
+
+    if "favicons" in params:
+        result["favicons"] = []
+
+    return JSONResponse(result)
+
+
+@app.get("/fever")
+async def fever_get(request: Request) -> Response:
+    """Fever API endpoint (GET) — used by some clients for initial auth checks."""
+    return await _fever_handler(request)
+
+
+@app.post("/fever")
+async def fever_post(request: Request) -> Response:
+    """Fever API endpoint (POST) — primary method used by Fever-compatible clients."""
+    return await _fever_handler(request)
 
 
 if __name__ == "__main__":

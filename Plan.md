@@ -10,6 +10,7 @@ This file is the backlog and staging area for future work.
 - **Alt/title in strat cards + caption source picker** — strat cards now show raw `title` and `alt` attribute text below each image. Two checkboxes (Title / Alt) + "↺ Auto" in Tuning let the user pre-select which attribute(s) to show as the entry caption. Text is pre-loaded during refresh (no pop-in). `entry_lead_images` and `feed_strategy_cache` gained `image_title` column; `feed_display_prefs` gained `caption_source`.
 - **GUID-churn suppression: title+date matching** — extended `_suppress_guid_churn` to also match on normalized title + published date within 7 days. Requires ≥4 title words to guard against generic titles. Covers publishers that change both GUID and URL on CMS migrations.
 - **Full persistent failure alerting UI** — **Pause/Resume updates** toggle in Feed Properties Info tab lets the user suspend a misbehaving feed without losing it. **Change URL** inline edit (pencil → input → Save) in the XML address row: migrates reader DB via `reader.change_feed_url` and updates all meta DB tables atomically. Both actions reflected immediately in the Properties dialog without a full reload.
+- **Fever API** — `/fever` endpoint with integer ID mapping tables, full feed/group/item/mark support. Enabled when `LECTIO_FEVER_PASSWORD` is set. Clients: Reeder, FeedMe, NetNewsWire, etc.
 - **WebSub (PubSubHubbub) push** — `websub_subscriptions` table, hub discovery on feed add and refresh cycles, HMAC-verified push callback, automatic lease renewal. Enabled when `LECTIO_PUBLIC_URL` is set.
 - **Per-folder refresh cadence** — `folders.cadence_minutes` column. Folder Properties dialog has a cadence select (5 min → once a day; default = use global setting). `scheduled_refresh_loop` now tracks per-folder last-refresh time in `app_settings` and only includes a folder's feeds when its cadence has elapsed. Per-folder HTTP Cache-Control / TTL-floor honoring is already handled by the reader library via `update_after` (no separate RSS TTL parsing needed).
 
@@ -21,6 +22,7 @@ This file is the backlog and staging area for future work.
 - ~~**Adaptive polling / TTL hints + Per-folder refresh cadence**~~ *(done — per-folder cadence in Folder Properties; reader's update_after already handles HTTP-level TTL floors)*
 - ~~**Resurface / GUID-churn suppression: title+date**~~ *(done)*
 - ~~**WebSub**~~ *(done)*
+- ~~**Fever API**~~ *(done)*
 
 ## Later
 
