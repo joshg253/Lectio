@@ -2446,10 +2446,19 @@
     }
 
     for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #fakefeedz-modal, #global-note-modal, #email-article-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
-      modal.addEventListener('click', (event) => {
-        if (event.target === modal) {
+      // Use mousedown/mouseup pairing so that CSS-resize drag releases (where
+      // mousedown was on the panel and mouseup lands on the backdrop) don't
+      // accidentally dismiss the modal.  Only closes when BOTH events hit the
+      // backdrop itself.
+      let _backdropDown = false;
+      modal.addEventListener('mousedown', (event) => {
+        _backdropDown = event.target === modal;
+      });
+      modal.addEventListener('mouseup', (event) => {
+        if (_backdropDown && event.target === modal) {
           modal.setAttribute('hidden', '');
         }
+        _backdropDown = false;
       });
     }
 
@@ -4955,11 +4964,6 @@
       updateCaptionPreviews(_lastStratCacheRows);
     });
 
-    for (const panel of document.querySelectorAll('.action-modal-panel')) {
-      panel.addEventListener('click', (event) => {
-        event.stopPropagation();
-      });
-    }
 
     contextMenu?.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -8340,22 +8344,21 @@
       _folderPropCloseOnClick = false;
     });
 
-    // Feeds tab: view switching (Folders / Failing / OK / Deactivated).
-    document.addEventListener('click', (event) => {
-      const viewBtn = event.target.closest('[data-feeds-view]');
-      if (!viewBtn) return;
-      const view = viewBtn.getAttribute('data-feeds-view');
-      const feedsTab = document.getElementById('settings-tab-feeds');
-      if (!feedsTab) return;
-      feedsTab.querySelectorAll('[data-feeds-view]').forEach(btn => {
-        const active = btn.getAttribute('data-feeds-view') === view;
-        btn.classList.toggle('feeds-tab-btn--active', active);
-        btn.setAttribute('aria-selected', String(active));
+    // Feeds tab: view switching (Folders / Failing / Deactivated).
+    const feedsTab = document.getElementById('settings-tab-feeds');
+    feedsTab?.querySelectorAll('[data-feeds-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-feeds-view');
+        feedsTab.querySelectorAll('[data-feeds-view]').forEach(b => {
+          const active = b.getAttribute('data-feeds-view') === view;
+          b.classList.toggle('feeds-tab-btn--active', active);
+          b.setAttribute('aria-selected', String(active));
+        });
+        feedsTab.querySelectorAll('[data-feeds-panel]').forEach(panel => {
+          panel.hidden = panel.getAttribute('data-feeds-panel') !== view;
+        });
+        if (view === 'failing') void markProblematicFeedsViewed();
       });
-      feedsTab.querySelectorAll('[data-feeds-panel]').forEach(panel => {
-        panel.hidden = panel.getAttribute('data-feeds-panel') !== view;
-      });
-      if (view === 'failing') void markProblematicFeedsViewed();
     });
 
     function problemFeedAckRequest(feedUrl, endpoint, headerVal) {
