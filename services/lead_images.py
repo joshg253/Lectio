@@ -62,7 +62,7 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -102,6 +102,12 @@ class LeadImageService:
     # Substack CDN and similar services encode dimensions as ,w_N,h_N, in the URL path.
     _PATH_WIDTH_RE = re.compile(r"(?:^|[,_])w_([0-9]{1,4})(?:[,_]|$)")
     _PATH_HEIGHT_RE = re.compile(r"(?:^|[,_])h_([0-9]{1,4})(?:[,_]|$)")
+    # Matches <source type="image/webp" srcset="..."> in either attribute order.
+    _WEBP_SOURCE_SRCSET_RE = re.compile(
+        r'<source\b[^>]+type=["\']image/webp["\'][^>]+srcset=["\']([^"\']+)["\']'
+        r'|<source\b[^>]+srcset=["\']([^"\']+)["\'][^>]+type=["\']image/webp["\']',
+        re.IGNORECASE | re.DOTALL,
+    )
     _PLACEHOLDER_URL_PATTERNS = re.compile(
         r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
@@ -192,6 +198,9 @@ class LeadImageService:
         # fetch is already in flight, so opening the same entry twice quickly
         # doesn't spawn duplicate fetches.
         self._source_fetch_in_progress: set[tuple[str, str]] = set()
+        # Events signalled when a queue_source_fetch completes; used to let the
+        # first-open entry render wait briefly for image + alt/title to be ready.
+        self._source_fetch_events: dict[tuple[str, str], threading.Event] = {}
         # In-memory set of feed URLs whose cache should be bypassed (debug only).
         self._debug_bypass_feeds: set[str] = set()
         # Feeds manually locked to strategy='none' — no lead image for any entry.
@@ -1152,11 +1161,6 @@ class LeadImageService:
         )
         if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
             return False
-        # Reject images whose alt or title text explicitly calls them a logo/icon,
-        # even when the URL path doesn't contain those terms.
-        alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}".strip()
-        if alt_title and self._LOGO_URL_PATTERNS.search(alt_title):
-            return False
 
         # Percentage-based height (e.g. height="60%") marks decorative dividers
         # or banner images sized by CSS — not article content images.
@@ -1166,6 +1170,21 @@ class LeadImageService:
 
         width_attr = self._parse_positive_int_attr(attrs, "width")
         height_attr = self._parse_positive_int_attr(attrs, "height")
+
+        # Reject images whose alt or title text explicitly calls them a logo/icon,
+        # even when the URL path doesn't contain those terms — but only when the
+        # image lacks explicit qualifying dimensions. An img with declared
+        # width/height >= minimums is intentional article content (e.g. "imdb logo"
+        # in an article about IMDB piracy); site chrome logos typically have no
+        # explicit dimensions or carry them in the URL instead.
+        alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}".strip()
+        if alt_title and self._LOGO_URL_PATTERNS.search(alt_title):
+            _has_qualifying_dims = (
+                width_attr is not None and width_attr >= self._LEAD_IMAGE_MIN_WIDTH
+                and height_attr is not None and height_attr >= self._LEAD_IMAGE_MIN_HEIGHT
+            )
+            if not _has_qualifying_dims:
+                return False
         if width_attr is not None and width_attr < self._LEAD_IMAGE_MIN_WIDTH:
             return False
         if height_attr is not None and height_attr < self._LEAD_IMAGE_MIN_HEIGHT:
@@ -1249,6 +1268,7 @@ class LeadImageService:
         best_url: str | None = None
         best_alt: str | None = None
         best_score = -1
+        _found_first = False  # tracks whether the first valid candidate has been scored
 
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             # Skip images inside author/speaker/bio sections — they are headshots.
@@ -1286,8 +1306,35 @@ class LeadImageService:
                     continue
                 if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True):
                     continue
+                # SVG files are icons/logos/diagrams — not photographic article lead images.
+                # They slip through allow_extensionless=True because .svg is not a raster format.
+                _resolved_path = urlparse(resolved).path.lower()
+                if _resolved_path.endswith(".svg"):
+                    continue
+
+                # Prefer <source type="image/webp"> from an enclosing <picture> element.
+                # The webp source is the browser's preferred format for this image and
+                # often carries a larger srcset than the fallback <img src>.
+                _pre_ctx = html_text[max(0, tag_match.start() - 600):tag_match.start()]
+                _pic_pos = _pre_ctx.rfind("<picture")
+                if _pic_pos != -1:
+                    _wm = self._WEBP_SOURCE_SRCSET_RE.search(_pre_ctx[_pic_pos:])
+                    if _wm:
+                        _wsrcset = _wm.group(1) or _wm.group(2)
+                        for _wu in self._parse_srcset_urls_descending(_wsrcset):
+                            if not _wu or _wu.startswith("data:"):
+                                continue
+                            _wr = urljoin(base_url, _wu)
+                            if self._is_image_url_acceptable(_wr, None, None, allow_extensionless=True):
+                                resolved = _wr
+                                break
 
                 score = self._score_source_image_tag(attrs, resolved, source_url, is_webcomic=is_webcomic)
+                # First valid image in the document gets a position bonus — publishers
+                # typically place the primary article image first.
+                if not _found_first:
+                    score += 10
+                    _found_first = True
                 if score > best_score:
                     best_score = score
                     best_url = resolved
@@ -1523,13 +1570,21 @@ class LeadImageService:
             _is_download_thumb = bool(re.search(
                 r'/(?:download|file|product|entry)?thumbs?(?:nail)?s?/', url_path_no_query, re.IGNORECASE
             ))
+            _url_has_large_dim = False
+            _url_has_small_dim = False
             for m in self._URL_DIMENSION_RE.finditer(url_path_no_query):
                 try:
                     w, h = int(m.group(1)), int(m.group(2))
-                    if not _is_download_thumb and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
-                        return False
+                    if w >= self._LEAD_IMAGE_MIN_WIDTH and h >= self._LEAD_IMAGE_MIN_HEIGHT:
+                        _url_has_large_dim = True
+                    elif not _is_download_thumb and (w < self._LEAD_IMAGE_MIN_WIDTH or h < self._LEAD_IMAGE_MIN_HEIGHT):
+                        _url_has_small_dim = True
                 except ValueError:
                     pass
+            # Only reject for small dims when no large dim exists to counteract —
+            # e.g. "16x9" format markers don't disqualify "image-1200x675.jpg".
+            if _url_has_small_dim and not _url_has_large_dim:
+                return False
             # Substack CDN and similar: ,w_N,h_N, path parameters.
             for mw in self._PATH_WIDTH_RE.finditer(url_path_no_query):
                 try:
@@ -1960,12 +2015,15 @@ class LeadImageService:
         """Fetch the source-page lead image in a background thread and persist it.
 
         Returns immediately. Deduplicates: if a fetch for this entry is already
-        in flight, the call is a no-op.
+        in flight, the call is a no-op.  Callers that need to wait for completion
+        can call wait_for_source_fetch() after this returns.
         """
         key = (feed_url, entry_id)
         if key in self._source_fetch_in_progress:
             return
         self._source_fetch_in_progress.add(key)
+        event = threading.Event()
+        self._source_fetch_events[key] = event
         is_wc = self._is_feed_webcomic(feed_url)
 
         def _bg() -> None:
@@ -1980,8 +2038,21 @@ class LeadImageService:
                 pass
             finally:
                 self._source_fetch_in_progress.discard(key)
+                event.set()
+                self._source_fetch_events.pop(key, None)
 
         threading.Thread(target=_bg, daemon=True).start()
+
+    def wait_for_source_fetch(self, feed_url: str, entry_id: str, timeout: float = 3.0) -> bool:
+        """Block until the in-flight queue_source_fetch for this entry finishes (or timeout).
+
+        Returns True if the fetch completed within the timeout, False otherwise.
+        If no fetch is in progress, returns True immediately.
+        """
+        event = self._source_fetch_events.get((feed_url, entry_id))
+        if event is None:
+            return True
+        return event.wait(timeout=timeout)
 
     def queue_source_html_fetch(
         self,

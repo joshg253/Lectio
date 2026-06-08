@@ -5676,12 +5676,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         )
         _pending_lead_image = False
         if _should_source_fetch and entry.link:
-            # Don't block the request on a source-page HTTP fetch.  Queue it in
-            # the background; the result is persisted and will appear next open.
+            # Queue the source-page fetch in the background.  Then wait briefly
+            # (≤3 s) so that alt/title text is ready on the very first open of a
+            # new entry, without blocking indefinitely on slow sites.  If the
+            # timeout expires the result arrives on the next open as before.
             lead_image_service.queue_source_fetch(
                 str(entry.feed_url), str(entry.id), entry.link
             )
-            _pending_lead_image = _show_lead_in_article and not video_id
+            lead_image_service.wait_for_source_fetch(
+                str(entry.feed_url), str(entry.id), timeout=3.0
+            )
+            # Re-read the image URL now that the fetch may have completed.
+            lead_image_url = lead_image_service.extract_entry_thumbnail_url(
+                entry, include_source_lookup=False
+            )
+            _pending_lead_image = (lead_image_url is None) and _show_lead_in_article and not video_id
         # If we injected a YouTube embed for this entry, avoid showing a
         # separate lead image (typically the video thumbnail) above the
         # embedded player — it looks redundant and visually noisy.
