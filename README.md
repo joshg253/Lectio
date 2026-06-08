@@ -1,57 +1,109 @@
 # Lectio
 
-Lectio is a local-first browser RSS reader with a three-pane desktop layout and a one-pane mobile drill-in mode.
+> **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
-## Features
+Lectio is a self-hosted, local-first RSS reader with a focus on fast reading triage. It runs as a single-user server behind a TLS proxy and is designed to be deployed on a personal VPS.
 
-- **Rachel by the Bay** support.
-- Folder tree, recursive post list, and post detail view.
-- Read/unread, saved/starred, tagging, filtering, and sorting.
-- Manual and scheduled refresh.
-- Search within the current scope.
-- Keyboard navigation.
-- Mobile swipe gestures.
-- OPML import/export.
-- Readability and source views.
-- Backup and restore support.
-- Debug tooling for development.
-- Lead images extracted from og:image, preload hints, and page content. When the article uses a `<picture>` element, the WebP source is preferred over the fallback PNG/JPEG.
-- Context menus on sidebar items and post entries (right-click or long-press).
-  - Right-click a feed or entry to **Mark Feed as Read** without leaving the current view.
-  - Right-click a folder to mark all feeds in it as read.
-- Bulk mark-as-read (toolbar dropdown or context menu) updates the visible list in-place — no page reload.
-- **Email Article** — share button in the entry toolbar sends the title, excerpt, and link as a styled email via Resend (requires `RESEND_API_KEY`, `LECTIO_EMAIL_FROM`, and `LECTIO_EMAIL_TO` in `.env`).
-- **RSS Auto-Discovery** — paste a plain website URL when adding a feed; Lectio probes the page for `<link rel="alternate">` RSS/Atom tags and falls back to common feed path suffixes (`/feed`, `/rss.xml`, etc.) before reporting failure.
-- **Feed Properties / Image Troubleshooter** — right-click a feed → Properties to inspect feed metadata, health, and post counts. The Image Display section controls three per-feed flags:
-  - *Show as thumbnail* — whether the lead image appears in the post list.
-  - *Show in article* — whether the lead image is prepended to the article body.
-  - *Feed type preset* — **Webcomic** (source-page scrape with comic-strip image scoring) or **Artwork** (first image from feed content, suited for art-portfolio feeds like ArtStation). ArtStation feeds are auto-assigned **Artwork**; feeds in folders whose name contains "comic" are auto-assigned **Webcomic**.
-  - *Image source* — override the raw extraction mode: **Auto-detect**, **Feed content**, **Source page**, **Media RSS**, or **None**.
-  - *Caption* — **Alt** / **Title** checkboxes select which HTML attribute to show as the image caption. Both unchecked = no caption; **↺ Auto** = title-preferred with automatic junk suppression. The selected text is available on first open (source fetch waits up to 3 s) and pre-loaded at subsequent refresh — no pop-in.
-  - *Post thumbnail* — per-entry auto image, a pinned custom URL, or one of the strategy-detected images.
-  - *Strategy comparison* — when Properties is opened while reading an article, it automatically runs all extraction strategies against that specific entry and displays the resulting images side-by-side with their actual source dimensions. Each card also shows the **title** and **alt** attribute text extracted for that image. Click a card to select that strategy; click **📌** to pin that image as the post thumbnail. Click **Refresh** to re-test at any time.
-  - *Pause / Resume updates* — the **Updates** row in the Info tab has a toggle to suspend automatic fetching for a specific feed without unsubscribing.
-  - *Change URL* — click **Edit** next to the XML address to update the feed's URL in-place. All history, images, automation rules, and display preferences are migrated to the new URL automatically.
-- **Automation** — keyword/regex rules that fire automatically at fetch time. Managed via the main menu → Automation or right-click a folder/feed. Rule types:
-  - *Highlight* — marks matching post titles and article body text with a color in the post list and entry pane. Client-side only.
-  - *Mark as Read* — auto-marks matching entries read when a feed is fetched. Scoped to a specific feed, folder, or globally. Supports title, body, or both search.
-  - *Deduplicate* — marks newer duplicates as read across feeds in a folder or globally. Match methods: URL slug, title, slug+title, fuzzy, or safe. Results logged to Automation History with a per-article detail list.
-- **Read History** — the History view (main menu or folder-pane footer) shows individually-opened articles in reverse-read order, capped at 2,000 entries.
-- **Settings dialog** — unified settings panel (user avatar button in topbar) with tabs: *Profile* (name, email), *Settings* (timezone display pref, maintenance hour), *Contacts* (email recipients), *Email* (Resend API key + from address), and *Integrations* (YouTube config + Instapaper credentials). All previously env-only keys are now editable in the UI (env still works as fallback).
-- **Instapaper integration** — "Save to Instapaper" button in the entry toolbar. Configure credentials in Settings → Integrations. Requires an Instapaper account (free).
-- **YouTube duration prefix** — entries from YouTube feeds show a `[H:MM:SS]` duration prefix in the post list and entry pane title.
-- **Web View proxy** — the Source view (reader icon in entry toolbar) first attempts to load the article in an inline frame. If the site blocks framing (via `X-Frame-Options` or `Content-Security-Policy: frame-ancestors`), Lectio automatically falls back to a server-side proxy that fetches the page, injects a `<base>` tag so relative assets resolve correctly, and adds a persistent "Proxied view · Open original ↗" bar. Cloudflare challenge pages and paywalls are detected and shown as informational notices instead of blank frames.
-- **Email Article rules** — server-side automation for Email Article rules fires at every feed refresh. Two delivery modes: *Immediately* sends one email per matching new article (capped at 10 per refresh cycle); *Batch* queues articles and flushes as a digest when the configured `batch_time` (HH:MM, local) arrives each day or when a count threshold is hit. The *Cc me* option adds your profile email as Cc, suppressed when it already matches the To address.
-- **Hide Shorts** — per-feed toggle in Feed Properties → Tuning (YouTube feeds only). When enabled, YouTube Shorts (entries whose link contains `/shorts/`) are automatically marked as read at fetch time.
-- **Takeout / Export & Import** — main menu → Takeout → *Export ZIP* downloads a `lectio-takeout-YYYYMMDD.zip` containing your feeds (OPML), automation rules, email contacts, tagged entries, starred entries, read history, and non-sensitive settings. *Import ZIP* uploads the ZIP to any Lectio instance and merges data non-destructively (rules and contacts skip duplicates, history appends, tags and stars are re-applied to matching entries).
-- **GUID-churn suppression** — after each feed refresh, entries that reappear with a new GUID but the same URL slug or the same title + publication date (within 7 days) are automatically marked read. Covers CMS migrations that change both GUID and permalink.
-- **Per-folder refresh cadence** — right-click a folder → Properties to set a custom polling interval (5 min to once a day). Overrides the global interval for feeds in that folder; the global interval remains the fallback.
-- **GReader API** — Google Reader-compatible API at `/greader`, supported by a wide range of Android and desktop RSS clients (Capy, Readrops, Aggregator, Read You, etc.). Authenticate with your Lectio username and `LECTIO_FEVER_PASSWORD`. Set the server URL in your client to `https://your-lectio-host/greader`.
-- **Fever API** — third-party RSS clients (Reeder, FeedMe, NetNewsWire, etc.) can connect using the Fever-compatible API at `/fever`. Set `LECTIO_FEVER_PASSWORD` in `.env` to enable it, then configure your client with your Lectio username and that password. Uses a dedicated password (not your main login) because the Fever protocol transmits credentials as MD5.
-- **WebSub (PubSubHubbub) push** — feeds that advertise a `<link rel="hub">` in their HTTP headers or XML body receive real-time push updates instead of waiting for the next poll cycle. Lectio discovers the hub on feed add and again during refresh cycles, subscribes with an HMAC secret, and processes incoming pushes immediately. Requires `LECTIO_PUBLIC_URL` in `.env` so the hub can reach the callback endpoint. Subscriptions are renewed automatically before expiry.
-- **Page Feed (FakeFeedz)** — subscribe to any page as an RSS feed without an external service. Two modes: *New links* surfaces each new link on the page as a feed entry; *Content changes* creates an entry whenever the page content changes. Supports a CSS selector to narrow the watched region. Add via the **+** menu → *Page Feed*, or from the toast that appears when a URL has no RSS feed.
-- **Dev feeds** — when `LECTIO_DEBUG=1`, six synthetic feed endpoints are served in RSS, Atom, and JSON Feed formats (`/dev/feeds/email-match.*`, `/dev/feeds/email-skip.*`) that generate fresh entries on every request for testing email automation rules. Dev feeds bypass the 60-second manual refresh cooldown. A "Flush email batch queue" button appears in Feed Properties for dev feeds.
+---
+
+## What it is
+
+A three-pane desktop RSS reader (folder tree → post list → article pane) with a mobile drill-in mode. Built on Python + FastAPI + the [`reader`](https://github.com/lemon24/reader) library, with a plain-HTML/JS frontend — no build step, no bundler, no framework.
+
+The design priority is **speed of triage**: quickly marking things read, surfacing what matters, and staying out of the way.
+
+---
+
+## Feature highlights
+
+### Reading experience
+- Folder tree with recursive post list; read/unread, saved/starred, tags, sort, and filter
+- Keyboard navigation throughout; mobile swipe gestures
+- **Context menus** — right-click (or long-press) a feed, folder, or entry for contextual actions (mark feed/folder as read, etc.) without leaving the current view
+- **Bulk mark-as-read** — toolbar dropdown or context menu; updates the visible list in-place with no page reload
+- **Read History** — reverse-chronological list of individually-opened articles, capped at 2,000 entries (main menu or folder-pane footer)
+- **Readability view** — extracts clean article text from the source page
+- **Web view proxy** — fetches source pages server-side when sites block embedding; detects Cloudflare/paywall pages
+- **Search** within the current scope
+- **YouTube duration prefix** — `[H:MM:SS]` shown in post list and title for YouTube feeds
+
+### Lead images
+- Per-feed **image extraction strategy**: Auto-detect, Webcomic (source-page scrape), Artwork (for art-portfolio feeds like ArtStation), Feed content only, Source scraping, Media RSS, or None
+- **Strategy comparison** in Feed Properties — runs all strategies against the current article, shows results side-by-side with actual image dimensions
+- Pin any strategy result as the post thumbnail; set a custom URL or feed favicon as a fixed thumbnail
+- **Caption source** — Alt / Title checkboxes select which HTML attribute to show as the image caption; **↺ Auto** applies title-preferred logic with junk suppression; text is pre-loaded at refresh (no pop-in)
+- Art-portfolio feeds (ArtStation) auto-assigned **Artwork** strategy; feeds in "comic"-named folders auto-assigned **Webcomic**
+- ArtStation feed URLs normalized to `www.artstation.com/username.rss` at add time (avoids TLS hostname issues with underscore usernames)
+
+### Automation
+- **Highlight** — keyword/regex rules color-highlight matching titles and article body text
+- **Mark as Read** — auto-marks matching entries at fetch time; scoped per feed, folder, or globally
+- **Deduplicate** — marks newer duplicates read across feeds; URL slug, title, slug+title, fuzzy, or safe match modes; results logged with per-article detail
+- **Email Article rules** — server-side rules that send matching articles via email (Resend); immediate or daily digest mode with Cc option
+- All rules fire automatically at refresh time; manual "Run Now" available
+
+### Feed management
+- **OPML import/export**
+- **RSS auto-discovery** — paste a website URL; probes for `<link rel="alternate">` and common feed path suffixes
+- **Page Feed (FakeFeedz)** — subscribe to any webpage as a feed: new links mode or content-change mode, with optional CSS selector
+- **YouTube folder sync** — sync a folder to a YouTube channel's video feed via YouTube Data API
+- **Hide Shorts** — per-feed toggle (YouTube feeds only) to automatically mark YouTube Shorts as read at fetch time
+- **Per-folder refresh cadence** — right-click a folder → Properties to set a custom polling interval (5 min to once a day); overrides the global interval for feeds in that folder
+- **Feed Properties** — health status, post counts, backoff state, per-feed image and thumbnail tuning
+  - **Pause / Resume updates** — suspend automatic fetching for a feed without unsubscribing
+  - **Change URL** — update a feed's URL in-place; history, images, rules, and display prefs migrate automatically
+
+### Reliability
+- Conditional HTTP requests (ETag / If-Modified-Since via `reader` library)
+- Exponential backoff per feed and per domain on errors; 410 Gone permanently disables a feed
+- HTML-response detection — surfaces "returned an HTML page instead of a feed" as a health error
+- **GUID-churn suppression** — entries that reappear with a new GUID but the same URL slug, or the same title + date (within 7 days), are automatically marked read after refresh
+- Feed User-Agent: `Lectio/0.1 (+https://github.com/joshb253/Lectio)`
+- WAL-mode SQLite for all databases
+
+### Real-time updates
+- **WebSub (PubSubHubbub)** — feeds that advertise a hub receive real-time push updates instead of waiting for the next poll; HMAC-verified, subscriptions renewed automatically. Requires `LECTIO_PUBLIC_URL` in `.env`.
+
+### API compatibility
+- **GReader API** — Google Reader-compatible API at `/greader`; works with Capy, Readrops, Aggregator, Read You, and other Android/desktop clients. Authenticate with your Lectio username and `LECTIO_FEVER_PASSWORD`.
+- **Fever API** — Fever-compatible API at `/fever`; works with Reeder, FeedMe, NetNewsWire, etc. Set `LECTIO_FEVER_PASSWORD` in `.env` to enable. Uses a dedicated password (not your main login) because Fever transmits credentials as MD5.
+
+### Data portability
+- **Takeout / Export & Import** — ZIP archive containing feeds (OPML), rules, contacts, tags, starred entries, read history, and settings; imports non-destructively
+- **Backup script** — online-safe SQLite `VACUUM INTO` snapshots via `scripts/backup_databases.py`
+
+### Integrations
+- **Instapaper** — "Save to Instapaper" button in the entry toolbar
+- **Email** — Resend API for Email Article and Email Article rules
+- **Settings UI** — all API keys and options configurable in-app (env vars still accepted as fallback)
+
+---
+
+## Technical overview
+
+| Layer | What it does |
+|---|---|
+| `main.py` | FastAPI routes, Jinja2 templates, all request handling |
+| `services/` | Feed refresh, lead images, email, starred archive, YouTube, reader API wrapper |
+| `reader` library | Feed fetching, parsing, storage, ETag/conditional requests |
+| `lectio.db` | reader's SQLite feed+entry store |
+| `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
+| `lectio_meta.sqlite` | Starred/saved entry archive |
+
+---
+
+## Stack
+
+- **Backend**: Python 3.14, FastAPI, uvicorn
+- **Feed library**: [reader](https://github.com/lemon24/reader) (handles HTTP, parsing, ETags, scheduling)
+- **Frontend**: Vanilla JS, Jinja2 templates, no build step
+- **Database**: SQLite (WAL mode) × 3
+- **Deployment**: Docker + docker-compose, Traefik reverse proxy
+
+---
 
 ## Status
 
-Work in progress — not yet ready for public release.
+Active personal use. Not yet documented for general deployment. The codebase moves fast — APIs, DB schema, and config format may change without notice.
+
+Issues and PRs welcome, but this is primarily a personal project.
