@@ -5941,14 +5941,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                                 (not _in_feed_title_is_lead_img and not _persisted_alt))
         if _needs_source_scrape and lead_image_url and entry.link:
             if entry.link in lead_image_service._source_html_cache:
-                _fetched_alt = lead_image_service.fetch_entry_image_alt(entry.link, lead_image_url=lead_image_url)
-                if _fetched_alt:
-                    _fetched_alt = re.sub(r"<[^>]+>", "", _fetched_alt).strip() or None
-                if _fetched_alt:
-                    image_title_text = _fetched_alt
-                    lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), image_title_text)
-                elif image_title_text is None:
-                    pass  # nothing from either source; stays None
+                _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url)
+                _fa = (re.sub(r"<[^>]+>", "", _fa).strip() or None) if _fa else None
+                _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
+                if _fa or _ft:
+                    image_title_text = _ft or _fa  # title preferred for auto display
+                    lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
             else:
                 lead_image_service.queue_source_html_fetch(
                     entry.link,
@@ -8465,6 +8463,22 @@ def refresh_feed_strategy_cache_route(
                 "image_alt": row.get("image_alt"),
                 "image_title": row.get("image_title"),
             })
+
+    # Sync the active strategy's alt/title into entry_lead_images so caption_source
+    # rendering can read them immediately without waiting for the next feed refresh.
+    _active_strat, _, _ = lead_image_service.get_feed_strategy(feed_url)
+    _active_row = next(
+        (r for r in strategy_rows if r["strategy"] == _active_strat and r.get("image_url")),
+        None,
+    )
+    if _active_row and sample_entry:
+        lead_image_service.store_entry_image_alt(
+            feed_url,
+            str(sample_entry.id),
+            _active_row.get("image_alt"),
+            title_text=_active_row.get("image_title"),
+        )
+
     return JSONResponse({"ok": True, "strategy_cache": results})
 
 

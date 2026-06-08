@@ -315,7 +315,7 @@ class LeadImageService:
         """Load stored lead-image records into in-memory caches."""
         try:
             with self._get_meta_connection() as conn:
-                rows = conn.execute("SELECT feed_url, entry_id, image_url, image_alt, fetched_at FROM entry_lead_images").fetchall()
+                rows = conn.execute("SELECT feed_url, entry_id, image_url, image_alt, image_title, fetched_at FROM entry_lead_images").fetchall()
             for row in rows:
                 url = row["image_url"]
                 key = (str(row["feed_url"]), str(row["entry_id"]))

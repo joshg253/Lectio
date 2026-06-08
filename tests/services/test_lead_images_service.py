@@ -63,6 +63,7 @@ def _make_conn(db_path: Path):
             entry_id TEXT NOT NULL,
             image_url TEXT,
             image_alt TEXT,
+            image_title TEXT,
             fetched_at REAL,
             PRIMARY KEY(feed_url, entry_id)
         )
