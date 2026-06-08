@@ -18,16 +18,16 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 | Dark mode | Light mode |
 |---|---|
-| ![Dark mode](docs/screenshots/dark.png) | ![Light mode](docs/screenshots/light.png) |
+| ![Dark mode](docs/screenshots/1dark.png) | ![Light mode](docs/screenshots/2light.png) |
 
 <details>
 <summary>More screenshots</summary>
 
-![Feed Properties — Info](docs/screenshots/feedprops.png)
-![Feed Properties — Tuning](docs/screenshots/feedtuning.png)
-![Folder Properties](docs/screenshots/folderprops.png)
-![Automation rules](docs/screenshots/automation.png)
-![Settings — Feeds](docs/screenshots/settings_feeds.png)
+![Settings — Feeds](docs/screenshots/3settings_feeds.png)
+![Automation rules](docs/screenshots/4automation.png)
+![Folder Properties](docs/screenshots/5folderprops.png)
+![Feed Properties — Info](docs/screenshots/6feedprops.png)
+![Feed Properties — Tuning](docs/screenshots/7feedtuning.png)
 
 </details>
 
