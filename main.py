@@ -5613,6 +5613,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             ).fetchone()
             is_saved = bool(row)
 
+        with get_meta_connection() as _prefs_conn:
+            _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
+        _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
+
         lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         # Discard avatar/portrait images (author headshots, profile pics) that
         # some feeds embed as the first image; prefer no image over a face.
@@ -5794,10 +5798,6 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             image_title_text = _persisted_alt
         elif image_title_text is None:
             pass  # stays None; source-page scrape below will attempt to fill it
-
-        with get_meta_connection() as _prefs_conn:
-            _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
-        _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
 
         # Strip the opener thumbnail and dedup against the remaining content.
         # Only when we will actually display the lead image at the top — if
