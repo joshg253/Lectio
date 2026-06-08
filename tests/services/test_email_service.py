@@ -1,3 +1,4 @@
+"""Unit tests for the email service: HTML/text rendering and send logic."""
 from __future__ import annotations
 
 import pytest

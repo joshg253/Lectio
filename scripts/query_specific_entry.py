@@ -1,3 +1,4 @@
+"""Query the meta DB for a specific entry's lead image state."""
 import sqlite3
 
 feed = "https://www.pcgamer.com/rss/"

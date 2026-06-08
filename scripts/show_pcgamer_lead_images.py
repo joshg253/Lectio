@@ -1,3 +1,4 @@
+"""Print lead image data for a specific PC Gamer entry from the meta DB."""
 import sqlite3
 
 conn = sqlite3.connect("lectio_meta.sqlite3")

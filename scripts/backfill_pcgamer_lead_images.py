@@ -1,3 +1,4 @@
+"""Backfill lead-image fetches specifically for the PC Gamer feed."""
 from __future__ import annotations
 
 import sys

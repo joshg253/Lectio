@@ -1,3 +1,4 @@
+"""Backfill lead-image fetches for every entry in a given feed."""
 from __future__ import annotations
 
 import sys

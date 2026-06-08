@@ -1,3 +1,4 @@
+"""Inspect raw entry rows in the meta DB for a given feed."""
 import sqlite3
 
 

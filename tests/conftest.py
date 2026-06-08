@@ -1,3 +1,4 @@
+"""Shared pytest fixtures: sys.path setup and in-memory app client."""
 from __future__ import annotations
 
 import sys

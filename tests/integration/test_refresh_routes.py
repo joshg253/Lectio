@@ -1,3 +1,4 @@
+"""Integration tests for manual and scheduled feed refresh HTTP routes."""
 from __future__ import annotations
 
 import sqlite3
