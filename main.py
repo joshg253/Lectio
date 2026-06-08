@@ -5322,7 +5322,7 @@ def list_entries_for_feeds(
             rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
         _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
-        _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False, fast_only=True)
         _feed_thumb_setting = _feed_prefs.get("feed_thumbnail_url")
         _show_thumb = bool(_feed_prefs.get("show_lead_image_as_thumb", 1))
         if _feed_thumb_setting and _feed_thumb_setting != "__favicon__":

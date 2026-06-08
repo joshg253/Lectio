@@ -478,7 +478,7 @@ class LeadImageService:
         fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
         return time.time() - fetched_at >= max_age_seconds
 
-    def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False) -> str | None:
+    def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url = str(getattr(entry, "feed_url", "") or "")
 
@@ -579,6 +579,9 @@ class LeadImageService:
                         return href
         except Exception:
             pass
+
+        if fast_only:
+            return None
 
         html_candidates: list[str] = []
         content_html: str | None = None

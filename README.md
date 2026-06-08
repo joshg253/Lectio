@@ -33,6 +33,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 ## Feature highlights
 
 ### Reading experience
+- **Rachel by the Bay** support.
 - Folder tree with recursive post list; read/unread, saved/starred, tags, sort, and filter
 - Keyboard navigation throughout; mobile swipe gestures
 - **Context menus** — right-click (or long-press) a feed, folder, or entry for contextual actions (mark feed/folder as read, etc.) without leaving the current view
