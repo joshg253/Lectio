@@ -297,3 +297,57 @@ def test_avatar_hint_does_not_match_authoritative():
     service = _build_service(Path("/tmp"), [])
     assert not service._AVATAR_HINT_PATTERNS.search("authoritative source")
     assert not service._AVATAR_HINT_PATTERNS.search("authorization required")
+
+
+# --- css_bg before preferred → promote to full-res img ---
+
+def test_css_bg_before_preferred_returns_fullres_img(tmp_path):
+    """When a CSS background (resized crop) appears before the body-scanner winner
+    and a full-res <img> with the same filename stem is present, the full-res URL
+    is returned instead of the resized css_bg or the body-scanner winner.
+
+    Mirrors the Astroneer blog layout where detail-view-header contains a
+    bg-blur div (resized crop) and a full-res <img>, both before the body image.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body>"
+        "<header class=\"detail-view-header\">"
+        "<div class=\"bg-blur\" style=\"background-image:"
+        " url('https://cdn.example.com/uploads/U40-Header-576x324.jpg')\"></div>"
+        "<img alt=\"\" src=\"https://cdn.example.com/uploads/U40-Header-616x347.jpg\"/>"
+        "</header>"
+        "<article>"
+        "<img src=\"https://cdn.example.com/uploads/U40-Body1-1920x1080.jpg\""
+        " srcset=\"U40-Body1-1920x1080.jpg 1920w, U40-Body1-768x432.jpg 768w\"/>"
+        "</article>"
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    result = service._fetch_source_lead_image("https://example.com/article")
+
+    assert result == "https://cdn.example.com/uploads/U40-Header-616x347.jpg"
+
+
+def test_css_bg_after_preferred_does_not_override(tmp_path):
+    """When the body-scanner winner appears before the CSS background, keep the
+    body image (normal article-first layout)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body>"
+        "<article>"
+        "<img src=\"https://cdn.example.com/uploads/article-hero.jpg\""
+        " srcset=\"article-hero.jpg 1920w\"/>"
+        "</article>"
+        "<footer>"
+        "<div style=\"background-image:"
+        " url('https://cdn.example.com/uploads/footer-decor-576x324.jpg')\"></div>"
+        "</footer>"
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    result = service._fetch_source_lead_image("https://example.com/article")
+
+    assert result == "https://cdn.example.com/uploads/article-hero.jpg"

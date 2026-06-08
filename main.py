@@ -8478,6 +8478,11 @@ def refresh_feed_strategy_cache_route(
             _active_row.get("image_alt"),
             title_text=_active_row.get("image_title"),
         )
+        lead_image_service.store_entry_lead_image(
+            feed_url,
+            str(sample_entry.id),
+            _active_row["image_url"],
+        )
 
     return JSONResponse({"ok": True, "strategy_cache": results})
 

@@ -1915,6 +1915,33 @@ class LeadImageService:
         # full-page HTML contains <link rel="apple-touch-icon|icon"> in <head>
         # which would be found as hrefs and mistakenly used as lead images.
         # That method is appropriate only for feed-content HTML snippets.
+        # When there's no og:image and a CSS background appears before the body-scanner
+        # winner in the page HTML, the publisher deliberately styled it as the article
+        # visual (e.g. inside <header class="detail-view-header">).  Prefer it — but
+        # try to promote to the full-resolution <img> variant when the css_bg is a
+        # responsive-resized crop (e.g. hero-576x324.jpg → find hero-616x347.jpg or hero.jpg).
+        if not meta_image and css_bg_image and preferred_image and css_bg_image != preferred_image:
+            _body_start = source_html.lower().find('<body')
+            _bh = source_html[_body_start:] if _body_start != -1 else source_html
+            _css_fname = css_bg_image.rstrip('/').split('/')[-1].split('?')[0]
+            _pref_fname = preferred_image.rstrip('/').split('/')[-1].split('?')[0]
+            _css_pos = _bh.lower().find(_css_fname.lower())
+            _pref_pos = _bh.lower().find(_pref_fname.lower())
+            if _css_pos != -1 and (_pref_pos == -1 or _css_pos < _pref_pos):
+                # Strip responsive size suffix (e.g. -576x324) from filename stem.
+                _css_stem = re.sub(r'-\d{2,4}x\d{2,4}$', '', _css_fname.rsplit('.', 1)[0])
+                if len(_css_stem) >= 6:
+                    _full_re = re.compile(
+                        r'(?:data-)?src=["\']([^"\']*' + re.escape(_css_stem) + r'[^"\']*\.[a-zA-Z]{2,5})["\']',
+                        re.IGNORECASE,
+                    )
+                    _m = _full_re.search(_bh)
+                    if _m:
+                        _candidate = urljoin(final_url, _m.group(1))
+                        if self._is_image_url_acceptable(_candidate, None, None, allow_extensionless=False):
+                            return _candidate
+                return css_bg_image
+
         if _og_extreme_ratio:
             return preferred_image or meta_image or css_bg_image
         return meta_image or preferred_image or css_bg_image
