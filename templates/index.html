@@ -1821,9 +1821,24 @@
           </dd>
           <dt>Feed title</dt><dd id="feed-prop-real-title">-</dd>
           <dt>Website</dt><dd id="feed-prop-website">-</dd>
-          <dt>XML address</dt><dd id="feed-prop-xml">-</dd>
+          <dt>XML address</dt>
+          <dd id="feed-prop-xml-row">
+            <span id="feed-prop-xml">-</span>
+            <button type="button" id="feed-prop-change-url-btn" class="feed-prop-inline-btn" title="Change feed URL">Edit</button>
+            <span id="feed-prop-change-url-wrap" hidden>
+              <input type="url" id="feed-prop-change-url-input" class="feed-prop-url-input" placeholder="New feed URL" autocomplete="off" />
+              <button type="button" id="feed-prop-change-url-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+              <button type="button" id="feed-prop-change-url-cancel" class="feed-prop-inline-btn">Cancel</button>
+              <span id="feed-prop-change-url-status" class="feed-prop-inline-status"></span>
+            </span>
+          </dd>
           <dt>Health</dt><dd id="feed-prop-health">-</dd>
           <dt>Detail</dt><dd id="feed-prop-health-detail">-</dd>
+          <dt>Updates</dt>
+          <dd id="feed-prop-updates-row">
+            <span id="feed-prop-updates-label">-</span>
+            <button type="button" id="feed-prop-toggle-updates-btn" class="feed-prop-inline-btn" hidden></button>
+          </dd>
           <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
           <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
           <dt>Date followed</dt><dd id="feed-prop-added">-</dd>
@@ -1931,6 +1946,22 @@
         <dt>Folder</dt><dd id="folder-prop-path">-</dd>
         <dt>Feeds</dt><dd id="folder-prop-feed-count">-</dd>
         <dt>Articles</dt><dd id="folder-prop-total">-</dd>
+        <dt>Refresh cadence</dt>
+        <dd>
+          <select id="folder-prop-cadence" class="feed-prop-strategy-select" style="width:auto">
+            <option value="0">Use global setting</option>
+            <option value="5">Every 5 min</option>
+            <option value="10">Every 10 min</option>
+            <option value="15">Every 15 min</option>
+            <option value="30">Every 30 min</option>
+            <option value="60">Every hour</option>
+            <option value="120">Every 2 hours</option>
+            <option value="360">Every 6 hours</option>
+            <option value="720">Every 12 hours</option>
+            <option value="1440">Once a day</option>
+          </select>
+          <span id="folder-prop-cadence-status" class="feed-prop-inline-status"></span>
+        </dd>
       </dl>
       <div id="folder-prop-top-feeds-wrap" hidden>
         <h4 class="folder-prop-section-title">Most active feeds</h4>
@@ -3128,6 +3159,14 @@
     const feedPropRealTitle = document.getElementById('feed-prop-real-title');
     const feedPropWebsite = document.getElementById('feed-prop-website');
     const feedPropXml = document.getElementById('feed-prop-xml');
+    const feedPropChangeUrlBtn = document.getElementById('feed-prop-change-url-btn');
+    const feedPropChangeUrlWrap = document.getElementById('feed-prop-change-url-wrap');
+    const feedPropChangeUrlInput = document.getElementById('feed-prop-change-url-input');
+    const feedPropChangeUrlSave = document.getElementById('feed-prop-change-url-save');
+    const feedPropChangeUrlCancel = document.getElementById('feed-prop-change-url-cancel');
+    const feedPropChangeUrlStatus = document.getElementById('feed-prop-change-url-status');
+    const feedPropUpdatesLabel = document.getElementById('feed-prop-updates-label');
+    const feedPropToggleUpdatesBtn = document.getElementById('feed-prop-toggle-updates-btn');
     const feedPropHealth = document.getElementById('feed-prop-health');
     const feedPropHealthDetail = document.getElementById('feed-prop-health-detail');
     const feedPropTotal = document.getElementById('feed-prop-total');
@@ -4152,6 +4191,16 @@
         setFeedPropText(feedPropRealTitle, data.real_title || data.feed_url || feedUrl);
         setFeedPropText(feedPropWebsite, data.website || '-');
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
+        if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
+        if (feedPropChangeUrlInput) feedPropChangeUrlInput.value = '';
+        if (feedPropChangeUrlStatus) feedPropChangeUrlStatus.textContent = '';
+        if (feedPropUpdatesLabel && feedPropToggleUpdatesBtn) {
+          const updatesEnabled = data.updates_enabled !== false;
+          feedPropUpdatesLabel.textContent = updatesEnabled ? 'Active' : 'Paused';
+          feedPropToggleUpdatesBtn.textContent = updatesEnabled ? 'Pause' : 'Resume';
+          feedPropToggleUpdatesBtn.hidden = false;
+          feedPropToggleUpdatesBtn.dataset.updatesEnabled = updatesEnabled ? '1' : '0';
+        }
         setFeedPropText(feedPropHealth, data.health || '-');
         setFeedPropText(feedPropHealthDetail, data.health_detail || '-');
         setFeedPropText(feedPropTotal, data.total_posts);
@@ -4491,6 +4540,17 @@
         }
         setVal('folder-prop-path', data.path || data.name || '-');
         setVal('folder-prop-feed-count', data.feed_count);
+        const cadenceSel = document.getElementById('folder-prop-cadence');
+        if (cadenceSel) {
+          cadenceSel.dataset.folderId = String(folderId);
+          const cadence = data.cadence_minutes || 0;
+          // Select closest option
+          const opts = Array.from(cadenceSel.options);
+          const match = opts.find(o => parseInt(o.value) === cadence);
+          cadenceSel.value = match ? String(cadence) : '0';
+        }
+        const cadenceStatus = document.getElementById('folder-prop-cadence-status');
+        if (cadenceStatus) cadenceStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -4643,6 +4703,70 @@
         if (feedLi) feedLi.style.opacity = '';
         window.alert('Unsubscribe failed. Please try again.');
         feedPropUnsubscribeBtn.disabled = false;
+      }
+    });
+
+    // Pause / Resume updates toggle
+    feedPropToggleUpdatesBtn?.addEventListener('click', async () => {
+      const feedUrl = feedPropToggleUpdatesBtn.closest('[data-feed-url]')?.dataset?.feedUrl
+        || feedPropStrategy?.dataset?.feedUrl;
+      if (!feedUrl) return;
+      const currentlyEnabled = feedPropToggleUpdatesBtn.dataset.updatesEnabled === '1';
+      const wantEnabled = !currentlyEnabled;
+      feedPropToggleUpdatesBtn.disabled = true;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, enabled: wantEnabled ? '1' : '0' });
+        const resp = await fetch('/feeds/toggle-updates', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'toggle failed');
+        feedPropUpdatesLabel.textContent = wantEnabled ? 'Active' : 'Paused';
+        feedPropToggleUpdatesBtn.textContent = wantEnabled ? 'Pause' : 'Resume';
+        feedPropToggleUpdatesBtn.dataset.updatesEnabled = wantEnabled ? '1' : '0';
+      } catch (err) {
+        window.alert(`Could not change update state: ${err.message}`);
+      } finally {
+        feedPropToggleUpdatesBtn.disabled = false;
+      }
+    });
+
+    // Change feed URL
+    feedPropChangeUrlBtn?.addEventListener('click', () => {
+      if (!feedPropChangeUrlWrap || !feedPropChangeUrlInput) return;
+      feedPropChangeUrlInput.value = feedPropXml?.textContent || '';
+      feedPropChangeUrlWrap.hidden = false;
+      feedPropChangeUrlBtn.hidden = true;
+      feedPropChangeUrlStatus.textContent = '';
+      feedPropChangeUrlInput.focus();
+      feedPropChangeUrlInput.select();
+    });
+    feedPropChangeUrlCancel?.addEventListener('click', () => {
+      if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
+      if (feedPropChangeUrlBtn) feedPropChangeUrlBtn.hidden = false;
+    });
+    feedPropChangeUrlSave?.addEventListener('click', async () => {
+      const oldUrl = feedPropXml?.textContent?.trim();
+      const newUrl = feedPropChangeUrlInput?.value?.trim();
+      if (!oldUrl || !newUrl || newUrl === oldUrl) {
+        if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
+        if (feedPropChangeUrlBtn) feedPropChangeUrlBtn.hidden = false;
+        return;
+      }
+      feedPropChangeUrlSave.disabled = true;
+      feedPropChangeUrlStatus.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ old_url: oldUrl, new_url: newUrl });
+        const resp = await fetch('/feeds/change-url', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'Change failed');
+        feedPropChangeUrlStatus.textContent = '';
+        if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
+        if (feedPropChangeUrlBtn) feedPropChangeUrlBtn.hidden = false;
+        // Reload properties for the new URL
+        window.location.assign(`/?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(window.location.search)), list_feed_url: newUrl })}`);
+      } catch (err) {
+        feedPropChangeUrlStatus.textContent = `Error: ${err.message}`;
+      } finally {
+        feedPropChangeUrlSave.disabled = false;
       }
     });
 
@@ -8188,6 +8312,23 @@
     document.getElementById('folder-properties-close')?.addEventListener('click', () => {
       folderPropertiesModal?.setAttribute('hidden', '');
     });
+    document.getElementById('folder-prop-cadence')?.addEventListener('change', async (e) => {
+      const sel = e.target;
+      const folderId = sel.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-cadence-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, cadence_minutes: sel.value });
+        const resp = await fetch('/folders/cadence', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
     let _folderPropCloseOnClick = false;
     folderPropertiesModal?.addEventListener('pointerdown', (event) => {
       _folderPropCloseOnClick = event.target === folderPropertiesModal;

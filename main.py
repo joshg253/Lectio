@@ -1244,6 +1244,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_failure_state ADD COLUMN acknowledged_at REAL")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE folders ADD COLUMN cadence_minutes INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_lead_images (
@@ -2963,14 +2967,23 @@ def _is_youtube_short(entry: object) -> bool:
     return "youtube.com/shorts/" in link
 
 
+_CHURN_TITLE_MIN_WORDS = 4   # require at least 4 words — avoids "New post" / "Update" false positives
+_CHURN_TITLE_DATE_DAYS  = 7  # published dates must be within this many days of each other
+
+
 def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
     """Auto-mark newly-seen unread entries as read when a read entry in the same
-    feed already has the same URL slug — indicating the publisher re-issued the
-    same article with a new GUID (CMS migration, permalink rebuild, etc.).
+    feed already has the same URL slug or the same title + publication date —
+    indicating the publisher re-issued the same article with a new GUID and/or
+    URL (CMS migration, permalink rebuild, etc.).
 
-    Only URL-slug matching is used: it has near-zero false-positive rate because
-    the same slug unambiguously means the same permalink.  Title-only matching is
-    too risky for feeds that reuse titles (weekly digests, daily roundups).
+    Two matching strategies:
+    - Slug match: URL path slug is identical (near-zero false-positive rate).
+    - Title+date match: normalised title is identical AND published dates are
+      within _CHURN_TITLE_DATE_DAYS.  Requires at least _CHURN_TITLE_MIN_WORDS
+      words to guard against short/generic titles like "Update" or "Episode 12".
+      Title-only matching is deliberately not used because some feeds reuse
+      titles across unrelated entries (weekly digests, daily roundups).
 
     Returns the number of entries suppressed.
     """
@@ -2985,9 +2998,10 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
     if not new_unread:
         return 0
 
-    # Build slug → True index from read entries in this feed (last 6 months, capped).
+    # Build slug set and title→[pub_dates] map from read entries (last 6 months).
     history_cutoff = datetime.now(tz=timezone.utc) - timedelta(days=180)
     read_slugs: set[str] = set()
+    read_title_dates: dict[str, list[datetime]] = {}
     for entry in reader.get_entries(feed=feed_url, read=True, limit=5000):
         pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
         if pub and pub < history_cutoff:
@@ -2996,17 +3010,35 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
             slug = _safe_dedup_entry_slug(entry.link)
             if slug:
                 read_slugs.add(slug)
-
-    if not read_slugs:
-        return 0
+        if entry.title and pub:
+            norm = normalize_entry_title_for_dedupe(entry.title)
+            if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
+                read_title_dates.setdefault(norm, []).append(pub)
 
     to_suppress = []
     for entry in new_unread:
-        if not entry.link:
-            continue
-        slug = _safe_dedup_entry_slug(entry.link)
-        if slug and slug in read_slugs:
-            to_suppress.append(entry)
+        # Slug match (highest confidence).
+        if entry.link:
+            slug = _safe_dedup_entry_slug(entry.link)
+            if slug and slug in read_slugs:
+                to_suppress.append(entry)
+                continue
+
+        # Title+date match (handles feeds that change both GUID and URL).
+        if entry.title and read_title_dates:
+            norm = normalize_entry_title_for_dedupe(entry.title)
+            if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS and norm in read_title_dates:
+                entry_pub = (
+                    getattr(entry, "published", None)
+                    or getattr(entry, "updated", None)
+                    or getattr(entry, "added", None)
+                )
+                if entry_pub:
+                    threshold = _CHURN_TITLE_DATE_DAYS * 86400
+                    for read_pub in read_title_dates[norm]:
+                        if abs((entry_pub - read_pub).total_seconds()) <= threshold:
+                            to_suppress.append(entry)
+                            break
 
     if not to_suppress:
         return 0
@@ -4054,7 +4086,7 @@ def get_folder_properties(folder_id: int) -> dict:
     with get_meta_connection() as conn:
         folder_row = conn.execute(
             """
-            SELECT f.id, f.name,
+            SELECT f.id, f.name, f.cadence_minutes,
                 CASE WHEN f.parent_id IS NULL THEN f.name
                      ELSE root.name || ' / ' || f.name END AS path
             FROM folders f
@@ -4076,6 +4108,7 @@ def get_folder_properties(folder_id: int) -> dict:
             "folder_id": folder_id,
             "name": folder_row["name"],
             "path": folder_row["path"],
+            "cadence_minutes": folder_row["cadence_minutes"],
             "feed_count": 0,
             "total_articles": 0,
             "unread_articles": 0,
@@ -4144,6 +4177,7 @@ def get_folder_properties(folder_id: int) -> dict:
         "folder_id": folder_id,
         "name": folder_row["name"],
         "path": folder_row["path"],
+        "cadence_minutes": folder_row["cadence_minutes"],
         "feed_count": feed_count,
         "total_articles": total_articles,
         "unread_articles": unread_articles,
@@ -6520,31 +6554,61 @@ def _start_background_update(feed_url: str) -> None:
     thread.start()
 
 
+_FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
+
+
 def scheduled_refresh_loop(stop_event: threading.Event) -> None:
     while not stop_event.wait(SCHEDULER_POLL_SECONDS):
-        auto_refresh_minutes = getattr(app.state, "auto_refresh_minutes", 0)
-        if auto_refresh_minutes <= 0:
+        global_minutes = getattr(app.state, "auto_refresh_minutes", 0)
+        if global_minutes <= 0:
             continue
 
-        last_run_at = getattr(app.state, "last_scheduled_refresh_started_at", 0.0)
-        if (time.monotonic() - last_run_at) < auto_refresh_minutes * 60:
-            continue
+        now_ts = time.time()
+        feeds_to_refresh: set[str] = set()
+        folders_to_mark: list[tuple[str, str]] = []
 
         with get_meta_connection() as conn:
-            feed_urls = get_all_feed_urls(conn)
             disabled = get_disabled_feed_urls(conn)
-        feed_urls -= disabled
+            # Load all folders and their per-folder cadence settings.
+            folder_rows = conn.execute("SELECT id, cadence_minutes FROM folders").fetchall()
+            for folder in folder_rows:
+                fid = int(folder["id"])
+                cadence = folder["cadence_minutes"]
+                effective_minutes = cadence if (cadence and cadence > 0) else global_minutes
+                key = f"{_FOLDER_CADENCE_LAST_REFRESH_PREFIX}{fid}"
+                last_ts_str = get_setting(conn, key)
+                last_ts = float(last_ts_str) if last_ts_str else 0.0
+                if (now_ts - last_ts) < effective_minutes * 60:
+                    continue
+                # This folder is due — collect its feeds.
+                folder_feed_rows = conn.execute(
+                    "SELECT feed_url FROM folder_feeds WHERE folder_id = ?", (fid,)
+                ).fetchall()
+                for row in folder_feed_rows:
+                    url = str(row["feed_url"])
+                    if url not in disabled:
+                        feeds_to_refresh.add(url)
+                folders_to_mark.append((key, str(now_ts)))
+            if folders_to_mark:
+                for key, val in folders_to_mark:
+                    set_setting(conn, key, val)
+                # Keep legacy global timestamp for monitoring / debug.
+                app.state.last_scheduled_refresh_started_at = time.monotonic()
+                with get_meta_connection() as _sc:
+                    scraper_service.refresh_all_scraped_feeds(_sc)
+
+        if not feeds_to_refresh:
+            continue
+
         if REFRESH_DEBUG_ENABLED:
             LOGGER.info(
-                "[refresh] scheduled run triggered: interval_minutes=%d feed_count=%d",
-                auto_refresh_minutes,
-                len(feed_urls),
+                "[refresh] scheduled run: global_minutes=%d feed_count=%d folder_count=%d",
+                global_minutes,
+                len(feeds_to_refresh),
+                len(folders_to_mark),
             )
-        app.state.last_scheduled_refresh_started_at = time.monotonic()
-        with get_meta_connection() as conn:
-            scraper_service.refresh_all_scraped_feeds(conn)
-        feed_refresh_service.update_feeds(feed_urls)
-        _run_automation_after_refresh(feed_urls)
+        feed_refresh_service.update_feeds(feeds_to_refresh)
+        _run_automation_after_refresh(feeds_to_refresh)
 
 
 def _run_daily_maintenance() -> None:
@@ -7859,6 +7923,25 @@ def folder_properties(folder_id: int):
     return JSONResponse(get_folder_properties(folder_id))
 
 
+@app.post("/folders/cadence")
+def set_folder_cadence(folder_id: int = Form(...), cadence_minutes: str = Form(...)):
+    """Set or clear the per-folder refresh cadence."""
+    try:
+        minutes = int(cadence_minutes)
+        if minutes < 0:
+            raise ValueError
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "cadence_minutes must be a non-negative integer"}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE folders SET cadence_minutes = ? WHERE id = ?",
+            (minutes if minutes > 0 else None, folder_id),
+        )
+        # Clear the last-refresh timestamp so the next cycle picks up the new cadence immediately.
+        set_setting(conn, f"{_FOLDER_CADENCE_LAST_REFRESH_PREFIX}{folder_id}", "0")
+    return JSONResponse({"ok": True, "cadence_minutes": minutes if minutes > 0 else None})
+
+
 _VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "none", "webcomic", "artwork"}
 
 
@@ -8551,6 +8634,99 @@ def enable_feed_route(folder_id: int | None = Form(default=None), feed_url: str 
     enable_feed(feed_url)
     dest = f"/?folder_id={folder_id}" if folder_id else "/"
     return RedirectResponse(url=dest, status_code=303)
+
+
+@app.post("/feeds/toggle-updates")
+def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
+    """Pause or resume automatic updates for a feed."""
+    want_enabled = enabled.lower() in ("1", "true", "yes")
+    try:
+        with get_reader() as reader:
+            if want_enabled:
+                reader.enable_feed_updates(feed_url)
+                # Clear the backoff so the feed is checked on the next cycle
+                # instead of waiting for the retry window to expire.
+                with get_meta_connection() as conn:
+                    conn.execute(
+                        "UPDATE feed_failure_state SET next_retry_at = NULL WHERE feed_url = ?",
+                        (feed_url,),
+                    )
+                invalidate_problematic_feeds_cache()
+            else:
+                reader.disable_feed_updates(feed_url)
+        return JSONResponse({"ok": True, "updates_enabled": want_enabled})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/feeds/change-url")
+def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
+    """Change the URL of a feed, migrating all associated data."""
+    new_url = new_url.strip()
+    parsed = urlparse(new_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return JSONResponse({"ok": False, "error": "Invalid URL — must be http or https."}, status_code=400)
+    if new_url == old_url:
+        return JSONResponse({"ok": False, "error": "New URL is the same as the current URL."}, status_code=400)
+
+    try:
+        with get_reader() as reader:
+            reader.change_feed_url(old_url, new_url)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    # Migrate all meta DB tables that reference the old feed_url.
+    _feed_url_tables = [
+        "archived_entry",
+        "archived_asset_link",
+        "folder_feeds",
+        "saved_entries",
+        "entry_read_state",
+        "read_history",
+        "feed_failure_state",
+        "entry_lead_images",
+        "feed_lead_image_strategy",
+        "disabled_feeds",
+        "feed_display_prefs",
+        "feed_strategy_cache",
+        "rule_run_log_entries",
+        "email_batch_queue",
+    ]
+    with get_meta_connection() as conn:
+        for table in _feed_url_tables:
+            try:
+                conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
+            except Exception:
+                pass
+        # highlight_keywords uses scope/scope_id rather than feed_url
+        try:
+            conn.execute(
+                "UPDATE highlight_keywords SET scope_id = ? WHERE scope = 'feed' AND scope_id = ?",
+                (new_url, old_url),
+            )
+        except Exception:
+            pass
+
+    # Migrate starred archive DB tables.
+    try:
+        with get_starred_archive_connection() as arch_conn:
+            for table in ("archived_entry", "archived_asset_link"):
+                try:
+                    arch_conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Migrate lead-image in-memory caches: re-key (old_url, entry_id) → (new_url, entry_id).
+    lead_image_service.rename_feed_url_in_cache(old_url, new_url)
+
+    invalidate_meta_structure_cache()
+    invalidate_problematic_feeds_cache()
+    global _unread_counts_generation
+    _unread_counts_generation += 1
+
+    return JSONResponse({"ok": True, "new_url": new_url})
 
 
 @app.post("/feeds/unsubscribe")

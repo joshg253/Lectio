@@ -397,6 +397,16 @@ class LeadImageService:
         except Exception:
             pass
 
+    def rename_feed_url_in_cache(self, old_url: str, new_url: str) -> None:
+        """Re-key all in-memory cache entries from old_url to new_url after a feed URL change."""
+        for cache in (self._cache, self._alt_cache, self._title_cache, self._fetched_at_cache):
+            old_keys = [k for k in cache if k[0] == old_url]
+            for k in old_keys:
+                cache[(new_url, k[1])] = cache.pop(k)
+        if old_url in self._debug_bypass_feeds:
+            self._debug_bypass_feeds.discard(old_url)
+            self._debug_bypass_feeds.add(new_url)
+
     def toggle_feed_bypass(self, feed_url: str) -> bool:
         """Toggle debug cache bypass for a feed. Returns the new bypass state."""
         if feed_url in self._debug_bypass_feeds:
