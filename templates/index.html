@@ -4955,9 +4955,11 @@
       updateCaptionPreviews(_lastStratCacheRows);
     });
 
-    document.querySelector('.action-modal-panel')?.addEventListener('click', (event) => {
-      event.stopPropagation();
-    });
+    for (const panel of document.querySelectorAll('.action-modal-panel')) {
+      panel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+    }
 
     contextMenu?.addEventListener('click', (event) => {
       event.stopPropagation();

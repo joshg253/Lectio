@@ -2841,8 +2841,9 @@ button:hover, .button-link:hover {
 
 .entry-content {
   line-height: 1.45;
-  /* Prevent fixed-width HTML elements (tables, pre) from expanding the viewport */
-  overflow-x: auto;
+  /* clip horizontal overflow without creating a scroll container (which would
+     force overflow-y:auto and add a spurious inner vertical scrollbar) */
+  overflow-x: clip;
 }
 
 .entry-content table {
@@ -3287,7 +3288,7 @@ body.resizing {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.35);
-  padding: 1rem;
+  padding: 2rem 1.5rem;
 }
 
 .action-modal[hidden] {
@@ -3298,8 +3299,8 @@ body.resizing {
   width: min(440px, 100%);
   min-width: min(320px, 100%);
   min-height: 20rem;
-  max-width: calc(100vw - 1rem);
-  max-height: calc(100vh - 1rem);
+  max-width: calc(100vw - 3rem);
+  max-height: calc(100vh - 4rem);
   display: flex;
   flex-direction: column;
   background: var(--elevated-bg);
