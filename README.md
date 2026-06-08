@@ -14,6 +14,22 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 ---
 
+## Screenshots
+
+| Dark mode | Light mode |
+|---|---|
+| ![Dark mode](docs/screenshots/dark.png) | ![Light mode](docs/screenshots/light.png) |
+
+<details>
+<summary>More screenshots</summary>
+
+![Feed Properties](docs/screenshots/feed-properties.png)
+![Automation rules](docs/screenshots/automation.png)
+
+</details>
+
+---
+
 ## Feature highlights
 
 ### Reading experience
