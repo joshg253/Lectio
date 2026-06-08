@@ -77,6 +77,33 @@ The strategy comparison cache (`feed_strategy_cache`) also stores `image_alt` an
 
 The JS layer reads the CSRF token explicitly from `<meta name="csrf-token">` and adds it as `X-CSRF-Token` on every async POST.
 
+## GReader API
+
+`GReaderService` (`services/greader.py`) implements the Google Reader-compatible protocol used by Capy, Readrops, Aggregator, Read You, and many other clients.
+
+**Auth:** `POST /greader/accounts/ClientLogin` accepts `Email` and `Passwd` form fields. Email may be bare username or `user@domain` (the local part is matched). Returns `SID/LSID/Auth` tokens (all identical) in the Fever-style `key=value` plain-text format. Tokens are stored in memory (90-day expiry); subsequent requests pass `Authorization: GoogleLogin auth=<token>`.
+
+**Shared ID table:** Reuses `fever_entry_map` for stable integer IDs — no additional DB table. GReader item IDs are the decimal integer for `itemRefs.id` and `tag:google.com,2005:reader/item/<16-char-hex>` for item content responses. All three input formats (decimal, `0x<hex>`, full tag URI) are parsed in `_parse_item_id`.
+
+**Stream IDs:** `user/-/state/com.google/reading-list` (all), `user/-/state/com.google/read`, `user/-/state/com.google/starred`, `feed/<url>`, `user/-/label/<folder>`. Exclusion tag `xt=user/-/state/com.google/read` filters unread-only.
+
+**Endpoints:**
+- `GET /greader/reader/api/0/user-info` — user identity
+- `GET /greader/reader/api/0/tag/list` — folders as labels + built-in states
+- `GET /greader/reader/api/0/subscription/list` — feeds with folder membership
+- `GET /greader/reader/api/0/unread-count` — per-feed and per-folder unread counts
+- `GET /greader/reader/api/0/token` — action token (returns auth token)
+- `GET /greader/reader/api/0/stream/items/ids` — paginated item ID list
+- `POST /greader/reader/api/0/stream/items/contents` — item content by IDs
+- `GET /greader/reader/api/0/stream/contents/{stream_id:path}` — combined IDs + content
+- `POST /greader/reader/api/0/edit-tag` — mark read/unread/starred/unstarred
+- `POST /greader/reader/api/0/mark-all-as-read` — bulk mark read (background thread)
+- `POST /greader/reader/api/0/subscription/edit` and `/quickadd` — stub OK responses
+
+**Pagination:** `?n=<count>` (default 20, cap 10,000), `?c=<continuation>` (published-timestamp in microseconds of the last returned item). `?r=o` reverses order to oldest-first.
+
+**Credential sharing:** Uses the same `LECTIO_FEVER_PASSWORD` env var as the Fever API — one API password covers both protocols.
+
 ## Fever API
 
 `FeverService` (`services/fever.py`) implements the [Fever RSS API](https://feedafever.com/api) for third-party client compatibility (Reeder, FeedMe, NetNewsWire, etc.).

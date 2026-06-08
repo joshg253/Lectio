@@ -53,6 +53,7 @@ from services.starred_archive import StarredArchiveService
 from services.youtube import YouTubeDurationService
 from services.websub import WebSubService
 from services.fever import FeverService
+from services.greader import GReaderService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -4606,6 +4607,18 @@ fever_service: FeverService | None = (
         root_folder_name=ROOT_FOLDER_NAME,
     )
     if FEVER_API_KEY
+    else None
+)
+
+greader_service: GReaderService | None = (
+    GReaderService(
+        get_meta_connection=get_meta_connection,
+        get_reader=get_reader,
+        username=AUTH_USERNAME,
+        password=_FEVER_PASSWORD,
+        root_folder_name=ROOT_FOLDER_NAME,
+    )
+    if _FEVER_PASSWORD and AUTH_USERNAME
     else None
 )
 
@@ -10235,6 +10248,173 @@ async def fever_get(request: Request) -> Response:
 async def fever_post(request: Request) -> Response:
     """Fever API endpoint (POST) — primary method used by Fever-compatible clients."""
     return await _fever_handler(request)
+
+
+# ================================================================== GReader API
+
+
+def _greader_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("GoogleLogin auth="):
+        return auth[17:].strip()
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    return request.query_params.get("token", "")
+
+
+def _greader_ok(request: Request) -> bool:
+    return bool(greader_service and greader_service.check_token(_greader_token(request)))
+
+
+@app.post("/greader/accounts/ClientLogin")
+async def greader_login(request: Request) -> Response:
+    """Authenticate and return a GReader auth token."""
+    if not greader_service:
+        return Response("Error=ServiceUnavailable\n", status_code=503)
+    form = await request.form()
+    email = str(form.get("Email") or form.get("email") or "")
+    passwd = str(form.get("Passwd") or form.get("passwd") or "")
+    token = greader_service.authenticate(email, passwd)
+    if not token:
+        return Response("Error=BadAuthentication\n", status_code=403)
+    return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
+
+
+@app.get("/greader/reader/api/0/user-info")
+def greader_user_info(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return JSONResponse(greader_service.get_user_info())  # type: ignore[union-attr]
+
+
+@app.get("/greader/reader/api/0/tag/list")
+def greader_tag_list(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return JSONResponse(greader_service.get_tag_list())  # type: ignore[union-attr]
+
+
+@app.get("/greader/reader/api/0/subscription/list")
+def greader_subscription_list(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]
+
+
+@app.post("/greader/reader/api/0/subscription/edit")
+async def greader_subscription_edit(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return Response("OK")
+
+
+@app.post("/greader/reader/api/0/subscription/quickadd")
+async def greader_subscription_quickadd(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return Response("OK")
+
+
+@app.get("/greader/reader/api/0/unread-count")
+def greader_unread_count(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return JSONResponse(greader_service.get_unread_counts())  # type: ignore[union-attr]
+
+
+@app.get("/greader/reader/api/0/token")
+def greader_action_token(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    return Response(_greader_token(request), media_type="text/plain")
+
+
+@app.get("/greader/reader/api/0/stream/items/ids")
+def greader_stream_item_ids(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    p = request.query_params
+    stream_id = p.get("s", "user/-/state/com.google/reading-list")
+    try:
+        count = min(int(p.get("n", "20")), 10_000)
+    except ValueError:
+        count = 20
+    continuation = p.get("c") or None
+    xt_values = p.getlist("xt")
+    exclude_read = "user/-/state/com.google/read" in xt_values
+    start_time = int(p["ot"]) if "ot" in p else None
+    stop_time = int(p["nt"]) if "nt" in p else None
+    oldest_first = p.get("r") == "o"
+    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]
+        stream_id, count=count, continuation=continuation,
+        exclude_read=exclude_read, start_time=start_time,
+        stop_time=stop_time, oldest_first=oldest_first,
+    ))
+
+
+@app.post("/greader/reader/api/0/stream/items/contents")
+async def greader_stream_items_contents(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    form = await request.form()
+    item_ids = list(form.getlist("i"))
+    return JSONResponse(greader_service.get_items_contents(item_ids))  # type: ignore[union-attr]
+
+
+@app.get("/greader/reader/api/0/stream/contents/{stream_id:path}")
+def greader_stream_contents_path(stream_id: str, request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    p = request.query_params
+    if not stream_id:
+        stream_id = p.get("s", "user/-/state/com.google/reading-list")
+    try:
+        count = min(int(p.get("n", "20")), 10_000)
+    except ValueError:
+        count = 20
+    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]
+        stream_id,
+        count=count,
+        continuation=p.get("c") or None,
+        exclude_read="user/-/state/com.google/read" in p.getlist("xt"),
+        oldest_first=p.get("r") == "o",
+    ))
+
+
+@app.get("/greader/reader/api/0/stream/contents")
+def greader_stream_contents_query(request: Request) -> Response:
+    stream_id = request.query_params.get("s", "user/-/state/com.google/reading-list")
+    return greader_stream_contents_path(stream_id, request)
+
+
+@app.post("/greader/reader/api/0/edit-tag")
+async def greader_edit_tag(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    form = await request.form()
+    greader_service.edit_tag(  # type: ignore[union-attr]
+        list(form.getlist("i")),
+        list(form.getlist("a")),
+        list(form.getlist("r")),
+    )
+    return Response("OK")
+
+
+@app.post("/greader/reader/api/0/mark-all-as-read")
+async def greader_mark_all_as_read(request: Request) -> Response:
+    if not _greader_ok(request):
+        return Response(status_code=401)
+    form = await request.form()
+    stream_id = str(form.get("s") or "user/-/state/com.google/reading-list")
+    ts_raw = form.get("ts")
+    # ts is in microseconds; convert to seconds for the service.
+    timestamp = int(ts_raw) // 1_000_000 if ts_raw else None
+    threading.Thread(
+        target=greader_service.mark_all_as_read,  # type: ignore[union-attr]
+        args=(stream_id, timestamp),
+        daemon=True,
+    ).start()
+    return Response("OK")
 
 
 if __name__ == "__main__":

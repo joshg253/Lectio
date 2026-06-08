@@ -22,6 +22,7 @@ This file is the backlog and staging area for future work.
 - ~~**Adaptive polling / TTL hints + Per-folder refresh cadence**~~ *(done — per-folder cadence in Folder Properties; reader's update_after already handles HTTP-level TTL floors)*
 - ~~**Resurface / GUID-churn suppression: title+date**~~ *(done)*
 - ~~**WebSub**~~ *(done)*
+- ~~**GReader API**~~ *(done — `/greader`, shared LECTIO_FEVER_PASSWORD, supports Capy/Readrops/Aggregator/ReadYou)*
 - ~~**Fever API**~~ *(done)*
 
 ## Later
