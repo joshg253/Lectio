@@ -15,7 +15,7 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
 - Readability and source views.
 - Backup and restore support.
 - Debug tooling for development.
-- Lead images extracted from og:image, preload hints, and page content.
+- Lead images extracted from og:image, preload hints, and page content. When the article uses a `<picture>` element, the WebP source is preferred over the fallback PNG/JPEG.
 - Context menus on sidebar items and post entries (right-click or long-press).
   - Right-click a feed or entry to **Mark Feed as Read** without leaving the current view.
   - Right-click a folder to mark all feeds in it as read.
@@ -27,7 +27,7 @@ Lectio is a local-first browser RSS reader with a three-pane desktop layout and 
   - *Show in article* — whether the lead image is prepended to the article body.
   - *Feed type preset* — **Webcomic** (source-page scrape with comic-strip image scoring) or **Artwork** (first image from feed content, suited for art-portfolio feeds like ArtStation). ArtStation feeds are auto-assigned **Artwork**; feeds in folders whose name contains "comic" are auto-assigned **Webcomic**.
   - *Image source* — override the raw extraction mode: **Auto-detect**, **Feed content**, **Source page**, **Media RSS**, or **None**.
-  - *Caption* — **Alt** / **Title** checkboxes select which HTML attribute to show as the image caption. Both unchecked = no caption; **↺ Auto** = title-preferred with automatic junk suppression. The selected text is pre-loaded at refresh time (no pop-in).
+  - *Caption* — **Alt** / **Title** checkboxes select which HTML attribute to show as the image caption. Both unchecked = no caption; **↺ Auto** = title-preferred with automatic junk suppression. The selected text is available on first open (source fetch waits up to 3 s) and pre-loaded at subsequent refresh — no pop-in.
   - *Post thumbnail* — per-entry auto image, a pinned custom URL, or one of the strategy-detected images.
   - *Strategy comparison* — when Properties is opened while reading an article, it automatically runs all extraction strategies against that specific entry and displays the resulting images side-by-side with their actual source dimensions. Each card also shows the **title** and **alt** attribute text extracted for that image. Click a card to select that strategy; click **📌** to pin that image as the post thumbnail. Click **Refresh** to re-test at any time.
   - *Pause / Resume updates* — the **Updates** row in the Info tab has a toggle to suspend automatic fetching for a specific feed without unsubscribing.
