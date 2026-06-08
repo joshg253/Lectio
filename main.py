@@ -319,7 +319,7 @@ SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 *
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/dev/feeds/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -621,7 +621,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img")
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/fever", "/greader/", "/websub/")
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
