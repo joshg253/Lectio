@@ -23,8 +23,11 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 <details>
 <summary>More screenshots</summary>
 
-![Feed Properties](docs/screenshots/feed-properties.png)
+![Feed Properties — Info](docs/screenshots/feedprops.png)
+![Feed Properties — Tuning](docs/screenshots/feedtuning.png)
+![Folder Properties](docs/screenshots/folderprops.png)
 ![Automation rules](docs/screenshots/automation.png)
+![Settings — Feeds](docs/screenshots/settings_feeds.png)
 
 </details>
 
@@ -33,7 +36,6 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 ## Feature highlights
 
 ### Reading experience
-- **Rachel by the Bay** support.
 - Folder tree with recursive post list; read/unread, saved/starred, tags, sort, and filter
 - Keyboard navigation throughout; mobile swipe gestures
 - **Context menus** — right-click (or long-press) a feed, folder, or entry for contextual actions (mark feed/folder as read, etc.) without leaving the current view
@@ -43,6 +45,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Web view proxy** — fetches source pages server-side when sites block embedding; detects Cloudflare/paywall pages
 - **Search** within the current scope
 - **YouTube duration prefix** — `[H:MM:SS]` shown in post list and title for YouTube feeds
+- **Rachel by the Bay** support.
 
 ### Lead images
 - Per-feed **image extraction strategy**: Auto-detect, Webcomic (source-page scrape), Artwork (for art-portfolio feeds like ArtStation), Feed content only, Source scraping, Media RSS, or None
