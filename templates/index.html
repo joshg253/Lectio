@@ -3890,11 +3890,13 @@
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
-      if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; }
+      if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
       const _thumbCustomRow = document.getElementById('feed-prop-thumb-custom-row');
       if (_thumbCustomRow) _thumbCustomRow.style.display = 'none';
       const _thumbPreview = document.getElementById('feed-prop-thumb-preview');
       if (_thumbPreview) _thumbPreview.style.display = 'none';
+      const _thumbInput = document.getElementById('feed-prop-thumbnail-url');
+      if (_thumbInput) _thumbInput.value = '';
       if (feedPropYtSection) feedPropYtSection.hidden = true;
       if (feedPropImgSection) feedPropImgSection.hidden = false;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
@@ -4024,7 +4026,10 @@
           const feedPropThumbUrlSave = document.getElementById('feed-prop-thumbnail-url-save');
           if (feedPropThumbUrlSave) feedPropThumbUrlSave.dataset.feedUrl = feedUrl;
           const thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
-          if (thumbSourceSelect) thumbSourceSelect.dataset.feedUrl = feedUrl;
+          if (thumbSourceSelect) {
+            thumbSourceSelect.dataset.feedUrl = feedUrl;
+            thumbSourceSelect.dataset.savedThumbUrl = data.feed_thumbnail_url || '';
+          }
           if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
 
           const _showThumb = data.show_lead_image_as_thumb !== false;
@@ -4249,8 +4254,8 @@
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         renderStrategyGrid(data.strategy_cache || []);
-        const currentThumbUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
         const _ts = document.getElementById('feed-prop-thumb-source');
+        const currentThumbUrl = _ts?.dataset.savedThumbUrl || null;
         const _showThumb = _ts?.value !== '__disabled__';
         updateThumbSourceSelect(data.strategy_cache || [], currentThumbUrl, _showThumb);
       } catch (e) {
@@ -4607,10 +4612,13 @@
       const feedUrl = btn?.dataset.feedUrl || document.getElementById('feed-prop-thumb-source')?.dataset.feedUrl;
       if (!feedUrl || !input) return;
       try {
-        const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: input.value.trim() });
+        const newUrl = input.value.trim();
+        const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: newUrl });
         const resp = await fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         btn.textContent = 'Saved';
+        const _ts2 = document.getElementById('feed-prop-thumb-source');
+        if (_ts2) _ts2.dataset.savedThumbUrl = newUrl;
         applyThumbSourceUI();
         setTimeout(() => { btn.textContent = 'Save'; }, 1500);
       } catch (e) {
@@ -4640,6 +4648,7 @@
       else if (val.startsWith('__strat__')) url = val.slice(9);
       const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: url });
       await fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
+      select.dataset.savedThumbUrl = url;
     });
 
     feedPropRefreshBtn?.addEventListener('click', () => {
