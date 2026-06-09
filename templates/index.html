@@ -105,15 +105,8 @@
           <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
           <div class="menu-popover anchor-left">
             <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
-            <button type="button" id="menu-highlights-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
             <hr class="menu-divider" />
             <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
-            <a
-              class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
-              href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
-              title="Global history"
-              aria-label="Global history"
-            ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
             <div class="flyout-item">
               <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
               <div class="flyout-panel">
@@ -127,9 +120,7 @@
                 </form>
               </div>
             </div>
-            <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
             <hr class="menu-divider" />
-            <button type="button" id="theme-toggle" class="theme-toggle menu-item" title="Toggle theme" aria-label="Toggle theme"></button>
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
           </div>
         </details>
@@ -442,6 +433,8 @@
               <a class="menu-item {% if not filter_is_active %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}">All</a>
               <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}">Unread</a>
               <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}">Starred</a>
+              <hr class="menu-divider" />
+              <a class="menu-item filter-history-item" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
             </div>
           </details>
           <details class="toolbar-dropdown sort-menu">
@@ -476,7 +469,7 @@
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" loading="lazy" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
           <div class="post-item-card">
@@ -757,7 +750,7 @@
       // in headers for the server before performing the fetch. This avoids
       // a race between capture-phase listeners.
       try {
-        if (a.matches && a.matches('.filter-menu .menu-item')) {
+        if (a.matches && a.matches('.filter-menu .menu-item:not(.filter-history-item)')) {
           const u2 = new URL(href, window.location.origin);
           const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
           if (rf) {
@@ -799,7 +792,7 @@
 
     // Persist read_filter when user clicks filter dropdown items (All / Unread / Starred)
     document.addEventListener('click', function(e) {
-      const pill = e.target.closest('.filter-menu .menu-item');
+      const pill = e.target.closest('.filter-menu .menu-item:not(.filter-history-item)');
       if (!pill) return;
       try {
         const u = new URL(pill.href, window.location.origin);
@@ -1233,27 +1226,6 @@
   </div>
   {% endif %}
 
-  <div id="highlights-modal" class="action-modal" hidden>
-    <div class="action-modal-panel highlights-modal-panel" role="dialog" aria-modal="true" aria-labelledby="highlights-modal-title">
-      <div class="modal-header-row">
-        <h3 id="highlights-modal-title" class="action-modal-title">Automation</h3>
-        <button type="button" class="modal-close" data-close-modal="highlights-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      <div class="hl-tab-bar" role="tablist">
-        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-hl-tab="rules" role="tab" aria-selected="true">Rules</button>
-        <button type="button" class="hl-tab-btn" data-hl-tab="history" role="tab" aria-selected="false">History</button>
-      </div>
-      <div id="hl-tab-rules" class="hl-tab-panel">
-        <p class="highlights-hint">Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Enable <strong>.*</strong> for regex.</p>
-        <div id="hl-rules-list" class="hl-rules-list"></div>
-        <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
-      </div>
-      <div id="hl-tab-history" class="hl-tab-panel" hidden>
-        <div id="hl-history-list" class="hl-history-list"><p class="hl-empty">Loading…</p></div>
-      </div>
-    </div>
-  </div>
-
   <div id="settings-modal" class="action-modal" hidden>
     <div class="action-modal-panel settings-modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
       <div class="settings-modal-header">
@@ -1268,6 +1240,9 @@
         <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="feeds" role="tab" aria-selected="false">Feeds</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="automation" role="tab" aria-selected="false">Automation</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="stats" role="tab" aria-selected="false">Stats</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="appearance" role="tab" aria-selected="false">Appearance</button>
       </div>
 
       <!-- Profile tab -->
@@ -1504,6 +1479,50 @@
         </div>
       </div>
 
+      <!-- Automation tab -->
+      <div id="settings-tab-automation" class="settings-tab-panel" hidden>
+        <div class="hl-tab-bar" role="tablist">
+          <button type="button" class="hl-tab-btn hl-tab-btn--active" data-hl-tab="rules" role="tab" aria-selected="true">Rules</button>
+          <button type="button" class="hl-tab-btn" data-hl-tab="history" role="tab" aria-selected="false">History</button>
+        </div>
+        <div id="hl-tab-rules" class="hl-tab-panel">
+          <p class="highlights-hint">Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Enable <strong>.*</strong> for regex.</p>
+          <div id="hl-rules-list" class="hl-rules-list"></div>
+          <button type="button" id="hl-add-rule-btn" class="hl-add-rule-btn">+ Add Rule</button>
+        </div>
+        <div id="hl-tab-history" class="hl-tab-panel" hidden>
+          <div id="hl-history-list" class="hl-history-list"><p class="hl-empty">Loading…</p></div>
+        </div>
+      </div>
+
+      <!-- Stats tab -->
+      <div id="settings-tab-stats" class="settings-tab-panel" hidden>
+        <dl class="feed-properties-grid">
+          <dt>Feeds</dt><dd id="stat-feed-count">—</dd>
+          <dt>Folders</dt><dd id="stat-folder-count">—</dd>
+          <dt>Total articles</dt><dd id="stat-entry-total">—</dd>
+          <dt>Unread</dt><dd id="stat-entry-unread">—</dd>
+          <dt>Read</dt><dd id="stat-entry-read">—</dd>
+          <dt>Saved</dt><dd id="stat-archive-summary">—</dd>
+          <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
+          <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
+          <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
+          {% if youtube_sync_last_at %}
+          <dt>YT sync</dt><dd>{{ youtube_sync_last_at }}<br><small>{{ youtube_sync_last_result }}</small></dd>
+          {% endif %}
+        </dl>
+      </div>
+
+      <!-- Appearance tab -->
+      <div id="settings-tab-appearance" class="settings-tab-panel" hidden>
+        <div class="settings-section">
+          <label class="settings-label">Theme</label>
+          <div><button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button></div>
+          <label class="settings-label">Folders</label>
+          <label class="settings-checkbox-label"><input type="checkbox" id="sett-unread-folders-chk"> Show only folders with unread posts</label>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -1692,32 +1711,6 @@
           <thead><tr><th>Feed</th><th>Avg/week</th><th>Total</th></tr></thead>
           <tbody id="folder-prop-top-feeds-body"></tbody>
         </table>
-      </div>
-    </div>
-  </div>
-
-  <div id="stats-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="stats-modal-title">
-      <div class="modal-header-row">
-        <h3 id="stats-modal-title" class="action-modal-title">Library Stats</h3>
-        <button type="button" class="modal-close" data-close-modal="stats-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      <dl class="feed-properties-grid">
-        <dt>Feeds</dt><dd id="stat-feed-count">—</dd>
-        <dt>Folders</dt><dd id="stat-folder-count">—</dd>
-        <dt>Total articles</dt><dd id="stat-entry-total">—</dd>
-        <dt>Unread</dt><dd id="stat-entry-unread">—</dd>
-        <dt>Read</dt><dd id="stat-entry-read">—</dd>
-        <dt>Saved</dt><dd id="stat-archive-summary">—</dd>
-        <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
-        <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
-        <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
-        {% if youtube_sync_last_at %}
-        <dt>YT sync</dt><dd>{{ youtube_sync_last_at }}<br><small>{{ youtube_sync_last_result }}</small></dd>
-        {% endif %}
-      </dl>
-      <div class="action-modal-actions">
-        <button type="button" class="action-modal-cancel" data-close-modal="stats-modal">Close</button>
       </div>
     </div>
   </div>
@@ -2188,7 +2181,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-feed-modal, #global-note-modal, #email-article-modal, #stats-modal, #highlights-modal, #settings-modal')) {
+    for (const modal of document.querySelectorAll('#add-feed-modal, #global-note-modal, #email-article-modal, #settings-modal')) {
       // Use mousedown/mouseup pairing so that CSS-resize drag releases (where
       // mousedown was on the panel and mouseup lands on the backdrop) don't
       // accidentally dismiss the modal.  Only closes when BOTH events hit the
@@ -2211,44 +2204,40 @@
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    const statsModalTrigger = document.querySelector('[data-toggle-panel="stats-modal"]');
-    if (statsModalTrigger) {
-      statsModalTrigger.addEventListener('click', async () => {
-        const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
+    async function loadStatsData() {
+      const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
+      for (const id of statIds) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '…';
+      }
+      try {
+        const resp = await fetch('/stats');
+        if (!resp.ok) throw new Error('stats request failed');
+        const data = await resp.json();
+        document.getElementById('stat-feed-count').textContent = data.feed_count.toLocaleString();
+        document.getElementById('stat-folder-count').textContent = data.folder_count.toLocaleString();
+        document.getElementById('stat-entry-total').textContent = data.entry_total.toLocaleString();
+        document.getElementById('stat-entry-unread').textContent = data.entry_unread.toLocaleString();
+        document.getElementById('stat-entry-read').textContent = data.entry_read.toLocaleString();
+        const archivedComplete = data.starred_archive_complete || 0;
+        let archiveSummary = `${archivedComplete.toLocaleString()} (${formatBytes(data.starred_archive_db_bytes || 0)})`;
+        const archiveExtras = [];
+        if (data.starred_archive_pending) archiveExtras.push(`${data.starred_archive_pending.toLocaleString()} pending`);
+        if (data.starred_archive_in_progress) archiveExtras.push(`${data.starred_archive_in_progress.toLocaleString()} in progress`);
+        if (data.starred_archive_failed) archiveExtras.push(`${data.starred_archive_failed.toLocaleString()} failed`);
+        if (data.starred_archive_pending_removal) archiveExtras.push(`${data.starred_archive_pending_removal.toLocaleString()} pending removal`);
+        if (archiveExtras.length) archiveSummary += ` · ${archiveExtras.join(', ')}`;
+        document.getElementById('stat-archive-summary').textContent = archiveSummary;
+        const thumbCount = (data.thumb_count || 0).toLocaleString();
+        document.getElementById('stat-thumb-summary').textContent = `${thumbCount} (${formatBytes(data.thumb_db_bytes || 0)})`;
+        document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
+        document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
+      } catch (_e) {
         for (const id of statIds) {
           const el = document.getElementById(id);
-          if (el) el.textContent = '…';
+          if (el) el.textContent = 'Error';
         }
-        try {
-          const resp = await fetch('/stats');
-          if (!resp.ok) throw new Error('stats request failed');
-          const data = await resp.json();
-          document.getElementById('stat-feed-count').textContent = data.feed_count.toLocaleString();
-          document.getElementById('stat-folder-count').textContent = data.folder_count.toLocaleString();
-          document.getElementById('stat-entry-total').textContent = data.entry_total.toLocaleString();
-          document.getElementById('stat-entry-unread').textContent = data.entry_unread.toLocaleString();
-          document.getElementById('stat-entry-read').textContent = data.entry_read.toLocaleString();
-          // "N (size)", with any non-complete states appended.
-          const archivedComplete = data.starred_archive_complete || 0;
-          let archiveSummary = `${archivedComplete.toLocaleString()} (${formatBytes(data.starred_archive_db_bytes || 0)})`;
-          const archiveExtras = [];
-          if (data.starred_archive_pending) archiveExtras.push(`${data.starred_archive_pending.toLocaleString()} pending`);
-          if (data.starred_archive_in_progress) archiveExtras.push(`${data.starred_archive_in_progress.toLocaleString()} in progress`);
-          if (data.starred_archive_failed) archiveExtras.push(`${data.starred_archive_failed.toLocaleString()} failed`);
-          if (data.starred_archive_pending_removal) archiveExtras.push(`${data.starred_archive_pending_removal.toLocaleString()} pending removal`);
-          if (archiveExtras.length) archiveSummary += ` · ${archiveExtras.join(', ')}`;
-          document.getElementById('stat-archive-summary').textContent = archiveSummary;
-          const thumbCount = (data.thumb_count || 0).toLocaleString();
-          document.getElementById('stat-thumb-summary').textContent = `${thumbCount} (${formatBytes(data.thumb_db_bytes || 0)})`;
-          document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
-          document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
-        } catch (_e) {
-          for (const id of statIds) {
-            const el = document.getElementById(id);
-            if (el) el.textContent = 'Error';
-          }
-        }
-      });
+      }
     }
 
     for (const toggle of document.querySelectorAll('.tree-toggle')) {
@@ -2632,13 +2621,22 @@
         unreadFoldersOnlyToggle.classList.toggle('active', onlyUnread);
         unreadFoldersOnlyToggle.setAttribute('aria-pressed', onlyUnread ? 'true' : 'false');
       }
+      const settChk = document.getElementById('sett-unread-folders-chk');
+      if (settChk) settChk.checked = onlyUnread;
     }
 
-    if (unreadFoldersOnlyToggle) {
+    {
       const savedUnreadOnly = window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1';
       applyUnreadFoldersOnly(savedUnreadOnly);
-      unreadFoldersOnlyToggle.addEventListener('click', () => {
-        const enabled = unreadFoldersOnlyToggle.getAttribute('aria-pressed') !== 'true';
+      if (unreadFoldersOnlyToggle) {
+        unreadFoldersOnlyToggle.addEventListener('click', () => {
+          const enabled = unreadFoldersOnlyToggle.getAttribute('aria-pressed') !== 'true';
+          window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
+          applyUnreadFoldersOnly(enabled);
+        });
+      }
+      document.getElementById('sett-unread-folders-chk')?.addEventListener('change', (e) => {
+        const enabled = e.target.checked;
         window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
         applyUnreadFoldersOnly(enabled);
       });
@@ -3589,7 +3587,6 @@
         const image = document.createElement('img');
         image.className = 'post-thumbnail-image';
         image.alt = '';
-        image.loading = 'lazy';
         image.src = thumbedLeadUrl;
         image.onerror = () => {
           thumbnail.classList.add('is-empty');
@@ -6159,7 +6156,6 @@
 
     // ── Highlights modal ────────────────────────────────────────────────────
     {
-      const hlModal = document.getElementById('highlights-modal');
       if (!Array.isArray(window.HIGHLIGHT_RULES)) window.HIGHLIGHT_RULES = [];
       const hlRules = window.HIGHLIGHT_RULES;
 
@@ -7671,12 +7667,15 @@
 
       addRuleBtn?.addEventListener('click', () => hlMakeAddDraft({}));
 
+      window._hlLoadFalseMatches = hlLoadFalseMatches;
+      window._hlRenderRules = hlRenderRules;
+      window._hlHideDraft = hlHideDraft;
+      window._hlMakeAddDraft = hlMakeAddDraft;
+
       function openHighlightsModal(prefill) {
-        hlHideDraft();
-        hlLoadFalseMatches();
-        hlRenderRules();
-        hlModal?.removeAttribute('hidden');
-        if (prefill) hlMakeAddDraft(prefill);
+        window._hlHideDraft?.();
+        window.openSettingsModal?.('automation');
+        if (prefill) window._hlMakeAddDraft?.(prefill);
       }
 
       highlightsButton?.addEventListener('click', (event) => {
@@ -7688,8 +7687,6 @@
         else if (contextFolderId) prefill = { scope: 'folder', scope_id: contextFolderId };
         openHighlightsModal(prefill);
       });
-
-      document.getElementById('menu-highlights-btn')?.addEventListener('click', () => openHighlightsModal());
     }
 
     // ── Profile modal ────────────────────────────────────────────────────────
@@ -7703,8 +7700,9 @@
         if (!settingsModal) return;
         settingsModal.removeAttribute('hidden');
         settSwitchTab(tab || 'profile');
-        loadSettingsData();
+        if (tab !== 'automation' && tab !== 'stats' && tab !== 'appearance') loadSettingsData();
       }
+      window.openSettingsModal = openSettingsModal;
 
       function settSwitchTab(tabName) {
         document.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -7717,6 +7715,15 @@
           panel.hidden = !isActive;
           panel.style.display = isActive ? 'flex' : 'none';
         });
+        if (tabName === 'stats') void loadStatsData();
+        if (tabName === 'automation') {
+          window._hlLoadFalseMatches?.();
+          window._hlRenderRules?.();
+        }
+        if (tabName === 'appearance') {
+          const chk = document.getElementById('sett-unread-folders-chk');
+          if (chk) chk.checked = window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1';
+        }
       }
 
       document.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -9597,7 +9604,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #add-feed-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #settings-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

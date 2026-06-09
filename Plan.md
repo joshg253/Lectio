@@ -4,8 +4,6 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-- **Posts toolbar + folders pane header polish** — filter/sort dropdowns use `position:fixed`+JS to escape `overflow:hidden` clip; toolbar restructured to two rows (search+mark-read on top, filter+sort on bottom); logo centered in folders pane header; pin/collapse button moved to header right; footer removed; single-mode CSS dead code removed.
-
 ## Up next
 
 ## Later
