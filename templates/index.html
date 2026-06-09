@@ -122,6 +122,7 @@
             </div>
             <hr class="menu-divider" />
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
+            <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
           </div>
         </details>
         <a class="menu-brand topbar-brand" href="/">Lectio</a>
@@ -154,16 +155,6 @@
               data-folder-depth="{{ root_folder_row.depth }}"
             >
               <span class="name">{{ root_folder_row.name }}</span>
-              <button
-                type="button"
-                id="folders-unread-toggle"
-                class="folders-unread-toggle"
-                title="Toggle filter: show only folders with unread posts"
-                aria-label="Toggle filter: show only folders with unread posts"
-                aria-pressed="false"
-              >
-                <span class="material-symbols-rounded" aria-hidden="true">filter_alt</span>
-              </button>
               {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
             </a>
           </div>
@@ -1233,20 +1224,20 @@
         <button type="button" class="modal-close" data-close-modal="settings-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <div class="hl-tab-bar settings-tab-bar" role="tablist">
-        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-settings-tab="profile" role="tab" aria-selected="true">Profile</button>
-        <button type="button" class="hl-tab-btn" data-settings-tab="app" role="tab" aria-selected="false">Settings</button>
+        <button type="button" class="hl-tab-btn hl-tab-btn--active" data-settings-tab="account" role="tab" aria-selected="true">Account</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="contacts" role="tab" aria-selected="false">Contacts</button>
-        <button type="button" class="hl-tab-btn" data-settings-tab="email" role="tab" aria-selected="false">Email</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="integrations" role="tab" aria-selected="false">Integrations</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="feeds" role="tab" aria-selected="false">Feeds</button>
-        <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="automation" role="tab" aria-selected="false">Automation</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="stats" role="tab" aria-selected="false">Stats</button>
-        <button type="button" class="hl-tab-btn" data-settings-tab="appearance" role="tab" aria-selected="false">Appearance</button>
       </div>
 
-      <!-- Profile tab -->
-      <div id="settings-tab-profile" class="settings-tab-panel">
+      <!-- Account tab (profile + appearance + app settings) -->
+      <div id="settings-tab-account" class="settings-tab-panel">
+        <div class="sett-avatar-row">
+          <img id="sett-avatar-img" class="sett-avatar-img" src="https://www.gravatar.com/avatar/?d=mp&s=80" alt="Avatar" />
+        </div>
         <div class="settings-section">
           <label class="settings-label" for="sett-profile-name">Name</label>
           <input type="text" id="sett-profile-name" class="settings-input" placeholder="Your name" maxlength="200" />
@@ -1256,17 +1247,19 @@
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="profile">Save</button>
         </div>
-      </div>
-
-      <!-- App Settings tab -->
-      <div id="settings-tab-app" class="settings-tab-panel" hidden>
+        <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
+        <div class="settings-section">
+          <label class="settings-label">Theme</label>
+          <div><button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button></div>
+        </div>
+        <h4 class="settings-section-title" style="margin-top:1rem">Application</h4>
         <div class="settings-section">
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
           <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
-          <label class="settings-label" for="sett-maint-hour">Daily maintenance hour (0–23)</label>
+          <label class="settings-label" for="sett-maint-hour">Maintenance hour (0–23)</label>
           <input type="number" id="sett-maint-hour" class="settings-input settings-input--short" min="0" max="23" placeholder="3" />
-          <p class="settings-hint">Maintenance runs once per day at this hour (server local time). It vacuums databases, prunes old logs, and syncs YouTube subscriptions.</p>
+          <p class="settings-hint">Runs once per day at this hour (server local time). Vacuums databases, prunes logs, and syncs YouTube subscriptions.</p>
           <div id="sett-maint-last" class="settings-hint settings-maint-last" hidden></div>
         </div>
         <div class="settings-actions">
@@ -1288,21 +1281,15 @@
         </div>
       </div>
 
-      <!-- Email tab -->
-      <div id="settings-tab-email" class="settings-tab-panel" hidden>
+      <!-- Integrations tab -->
+      <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
+        <h4 class="settings-section-title">Resend</h4>
         <div class="settings-section">
-          <label class="settings-label" for="sett-resend-key">Resend API key</label>
+          <label class="settings-label" for="sett-resend-key">API key</label>
           <input type="password" id="sett-resend-key" class="settings-input settings-input--secret" placeholder="re_…" autocomplete="new-password" />
           <label class="settings-label" for="sett-email-from">From address</label>
           <input type="email" id="sett-email-from" class="settings-input" placeholder="lectio@yourdomain.com" maxlength="200" />
         </div>
-        <div class="settings-actions">
-          <button type="button" class="settings-save-btn" data-settings-save="email">Save</button>
-        </div>
-      </div>
-
-      <!-- Integrations tab -->
-      <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
         <h4 class="settings-section-title">YouTube</h4>
         <div class="settings-section">
           <label class="settings-label" for="sett-yt-key">API key</label>
@@ -1513,15 +1500,6 @@
         </dl>
       </div>
 
-      <!-- Appearance tab -->
-      <div id="settings-tab-appearance" class="settings-tab-panel" hidden>
-        <div class="settings-section">
-          <label class="settings-label">Theme</label>
-          <div><button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button></div>
-          <label class="settings-label">Folders</label>
-          <label class="settings-checkbox-label"><input type="checkbox" id="sett-unread-folders-chk"> Show only folders with unread posts</label>
-        </div>
-      </div>
 
     </div>
   </div>
@@ -2621,8 +2599,6 @@
         unreadFoldersOnlyToggle.classList.toggle('active', onlyUnread);
         unreadFoldersOnlyToggle.setAttribute('aria-pressed', onlyUnread ? 'true' : 'false');
       }
-      const settChk = document.getElementById('sett-unread-folders-chk');
-      if (settChk) settChk.checked = onlyUnread;
     }
 
     {
@@ -2635,11 +2611,6 @@
           applyUnreadFoldersOnly(enabled);
         });
       }
-      document.getElementById('sett-unread-folders-chk')?.addEventListener('change', (e) => {
-        const enabled = e.target.checked;
-        window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
-        applyUnreadFoldersOnly(enabled);
-      });
     }
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');
@@ -7699,8 +7670,8 @@
       function openSettingsModal(tab) {
         if (!settingsModal) return;
         settingsModal.removeAttribute('hidden');
-        settSwitchTab(tab || 'profile');
-        if (tab !== 'automation' && tab !== 'stats' && tab !== 'appearance') loadSettingsData();
+        settSwitchTab(tab || 'account');
+        if (tab !== 'automation' && tab !== 'stats') loadSettingsData();
       }
       window.openSettingsModal = openSettingsModal;
 
@@ -7719,10 +7690,6 @@
         if (tabName === 'automation') {
           window._hlLoadFalseMatches?.();
           window._hlRenderRules?.();
-        }
-        if (tabName === 'appearance') {
-          const chk = document.getElementById('sett-unread-folders-chk');
-          if (chk) chk.checked = window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1';
         }
       }
 
@@ -7756,6 +7723,56 @@
         } catch { /* silently fail on load */ }
       }
 
+      // Minimal MD5 for Gravatar hashing
+      function _md5(str) {
+        function safeAdd(x, y) { const lsw = (x & 0xffff) + (y & 0xffff); return (((x >> 16) + (y >> 16) + (lsw >> 16)) << 16) | (lsw & 0xffff); }
+        function bitRotateLeft(num, cnt) { return (num << cnt) | (num >>> (32 - cnt)); }
+        function md5cmn(q, a, b, x, s, t) { return safeAdd(bitRotateLeft(safeAdd(safeAdd(a, q), safeAdd(x, t)), s), b); }
+        function md5ff(a, b, c, d, x, s, t) { return md5cmn((b & c) | (~b & d), a, b, x, s, t); }
+        function md5gg(a, b, c, d, x, s, t) { return md5cmn((b & d) | (c & ~d), a, b, x, s, t); }
+        function md5hh(a, b, c, d, x, s, t) { return md5cmn(b ^ c ^ d, a, b, x, s, t); }
+        function md5ii(a, b, c, d, x, s, t) { return md5cmn(c ^ (b | ~d), a, b, x, s, t); }
+        function utf8Encode(s) { return unescape(encodeURIComponent(s)); }
+        const utf = utf8Encode(str);
+        const n = utf.length;
+        const ws = [];
+        for (let i = 0; i < n; i++) ws[i >> 2] |= utf.charCodeAt(i) << ((i % 4) * 8);
+        ws[n >> 2] |= 0x80 << ((n % 4) * 8);
+        ws[(((n + 8) >> 6) << 4) + 14] = n * 8;
+        let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+        for (let i = 0; i < ws.length; i += 16) {
+          const [oa, ob, oc, od] = [a, b, c, d];
+          a = md5ff(a,b,c,d,ws[i+0],7,-680876936); d = md5ff(d,a,b,c,ws[i+1],12,-389564586); c = md5ff(c,d,a,b,ws[i+2],17,606105819); b = md5ff(b,c,d,a,ws[i+3],22,-1044525330);
+          a = md5ff(a,b,c,d,ws[i+4],7,-176418897); d = md5ff(d,a,b,c,ws[i+5],12,1200080426); c = md5ff(c,d,a,b,ws[i+6],17,-1473231341); b = md5ff(b,c,d,a,ws[i+7],22,-45705983);
+          a = md5ff(a,b,c,d,ws[i+8],7,1770035416); d = md5ff(d,a,b,c,ws[i+9],12,-1958414417); c = md5ff(c,d,a,b,ws[i+10],17,-42063); b = md5ff(b,c,d,a,ws[i+11],22,-1990404162);
+          a = md5ff(a,b,c,d,ws[i+12],7,1804603682); d = md5ff(d,a,b,c,ws[i+13],12,-40341101); c = md5ff(c,d,a,b,ws[i+14],17,-1502002290); b = md5ff(b,c,d,a,ws[i+15],22,1236535329);
+          a = md5gg(a,b,c,d,ws[i+1],5,-165796510); d = md5gg(d,a,b,c,ws[i+6],9,-1069501632); c = md5gg(c,d,a,b,ws[i+11],14,643717713); b = md5gg(b,c,d,a,ws[i+0],20,-373897302);
+          a = md5gg(a,b,c,d,ws[i+5],5,-701558691); d = md5gg(d,a,b,c,ws[i+10],9,38016083); c = md5gg(c,d,a,b,ws[i+15],14,-660478335); b = md5gg(b,c,d,a,ws[i+4],20,-405537848);
+          a = md5gg(a,b,c,d,ws[i+9],5,568446438); d = md5gg(d,a,b,c,ws[i+14],9,-1019803690); c = md5gg(c,d,a,b,ws[i+3],14,-187363961); b = md5gg(b,c,d,a,ws[i+8],20,1163531501);
+          a = md5gg(a,b,c,d,ws[i+13],5,-1444681467); d = md5gg(d,a,b,c,ws[i+2],9,-51403784); c = md5gg(c,d,a,b,ws[i+7],14,1735328473); b = md5gg(b,c,d,a,ws[i+12],20,-1926607734);
+          a = md5hh(a,b,c,d,ws[i+5],4,-378558); d = md5hh(d,a,b,c,ws[i+8],11,-2022574463); c = md5hh(c,d,a,b,ws[i+11],16,1839030562); b = md5hh(b,c,d,a,ws[i+14],23,-35309556);
+          a = md5hh(a,b,c,d,ws[i+1],4,-1530992060); d = md5hh(d,a,b,c,ws[i+4],11,1272893353); c = md5hh(c,d,a,b,ws[i+7],16,-155497632); b = md5hh(b,c,d,a,ws[i+10],23,-1094730640);
+          a = md5hh(a,b,c,d,ws[i+13],4,681279174); d = md5hh(d,a,b,c,ws[i+0],11,-358537222); c = md5hh(c,d,a,b,ws[i+3],16,-722521979); b = md5hh(b,c,d,a,ws[i+6],23,76029189);
+          a = md5hh(a,b,c,d,ws[i+9],4,-640364487); d = md5hh(d,a,b,c,ws[i+12],11,-421815835); c = md5hh(c,d,a,b,ws[i+15],16,530742520); b = md5hh(b,c,d,a,ws[i+2],23,-995338651);
+          a = md5ii(a,b,c,d,ws[i+0],6,-198630844); d = md5ii(d,a,b,c,ws[i+7],10,1126891415); c = md5ii(c,d,a,b,ws[i+14],15,-1416354905); b = md5ii(b,c,d,a,ws[i+5],21,-57434055);
+          a = md5ii(a,b,c,d,ws[i+12],6,1700485571); d = md5ii(d,a,b,c,ws[i+3],10,-1894986606); c = md5ii(c,d,a,b,ws[i+10],15,-1051523); b = md5ii(b,c,d,a,ws[i+1],21,-2054922799);
+          a = md5ii(a,b,c,d,ws[i+8],6,1873313359); d = md5ii(d,a,b,c,ws[i+15],10,-30611744); c = md5ii(c,d,a,b,ws[i+6],15,-1560198380); b = md5ii(b,c,d,a,ws[i+13],21,1309151649);
+          a = md5ii(a,b,c,d,ws[i+4],6,-145523070); d = md5ii(d,a,b,c,ws[i+11],10,-1120210379); c = md5ii(c,d,a,b,ws[i+2],15,718787259); b = md5ii(b,c,d,a,ws[i+9],21,-343485551);
+          a = safeAdd(a, oa); b = safeAdd(b, ob); c = safeAdd(c, oc); d = safeAdd(d, od);
+        }
+        return [a, b, c, d].map(n => (n < 0 ? n + 0x100000000 : n).toString(16).padStart(8, '0').match(/../g).map(h => h.split('').reverse().join('')).join('')).join('');
+      }
+
+      function updateSettAvatar() {
+        const email = (document.getElementById('sett-profile-email')?.value || '').trim().toLowerCase();
+        const img = document.getElementById('sett-avatar-img');
+        if (!img) return;
+        const hash = email ? _md5(email) : '';
+        img.src = `https://www.gravatar.com/avatar/${hash}?d=mp&s=80`;
+      }
+
+      document.getElementById('sett-profile-email')?.addEventListener('input', updateSettAvatar);
+
       function settPopulate(d) {
         const v = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
         v('sett-profile-name', d.profile_name);
@@ -7788,6 +7805,7 @@
         settContacts = d.contacts || [];
         settDefaultAddress = d.email_to_default || '';
         settRenderContacts();
+        updateSettAvatar();
       }
 
       let settDefaultAddress = '';
@@ -7879,10 +7897,10 @@
           payload = { email_contacts: JSON.stringify(settContacts) };
         } else if (scope === 'default') {
           payload = { email_to: settDefaultAddress };
-        } else if (scope === 'email') {
-          payload = { resend_api_key: g('sett-resend-key'), email_from: g('sett-email-from') };
         } else if (scope === 'integrations') {
           payload = {
+            resend_api_key: g('sett-resend-key'),
+            email_from: g('sett-email-from'),
             yt_api_key: g('sett-yt-key'),
             yt_channel_id: g('sett-yt-channel'),
             yt_folder_name: g('sett-yt-folder'),
@@ -7927,8 +7945,8 @@
         } catch { showToastMessage('Failed to start maintenance.'); }
       });
 
-      document.getElementById('menu-settings-btn')?.addEventListener('click', () => openSettingsModal('profile'));
-      document.getElementById('menu-profile-btn')?.addEventListener('click', () => openSettingsModal('profile'));
+      document.getElementById('menu-settings-btn')?.addEventListener('click', () => openSettingsModal('account'));
+      document.getElementById('menu-profile-btn')?.addEventListener('click', () => openSettingsModal('account'));
     }
 
     // ── Highlight engine (applies <mark> to post titles) ────────────────────
