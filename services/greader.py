@@ -41,15 +41,42 @@ class GReaderService:
             return None
         token = secrets.token_hex(24)
         now = time.time()
+        expires_at = now + self._TOKEN_LIFETIME
         with self._tokens_lock:
             self._tokens = {t: exp for t, exp in self._tokens.items() if exp > now}
-            self._tokens[token] = now + self._TOKEN_LIFETIME
+            self._tokens[token] = expires_at
+        try:
+            with self._get_meta() as conn:
+                conn.execute(
+                    "DELETE FROM greader_tokens WHERE expires_at <= ?", (now,)
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO greader_tokens (token, expires_at) VALUES (?, ?)",
+                    (token, expires_at),
+                )
+        except Exception:
+            pass
         return token
 
     def check_token(self, token: str) -> bool:
+        now = time.time()
         with self._tokens_lock:
             exp = self._tokens.get(token)
-        return exp is not None and exp > time.time()
+        if exp is not None:
+            return exp > now
+        # Not in memory — check DB (survives restarts).
+        try:
+            with self._get_meta() as conn:
+                row = conn.execute(
+                    "SELECT expires_at FROM greader_tokens WHERE token = ?", (token,)
+                ).fetchone()
+            if row and float(row["expires_at"]) > now:
+                with self._tokens_lock:
+                    self._tokens[token] = float(row["expires_at"])
+                return True
+        except Exception:
+            pass
+        return False
 
     # ------------------------------------------------------------------ ID helpers
 

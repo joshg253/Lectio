@@ -1587,6 +1587,14 @@ def ensure_meta_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_fever_entry_map_feed"
             " ON fever_entry_map(feed_url)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS greader_tokens (
+                token      TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            )
+            """
+        )
         root = conn.execute(
             "SELECT id FROM folders WHERE name = ? AND parent_id IS NULL",
             (ROOT_FOLDER_NAME,),
