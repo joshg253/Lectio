@@ -3160,17 +3160,28 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
 
 
 def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
-    """One-time retroactive scan: for every feed, find unread entries that share
-    a URL slug or a title+date with another unread entry in the same feed.
-    Keeps the oldest copy, marks the rest read.  Handles accumulated duplicates
-    that arrived before _suppress_guid_churn could catch them.
+    """Retroactive scan: suppress duplicate unread entries that the web UI already
+    hides at render time but that mobile GReader clients still see as separate items.
 
-    Returns total entries suppressed across all feeds.
+    Two passes:
+
+    Pass 1 — per-feed: slug or title+date duplicates within the same feed.
+      Keeps the oldest copy, marks the rest read.
+
+    Pass 2 — cross-feed: entries in different feeds with the same canonical link URL.
+      Same article syndicated to two feeds (e.g. blog + planet aggregator).
+      Keeps the oldest copy across feeds, marks the rest read.
+
+    Returns total entries suppressed.
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
-    total = 0
     when = datetime.now().isoformat()
+    suppressed_ids: set[tuple[str, str]] = set()
+    all_to_suppress: list = []
+    threshold = _CHURN_TITLE_DATE_DAYS * 86400
+
+    # ── Pass 1: per-feed slug + title+date dedup ──────────────────────────────
     for feed in reader.get_feeds():
         feed_url = str(feed.url)
         try:
@@ -3190,10 +3201,6 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                     if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
                         title_entries.setdefault(norm, []).append((pub_ts, entry))
 
-            to_suppress: list = []
-            suppressed_ids: set = set()
-
-            # Slug duplicates: keep oldest.
             for slug, items in slug_entries.items():
                 if len(items) < 2:
                     continue
@@ -3202,10 +3209,8 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                     eid = (str(entry.feed_url), str(entry.id))
                     if eid not in suppressed_ids:
                         suppressed_ids.add(eid)
-                        to_suppress.append(entry)
+                        all_to_suppress.append(entry)
 
-            # Title+date duplicates: keep oldest among entries with pub dates within window.
-            threshold = _CHURN_TITLE_DATE_DAYS * 86400
             for norm, items in title_entries.items():
                 if len(items) < 2:
                     continue
@@ -3216,22 +3221,52 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
                         eid = (str(entry.feed_url), str(entry.id))
                         if eid not in suppressed_ids:
                             suppressed_ids.add(eid)
-                            to_suppress.append(entry)
-
-            if not to_suppress:
-                continue
-
-            for entry in to_suppress:
-                reader.mark_entry_as_read((str(entry.feed_url), str(entry.id)))
-            conn.executemany(
-                "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
-                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
-                [(str(e.feed_url), str(e.id), when) for e in to_suppress],
-            )
-            total += len(to_suppress)
+                            all_to_suppress.append(entry)
         except Exception:
             LOGGER.exception("[guid-churn-cleanup] error on feed %s", feed_url)
-    return total
+
+    # ── Pass 2: cross-feed identical-link dedup ───────────────────────────────
+    # Mirrors the build_entry_dedupe_key logic the web UI uses at render time.
+    # An identical canonical link in two different feeds is a near-certain
+    # syndication duplicate (blog + planet, RSS + Atom of same feed, etc.).
+    try:
+        link_entries: dict[str, list] = {}
+        for entry in reader.get_entries(read=False):
+            if not entry.link:
+                continue
+            canon = normalize_entry_link_for_dedupe(entry.link)
+            if not canon:
+                continue
+            pub = (getattr(entry, "published", None)
+                   or getattr(entry, "updated", None)
+                   or getattr(entry, "added", None))
+            pub_ts = pub.timestamp() if pub else 0.0
+            link_entries.setdefault(canon, []).append((pub_ts, entry))
+
+        for canon, items in link_entries.items():
+            # Only act when entries come from at least two different feeds.
+            if len({str(e.feed_url) for _, e in items}) < 2:
+                continue
+            items.sort(key=lambda x: x[0])
+            for _, entry in items[1:]:
+                eid = (str(entry.feed_url), str(entry.id))
+                if eid not in suppressed_ids:
+                    suppressed_ids.add(eid)
+                    all_to_suppress.append(entry)
+    except Exception:
+        LOGGER.exception("[guid-churn-cleanup] error during cross-feed link dedup")
+
+    if not all_to_suppress:
+        return 0
+
+    for entry in all_to_suppress:
+        reader.mark_entry_as_read((str(entry.feed_url), str(entry.id)))
+    conn.executemany(
+        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+        [(str(e.feed_url), str(e.id), when) for e in all_to_suppress],
+    )
+    return len(all_to_suppress)
 
 
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
@@ -3253,6 +3288,18 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
             LOGGER.info("[guid-churn] suppressed %d re-issued entries", suppressed_total)
     except Exception:
         LOGGER.exception("[guid-churn] error during suppression")
+
+    # Cross-feed identical-link dedup: catches syndication dupes (blog + planet, etc.)
+    # that the web UI hides at render time but GReader clients see as separate items.
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                cross_suppressed = _cleanup_intra_feed_slug_dupes(reader, conn)
+        if cross_suppressed:
+            _unread_counts_generation += 1
+            LOGGER.info("[guid-churn] suppressed %d cross-feed duplicate entries", cross_suppressed)
+    except Exception:
+        LOGGER.exception("[guid-churn] error during cross-feed dedup")
 
     # Hide Shorts: auto-mark Shorts as read for YouTube feeds that have it enabled.
     try:
