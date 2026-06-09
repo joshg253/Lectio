@@ -4303,6 +4303,21 @@ mark.highlight-mark {
 }
 .dedup-inline-actions {
   padding-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.dedup-rescue-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.dedup-rescue-label input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 0.15em;
 }
 
 /* Highlights modal */

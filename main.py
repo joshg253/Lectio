@@ -9081,6 +9081,42 @@ def get_feed_duplicates():
     return JSONResponse({"same_folder": same_folder, "cross_folder": cross_folder, "upgradable": upgradable})
 
 
+def _rescue_unread_entries(reader, remove_url: str, keep_url: str) -> int:
+    """Mark read entries in keep_url as unread when the removed feed had them unread.
+
+    Collects URL slugs (last path segment) of unread entries in remove_url, then
+    finds read entries in keep_url with matching slugs and marks them unread.
+    Slug matching is domain-agnostic, so old.reddit.com vs www.reddit.com works.
+    Returns the number of entries rescued.
+    """
+    unread_slugs: set[str] = set()
+    try:
+        for entry in reader.get_entries(feed=remove_url, read=False):
+            slug = entry_url_slug(entry.link) if entry.link else None
+            if slug:
+                unread_slugs.add(slug)
+    except Exception:
+        LOGGER.exception("[dedup] error collecting unread slugs from %s", remove_url)
+        return 0
+
+    if not unread_slugs:
+        return 0
+
+    rescued = 0
+    try:
+        for entry in reader.get_entries(feed=keep_url, read=True):
+            slug = entry_url_slug(entry.link) if entry.link else None
+            if slug and slug in unread_slugs:
+                reader.mark_entry_as_unread(entry)
+                rescued += 1
+    except Exception:
+        LOGGER.exception("[dedup] error rescuing unread entries in %s", keep_url)
+
+    if rescued:
+        LOGGER.info("[dedup] rescued %d unread entries in %s (removed %s)", rescued, keep_url, remove_url)
+    return rescued
+
+
 @app.post("/feeds/deduplicate")
 async def deduplicate_feeds(request: Request):
     """Remove slash-duplicate feeds and optionally upgrade format-selector URLs.
@@ -9088,10 +9124,13 @@ async def deduplicate_feeds(request: Request):
     Body (JSON):
       cross_folder_choices: list of {keep, remove, folder_ids} — user-selected folder assignments.
       upgrade_choices: list of {current, upgrade_to} — feeds to switch from RSS to Atom URL.
+      rescue_unread: bool — if true, mark read entries in surviving feed as unread
+                     when the removed feed had them unread (default false).
     """
     body = await request.json()
     cross_choices: list[dict] = body.get("cross_folder_choices", [])
     upgrade_choices: list[dict] = body.get("upgrade_choices", [])
+    rescue_unread: bool = bool(body.get("rescue_unread", False))
 
     data = get_feed_duplicates()
     import json as _json
@@ -9099,10 +9138,12 @@ async def deduplicate_feeds(request: Request):
     same = dup_data["same_folder"]
 
     removed: list[dict] = []
+    rescued_count = 0
 
     # Same-folder: auto-remove slash variant from the shared folder.
     for dup in same:
         feed_url = dup["remove"]
+        keep_url = dup["keep"]
         folder_id = dup["folder_id"]
         with get_meta_connection() as conn:
             conn.execute(
@@ -9114,8 +9155,10 @@ async def deduplicate_feeds(request: Request):
             ).fetchone()
         if not still_used:
             with get_reader() as reader:
+                if rescue_unread:
+                    rescued_count += _rescue_unread_entries(reader, feed_url, keep_url)
                 reader.delete_feed(feed_url, missing_ok=True)
-        removed.append({"removed": feed_url, "kept": dup["keep"]})
+        removed.append({"removed": feed_url, "kept": keep_url})
         LOGGER.info("[deduplicate] same-folder: removed %s from folder %d", feed_url, folder_id)
 
     # Cross-folder: apply user's folder choices.
@@ -9131,6 +9174,8 @@ async def deduplicate_feeds(request: Request):
             ).fetchone()
         if not still_used:
             with get_reader() as reader:
+                if rescue_unread:
+                    rescued_count += _rescue_unread_entries(reader, remove, keep)
                 reader.delete_feed(remove, missing_ok=True)
         # Ensure the canonical URL is in each selected folder.
         with get_reader() as reader:
@@ -9175,7 +9220,7 @@ async def deduplicate_feeds(request: Request):
         LOGGER.info("[deduplicate] upgraded %s → %s", current, upgrade_to)
 
     invalidate_meta_structure_cache()
-    return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded)})
+    return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded), "rescued_count": rescued_count})
 
 
 @app.post("/refresh")

@@ -1761,6 +1761,10 @@
               <div class="dedup-upgrade-list"></div>
             </div>
             <div class="dedup-inline-actions">
+              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
+                <input type="checkbox" id="dedup-rescue-unread" checked>
+                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
+              </label>
               <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
             </div>
           </div>
@@ -2649,10 +2653,12 @@
           upgradeSection.hidden = true;
         }
 
-        // Update OK button label
+        // Update OK button label and rescue checkbox visibility
         const hasDedup = sameFolder.length > 0 || crossFolder.length > 0;
         const hasUpgrade = upgradable.length > 0;
         okBtn.textContent = hasDedup && hasUpgrade ? 'Remove duplicates & upgrade' : hasUpgrade ? 'Upgrade feeds' : 'Remove duplicates';
+        const rescueLabel = document.getElementById('dedup-rescue-label');
+        if (rescueLabel) rescueLabel.hidden = !hasDedup;
       }
     });
 
@@ -2671,15 +2677,17 @@
       for (const cb of results.querySelectorAll('.dedup-upgrade-check:checked')) {
         upgradeChoices.push({ current: cb.dataset.current, upgrade_to: cb.dataset.upgradeTo });
       }
+      const rescueUnread = document.getElementById('dedup-rescue-unread')?.checked ?? false;
       results.hidden = true;
       const dedupeResp = await fetch('/feeds/deduplicate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cross_folder_choices: crossChoices, upgrade_choices: upgradeChoices }),
+        body: JSON.stringify({ cross_folder_choices: crossChoices, upgrade_choices: upgradeChoices, rescue_unread: rescueUnread }),
       });
       const dedupeData = await dedupeResp.json();
       const parts = [];
       if (dedupeData.count > 0) parts.push(`Removed ${dedupeData.count} duplicate feed(s)`);
+      if (dedupeData.rescued_count > 0) parts.push(`rescued ${dedupeData.rescued_count} unread post(s)`);
       if (dedupeData.upgraded_count > 0) parts.push(`upgraded ${dedupeData.upgraded_count} feed(s) to Atom`);
       alert(parts.length ? parts.join(', ') + '.' : 'Nothing to do.');
       window.location.reload();
