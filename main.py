@@ -432,6 +432,8 @@ async def lifespan(app: FastAPI):
     _auto_tag_artwork_feeds()
     # Auto-tag feeds in "comic*" folders with strategy='webcomic'.
     _auto_tag_webcomic_feeds()
+    # GitHub release feeds get og_scrape + no list thumbnail.
+    _auto_tag_github_release_feeds()
 
     # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
     # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
@@ -8190,6 +8192,52 @@ def _auto_tag_webcomic_feeds() -> None:
                 lead_image_service.store_feed_strategy(feed_url, "webcomic", manual=False)
     except Exception:
         LOGGER.exception("_auto_tag_webcomic_feeds failed")
+
+
+def _auto_tag_github_release_feeds() -> None:
+    """Set strategy='og_scrape' and suppress list thumbnails for GitHub release feeds.
+
+    GitHub generates a unique social-preview card (og:image) per release, making
+    og_scrape the right strategy.  Thumbnails are suppressed because the card is
+    contextual, not a post image.  Skips feeds where strategy is manually locked.
+    """
+    try:
+        with get_meta_connection() as conn:
+            now = time.time()
+            rows = conn.execute(
+                "SELECT DISTINCT feed_url FROM folder_feeds"
+                " WHERE lower(feed_url) LIKE '%github.com%/releases.atom'"
+            ).fetchall()
+            for row in rows:
+                feed_url = str(row["feed_url"])
+                existing = conn.execute(
+                    "SELECT strategy, manual FROM feed_lead_image_strategy WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchone()
+                if existing and existing["manual"]:
+                    continue
+                if not (existing and existing["strategy"] == "og_scrape"):
+                    conn.execute(
+                        """
+                        INSERT INTO feed_lead_image_strategy (feed_url, strategy, detected_at, manual)
+                        VALUES (?, 'og_scrape', ?, 0)
+                        ON CONFLICT(feed_url) DO UPDATE SET
+                            strategy = 'og_scrape',
+                            detected_at = excluded.detected_at
+                        WHERE manual = 0
+                        """,
+                        (feed_url, now),
+                    )
+                    lead_image_service.store_feed_strategy(feed_url, "og_scrape", manual=False)
+                # Ensure row exists and thumbnail is off.
+                conn.execute(
+                    "INSERT INTO feed_display_prefs (feed_url, show_lead_image_as_thumb)"
+                    " VALUES (?, 0)"
+                    " ON CONFLICT(feed_url) DO UPDATE SET show_lead_image_as_thumb = 0",
+                    (feed_url,),
+                )
+    except Exception:
+        LOGGER.exception("_auto_tag_github_release_feeds failed")
 
 
 # Domains whose feeds use the artwork image layout (image appended after text).

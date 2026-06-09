@@ -62,6 +62,16 @@ Use plugin/adapter style for non-native behavior instead of hardwired branching.
 - ArtStation subdomain rewrites (`username.artstation.com/rss` → `www.artstation.com/username.rss`) to avoid TLS hostname issues with underscore usernames.
 - `_DOMAIN_ALIASES` map — known domain pairs that serve identical content (currently `old.reddit.com` → `www.reddit.com`). Add new pairs there; the normalization and duplicate-scan logic picks them up automatically.
 
+## Feed auto-taggers
+
+Three functions run at startup to apply strategy and display defaults without user action:
+
+- `_auto_tag_artwork_feeds()` — matches `artstation.com` and `deviantart.com` feed URLs → `strategy=artwork`.
+- `_auto_tag_webcomic_feeds()` — matches feeds in folders whose name contains "comic" → `strategy=webcomic`. Artwork wins if both conditions apply.
+- `_auto_tag_github_release_feeds()` — matches `github.com/*/releases.atom` URLs → `strategy=og_scrape` + `show_lead_image_as_thumb=0`. GitHub generates a unique social-preview card per release; thumbnails are suppressed because the card is contextual rather than a post image.
+
+All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
+
 ## Lead image pipeline
 
 `LeadImageService` (services/lead_images.py) resolves a hero image for each entry using a layered strategy:
