@@ -8,7 +8,7 @@ Lectio is a self-hosted, local-first RSS reader with a focus on fast reading tri
 
 ## What it is
 
-A three-pane desktop RSS reader (folder tree → post list → article pane) with a mobile drill-in mode. Built on Python + FastAPI + the [`reader`](https://github.com/lemon24/reader) library, with a plain-HTML/JS frontend — no build step, no bundler, no framework.
+A three-pane desktop RSS reader (folder tree → post list → article pane). Built on Python + FastAPI + the [`reader`](https://github.com/lemon24/reader) library, with a plain-HTML/JS frontend — no build step, no bundler, no framework.
 
 The design priority is **speed of triage**: quickly marking things read, surfacing what matters, and staying out of the way.
 
@@ -37,7 +37,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 ### Reading experience
 - Folder tree with recursive post list; read/unread, saved/starred, tags, sort, and filter
-- Keyboard navigation throughout; mobile swipe gestures
+- Keyboard navigation throughout
 - **Context menus** — right-click (or long-press) a feed, folder, or entry for contextual actions (mark feed/folder as read, etc.) without leaving the current view
 - **Bulk mark-as-read** — toolbar dropdown or context menu; updates the visible list in-place with no page reload
 - **Read History** — reverse-chronological list of individually-opened articles, capped at 2,000 entries (main menu or folder-pane footer)

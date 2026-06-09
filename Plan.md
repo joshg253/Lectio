@@ -4,10 +4,9 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-## Up next
+- **Desktop-first web GUI cleanup** — Removed 1-pane mobile mode entirely. Eliminated top bar: logo + hamburger moved to folders pane header; search moved to posts toolbar; theme toggle, note, and collapse sidebar moved into hamburger menu. Tags list gets a collapsible "Tags" header row (like "All Feeds"). Burger menu uses `position: fixed` to escape `overflow:hidden` clipping.
 
-- **Rachel by the Bay feed health (bug)** — Feed Properties shows fetch errors. Investigate: check actual error message, verify feed URL still live, determine if `_parse_month_first_pubdate` date handler is still needed/matching.
-- **Desktop-first web GUI cleanup** — Remove 1-pane mobile mode entirely (single-pane JS/CSS, swipe gestures, pull-to-refresh, topbar scroll-hide, mobile safe-area padding). Eliminate top bar: logo + hamburger move into folders pane header (logo hides with collapsed pane); search moves into posts pane toolbar; theme toggle + note button move to folders pane footer or hamburger menu. Remove duplicate star from folders pane footer. Verify/add collapsible folder groups and tags section within the folders pane.
+## Up next
 
 ## Later
 

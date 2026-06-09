@@ -81,77 +81,10 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
   <style>
-    body[data-single-mode="1"][data-single-pane-level="0"] .pane-folders { display: flex !important; flex-direction: column !important; }
-    body[data-single-mode="1"] .folders-pane-footer { display: flex !important; }
-    body[data-single-mode="1"] #folders-collapse-btn { display: none !important; }
     .entry-pane-title-link { -webkit-line-clamp: 5 !important; }
   </style>
 </head>
 <body data-tree-filter="{{ 'unread' if selected_read_filter == 'unread' and not selected_star_only else 'all' }}">
-  <header class="topbar" role="banner">
-  <a class="menu-brand topbar-brand" href="/">Lectio</a>
-  {% if debug_mode %}
-  <div class="topbar-debug" id="topbar-debug">
-    <button type="button" class="topbar-debug-btn" id="debug-bypass-cache-btn" title="Toggle cache bypass for current feed">
-      <span class="material-symbols-rounded" aria-hidden="true">no_photography</span>
-      <span class="topbar-debug-btn-label">Bypass Cache</span>
-    </button>
-  </div>
-  {% endif %}
-    <div class="topbar-actions">
-      <form method="get" action="/" class="topbar-search-form" role="search" aria-label="Search posts">
-        <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-        {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-        {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-        <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-        <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-        <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-        <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-        <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-        <input
-          id="topbar-search-input"
-          name="q"
-          class="topbar-search-input"
-          type="search"
-          value="{{ selected_query or '' }}"
-          placeholder="Search posts"
-          aria-label="Search posts"
-          autocomplete="off"
-        />
-      </form>
-      <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
-      <button type="button" class="topbar-icon-btn" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span></button>
-      <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu">
-        <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
-        <div class="menu-popover">
-          <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
-          <button type="button" id="menu-highlights-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
-          <hr class="menu-divider" />
-          <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
-          <a
-            class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
-            href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
-            title="Global history"
-            aria-label="Global history"
-          ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
-          <div class="flyout-item">
-            <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
-            <div class="flyout-panel">
-              <form method="post" action="/settings/auto-refresh">
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                {% for option_minutes in auto_refresh_option_minutes %}
-                <button type="submit" class="menu-item refresh-option {% if option_minutes == auto_refresh_minutes %}active{% endif %}" name="refresh_minutes" value="{{ option_minutes }}">{% if option_minutes == 0 %}Off{% else %}{{ (option_minutes|string) + 'm' if option_minutes < 60 else (option_minutes // 60)|string + 'h' }}{% endif %}</button>
-                {% endfor %}
-              </form>
-            </div>
-          </div>
-          <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
-        </div>
-      </details>
-    </div>
-  </header>
 
   <form id="opml-import-form" method="post" action="/opml/import" enctype="multipart/form-data" hidden>
     {{ csrf_input(request)|safe }}
@@ -167,6 +100,51 @@
   <main class="panes">
 
     <section class="pane pane-folders">
+      <header class="folders-pane-header">
+        <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu folders-pane-menu">
+          <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
+          <div class="menu-popover anchor-left">
+            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
+            <button type="button" id="menu-highlights-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
+            <hr class="menu-divider" />
+            <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
+            <a
+              class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
+              href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+              title="Global history"
+              aria-label="Global history"
+            ><span class="material-symbols-rounded" aria-hidden="true">history</span> History</a>
+            <div class="flyout-item">
+              <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
+              <div class="flyout-panel">
+                <form method="post" action="/settings/auto-refresh">
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  {% for option_minutes in auto_refresh_option_minutes %}
+                  <button type="submit" class="menu-item refresh-option {% if option_minutes == auto_refresh_minutes %}active{% endif %}" name="refresh_minutes" value="{{ option_minutes }}">{% if option_minutes == 0 %}Off{% else %}{{ (option_minutes|string) + 'm' if option_minutes < 60 else (option_minutes // 60)|string + 'h' }}{% endif %}</button>
+                  {% endfor %}
+                </form>
+              </div>
+            </div>
+            <button type="button" class="menu-item" data-toggle-panel="stats-modal"><span class="material-symbols-rounded" aria-hidden="true">query_stats</span> Stats</button>
+            <hr class="menu-divider" />
+            <button type="button" id="theme-toggle" class="theme-toggle menu-item" title="Toggle theme" aria-label="Toggle theme"></button>
+            <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
+            <button type="button" id="menu-collapse-sidebar-btn" class="menu-item folders-collapse-menu-item"><span class="material-symbols-rounded" aria-hidden="true">push_pin</span> <span class="folders-collapse-menu-label">Collapse sidebar</span></button>
+          </div>
+        </details>
+        <a class="menu-brand topbar-brand" href="/">Lectio</a>
+        {% if debug_mode %}
+        <div class="topbar-debug" id="topbar-debug">
+          <button type="button" class="topbar-debug-btn" id="debug-bypass-cache-btn" title="Toggle cache bypass for current feed">
+            <span class="material-symbols-rounded" aria-hidden="true">no_photography</span>
+            <span class="topbar-debug-btn-label">Bypass Cache</span>
+          </button>
+        </div>
+        {% endif %}
+      </header>
+
       <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
         {% if root_folder_row %}
         {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
@@ -278,6 +256,12 @@
         </div>
 
         <div class="tree-block tags-tree-block" id="tags-tree-block">
+          <div class="tags-header-row">
+            <button type="button" class="tags-header section-block-header" id="tags-header-btn">
+              Tags
+              <span class="tags-collapse-chevron material-symbols-rounded" aria-hidden="true">expand_more</span>
+            </button>
+          </div>
           <div class="tags-tree-body" id="tags-tree-body">
             {% if tag_rows %}
             <ul class="feed-list tag-list">
@@ -304,33 +288,6 @@
 
       <footer class="folders-pane-footer">
         <div class="folders-utility-row" role="toolbar" aria-label="Folders actions">
-          {% set scope_base = '/?folder_id=' ~ selected_folder_id %}
-          {% if selected_feed_url %}{% set scope_base = scope_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
-          {% if selected_tag %}{% set scope_base = scope_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
-          {% set scope_base = scope_base ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir ~ '&read_filter=' %}
-          {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
-          {% if selected_star_only %}
-          {% set star_href = scope_base ~ resume_filter ~ '&star_only=0&resume_read_filter=' ~ resume_filter %}
-          {% else %}
-          {% set star_href = scope_base ~ 'all&star_only=1&resume_read_filter=' ~ resume_filter %}
-          {% endif %}
-          <a
-            id="folders-star-toggle"
-            href="{{ star_href }}"
-            class="folders-utility-btn {% if selected_star_only %}active{% endif %}"
-            title="Toggle saved posts"
-            aria-label="Toggle saved posts"
-          ><span class="material-symbols-rounded" aria-hidden="true">star</span></a>
-
-          <button
-            id="folders-tags-toggle"
-            class="folders-utility-btn"
-            type="button"
-            aria-label="Toggle tags"
-            aria-pressed="false"
-            title="Toggle tags"
-          ><span class="material-symbols-rounded" aria-hidden="true">edit_note</span></button>
-
           <button id="folders-collapse-btn" class="folders-collapse-btn folders-utility-btn" type="button"
             aria-label="Collapse folders pane" title="Collapse folders pane">
             <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
@@ -352,6 +309,26 @@
       </div>
       {% else %}
       <div class="posts-toolbar">
+        <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
+          <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+          {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+          {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+          <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+          <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+          <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+          <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+          <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+          <input
+            id="topbar-search-input"
+            name="q"
+            class="topbar-search-input"
+            type="search"
+            value="{{ selected_query or '' }}"
+            placeholder="Search posts"
+            aria-label="Search posts"
+            autocomplete="off"
+          />
+        </form>
         <div class="sort-group" role="group" aria-label="Filter posts">
           {% set rf_base = '/?folder_id=' ~ selected_folder_id %}
           {% if selected_feed_url %}{% set rf_base = rf_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
@@ -636,11 +613,8 @@
 
   <script>
   (function(){
-    const SINGLE_THRESHOLD = 720;
     const MEDIUM_THRESHOLD = 1100;
     const WIDE_LEFT_COLLAPSED_KEY = 'lectio-wide-left-collapsed';
-    const SINGLE_PANE_RESTORE_KEY = 'lectio-single-pane-restore-level';
-    let singleMode = window.innerWidth <= SINGLE_THRESHOLD;
     let layoutMode = 'wide';
     const bodyEl = document.body;
     const mediumPaneBackdrop = document.getElementById('medium-pane-backdrop');
@@ -649,11 +623,24 @@
       return window.localStorage.getItem(WIDE_LEFT_COLLAPSED_KEY) === '1';
     }
 
+    function updateCollapseSidebarMenuLabel() {
+      const labelEl = document.querySelector('.folders-collapse-menu-label');
+      if (!labelEl) return;
+      if (layoutMode === 'wide') {
+        const collapsed = bodyEl.getAttribute('data-left-collapsed') === '1';
+        labelEl.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      } else {
+        const open = bodyEl.getAttribute('data-medium-left-open') === '1';
+        labelEl.textContent = open ? 'Close sidebar' : 'Open sidebar';
+      }
+    }
+
     function setWideLeftCollapsed(collapsed, persist = true) {
       bodyEl.setAttribute('data-left-collapsed', collapsed ? '1' : '0');
       if (persist) {
         window.localStorage.setItem(WIDE_LEFT_COLLAPSED_KEY, collapsed ? '1' : '0');
       }
+      updateCollapseSidebarMenuLabel();
     }
 
     function setMediumLeftOpen(isOpen) {
@@ -665,40 +652,13 @@
           mediumPaneBackdrop.setAttribute('hidden', '');
         }
       }
+      updateCollapseSidebarMenuLabel();
     }
 
     function updateSingleMode() {
       const width = window.innerWidth;
-      if (width <= SINGLE_THRESHOLD) {
-        layoutMode = 'narrow';
-      } else if (width <= MEDIUM_THRESHOLD) {
-        layoutMode = 'medium';
-      } else {
-        layoutMode = 'wide';
-      }
-
+      layoutMode = width <= MEDIUM_THRESHOLD ? 'medium' : 'wide';
       bodyEl.setAttribute('data-layout-mode', layoutMode);
-      singleMode = layoutMode === 'narrow';
-      bodyEl.setAttribute('data-single-mode', singleMode ? '1' : '0');
-
-      if (!singleMode) {
-        bodyEl.removeAttribute('data-single-pane-level');
-      } else if (!bodyEl.getAttribute('data-single-pane-level')) {
-        let restoredLevel = null;
-        try {
-          const raw = window.sessionStorage.getItem(SINGLE_PANE_RESTORE_KEY);
-          if (raw !== null) {
-            const parsed = Number.parseInt(raw, 10);
-            if (Number.isInteger(parsed)) {
-              restoredLevel = parsed;
-            }
-            window.sessionStorage.removeItem(SINGLE_PANE_RESTORE_KEY);
-          }
-        } catch (_e) {
-          restoredLevel = null;
-        }
-        setSinglePaneLevel(restoredLevel ?? 0);
-      }
 
       if (layoutMode === 'wide') {
         setMediumLeftOpen(false);
@@ -750,235 +710,6 @@
       window.visualViewport.addEventListener('scroll', setVh, { passive: true });
     }
 
-    function setSinglePaneLevel(level) {
-      bodyEl.setAttribute('data-single-pane-level', String(level));
-    }
-
-    // Topbar hide/show on scroll in single-pane mode (direction-based, 1p only)
-    let lastScrollTop = 0;
-    function bindSinglePaneScrollBehavior() {
-      function onScrollPane(e) {
-        if (document.body.getAttribute('data-single-mode') !== '1') return;
-        const pane = e.target;
-        const st = pane.scrollTop;
-        const topbar = document.querySelector('.topbar');
-        if (!topbar) return;
-        if (st > lastScrollTop + 8) {
-          topbar.classList.add('topbar-hidden');
-        } else if (st < lastScrollTop - 4) {
-          topbar.classList.remove('topbar-hidden');
-        }
-        lastScrollTop = st;
-      }
-
-      // Reset saved position whenever the visible pane changes so stale scroll
-      // position from a previous pane doesn't cause a wrong first-scroll hide/show.
-      new MutationObserver(() => {
-        lastScrollTop = 0;
-        const topbar = document.querySelector('.topbar');
-        if (topbar) topbar.classList.remove('topbar-hidden');
-      }).observe(document.body, { attributeFilter: ['data-single-pane-level'] });
-
-      const postsPane = document.querySelector('.pane-posts');
-      const entryPane = document.querySelector('.pane-entry');
-      const foldersTree = document.querySelector('.pane-folders .tree');
-      if (postsPane) postsPane.addEventListener('scroll', onScrollPane, { passive: true });
-      if (entryPane) entryPane.addEventListener('scroll', onScrollPane, { passive: true });
-      if (foldersTree) foldersTree.addEventListener('scroll', onScrollPane, { passive: true });
-    }
-
-    // Swipe gestures: post list items and entry pane navigation
-    function bindSwipeGestures() {
-      // post list swipe for toggles
-      function attachPostSwipe(postItem) {
-        if (postItem.dataset.boundPaneSwipeNav === '1') {
-          return;
-        }
-        postItem.dataset.boundPaneSwipeNav = '1';
-        postItem.dataset.boundSwipe = '1';
-        let sx = 0, sy = 0, dx = 0, dy = 0, touching = false;
-        const threshold = 40;
-        postItem.addEventListener('touchstart', (ev) => {
-          const t = ev.changedTouches[0]; sx = t.clientX; sy = t.clientY; touching = true; dx = 0; dy = 0;
-        }, { passive: true });
-        postItem.addEventListener('touchmove', (ev) => {
-          if (!touching) return; const t = ev.changedTouches[0]; dx = t.clientX - sx; dy = t.clientY - sy; }, { passive: true });
-        postItem.addEventListener('touchend', (ev) => {
-          if (!touching) return; touching = false; if (Math.abs(dx) < Math.abs(dy)) return; if (Math.abs(dx) < threshold) return;
-          // Right swipe -> toggle read/unread, Left swipe -> toggle saved
-          if (dx > 0) {
-            const btn = postItem.querySelector('.post-read-toggle'); if (btn) btn.click();
-          } else {
-            const btn = postItem.querySelector('.post-save-toggle'); if (btn) btn.click();
-          }
-        }, { passive: true });
-      }
-
-      for (const postItem of document.querySelectorAll('.post-item')) {
-        attachPostSwipe(postItem);
-      }
-
-      // entry pane swipe for next/previous
-      const entryPaneEl = document.querySelector('.pane-entry');
-      if (entryPaneEl) {
-        if (entryPaneEl.dataset.boundEntrySwipeNav === '1') {
-          return;
-        }
-        entryPaneEl.dataset.boundEntrySwipeNav = '1';
-        let sx=0, sy=0, dx=0, dy=0, touching=false, lockHorizontal=false;
-        entryPaneEl.addEventListener('touchstart', (ev)=>{
-          if (ev.touches.length !== 1) { touching = false; return; }
-          const t=ev.changedTouches[0]; sx=t.clientX; sy=t.clientY; touching=true; dx=0; dy=0; lockHorizontal=false;
-        }, { passive: true });
-        entryPaneEl.addEventListener('touchmove', (ev)=>{
-          if(!touching) return;
-          if (ev.touches.length !== 1) { touching = false; return; }
-          const t=ev.changedTouches[0]; dx=t.clientX-sx; dy=t.clientY-sy;
-          if (!lockHorizontal && Math.abs(dx) > 18 && Math.abs(dx) > Math.abs(dy)) {
-            lockHorizontal = true;
-          }
-          if (lockHorizontal) {
-            ev.preventDefault();
-          }
-        }, { passive: false });
-        entryPaneEl.addEventListener('touchend', (ev)=>{
-          if(!touching) return;
-          touching=false;
-          if (!window.isSingleMode || !window.isSingleMode()) return;
-          if (entryPaneEl.querySelector('.entry.source-active')) return;
-          if (window.visualViewport && window.visualViewport.scale > 1.05) return;
-          if(Math.abs(dx) < Math.abs(dy)) return;
-          const threshold=52;
-          if(Math.abs(dx) < threshold) return;
-          if (dx < 0) { // swipe left -> next
-            navigateEntry(1);
-          } else { // swipe right -> prev
-            navigateEntry(-1);
-          }
-        }, { passive: true });
-      }
-    }
-
-    function bindSinglePanePullToRefresh() {
-      function attachPTR(paneEl, scrollEl, touchEl = scrollEl) {
-        if (!paneEl || !scrollEl || !touchEl || paneEl.dataset.ptrBound === '1') return;
-        paneEl.dataset.ptrBound = '1';
-
-        const START_PULL = 12;
-        const THRESHOLD = 70;
-        const MAX_PULL = 100;
-        let startY = 0;
-        let pulling = false;
-        let loading = false;
-        let currentDy = 0;
-
-        const indicator = document.createElement('div');
-        indicator.className = 'ptr-indicator';
-        indicator.innerHTML = '<div class="ptr-icon"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></div>';
-        indicator.style.display = 'none';
-        if (getComputedStyle(paneEl).position === 'static') paneEl.style.position = 'relative';
-        paneEl.insertBefore(indicator, paneEl.firstChild);
-
-        function showAt(dy) {
-          const travel = Math.min(Math.max(dy, 0), MAX_PULL);
-          indicator.style.display = 'flex';
-          indicator.style.transition = 'none';
-          indicator.style.transform = `translateY(calc(-56px + ${travel}px))`;
-          indicator.classList.toggle('ptr-armed', travel >= THRESHOLD);
-        }
-
-        function hide() {
-          indicator.style.transition = 'transform 180ms ease';
-          indicator.style.transform = 'translateY(-56px)';
-          setTimeout(() => {
-            indicator.style.display = 'none';
-            indicator.classList.remove('ptr-armed');
-            indicator.classList.remove('ptr-loading');
-            loading = false;
-          }, 190);
-        }
-
-        function isAtTop() {
-          const paneTop = typeof paneEl.scrollTop === 'number' ? paneEl.scrollTop : 0;
-          const scrollTop = typeof scrollEl.scrollTop === 'number' ? scrollEl.scrollTop : 0;
-          return paneTop <= 2 && scrollTop <= 2;
-        }
-
-        const targets = [];
-        for (const el of [touchEl, scrollEl, paneEl]) {
-          if (el && !targets.includes(el)) targets.push(el);
-        }
-
-        function onTouchStart(e) {
-          if (!window.isSingleMode || !window.isSingleMode()) return;
-          if (loading) return;
-          if (!isAtTop()) return;
-          if (e.touches.length !== 1) return;
-          startY = e.touches[0].clientY;
-          currentDy = 0;
-          pulling = true;
-        }
-
-        function onTouchMove(e) {
-          if (!pulling || loading) return;
-          const dy = e.touches[0].clientY - startY;
-          if (dy <= START_PULL) {
-            if (dy < 0) {
-              pulling = false;
-              hide();
-            }
-            return;
-          }
-          currentDy = dy;
-          showAt(dy);
-          e.preventDefault();
-        }
-
-        function onTouchEnd() {
-          if (!pulling || loading) return;
-          pulling = false;
-          if (currentDy >= THRESHOLD) {
-            loading = true;
-            indicator.classList.add('ptr-loading');
-            Promise.resolve()
-              .then(() => {
-                const sp = new URLSearchParams(window.location.search);
-                const isSingleFeed = sp.has('list_feed_url');
-                if (isSingleFeed && typeof window.refreshCurrentFeedOrFolder === 'function') {
-                  // Single feed in view: one network call, worth waiting for
-                  return window.refreshCurrentFeedOrFolder();
-                }
-                // Folder / root: reload the view from DB (instant).
-                // Background auto-refresh handles actual network fetching.
-                return loadScopePanesWithoutFullRefresh(window.location.href, false);
-              })
-              .finally(() => hide());
-          } else {
-            hide();
-          }
-        }
-
-        function onTouchCancel() {
-          pulling = false;
-          if (!loading) hide();
-        }
-
-        for (const target of targets) {
-          target.addEventListener('touchstart', onTouchStart, { passive: true });
-          target.addEventListener('touchmove', onTouchMove, { passive: false });
-          target.addEventListener('touchend', onTouchEnd, { passive: true });
-          target.addEventListener('touchcancel', onTouchCancel, { passive: true });
-        }
-      }
-
-      const foldersPane = document.querySelector('.pane-folders');
-      const treeScroller = document.querySelector('.pane-folders .tree') || foldersPane;
-      const postsPane = document.querySelector('.pane-posts');
-      const postsScroller = document.querySelector('.posts') || postsPane;
-
-      attachPTR(foldersPane, treeScroller, treeScroller);
-      attachPTR(postsPane, postsScroller, postsScroller);
-    }
 
     function navigateEntry(direction) {
       // find active post in posts pane
@@ -995,11 +726,11 @@
     }
 
 
-    // Expose for debugging
-    window.setSinglePaneLevel = setSinglePaneLevel;
-    window.isSingleMode = () => singleMode;
-    window.bindSinglePanePullToRefresh = bindSinglePanePullToRefresh;
-    window.bindSwipeGestures = bindSwipeGestures;
+    // Stubs: single-pane mode removed; kept so call-sites are no-ops
+    window.setSinglePaneLevel = () => {};
+    window.isSingleMode = () => false;
+    window.bindSinglePanePullToRefresh = () => {};
+    window.bindSwipeGestures = () => {};
 
     window.addEventListener('resize', () => updateSingleMode());
 
@@ -1114,9 +845,17 @@
 
     // Folders pane in-pane collapse/expand + hover floater
     const folderCollapseBtn = document.getElementById('folders-collapse-btn');
+    const menuCollapseSidebarBtn = document.getElementById('menu-collapse-sidebar-btn');
     const folderPaneEl = document.querySelector('.pane-folders');
     let mediumFlyoutManualClose = false;
     let mediumFlyoutClickOpen = false;
+
+    if (menuCollapseSidebarBtn) {
+      menuCollapseSidebarBtn.addEventListener('click', () => {
+        folderCollapseBtn?.click();
+        document.querySelector('.folders-pane-menu')?.removeAttribute('open');
+      });
+    }
 
     if (folderCollapseBtn) {
       folderCollapseBtn.addEventListener('click', (e) => {
@@ -1203,10 +942,6 @@
     // Ensure entry pane refs and observer are bound for initial load
     try { refreshEntryPaneRefs(); } catch (e) {}
     // (no URL mutation) rely on SPA interception + headers to persist filter
-    // bind single-pane niceties
-    bindSinglePaneScrollBehavior();
-    bindSwipeGestures();
-    bindSinglePanePullToRefresh();
 
     // Leave the brand/logo as a normal bare link to `/` (no interception).
   })();
@@ -2342,9 +2077,10 @@
       }
 
       if (themeToggle) {
-        themeToggle.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span>`;
-        themeToggle.setAttribute('aria-label', `Current theme: ${theme}. Click to switch to ${theme === 'dark' ? 'light' : 'dark'}.`);
-        themeToggle.title = `Current theme: ${theme}. Click to switch to ${theme === 'dark' ? 'light' : 'dark'}.`;
+        const nextThemeName = theme === 'dark' ? 'Light mode' : 'Dark mode';
+        themeToggle.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span> ${nextThemeName}`;
+        themeToggle.setAttribute('aria-label', `Switch to ${nextThemeName.toLowerCase()}`);
+        themeToggle.title = `Switch to ${nextThemeName.toLowerCase()}`;
       }
 
       updateDynamicFavicon();
@@ -2906,30 +2642,25 @@
     }
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');
-    const tagsToggleButton = document.getElementById('folders-tags-toggle');
+    const tagsHeaderBtn = document.getElementById('tags-header-btn');
     const TAGS_COLLAPSED_KEY = 'lectio-tags-collapsed';
     let problematicFeedsViewedThisSession = false;
 
     function applyTagsCollapsed(collapsed) {
-      if (!tagsTreeBlock) {
-        return;
-      }
+      if (!tagsTreeBlock) return;
       tagsTreeBlock.classList.toggle('is-collapsed', collapsed);
-      if (tagsToggleButton) {
-        tagsToggleButton.classList.toggle('active', !collapsed);
-        tagsToggleButton.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
-        tagsToggleButton.title = collapsed ? 'Expand tags' : 'Collapse tags';
-      }
     }
 
-    if (tagsTreeBlock && tagsToggleButton) {
+    if (tagsTreeBlock) {
       const savedTagsCollapsed = window.localStorage.getItem(TAGS_COLLAPSED_KEY) === '1';
       applyTagsCollapsed(savedTagsCollapsed);
-      tagsToggleButton.addEventListener('click', () => {
-        const nextCollapsed = !tagsTreeBlock.classList.contains('is-collapsed');
-        window.localStorage.setItem(TAGS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
-        applyTagsCollapsed(nextCollapsed);
-      });
+      if (tagsHeaderBtn) {
+        tagsHeaderBtn.addEventListener('click', () => {
+          const nextCollapsed = !tagsTreeBlock.classList.contains('is-collapsed');
+          window.localStorage.setItem(TAGS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
+          applyTagsCollapsed(nextCollapsed);
+        });
+      }
     }
 
     async function markProblematicFeedsViewed() {
