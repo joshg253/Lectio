@@ -4,8 +4,7 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-- **Folders pane tree headers** — collapsible "Feeds" section header (collapses folder list) and "Tags" section header; both persist state in localStorage.
-- **Posts toolbar filter + sort dropdowns** — replaced inline filter pills and sort pills with a filter dropdown (All/Unread/Starred) and sort dropdown (Published/Received × newest/oldest). Burger + logo left-aligned in pane header with reduced left padding.
+- **Posts toolbar + folders pane header polish** — filter/sort dropdowns use `position:fixed`+JS to escape `overflow:hidden` clip; toolbar restructured to two rows (search+mark-read on top, filter+sort on bottom); logo centered in folders pane header; pin/collapse button moved to header right; footer removed; single-mode CSS dead code removed.
 
 ## Up next
 

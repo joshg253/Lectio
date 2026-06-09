@@ -120,10 +120,19 @@ a:hover {
   height: var(--folders-header-height);
   display: flex;
   align-items: center;
-  justify-content: flex-start;
   gap: 0.4rem;
-  padding: 0.45rem 0.8rem 0.45rem 0.3rem;
+  padding: 0.45rem 0.4rem 0.45rem 0.3rem;
   border-bottom: 1px solid var(--line);
+}
+
+.folders-pane-header .topbar-brand {
+  flex: 1;
+  text-align: center;
+}
+
+.folders-pane-header-collapse-btn {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .folders-pane-menu .menu-popover {
@@ -281,21 +290,10 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .pane-folders {
   cursor: default;
 }
 
-/* Fix tree flex so footer can sit below it */
 .pane-folders .tree {
   flex: 1 1 0;
   min-height: 0;
   height: auto;
-}
-
-/* Folders pane footer with collapse/expand button */
-.folders-pane-footer {
-  flex-shrink: 0;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  border-top: 1px solid var(--line);
-  padding: 0.25rem 0.35rem;
 }
 
 .folders-utility-row {
@@ -455,7 +453,7 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .folders-btn-popout-i
   display: inline;
 }
 
-/* Strip state: overlay transparent pane, only footer is interactive */
+/* Strip state: overlay transparent pane, only header collapse btn is interactive */
 body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .pane-folders,
 body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .pane-folders {
   background: transparent;
@@ -464,33 +462,23 @@ body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .pane-folders {
   pointer-events: none;
 }
 
-/* Strip footer: push to bottom, transparent bg, only collapse btn interactive */
-body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-pane-footer,
-body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-pane-footer {
-  margin-top: auto;
+/* Strip header: transparent bg, only collapse btn clickable */
+body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-pane-header,
+body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-pane-header {
   justify-content: center;
-  border-top: none;
-  padding: 0.2rem 0;
-  pointer-events: auto;
+  border-bottom: none;
   background: transparent;
+  pointer-events: auto;
 }
 
-/* Strip state: only show collapse button in utility row */
-body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-utility-row .folders-utility-btn:not(#folders-collapse-btn),
-body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-utility-row .folders-utility-btn:not(#folders-collapse-btn) {
+body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-pane-header > :not(.folders-pane-header-collapse-btn),
+body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-pane-header > :not(.folders-pane-header-collapse-btn) {
   display: none;
 }
 
-body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-utility-row,
-body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-utility-row {
-  justify-content: center;
-}
-
-/* Hide tree content and header when folders pane is in strip mode. */
+/* Hide tree content when folders pane is in strip mode. */
 body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .pane-folders .tree,
-body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .pane-folders .tree,
-body[data-layout-mode="wide"][data-left-collapsed="1"]:not([data-left-floating="1"]) .folders-pane-header,
-body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .folders-pane-header {
+body[data-layout-mode="medium"]:not([data-medium-left-open="1"]) .pane-folders .tree {
   display: none;
 }
 
@@ -1322,22 +1310,31 @@ button:hover, .button-link:hover {
 
 .posts-toolbar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.3rem 0.6rem;
-  padding: 0.35rem 0.55rem 0.25rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem 0.55rem 0.3rem;
   border-bottom: 1px solid var(--line);
 }
 
-.posts-search-form {
-  flex: 0 0 100%;
-  min-width: 0;
-  padding-bottom: 0.1rem;
+.toolbar-row-1 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
-.posts-search-form .topbar-search-input {
+.toolbar-row-1 .posts-search-form {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toolbar-row-1 .posts-search-form .topbar-search-input {
   width: 100%;
+}
+
+.toolbar-row-2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .sort-group {
@@ -1384,7 +1381,9 @@ button:hover, .button-link:hover {
 }
 
 .toolbar-dropdown-popover {
+  position: fixed;
   min-width: 160px;
+  z-index: 1500;
 }
 
 .mark-read-group {
@@ -1673,38 +1672,6 @@ button:hover, .button-link:hover {
 
 .tags-empty {
   padding: 0.45rem 0.5rem 0.2rem;
-}
-
-.feeds-header-row {
-  display: flex;
-  align-items: stretch;
-  border-bottom: 1px solid var(--line);
-}
-
-.feeds-header {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  color: var(--muted);
-}
-
-.feeds-collapse-chevron {
-  margin-left: auto;
-  font-size: 1.1rem;
-  line-height: 1;
-  color: var(--muted);
-  transition: transform 0.15s ease;
-}
-
-.root-tree-block.feeds-collapsed #tree-children {
-  display: none;
-}
-
-.root-tree-block.feeds-collapsed .feeds-collapse-chevron {
-  transform: rotate(-90deg);
 }
 
 .tree-children {

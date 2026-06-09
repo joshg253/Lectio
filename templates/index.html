@@ -131,7 +131,6 @@
             <hr class="menu-divider" />
             <button type="button" id="theme-toggle" class="theme-toggle menu-item" title="Toggle theme" aria-label="Toggle theme"></button>
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
-            <button type="button" id="menu-collapse-sidebar-btn" class="menu-item folders-collapse-menu-item"><span class="material-symbols-rounded" aria-hidden="true">push_pin</span> <span class="folders-collapse-menu-label">Collapse sidebar</span></button>
           </div>
         </details>
         <a class="menu-brand topbar-brand" href="/">Lectio</a>
@@ -143,6 +142,12 @@
           </button>
         </div>
         {% endif %}
+        <button id="folders-collapse-btn" class="folders-collapse-btn folders-pane-header-collapse-btn" type="button"
+          aria-label="Collapse folders pane" title="Collapse folders pane">
+          <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+          <span class="folders-btn-icon folders-btn-strip-icon material-symbols-rounded" aria-hidden="true">chevron_right</span>
+          <span class="folders-btn-icon folders-btn-popout-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
+        </button>
       </header>
 
       <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
@@ -172,14 +177,7 @@
             </a>
           </div>
 
-          <div class="feeds-header-row">
-            <button type="button" class="feeds-header section-block-header" id="feeds-header-btn">
-              Feeds
-              <span class="feeds-collapse-chevron material-symbols-rounded" aria-hidden="true">expand_more</span>
-            </button>
-          </div>
-
-          <div class="tree-children" id="tree-children">
+          <div class="tree-children">
             {% for row in child_folder_rows %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
             <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
@@ -293,16 +291,6 @@
         {% endif %}
       </nav>
 
-      <footer class="folders-pane-footer">
-        <div class="folders-utility-row" role="toolbar" aria-label="Folders actions">
-          <button id="folders-collapse-btn" class="folders-collapse-btn folders-utility-btn" type="button"
-            aria-label="Collapse folders pane" title="Collapse folders pane">
-            <span class="folders-btn-icon folders-btn-expanded-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
-            <span class="folders-btn-icon folders-btn-strip-icon material-symbols-rounded" aria-hidden="true">chevron_right</span>
-            <span class="folders-btn-icon folders-btn-popout-icon material-symbols-rounded" aria-hidden="true">push_pin</span>
-          </button>
-        </div>
-      </footer>
     </section>
 
     <div class="pane-resizer" data-resizer="left-middle" role="separator" aria-label="Resize left and middle panes"></div>
@@ -316,26 +304,6 @@
       </div>
       {% else %}
       <div class="posts-toolbar">
-        <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
-          <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-          {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-          {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-          <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-          <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-          <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-          <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-          <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-          <input
-            id="topbar-search-input"
-            name="q"
-            class="topbar-search-input"
-            type="search"
-            value="{{ selected_query or '' }}"
-            placeholder="Search posts"
-            aria-label="Search posts"
-            autocomplete="off"
-          />
-        </form>
         {% set tb_base = '/?folder_id=' ~ selected_folder_id %}
         {% if selected_feed_url %}{% set tb_base = tb_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
         {% if selected_tag %}{% set tb_base = tb_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
@@ -344,25 +312,37 @@
         {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
         {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else 'All') %}
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
-        <details class="toolbar-dropdown filter-menu">
-          <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter posts">
-            <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">filter_list</span>
-            <span class="toolbar-dd-label">{{ filter_label }}</span>
-            <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
-          </summary>
-          <div class="menu-popover anchor-left toolbar-dropdown-popover">
-            <a class="menu-item {% if not filter_is_active %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}">All</a>
-            <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}">Unread</a>
-            <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}">Starred</a>
-          </div>
-        </details>
-        <div class="sort-group mark-read-group" role="group" aria-label="Mark posts read options">
-          <details class="mark-read-menu">
-            <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
-              <span class="material-symbols-rounded mark-read-trigger-icon" aria-hidden="true">done_all</span>
-              <span class="material-symbols-rounded mark-read-trigger-caret" aria-hidden="true">arrow_drop_down</span>
-            </summary>
-            <div class="mark-read-popover" role="menu" aria-label="Mark read actions">
+        {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
+        {% set sort_by_label = 'Published' if selected_sort_by == 'post' else 'Received' %}
+        {% set sort_dir_label = 'newest' if selected_sort_dir == 'desc' else 'oldest' %}
+        <div class="toolbar-row-1">
+          <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
+            <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+            {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+            {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+            <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+            <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+            <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+            <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+            <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+            <input
+              id="topbar-search-input"
+              name="q"
+              class="topbar-search-input"
+              type="search"
+              value="{{ selected_query or '' }}"
+              placeholder="Search posts"
+              aria-label="Search posts"
+              autocomplete="off"
+            />
+          </form>
+          <div class="sort-group mark-read-group" role="group" aria-label="Mark posts read options">
+            <details class="mark-read-menu">
+              <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
+                <span class="material-symbols-rounded mark-read-trigger-icon" aria-hidden="true">done_all</span>
+                <span class="material-symbols-rounded mark-read-trigger-caret" aria-hidden="true">arrow_drop_down</span>
+              </summary>
+              <div class="mark-read-popover" role="menu" aria-label="Mark read actions">
               <p class="mark-read-header-label">Mark as read:</p>
               {% set _mr_hidden %}
                 <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
@@ -448,24 +428,36 @@
               </form>
               {% endfor %}
             </div>
+            </details>
+          </div>
+        </div>
+        <div class="toolbar-row-2">
+          <details class="toolbar-dropdown filter-menu">
+            <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter posts">
+              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">filter_list</span>
+              <span class="toolbar-dd-label">{{ filter_label }}</span>
+              <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+            </summary>
+            <div class="menu-popover anchor-left toolbar-dropdown-popover">
+              <a class="menu-item {% if not filter_is_active %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}">All</a>
+              <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}">Unread</a>
+              <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}">Starred</a>
+            </div>
+          </details>
+          <details class="toolbar-dropdown sort-menu">
+            <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
+              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">swap_vert</span>
+              <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
+              <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+            </summary>
+            <div class="menu-popover anchor-right toolbar-dropdown-popover">
+              <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=desc' ~ tb_rf }}">Published newest</a>
+              <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
+              <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
+              <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
+            </div>
           </details>
         </div>
-        {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
-        {% set sort_by_label = 'Published' if selected_sort_by == 'post' else 'Received' %}
-        {% set sort_dir_label = 'newest' if selected_sort_dir == 'desc' else 'oldest' %}
-        <details class="toolbar-dropdown sort-menu">
-          <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
-            <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">swap_vert</span>
-            <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
-            <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
-          </summary>
-          <div class="menu-popover anchor-right toolbar-dropdown-popover">
-            <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=desc' ~ tb_rf }}">Published newest</a>
-            <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
-            <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
-            <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
-          </div>
-        </details>
       </div>
       {% endif %}
       <div class="posts" data-chunk-size="10" data-server-posts-total="{{ server_posts_total if server_posts_total is defined else '' }}" data-server-posts-sent="{{ server_posts_sent if server_posts_sent is defined else '' }}">
@@ -637,24 +629,11 @@
       return window.localStorage.getItem(WIDE_LEFT_COLLAPSED_KEY) === '1';
     }
 
-    function updateCollapseSidebarMenuLabel() {
-      const labelEl = document.querySelector('.folders-collapse-menu-label');
-      if (!labelEl) return;
-      if (layoutMode === 'wide') {
-        const collapsed = bodyEl.getAttribute('data-left-collapsed') === '1';
-        labelEl.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
-      } else {
-        const open = bodyEl.getAttribute('data-medium-left-open') === '1';
-        labelEl.textContent = open ? 'Close sidebar' : 'Open sidebar';
-      }
-    }
-
     function setWideLeftCollapsed(collapsed, persist = true) {
       bodyEl.setAttribute('data-left-collapsed', collapsed ? '1' : '0');
       if (persist) {
         window.localStorage.setItem(WIDE_LEFT_COLLAPSED_KEY, collapsed ? '1' : '0');
       }
-      updateCollapseSidebarMenuLabel();
     }
 
     function setMediumLeftOpen(isOpen) {
@@ -666,7 +645,6 @@
           mediumPaneBackdrop.setAttribute('hidden', '');
         }
       }
-      updateCollapseSidebarMenuLabel();
     }
 
     function updateSingleMode() {
@@ -859,17 +837,9 @@
 
     // Folders pane in-pane collapse/expand + hover floater
     const folderCollapseBtn = document.getElementById('folders-collapse-btn');
-    const menuCollapseSidebarBtn = document.getElementById('menu-collapse-sidebar-btn');
     const folderPaneEl = document.querySelector('.pane-folders');
     let mediumFlyoutManualClose = false;
     let mediumFlyoutClickOpen = false;
-
-    if (menuCollapseSidebarBtn) {
-      menuCollapseSidebarBtn.addEventListener('click', () => {
-        folderCollapseBtn?.click();
-        document.querySelector('.folders-pane-menu')?.removeAttribute('open');
-      });
-    }
 
     if (folderCollapseBtn) {
       folderCollapseBtn.addEventListener('click', (e) => {
@@ -2136,6 +2106,25 @@
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
 
+    // Position toolbar dropdowns using fixed positioning to escape .pane overflow:hidden
+    document.querySelectorAll('.toolbar-dropdown').forEach(dd => {
+      dd.addEventListener('toggle', () => {
+        if (!dd.open) return;
+        const summary = dd.querySelector('summary');
+        const popover = dd.querySelector('.toolbar-dropdown-popover');
+        if (!summary || !popover) return;
+        const rect = summary.getBoundingClientRect();
+        popover.style.top = (rect.bottom + 4) + 'px';
+        if (dd.classList.contains('sort-menu')) {
+          popover.style.right = (window.innerWidth - rect.right) + 'px';
+          popover.style.left = 'auto';
+        } else {
+          popover.style.left = rect.left + 'px';
+          popover.style.right = 'auto';
+        }
+      });
+    });
+
     appUnreadCount = getUnreadCountFromRootBadge();
     lastFocusedUnreadCount = getUnreadCountForFavicon();
     updateDynamicFavicon();
@@ -2653,26 +2642,6 @@
         window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
         applyUnreadFoldersOnly(enabled);
       });
-    }
-
-    const rootTreeBlock = document.querySelector('.root-tree-block');
-    const feedsHeaderBtn = document.getElementById('feeds-header-btn');
-    const FEEDS_COLLAPSED_KEY = 'lectio-feeds-collapsed';
-
-    function applyFeedsCollapsed(collapsed) {
-      if (!rootTreeBlock) return;
-      rootTreeBlock.classList.toggle('feeds-collapsed', collapsed);
-    }
-
-    if (rootTreeBlock) {
-      applyFeedsCollapsed(window.localStorage.getItem(FEEDS_COLLAPSED_KEY) === '1');
-      if (feedsHeaderBtn) {
-        feedsHeaderBtn.addEventListener('click', () => {
-          const nextCollapsed = !rootTreeBlock.classList.contains('feeds-collapsed');
-          window.localStorage.setItem(FEEDS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
-          applyFeedsCollapsed(nextCollapsed);
-        });
-      }
     }
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');
