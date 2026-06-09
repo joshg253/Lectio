@@ -172,7 +172,14 @@
             </a>
           </div>
 
-          <div class="tree-children">
+          <div class="feeds-header-row">
+            <button type="button" class="feeds-header section-block-header" id="feeds-header-btn">
+              Feeds
+              <span class="feeds-collapse-chevron material-symbols-rounded" aria-hidden="true">expand_more</span>
+            </button>
+          </div>
+
+          <div class="tree-children" id="tree-children">
             {% for row in child_folder_rows %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
             <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
@@ -329,22 +336,26 @@
             autocomplete="off"
           />
         </form>
-        <div class="sort-group" role="group" aria-label="Filter posts">
-          {% set rf_base = '/?folder_id=' ~ selected_folder_id %}
-          {% if selected_feed_url %}{% set rf_base = rf_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
-          {% if selected_tag %}{% set rf_base = rf_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
-          {% set rf_base = rf_base ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir ~ '&read_filter=' %}
-          {% set rf_star_current = '&star_only=1' if selected_star_only else '&star_only=0' %}
-          {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
-          {% set unread_toggle_target = 'all' if selected_read_filter == 'unread' else 'unread' %}
-          <a class="sort-pill filter-pill {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ rf_base }}{{ unread_toggle_target }}{{ rf_star_current }}&resume_read_filter={{ unread_toggle_target }}" title="Toggle unread filter" aria-label="Toggle unread filter"><span class="material-symbols-rounded filter-icon" aria-hidden="true">mark_email_unread</span></a>
-          {% if selected_star_only %}
-          {% set star_href = rf_base ~ resume_filter ~ '&star_only=0&resume_read_filter=' ~ resume_filter %}
-          {% else %}
-          {% set star_href = rf_base ~ 'all&star_only=1&resume_read_filter=' ~ resume_filter %}
-          {% endif %}
-          <a class="sort-pill filter-pill {% if selected_star_only %}active{% endif %}" href="{{ star_href }}" title="Toggle star filter" aria-label="Toggle star filter"><span class="material-symbols-rounded filter-icon" aria-hidden="true">star</span></a>
-        </div>
+        {% set tb_base = '/?folder_id=' ~ selected_folder_id %}
+        {% if selected_feed_url %}{% set tb_base = tb_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+        {% if selected_tag %}{% set tb_base = tb_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
+        {% set tb_sort = '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
+        {% set tb_rf = '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '&star_only=0') ~ '&resume_read_filter=' ~ selected_resume_read_filter %}
+        {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
+        {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else 'All') %}
+        {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
+        <details class="toolbar-dropdown filter-menu">
+          <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter posts">
+            <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">filter_list</span>
+            <span class="toolbar-dd-label">{{ filter_label }}</span>
+            <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+          </summary>
+          <div class="menu-popover anchor-left toolbar-dropdown-popover">
+            <a class="menu-item {% if not filter_is_active %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}">All</a>
+            <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}">Unread</a>
+            <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}">Starred</a>
+          </div>
+        </details>
         <div class="sort-group mark-read-group" role="group" aria-label="Mark posts read options">
           <details class="mark-read-menu">
             <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
@@ -439,19 +450,22 @@
             </div>
           </details>
         </div>
-        <div class="sort-group" role="group" aria-label="Sort posts">
-          <a
-            class="sort-pill active"
-            href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}{% if selected_tag %}&tag={{ selected_tag | urlencode }}{% endif %}&sort_by={{ 'received' if selected_sort_by == 'post' else 'post' }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
-            title="Currently sorting by {{ 'published' if selected_sort_by == 'post' else 'received' }}. Click to switch to {{ 'received' if selected_sort_by == 'post' else 'published' }}."
-          >{{ 'Published' if selected_sort_by == 'post' else 'Received' }}</a>
-          <a
-            class="sort-arrow active"
-            href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}{% if selected_tag %}&tag={{ selected_tag | urlencode }}{% endif %}&sort_by={{ selected_sort_by }}&sort_dir={{ 'asc' if selected_sort_dir == 'desc' else 'desc' }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
-            title="Currently {{ 'descending' if selected_sort_dir == 'desc' else 'ascending' }}. Click to switch to {{ 'ascending' if selected_sort_dir == 'desc' else 'descending' }}."
-            aria-label="Sort {{ 'descending' if selected_sort_dir == 'desc' else 'ascending' }}"
-          ><span class="material-symbols-rounded" aria-hidden="true">{{ 'south' if selected_sort_dir == 'desc' else 'north' }}</span></a>
-        </div>
+        {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
+        {% set sort_by_label = 'Published' if selected_sort_by == 'post' else 'Received' %}
+        {% set sort_dir_label = 'newest' if selected_sort_dir == 'desc' else 'oldest' %}
+        <details class="toolbar-dropdown sort-menu">
+          <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
+            <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">swap_vert</span>
+            <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
+            <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+          </summary>
+          <div class="menu-popover anchor-right toolbar-dropdown-popover">
+            <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=desc' ~ tb_rf }}">Published newest</a>
+            <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
+            <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
+            <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
+          </div>
+        </details>
       </div>
       {% endif %}
       <div class="posts" data-chunk-size="10" data-server-posts-total="{{ server_posts_total if server_posts_total is defined else '' }}" data-server-posts-sent="{{ server_posts_sent if server_posts_sent is defined else '' }}">
@@ -765,7 +779,7 @@
       // in headers for the server before performing the fetch. This avoids
       // a race between capture-phase listeners.
       try {
-        if (a.matches && a.matches('.filter-pill')) {
+        if (a.matches && a.matches('.filter-menu .menu-item')) {
           const u2 = new URL(href, window.location.origin);
           const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
           if (rf) {
@@ -805,9 +819,9 @@
       }
     }, true);
 
-    // Persist read_filter when user clicks filter pills (All / Unread / Star)
+    // Persist read_filter when user clicks filter dropdown items (All / Unread / Starred)
     document.addEventListener('click', function(e) {
-      const pill = e.target.closest('.filter-pill');
+      const pill = e.target.closest('.filter-menu .menu-item');
       if (!pill) return;
       try {
         const u = new URL(pill.href, window.location.origin);
@@ -2639,6 +2653,26 @@
         window.localStorage.setItem(UNREAD_FOLDERS_ONLY_KEY, enabled ? '1' : '0');
         applyUnreadFoldersOnly(enabled);
       });
+    }
+
+    const rootTreeBlock = document.querySelector('.root-tree-block');
+    const feedsHeaderBtn = document.getElementById('feeds-header-btn');
+    const FEEDS_COLLAPSED_KEY = 'lectio-feeds-collapsed';
+
+    function applyFeedsCollapsed(collapsed) {
+      if (!rootTreeBlock) return;
+      rootTreeBlock.classList.toggle('feeds-collapsed', collapsed);
+    }
+
+    if (rootTreeBlock) {
+      applyFeedsCollapsed(window.localStorage.getItem(FEEDS_COLLAPSED_KEY) === '1');
+      if (feedsHeaderBtn) {
+        feedsHeaderBtn.addEventListener('click', () => {
+          const nextCollapsed = !rootTreeBlock.classList.contains('feeds-collapsed');
+          window.localStorage.setItem(FEEDS_COLLAPSED_KEY, nextCollapsed ? '1' : '0');
+          applyFeedsCollapsed(nextCollapsed);
+        });
+      }
     }
 
     const tagsTreeBlock = document.getElementById('tags-tree-block');

@@ -4,7 +4,8 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-- **Desktop-first web GUI cleanup** — Removed 1-pane mobile mode entirely. Eliminated top bar: logo + hamburger moved to folders pane header; search moved to posts toolbar; theme toggle, note, and collapse sidebar moved into hamburger menu. Tags list gets a collapsible "Tags" header row (like "All Feeds"). Burger menu uses `position: fixed` to escape `overflow:hidden` clipping.
+- **Folders pane tree headers** — collapsible "Feeds" section header (collapses folder list) and "Tags" section header; both persist state in localStorage.
+- **Posts toolbar filter + sort dropdowns** — replaced inline filter pills and sort pills with a filter dropdown (All/Unread/Starred) and sort dropdown (Published/Received × newest/oldest). Burger + logo left-aligned in pane header with reduced left padding.
 
 ## Up next
 
