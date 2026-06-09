@@ -62,6 +62,18 @@ Use plugin/adapter style for non-native behavior instead of hardwired branching.
 - ArtStation subdomain rewrites (`username.artstation.com/rss` → `www.artstation.com/username.rss`) to avoid TLS hostname issues with underscore usernames.
 - `_DOMAIN_ALIASES` map — known domain pairs that serve identical content (currently `old.reddit.com` → `www.reddit.com`). Add new pairs there; the normalization and duplicate-scan logic picks them up automatically.
 
+## Duplicate entry suppression
+
+Two mechanisms prevent duplicate articles from accumulating in the reader DB:
+
+**GUID-churn suppression** (`_suppress_guid_churn`, runs after each refresh): detects entries that reappear with a new GUID but the same URL slug, or the same title + publication date (within 7 days). Checks both read history AND existing unread entries so that multiple copies arriving before any are opened are also caught.
+
+**Intra-feed and cross-feed cleanup** (`_cleanup_intra_feed_slug_dupes`, runs at startup and after each refresh cycle): two-pass retroactive cleanup for duplicates that slipped through before suppression was in place or before Deduplicate rules ran.
+- Pass 1: within each feed, keep the oldest entry per slug and per title+date; mark newer copies read.
+- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe` (canonical URL after stripping tracking params); keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+
+These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
+
 ## Feed auto-taggers
 
 Three functions run at startup to apply strategy and display defaults without user action:
@@ -100,7 +112,7 @@ The JS layer reads the CSRF token explicitly from `<meta name="csrf-token">` and
 
 `GReaderService` (`services/greader.py`) implements the Google Reader-compatible protocol used by Capy, Readrops, Aggregator, Read You, and many other clients.
 
-**Auth:** `POST /greader/accounts/ClientLogin` accepts `Email` and `Passwd` form fields. Email may be bare username or `user@domain` (the local part is matched). Returns `SID/LSID/Auth` tokens (all identical) in the Fever-style `key=value` plain-text format. Tokens are stored in memory (90-day expiry); subsequent requests pass `Authorization: GoogleLogin auth=<token>`.
+**Auth:** `POST /greader/accounts/ClientLogin` accepts `Email` and `Passwd` form fields. Email may be bare username or `user@domain` (the local part is matched). Returns `SID/LSID/Auth` tokens (all identical) in the Fever-style `key=value` plain-text format. Tokens are cached in memory and persisted to `greader_tokens (token TEXT PK, expires_at REAL)` in the meta DB (90-day expiry). On restart, `check_token()` falls back to the DB on an in-memory cache miss and re-warms the cache, so clients are not logged out by container restarts or deploys. Subsequent requests pass `Authorization: GoogleLogin auth=<token>`.
 
 **Shared ID table:** Reuses `fever_entry_map` for stable integer IDs — no additional DB table. GReader item IDs are the decimal integer for `itemRefs.id` and `tag:google.com,2005:reader/item/<16-char-hex>` for item content responses. All three input formats (decimal, `0x<hex>`, full tag URI) are parsed in `_parse_item_id`.
 

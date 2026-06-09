@@ -79,7 +79,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - Conditional HTTP requests (ETag / If-Modified-Since via `reader` library)
 - Exponential backoff per feed and per domain on errors; 410 Gone permanently disables a feed
 - HTML-response detection — surfaces "returned an HTML page instead of a feed" as a health error
-- **GUID-churn suppression** — entries that reappear with a new GUID but the same URL slug, or the same title + date (within 7 days), are automatically marked read after refresh
+- **GUID-churn suppression** — entries that reappear with a new GUID but the same URL slug, or the same title + date (within 7 days), are automatically marked read after refresh; a startup cleanup pass also retroactively deduplicates within each feed and across feeds that syndicate the same post
 - Feed User-Agent: `Lectio/0.1 (+https://github.com/joshb253/Lectio)`
 - WAL-mode SQLite for all databases
 
