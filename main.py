@@ -435,6 +435,17 @@ async def lifespan(app: FastAPI):
     # GitHub release feeds get og_scrape + no list thumbnail.
     _auto_tag_github_release_feeds()
 
+    # Retroactive dedup: suppress duplicate unread entries (same slug or title+date)
+    # that accumulated before _suppress_guid_churn could catch them.
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                cleaned = _cleanup_intra_feed_slug_dupes(reader, conn)
+        if cleaned:
+            LOGGER.info("[guid-churn-cleanup] suppressed %d pre-existing duplicate entries", cleaned)
+    except Exception:
+        LOGGER.exception("[guid-churn-cleanup] startup cleanup failed")
+
     # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
     # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
     # Useful after an OPML import of hundreds of feeds: boot in a calm state,
@@ -3051,7 +3062,7 @@ _CHURN_TITLE_DATE_DAYS  = 7  # published dates must be within this many days of 
 
 
 def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
-    """Auto-mark newly-seen unread entries as read when a read entry in the same
+    """Auto-mark newly-seen unread entries as read when another entry in the same
     feed already has the same URL slug or the same title + publication date —
     indicating the publisher re-issued the same article with a new GUID and/or
     URL (CMS migration, permalink rebuild, etc.).
@@ -3064,23 +3075,26 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
       Title-only matching is deliberately not used because some feeds reuse
       titles across unrelated entries (weekly digests, daily roundups).
 
+    Compares new entries against both READ history and EXISTING UNREAD entries so
+    that duplicate re-publications are caught even when the originals were never read.
+
     Returns the number of entries suppressed.
     """
     from datetime import datetime, timedelta
 
     recent_cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=90)
 
-    new_unread = [
-        e for e in reader.get_entries(feed=feed_url, read=False)
-        if getattr(e, "added", None) and e.added >= recent_cutoff
-    ]
+    all_unread = list(reader.get_entries(feed=feed_url, read=False))
+    new_unread = [e for e in all_unread if getattr(e, "added", None) and e.added >= recent_cutoff]
     if not new_unread:
         return 0
 
+    old_unread = [e for e in all_unread if e not in new_unread]
+
     # Build slug set and title→[pub_dates] map from read entries (last 6 months).
     history_cutoff = datetime.now(tz=timezone.utc) - timedelta(days=180)
-    read_slugs: set[str] = set()
-    read_title_dates: dict[str, list[datetime]] = {}
+    known_slugs: set[str] = set()
+    known_title_dates: dict[str, list[datetime]] = {}
     for entry in reader.get_entries(feed=feed_url, read=True, limit=5000):
         pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
         if pub and pub < history_cutoff:
@@ -3088,25 +3102,37 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
         if entry.link:
             slug = _safe_dedup_entry_slug(entry.link)
             if slug:
-                read_slugs.add(slug)
+                known_slugs.add(slug)
         if entry.title and pub:
             norm = normalize_entry_title_for_dedupe(entry.title)
             if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
-                read_title_dates.setdefault(norm, []).append(pub)
+                known_title_dates.setdefault(norm, []).append(pub)
+
+    # Also index old unread entries — catches dupes that arrived before the user read any copy.
+    for entry in old_unread:
+        if entry.link:
+            slug = _safe_dedup_entry_slug(entry.link)
+            if slug:
+                known_slugs.add(slug)
+        pub = getattr(entry, "published", None) or getattr(entry, "updated", None) or getattr(entry, "added", None)
+        if entry.title and pub:
+            norm = normalize_entry_title_for_dedupe(entry.title)
+            if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
+                known_title_dates.setdefault(norm, []).append(pub)
 
     to_suppress = []
     for entry in new_unread:
         # Slug match (highest confidence).
         if entry.link:
             slug = _safe_dedup_entry_slug(entry.link)
-            if slug and slug in read_slugs:
+            if slug and slug in known_slugs:
                 to_suppress.append(entry)
                 continue
 
         # Title+date match (handles feeds that change both GUID and URL).
-        if entry.title and read_title_dates:
+        if entry.title and known_title_dates:
             norm = normalize_entry_title_for_dedupe(entry.title)
-            if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS and norm in read_title_dates:
+            if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS and norm in known_title_dates:
                 entry_pub = (
                     getattr(entry, "published", None)
                     or getattr(entry, "updated", None)
@@ -3114,8 +3140,8 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
                 )
                 if entry_pub:
                     threshold = _CHURN_TITLE_DATE_DAYS * 86400
-                    for read_pub in read_title_dates[norm]:
-                        if abs((entry_pub - read_pub).total_seconds()) <= threshold:
+                    for known_pub in known_title_dates[norm]:
+                        if abs((entry_pub - known_pub).total_seconds()) <= threshold:
                             to_suppress.append(entry)
                             break
 
@@ -3131,6 +3157,81 @@ def _suppress_guid_churn(reader, conn, feed_url: str) -> int:
         [(str(e.feed_url), str(e.id), when) for e in to_suppress],
     )
     return len(to_suppress)
+
+
+def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
+    """One-time retroactive scan: for every feed, find unread entries that share
+    a URL slug or a title+date with another unread entry in the same feed.
+    Keeps the oldest copy, marks the rest read.  Handles accumulated duplicates
+    that arrived before _suppress_guid_churn could catch them.
+
+    Returns total entries suppressed across all feeds.
+    """
+    from datetime import datetime, timedelta
+
+    total = 0
+    when = datetime.now().isoformat()
+    for feed in reader.get_feeds():
+        feed_url = str(feed.url)
+        try:
+            slug_entries: dict[str, list] = {}
+            title_entries: dict[str, list] = {}
+            for entry in reader.get_entries(feed=feed_url, read=False):
+                pub = (getattr(entry, "published", None)
+                       or getattr(entry, "updated", None)
+                       or getattr(entry, "added", None))
+                pub_ts = pub.timestamp() if pub else 0.0
+                if entry.link:
+                    slug = _safe_dedup_entry_slug(entry.link)
+                    if slug:
+                        slug_entries.setdefault(slug, []).append((pub_ts, entry))
+                if entry.title and pub:
+                    norm = normalize_entry_title_for_dedupe(entry.title)
+                    if len(norm.split()) >= _CHURN_TITLE_MIN_WORDS:
+                        title_entries.setdefault(norm, []).append((pub_ts, entry))
+
+            to_suppress: list = []
+            suppressed_ids: set = set()
+
+            # Slug duplicates: keep oldest.
+            for slug, items in slug_entries.items():
+                if len(items) < 2:
+                    continue
+                items.sort(key=lambda x: x[0])
+                for _, entry in items[1:]:
+                    eid = (str(entry.feed_url), str(entry.id))
+                    if eid not in suppressed_ids:
+                        suppressed_ids.add(eid)
+                        to_suppress.append(entry)
+
+            # Title+date duplicates: keep oldest among entries with pub dates within window.
+            threshold = _CHURN_TITLE_DATE_DAYS * 86400
+            for norm, items in title_entries.items():
+                if len(items) < 2:
+                    continue
+                items.sort(key=lambda x: x[0])
+                oldest_ts = items[0][0]
+                for pub_ts, entry in items[1:]:
+                    if abs(pub_ts - oldest_ts) <= threshold:
+                        eid = (str(entry.feed_url), str(entry.id))
+                        if eid not in suppressed_ids:
+                            suppressed_ids.add(eid)
+                            to_suppress.append(entry)
+
+            if not to_suppress:
+                continue
+
+            for entry in to_suppress:
+                reader.mark_entry_as_read((str(entry.feed_url), str(entry.id)))
+            conn.executemany(
+                "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+                [(str(e.feed_url), str(e.id), when) for e in to_suppress],
+            )
+            total += len(to_suppress)
+        except Exception:
+            LOGGER.exception("[guid-churn-cleanup] error on feed %s", feed_url)
+    return total
 
 
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
