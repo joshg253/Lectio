@@ -64,7 +64,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 ### Feed management
 - **OPML import/export**
-- **RSS auto-discovery** — paste a website URL; probes for `<link rel="alternate">` and common feed path suffixes
+- **RSS/Atom auto-discovery** — paste a website URL; probes for `<link rel="alternate">` and common feed path suffixes; Atom is preferred over RSS when both are advertised
 - **Page Feed (FakeFeedz)** — subscribe to any webpage as a feed: new links mode or content-change mode, with optional CSS selector
 - **YouTube folder sync** — sync a folder to a YouTube channel's video feed via YouTube Data API
 - **Hide Shorts** — per-feed toggle (YouTube feeds only) to automatically mark YouTube Shorts as read at fetch time
@@ -72,6 +72,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Feed Properties** — health status, post counts, backoff state, per-feed image and thumbnail tuning
   - **Pause / Resume updates** — suspend automatic fetching for a feed without unsubscribing
   - **Change URL** — update a feed's URL in-place; history, images, rules, and display prefs migrate automatically
+- **Duplicate feed scan** (Manage Feeds → Duplicates) — detects feeds subscribed more than once under different URL variants: trailing-slash differences, format-selector params (`?alt=rss`), and known equivalent domains (e.g. `old.reddit.com` ↔ `www.reddit.com`). Same-folder duplicates are auto-removed; cross-folder duplicates let you choose which folder to keep.
 
 ### Reliability
 - Conditional HTTP requests (ETag / If-Modified-Since via `reader` library)

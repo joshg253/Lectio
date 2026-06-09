@@ -133,11 +133,12 @@ class TestDiscoverFeedUrls:
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
-    def test_multiple_feeds_returned_in_order(self):
+    def test_atom_preferred_over_rss_regardless_of_order(self):
+        """Atom candidate must come first even when RSS appears first in HTML."""
         html = (
             '<link rel="alternate" type="application/rss+xml" href="/rss.xml" />'
             '<link rel="alternate" type="application/atom+xml" href="/atom.xml" />'
         )
         with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
-        assert result == ["https://example.com/rss.xml", "https://example.com/atom.xml"]
+        assert result == ["https://example.com/atom.xml", "https://example.com/rss.xml"]

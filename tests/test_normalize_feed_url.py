@@ -48,3 +48,29 @@ def test_blogger_alt_rss_param_stripped():
     result = normalize_feed_url("https://example.blogspot.com/feeds/posts/default?alt=rss")
     assert "alt=rss" not in result
     assert "example.blogspot.com" in result
+
+
+# --- Domain alias normalization ---
+
+@pytest.mark.parametrize("raw, expected", [
+    (
+        "https://old.reddit.com/r/buildapcsales/.rss",
+        "https://www.reddit.com/r/buildapcsales/.rss",
+    ),
+    (
+        "https://old.reddit.com/r/learnpython/.rss",
+        "https://www.reddit.com/r/learnpython/.rss",
+    ),
+    # Trailing slash still stripped after domain rewrite
+    (
+        "https://old.reddit.com/r/buildapcsales/",
+        "https://www.reddit.com/r/buildapcsales",
+    ),
+])
+def test_reddit_old_domain_rewritten(raw, expected):
+    assert normalize_feed_url(raw) == expected
+
+
+def test_www_reddit_unchanged():
+    url = "https://www.reddit.com/r/buildapcsales/.rss"
+    assert normalize_feed_url(url) == url

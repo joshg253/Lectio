@@ -127,14 +127,7 @@
           <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
           <button type="button" id="menu-highlights-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">auto_fix_high</span> Automation</button>
           <hr class="menu-divider" />
-          <div class="flyout-item">
-            <div class="flyout-trigger menu-item"><span class="flyout-label">+ Add</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
-            <div class="flyout-panel">
-              <button type="button" class="menu-item" data-toggle-panel="add-folder-modal">Folder</button>
-              <button type="button" class="menu-item" data-toggle-panel="add-feed-modal">Feed</button>
-              <button type="button" class="menu-item" data-toggle-panel="fakefeedz-modal">Page Feed</button>
-            </div>
-          </div>
+          <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
           <a
             class="menu-item history-menu-item{% if selected_read_filter == 'history' %} active{% endif %}"
             href="/?folder_id={{ selected_folder_id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=history&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
@@ -1396,30 +1389,6 @@
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
 
-  <div id="dedup-modal" class="action-modal" hidden>
-    <div class="action-modal-panel dedup-modal-panel" role="dialog" aria-modal="true" aria-labelledby="dedup-modal-title">
-      <div class="modal-header-row">
-        <h3 id="dedup-modal-title" class="action-modal-title">Remove duplicate feeds</h3>
-        <button type="button" class="modal-close" data-close-modal="dedup-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      <p class="action-modal-label dedup-modal-intro"></p>
-      <div class="dedup-modal-list"></div>
-      <div class="dedup-cross-section" hidden>
-        <p class="action-modal-label dedup-cross-intro"></p>
-        <div class="dedup-cross-list"></div>
-      </div>
-      <div class="dedup-upgrade-section" hidden>
-        <p class="action-modal-label dedup-upgrade-intro"></p>
-        <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
-        <div class="dedup-upgrade-list"></div>
-      </div>
-      <div class="action-modal-actions">
-        <button type="button" class="action-modal-cancel" data-close-modal="dedup-modal">Cancel</button>
-        <button type="button" id="dedup-modal-ok" class="danger">Remove duplicates</button>
-      </div>
-    </div>
-  </div>
-
   <div id="debug-confirm-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">
       <div class="modal-header-row">
@@ -1434,83 +1403,67 @@
     </div>
   </div>
 
-  <div id="add-folder-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="add-folder-modal-title">
-      <div class="modal-header-row">
-        <h3 id="add-folder-modal-title" class="action-modal-title">Add Folder</h3>
-        <button type="button" class="modal-close" data-close-modal="add-folder-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      <form method="post" action="/folders" class="action-modal-form">
-        <label for="add-folder-name" class="action-modal-label">Folder name</label>
-        <input id="add-folder-name" name="name" placeholder="New folder name" required />
-        <div class="action-modal-actions">
-          <button type="button" class="action-modal-cancel" data-close-modal="add-folder-modal">Cancel</button>
-          <button type="submit">Add Folder</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
   <div id="add-feed-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="add-feed-modal-title">
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="afd-title">
       <div class="modal-header-row">
-        <h3 id="add-feed-modal-title" class="action-modal-title">Add Feed</h3>
+        <h3 id="afd-title" class="action-modal-title">Add Feed</h3>
         <button type="button" class="modal-close" data-close-modal="add-feed-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
-      <form method="post" action="/feeds" class="action-modal-form">
-        <label for="add-feed-url" class="action-modal-label">Feed or website URL</label>
-        <input id="add-feed-url" name="feed_url" placeholder="https://example.com/ or https://example.com/feed.xml" required />
-        <label for="add-feed-folder" class="action-modal-label">Folder</label>
-        <select id="add-feed-folder" name="folder_id">
-          {% for folder in folder_options %}
-          {% if folder.depth == 0 %}
-          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
-          {% else %}
-          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
-          {% endif %}
-          {% endfor %}
-        </select>
-        <div class="action-modal-actions">
-          <button type="button" class="action-modal-cancel" data-close-modal="add-feed-modal">Cancel</button>
-          <button type="submit">Add Feed</button>
-        </div>
-      </form>
-    </div>
-  </div>
 
-  <div id="fakefeedz-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="fakefeedz-modal-title">
-      <div class="modal-header-row">
-        <h3 id="fakefeedz-modal-title" class="action-modal-title">Create Page Feed</h3>
-        <button type="button" class="modal-close" data-close-modal="fakefeedz-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      <div class="afd-url-row">
+        <input id="afd-url" type="url" placeholder="https://example.com/ or paste a feed URL" autocomplete="off" />
+        <span id="afd-spinner" class="afd-spinner" hidden aria-hidden="true"></span>
       </div>
-      <form method="post" action="/scraped-feeds" class="action-modal-form">
-        <label for="fakefeedz-url" class="action-modal-label">Page URL</label>
-        <input id="fakefeedz-url" name="source_url" type="url" placeholder="https://example.com/" required />
-        <label for="fakefeedz-title" class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional — auto-detected)</span></label>
-        <input id="fakefeedz-title" name="feed_title" placeholder="Detected from page title" />
+
+      <div id="afd-msg" class="afd-msg" hidden></div>
+
+      <div id="afd-pick" class="afd-pick" hidden></div>
+
+      <div id="afd-pf" class="afd-pf" hidden>
+        <div class="afd-pf-header">Page Feed options</div>
+        <label class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional)</span></label>
+        <input id="afd-pf-title" placeholder="Detected from page title" />
         <label class="action-modal-label">Scraping mode</label>
         <div class="fakefeedz-modes">
-          <label class="fakefeedz-mode-label"><input type="radio" name="mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
-          <label class="fakefeedz-mode-label"><input type="radio" name="mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
+          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
+          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
         </div>
-        <label for="fakefeedz-selector" class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
-        <input id="fakefeedz-selector" name="selector" placeholder="e.g. .changelog a, article a" />
-        <p class="action-modal-hint">Narrows what is scraped. For link list, selects the link elements. For change detect, selects the content region to watch.</p>
-        <label for="fakefeedz-folder" class="action-modal-label">Folder</label>
-        <select id="fakefeedz-folder" name="folder_id">
-          {% for folder in folder_options %}
-          {% if folder.depth == 0 %}
-          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
-          {% else %}
-          <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
-          {% endif %}
-          {% endfor %}
-        </select>
-        <div class="action-modal-actions">
-          <button type="button" class="action-modal-cancel" data-close-modal="fakefeedz-modal">Cancel</button>
-          <button type="submit">Create Feed</button>
-        </div>
+        <label class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
+        <input id="afd-pf-selector" placeholder="e.g. .changelog a, article a" />
+        <p class="action-modal-hint">For link list, selects link elements. For change detect, selects the content region to watch.</p>
+      </div>
+
+      <label for="afd-folder" class="action-modal-label">Folder</label>
+      <select id="afd-folder">
+        {% for folder in folder_options %}
+        {% if folder.depth == 0 %}
+        <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>{{ folder.name }}</option>
+        {% else %}
+        <option value="{{ folder.id }}" {% if folder.id == selected_folder_id %}selected{% endif %}>&#8195;{{ folder.name }}</option>
+        {% endif %}
+        {% endfor %}
+        <option value="__new__">+ New folder…</option>
+      </select>
+      <div id="afd-new-folder" class="afd-new-folder" hidden>
+        <input id="afd-new-folder-name" placeholder="Folder name" />
+        <button type="button" id="afd-new-folder-btn">Create</button>
+      </div>
+
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="add-feed-modal">Cancel</button>
+        <button type="button" id="afd-submit" disabled>Add Feed</button>
+      </div>
+
+      <form id="afd-feed-form" method="post" action="/feeds" hidden>
+        <input type="hidden" name="feed_url" id="afd-ff-url" />
+        <input type="hidden" name="folder_id" id="afd-ff-folder" />
+      </form>
+      <form id="afd-pf-form" method="post" action="/scraped-feeds" hidden>
+        <input type="hidden" name="source_url" id="afd-pff-url" />
+        <input type="hidden" name="folder_id" id="afd-pff-folder" />
+        <input type="hidden" name="mode" id="afd-pff-mode" />
+        <input type="hidden" name="feed_title" id="afd-pff-title" />
+        <input type="hidden" name="selector" id="afd-pff-selector" />
       </form>
     </div>
   </div>
@@ -1687,10 +1640,34 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Duplicates</button>
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
-          <p class="muted" style="padding:0.5rem 0">Folder list coming soon.</p>
+          {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
+          {% if child_rows %}
+          <table class="settings-folders-table">
+            <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th></th><th></th></tr></thead>
+            <tbody>
+            {% for row in child_rows %}
+            {% set failing = folder_failing_counts.get(row.id, 0) %}
+            <tr class="settings-folder-row">
+              <td class="settings-folder-name">{{ row.name }}</td>
+              <td class="settings-folder-feeds">{{ row.feed_count }}</td>
+              <td class="settings-folder-status">
+                {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+                {% if row.cadence_minutes %}<span class="settings-folder-cadence" title="Custom refresh: every {{ row.cadence_minutes }} min">{{ row.cadence_minutes }}m</span>{% endif %}
+              </td>
+              <td class="settings-folder-actions">
+                <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
+              </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <p class="muted" style="padding:0.5rem 0">No folders yet.</p>
+          {% endif %}
         </div>
 
         <div id="problematic-feeds-modal">
@@ -1766,6 +1743,28 @@
           <p class="muted">No deactivated feeds.</p>
           {% endif %}
         </div>
+
+        <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="duplicates" hidden>
+          <div class="feeds-dedup-controls">
+            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
+          </div>
+          <div id="dedup-inline-results" hidden>
+            <p class="action-modal-label dedup-modal-intro"></p>
+            <div class="dedup-modal-list"></div>
+            <div class="dedup-cross-section" hidden>
+              <p class="action-modal-label dedup-cross-intro"></p>
+              <div class="dedup-cross-list"></div>
+            </div>
+            <div class="dedup-upgrade-section" hidden>
+              <p class="action-modal-label dedup-upgrade-intro"></p>
+              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
+              <div class="dedup-upgrade-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Import/Export tab -->
@@ -1774,7 +1773,6 @@
         <div class="settings-section settings-importexport-group">
           <label for="opml-file-input" class="settings-secondary-btn" style="cursor:pointer">Import OPML</label>
           <a class="settings-secondary-btn" href="/opml/export">Export OPML</a>
-          <button type="button" class="settings-secondary-btn" id="dedup-feeds-btn">Remove duplicate feeds</button>
         </div>
         <h4 class="settings-section-title" style="margin-top:1.25rem">Takeout</h4>
         <div class="settings-section settings-importexport-group">
@@ -1950,6 +1948,8 @@
         <dd>
           <select id="folder-prop-cadence" class="feed-prop-strategy-select" style="width:auto">
             <option value="0">Use global setting</option>
+            <option value="1">Every 1 min</option>
+            <option value="2">Every 2 min</option>
             <option value="5">Every 5 min</option>
             <option value="10">Every 10 min</option>
             <option value="15">Every 15 min</option>
@@ -2445,7 +2445,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-folder-modal, #add-feed-modal, #fakefeedz-modal, #global-note-modal, #email-article-modal, #stats-modal, #dedup-modal, #highlights-modal, #settings-modal')) {
+    for (const modal of document.querySelectorAll('#add-feed-modal, #global-note-modal, #email-article-modal, #stats-modal, #highlights-modal, #settings-modal')) {
       // Use mousedown/mouseup pairing so that CSS-resize drag releases (where
       // mousedown was on the panel and mouseup lands on the backdrop) don't
       // accidentally dismiss the modal.  Only closes when BOTH events hit the
@@ -2567,14 +2567,16 @@
       const sameFolder = data.same_folder || [];
       const crossFolder = data.cross_folder || [];
       const upgradable = data.upgradable || [];
-      const modal = document.getElementById('dedup-modal');
-      const intro = modal.querySelector('.dedup-modal-intro');
-      const list = modal.querySelector('.dedup-modal-list');
-      const crossSection = modal.querySelector('.dedup-cross-section');
-      const crossList = modal.querySelector('.dedup-cross-list');
-      const upgradeSection = modal.querySelector('.dedup-upgrade-section');
-      const upgradeList = modal.querySelector('.dedup-upgrade-list');
+      const results = document.getElementById('dedup-inline-results');
+      const intro = results.querySelector('.dedup-modal-intro');
+      const list = results.querySelector('.dedup-modal-list');
+      const crossSection = results.querySelector('.dedup-cross-section');
+      const crossList = results.querySelector('.dedup-cross-list');
+      const upgradeSection = results.querySelector('.dedup-upgrade-section');
+      const upgradeList = results.querySelector('.dedup-upgrade-list');
+      const okBtn = document.getElementById('dedup-modal-ok');
 
+      results.hidden = false;
       const hasAnything = sameFolder.length > 0 || crossFolder.length > 0 || upgradable.length > 0;
 
       if (!hasAnything) {
@@ -2582,9 +2584,9 @@
         list.innerHTML = '';
         crossSection.hidden = true;
         upgradeSection.hidden = true;
-        modal.querySelector('#dedup-modal-ok').hidden = true;
+        okBtn.hidden = true;
       } else {
-        modal.querySelector('#dedup-modal-ok').hidden = false;
+        okBtn.hidden = false;
 
         // Same-folder section
         if (sameFolder.length > 0) {
@@ -2648,19 +2650,17 @@
         }
 
         // Update OK button label
-        const okBtn = modal.querySelector('#dedup-modal-ok');
         const hasDedup = sameFolder.length > 0 || crossFolder.length > 0;
         const hasUpgrade = upgradable.length > 0;
         okBtn.textContent = hasDedup && hasUpgrade ? 'Remove duplicates & upgrade' : hasUpgrade ? 'Upgrade feeds' : 'Remove duplicates';
       }
-      modal.hidden = false;
     });
 
     document.getElementById('dedup-modal-ok')?.addEventListener('click', async () => {
-      const modal = document.getElementById('dedup-modal');
+      const results = document.getElementById('dedup-inline-results');
       // Collect cross-folder choices
       const crossChoices = [];
-      for (const pair of modal.querySelectorAll('.dedup-cross-pair')) {
+      for (const pair of results.querySelectorAll('.dedup-cross-pair')) {
         const keep = pair.dataset.keep;
         const remove = pair.dataset.remove;
         const folderIds = [...pair.querySelectorAll('input[type="checkbox"]:checked')].map(cb => parseInt(cb.value));
@@ -2668,10 +2668,10 @@
       }
       // Collect upgrade choices (only checked ones)
       const upgradeChoices = [];
-      for (const cb of modal.querySelectorAll('.dedup-upgrade-check:checked')) {
+      for (const cb of results.querySelectorAll('.dedup-upgrade-check:checked')) {
         upgradeChoices.push({ current: cb.dataset.current, upgrade_to: cb.dataset.upgradeTo });
       }
-      modal.hidden = true;
+      results.hidden = true;
       const dedupeResp = await fetch('/feeds/deduplicate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -8344,7 +8344,13 @@
       _folderPropCloseOnClick = false;
     });
 
-    // Feeds tab: view switching (Folders / Failing / Deactivated).
+    // Feeds tab: folder properties buttons in the Folders panel.
+    document.getElementById('settings-tab-feeds')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-settings-folder-id]');
+      if (btn) openFolderPropertiesModal(Number(btn.dataset.settingsFolderId));
+    });
+
+    // Feeds tab: view switching (Folders / Failing / Deactivated / Duplicates).
     const feedsTab = document.getElementById('settings-tab-feeds');
     feedsTab?.querySelectorAll('[data-feeds-view]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -8584,41 +8590,15 @@
     rootAddFeedButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!contextFolderId || !contextFolderIdInput || !contextFeedUrlInput || !addFeedForm) {
-        return;
-      }
       hideAllContextMenus();
-      openActionInputModal({
-        title: 'Add Feed',
-        label: `Feed URL for ${contextFolderName}`,
-        placeholder: 'https://example.com/feed.xml',
-        submitLabel: 'Add Feed',
-        onSubmit: (feedUrl) => {
-          contextFolderIdInput.value = contextFolderId;
-          contextFeedUrlInput.value = feedUrl;
-          addFeedForm.submit();
-        },
-      });
+      openAddFeedDialog({ folderId: contextFolderId });
     });
 
     addFeedButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!contextFolderId || !contextFolderIdInput || !contextFeedUrlInput || !addFeedForm) {
-        return;
-      }
       hideAllContextMenus();
-      openActionInputModal({
-        title: 'Add Feed',
-        label: `Feed URL for ${contextFolderName}`,
-        placeholder: 'https://example.com/feed.xml',
-        submitLabel: 'Add Feed',
-        onSubmit: (feedUrl) => {
-          contextFolderIdInput.value = contextFolderId;
-          contextFeedUrlInput.value = feedUrl;
-          addFeedForm.submit();
-        },
-      });
+      openAddFeedDialog({ folderId: contextFolderId });
     });
 
     renameFolderButton?.addEventListener('click', (event) => {
@@ -9456,32 +9436,165 @@
       }
     }
 
-    function openAddFeedModal() {
-      const modal = document.getElementById('add-feed-modal');
-      if (modal) {
-        modal.removeAttribute('hidden');
-        modal.querySelector('input[name="feed_url"]')?.focus();
-      }
-    }
-
-    function openFakeFeedzModal(prefillUrl) {
-      const modal = document.getElementById('fakefeedz-modal');
+    // ── Unified Add Feed dialog ──────────────────────────────────────────────
+    (function () {
+      const modal    = document.getElementById('add-feed-modal');
       if (!modal) return;
-      if (prefillUrl) {
-        const urlInput = modal.querySelector('#fakefeedz-url');
-        if (urlInput) urlInput.value = prefillUrl;
+      const urlInput      = document.getElementById('afd-url');
+      const spinner       = document.getElementById('afd-spinner');
+      const msgEl         = document.getElementById('afd-msg');
+      const pickEl        = document.getElementById('afd-pick');
+      const pfSection     = document.getElementById('afd-pf');
+      const folderSelect  = document.getElementById('afd-folder');
+      const newFolderRow  = document.getElementById('afd-new-folder');
+      const newFolderName = document.getElementById('afd-new-folder-name');
+      const newFolderBtn  = document.getElementById('afd-new-folder-btn');
+      const submitBtn     = document.getElementById('afd-submit');
+      const feedForm      = document.getElementById('afd-feed-form');
+      const pfForm        = document.getElementById('afd-pf-form');
+
+      let checkTimer = null, selectedFeedUrl = null, isPageFeedMode = false, isChecking = false;
+
+      function reset() {
+        urlInput.value = '';
+        msgEl.hidden = true; msgEl.className = 'afd-msg'; msgEl.textContent = '';
+        pickEl.hidden = true; pickEl.innerHTML = '';
+        pfSection.hidden = true;
+        document.getElementById('afd-pf-title').value = '';
+        document.getElementById('afd-pf-selector').value = '';
+        modal.querySelector('input[name="afd-mode"][value="link_list"]').checked = true;
+        submitBtn.disabled = true; submitBtn.textContent = 'Add Feed';
+        selectedFeedUrl = null; isPageFeedMode = false;
+        spinner.hidden = true; isChecking = false;
+        newFolderRow.hidden = true; newFolderName.value = '';
       }
-      const folderSelect = modal.querySelector('#fakefeedz-folder');
-      if (folderSelect) folderSelect.value = '{{ selected_folder_id }}';
-      modal.removeAttribute('hidden');
-      modal.querySelector('#fakefeedz-url')?.focus();
-    }
+
+      function setMsg(text, type) {
+        msgEl.textContent = text;
+        msgEl.className = 'afd-msg' + (type ? ' afd-msg--' + type : '');
+        msgEl.hidden = !text;
+      }
+
+      function schedule(url) {
+        clearTimeout(checkTimer);
+        if (!url || !url.includes('://')) {
+          setMsg(''); submitBtn.disabled = true;
+          pickEl.hidden = true; pfSection.hidden = true; selectedFeedUrl = null;
+          return;
+        }
+        checkTimer = setTimeout(() => run(url), 700);
+      }
+
+      async function run(url) {
+        if (isChecking) return;
+        isChecking = true; spinner.hidden = false; submitBtn.disabled = true;
+        setMsg(''); pickEl.hidden = true; pickEl.innerHTML = ''; pfSection.hidden = true;
+        selectedFeedUrl = null; isPageFeedMode = false;
+        try {
+          const r = await fetch('/feeds/discover?url=' + encodeURIComponent(url));
+          apply(url, await r.json());
+        } catch (_) { setMsg('Network error — could not reach server.', 'error'); }
+        finally { isChecking = false; spinner.hidden = true; }
+      }
+
+      function apply(rawUrl, d) {
+        if (d.status === 'feed') {
+          selectedFeedUrl = d.feeds[0].url;
+          setMsg((d.feeds[0].title ? 'Feed found: ' + d.feeds[0].title : 'Feed found.'), 'ok');
+          submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
+        } else if (d.status === 'feeds') {
+          setMsg(d.feeds.length + ' feeds found — pick one:');
+          renderPicker(d.feeds);
+          submitBtn.textContent = 'Add Feed'; submitBtn.disabled = true;
+        } else if (d.status === 'none' || d.status === 'blocked') {
+          setMsg(d.message, 'warn');
+          pfSection.hidden = false; isPageFeedMode = true; selectedFeedUrl = rawUrl;
+          submitBtn.textContent = 'Create Page Feed'; submitBtn.disabled = false;
+        } else {
+          setMsg(d.message || 'Could not check URL.', 'error');
+        }
+      }
+
+      function renderPicker(feeds) {
+        pickEl.innerHTML = ''; pickEl.hidden = false;
+        feeds.forEach((f, i) => {
+          const lbl = document.createElement('label');
+          lbl.className = 'afd-pick-item';
+          const rb = document.createElement('input');
+          rb.type = 'radio'; rb.name = 'afd-pick'; rb.value = f.url;
+          if (i === 0) { rb.checked = true; selectedFeedUrl = f.url; submitBtn.disabled = false; }
+          rb.addEventListener('change', () => { selectedFeedUrl = f.url; submitBtn.disabled = false; });
+          const sp = document.createElement('span');
+          sp.textContent = f.title || f.url; sp.title = f.url;
+          lbl.append(rb, sp); pickEl.append(lbl);
+        });
+      }
+
+      folderSelect.addEventListener('change', () => {
+        newFolderRow.hidden = folderSelect.value !== '__new__';
+        if (folderSelect.value === '__new__') newFolderName.focus();
+      });
+
+      newFolderBtn.addEventListener('click', async () => {
+        const name = newFolderName.value.trim();
+        if (!name) return;
+        newFolderBtn.disabled = true;
+        try {
+          const r = await fetch('/api/folders', { method: 'POST', body: new URLSearchParams({ name }) });
+          const d = await r.json();
+          if (d.ok) {
+            const opt = new Option(d.name, d.id);
+            folderSelect.insertBefore(opt, folderSelect.querySelector('option[value="__new__"]'));
+            folderSelect.value = d.id;
+            newFolderRow.hidden = true; newFolderName.value = '';
+          }
+        } finally { newFolderBtn.disabled = false; }
+      });
+
+      newFolderName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); newFolderBtn.click(); } });
+
+      submitBtn.addEventListener('click', () => {
+        const fid = folderSelect.value === '__new__' ? null : folderSelect.value;
+        if (!fid || !selectedFeedUrl) return;
+        if (isPageFeedMode) {
+          document.getElementById('afd-pff-url').value    = selectedFeedUrl;
+          document.getElementById('afd-pff-folder').value = fid;
+          document.getElementById('afd-pff-mode').value   = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
+          document.getElementById('afd-pff-title').value  = document.getElementById('afd-pf-title').value;
+          document.getElementById('afd-pff-selector').value = document.getElementById('afd-pf-selector').value;
+          pfForm.submit();
+        } else {
+          document.getElementById('afd-ff-url').value    = selectedFeedUrl;
+          document.getElementById('afd-ff-folder').value = fid;
+          feedForm.submit();
+        }
+      });
+
+      urlInput.addEventListener('input', () => schedule(urlInput.value.trim()));
+      urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(checkTimer); run(urlInput.value.trim()); } });
+
+      window.openAddFeedDialog = function (opts = {}) {
+        reset();
+        if (opts.folderId) folderSelect.value = String(opts.folderId);
+        if (opts.url) { urlInput.value = opts.url; run(opts.url); }
+        modal.removeAttribute('hidden');
+        urlInput.focus();
+      };
+      // Legacy shims so any remaining callers don't break
+      window.openAddFeedModal = () => window.openAddFeedDialog();
+      window.openFakeFeedzModal = url => window.openAddFeedDialog({ url });
+
+      document.getElementById('menu-add-feed-btn')?.addEventListener('click', () => {
+        window.openAddFeedDialog();
+        document.getElementById('side-menu')?.removeAttribute('data-open');
+      });
+    }());
 
     // "Create page feed" button inside the no-RSS toast.
     const toastPageFeedBtn = document.getElementById('toast-page-feed-btn');
     if (toastPageFeedBtn) {
       toastPageFeedBtn.addEventListener('click', () => {
-        openFakeFeedzModal({{ no_rss_url | tojson }});
+        openAddFeedDialog({ url: {{ no_rss_url | tojson }} });
       });
     }
 
@@ -9733,7 +9846,7 @@
 
       // Close any open action modal (priority order)
       const openModal = document.querySelector(
-        '#global-note-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #add-folder-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
+        '#global-note-modal:not([hidden]), #stats-modal:not([hidden]), #add-feed-modal:not([hidden]), #action-input-modal:not([hidden]), #feed-properties-modal:not([hidden]), #highlights-modal:not([hidden])'
       );
       if (openModal) {
         openModal.setAttribute('hidden', '');

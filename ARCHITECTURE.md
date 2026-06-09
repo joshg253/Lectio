@@ -53,6 +53,15 @@ Current target is local-first single-user. Later phases may add basic auth behin
 
 Use plugin/adapter style for non-native behavior instead of hardwired branching. Prefer replaceable pieces and avoid duplicating `reader` capabilities in app code.
 
+## Feed URL normalization
+
+`normalize_feed_url` (main.py) is applied at add-feed time and in the Duplicate scan (`GET /feeds/duplicates`). It handles:
+
+- Trailing-slash stripping from paths longer than `/`.
+- Format-selector query params (`alt=rss`, `alt=atom`, etc.) that select serialization without changing content — lets the Blogger Atom and RSS URLs of the same feed collapse to one.
+- ArtStation subdomain rewrites (`username.artstation.com/rss` → `www.artstation.com/username.rss`) to avoid TLS hostname issues with underscore usernames.
+- `_DOMAIN_ALIASES` map — known domain pairs that serve identical content (currently `old.reddit.com` → `www.reddit.com`). Add new pairs there; the normalization and duplicate-scan logic picks them up automatically.
+
 ## Lead image pipeline
 
 `LeadImageService` (services/lead_images.py) resolves a hero image for each entry using a layered strategy:

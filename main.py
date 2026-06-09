@@ -175,7 +175,7 @@ _LECTIO_FOLDER_NAME = "_Lectio"
 
 scraper_service.init(DATA_DIR)
 DEFAULT_AUTO_REFRESH_MINUTES = 60
-MIN_AUTO_REFRESH_MINUTES = 15
+MIN_AUTO_REFRESH_MINUTES = 5
 MANUAL_REFRESH_COOLDOWN_SECONDS = 60
 FAILED_FEED_BACKOFF_BASE_SECONDS = 60
 FAILED_FEED_BACKOFF_MAX_SECONDS = 60 * 60 * 24
@@ -199,7 +199,7 @@ SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
 SETTING_INSTAPAPER_PASSWORD = "instapaper_password"
-AUTO_REFRESH_OPTION_MINUTES = (0, 15, 30, 60, 360, 720)
+AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
@@ -405,6 +405,17 @@ async def lifespan(app: FastAPI):
         with _app_settings_cache_lock:
             _app_settings_cache = _load_app_settings_cache(conn)
     app.state.last_scheduled_refresh_started_at = time.monotonic()
+
+    # Checkpoint both WAL files at startup so the first user request does not
+    # have to rebuild the WAL index from a large file left over from the
+    # previous run.  Use direct connections so we're not racing the reader.
+    for _ckpt_path in (READER_DB_PATH, META_DB_PATH):
+        try:
+            _ckpt_conn = sqlite3.connect(str(_ckpt_path), timeout=5)
+            _ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _ckpt_conn.close()
+        except Exception:
+            pass
 
     # Ensure reader db is created at startup.
     with get_reader():
@@ -686,6 +697,7 @@ class _AccessLogMiddleware:
             await self.app(scope, receive, send)
             return
 
+        _t0 = time.monotonic()
         status_holder = [0]
 
         async def send_wrapper(message):
@@ -697,6 +709,7 @@ class _AccessLogMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             status = status_holder[0]
+            elapsed_ms = int((time.monotonic() - _t0) * 1000)
             client = scope.get("client") or ("?", 0)
             client_addr = f"{client[0]}:{client[1]}"
             method = scope.get("method", "?")
@@ -710,7 +723,8 @@ class _AccessLogMiddleware:
             # Suppression: prefetch 204/503 with list_feed_url= are pure noise.
             if not (status in self._SUPPRESS_STATUSES and "list_feed_url=" in request_path):
                 reason = self._STATUS_REASONS.get(status, "")
-                LOGGER.info('%s - "%s" %d %s', client_addr, request_line, status, reason)
+                duration = f" {elapsed_ms}ms" if elapsed_ms >= 200 else ""
+                LOGGER.info('%s - "%s" %d %s%s', client_addr, request_line, status, reason, duration)
 
 
 class _RejectPrefetchMiddleware:
@@ -1061,6 +1075,9 @@ def get_meta_connection() -> sqlite3.Connection:
     # immediately failing with "database is locked".
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
+    # Keep WAL small: checkpoint at 200 pages (~800KB) rather than the default
+    # 1000 pages so the file never balloons to tens of MB between restarts.
+    conn.execute("PRAGMA wal_autocheckpoint=200")
     _meta_conn_local.conn = conn
     return conn
 
@@ -1950,6 +1967,7 @@ def get_folder_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         SELECT
             f.id,
             f.name,
+            f.cadence_minutes,
             CASE WHEN f.parent_id IS NULL THEN 0 ELSE 1 END AS depth,
             CASE WHEN f.parent_id IS NULL THEN f.name ELSE root.name || ' / ' || f.name END AS path,
             (
@@ -5592,10 +5610,14 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
 
 
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
+    _t0 = time.monotonic()
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
             return _build_orphan_entry_detail(feed_url, entry_id)
+        _reader_get_ms = int((time.monotonic() - _t0) * 1000)
+        if _reader_get_ms > 200:
+            LOGGER.info("[perf] entry_detail: reader.get_entry=%dms %s", _reader_get_ms, entry_id)
 
         published_dt = entry.published or entry.updated or entry.added
         author_name = (getattr(entry, "authors_str", None) or "").strip() or None
@@ -5776,9 +5798,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             lead_image_service.queue_source_fetch(
                 str(entry.feed_url), str(entry.id), entry.link
             )
+            _fetch_t0 = time.monotonic()
             lead_image_service.wait_for_source_fetch(
                 str(entry.feed_url), str(entry.id), timeout=3.0
             )
+            _fetch_ms = int((time.monotonic() - _fetch_t0) * 1000)
+            LOGGER.info("[perf] entry_detail: source_fetch_wait=%dms %s", _fetch_ms, entry.link)
             # Re-read the image URL now that the fetch may have completed.
             lead_image_url = lead_image_service.extract_entry_thumbnail_url(
                 entry, include_source_lookup=False
@@ -6206,6 +6231,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             if not _summary_text_only:
                 _summary = None
 
+        _total_ms = int((time.monotonic() - _t0) * 1000)
+        if _total_ms > 500:
+            LOGGER.info("[perf] entry_detail: total=%dms %s", _total_ms, entry_id)
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
@@ -6262,19 +6290,38 @@ def entry_pane(
     normalized_star_only = normalize_star_only(star_only)
     normalized_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
 
+    _pane_t0 = time.monotonic()
     selected_entry = get_entry_detail(feed_url, entry_id)
+    _detail_ms = int((time.monotonic() - _pane_t0) * 1000)
+    if _detail_ms > 500:
+        LOGGER.info("[perf] entry_pane: get_entry_detail=%dms feed=%s", _detail_ms, feed_url)
     if selected_entry and not selected_entry["read"]:
-        with get_reader() as reader:
-            reader.mark_entry_as_read((feed_url, entry_id))
-        try:
-            upsert_entry_read_state(feed_url, entry_id)
-        except Exception:
-            LOGGER.warning("upsert_entry_read_state failed (db contention?); entry still marked read in reader", exc_info=True)
-        with unread_counts_cache_lock:
-            global _unread_counts_generation
-            _unread_counts_generation += 1
-            unread_counts_cache.clear()
         selected_entry["read"] = True
+        _fu, _eid = feed_url, entry_id
+        _title = str(selected_entry.get("title") or "")
+        _link = str(selected_entry.get("link") or "")
+        _feed_title = str(selected_entry.get("feed_title") or "")
+
+        def _bg_mark_read() -> None:
+            try:
+                with get_reader() as reader:
+                    reader.mark_entry_as_read((_fu, _eid))
+            except Exception:
+                LOGGER.warning("background mark_entry_as_read failed for %s/%s", _fu, _eid, exc_info=True)
+            try:
+                upsert_entry_read_state(_fu, _eid)
+            except Exception:
+                LOGGER.warning("background upsert_entry_read_state failed for %s/%s", _fu, _eid, exc_info=True)
+            try:
+                append_read_history(_fu, _eid, _title, _link, _feed_title)
+            except Exception:
+                LOGGER.warning("background append_read_history failed for %s/%s", _fu, _eid, exc_info=True)
+            with unread_counts_cache_lock:
+                global _unread_counts_generation
+                _unread_counts_generation += 1
+                unread_counts_cache.clear()
+
+        threading.Thread(target=_bg_mark_read, daemon=True).start()
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
     # so it lands in the feed's actual containing folder.
@@ -6390,6 +6437,12 @@ _FORMAT_SELECTOR_PARAMS = frozenset({"alt"})
 _FORMAT_SELECTOR_VALUES = frozenset({"rss", "rss2", "atom"})
 
 
+_DOMAIN_ALIASES: dict[str, str] = {
+    # old.reddit.com and www.reddit.com serve identical RSS content
+    "old.reddit.com": "www.reddit.com",
+}
+
+
 def normalize_feed_url(feed_url: str) -> str:
     """Normalize a feed URL for consistent storage and deduplication.
 
@@ -6400,6 +6453,7 @@ def normalize_feed_url(feed_url: str) -> str:
     - Rewrites ArtStation subdomain feeds (username.artstation.com/rss) to the
       main-domain form (www.artstation.com/username.rss) which works for all
       usernames including those with underscores that fail TLS hostname validation.
+    - Rewrites known domain aliases (e.g. old.reddit.com → www.reddit.com).
     - Other normalization (YouTube links) is handled separately.
     """
     import re as _re
@@ -6408,6 +6462,9 @@ def normalize_feed_url(feed_url: str) -> str:
         feed_url = f'{_as_m.group(1)}://www.artstation.com/{_as_m.group(2)}.rss'
     try:
         parsed = urlparse(feed_url)
+        if parsed.netloc.lower() in _DOMAIN_ALIASES:
+            feed_url = parsed._replace(netloc=_DOMAIN_ALIASES[parsed.netloc.lower()]).geturl()
+            parsed = urlparse(feed_url)
         path = parsed.path
         if path and path != "/" and path.endswith("/"):
             path = path.rstrip("/")
@@ -7372,6 +7429,11 @@ def home(
 
     root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
+    folder_failing_counts: dict[int, int] = {
+        fid: sum(1 for f in feeds if f.has_error)
+        for fid, feeds in feeds_by_folder.items()
+        if any(f.has_error for f in feeds)
+    }
 
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
@@ -7474,6 +7536,7 @@ def home(
             "folder_rows": folder_rows,
             "root_folder_row": root_folder_row,
             "child_folder_rows": child_folder_rows,
+            "folder_failing_counts": folder_failing_counts,
             "folder_options": folder_options,
             "feeds_by_folder": feeds_by_folder,
             "feed_to_folder": feed_to_folder,
@@ -7852,6 +7915,32 @@ def starred_asset(asset_hash: str) -> Response:
         media_type=content_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
+
+
+@app.get("/feeds/discover")
+def discover_feed_route(url: str = Query(...)):
+    from services.feed_discovery import probe_url as _probe_url
+    return JSONResponse(_probe_url(url.strip()))
+
+
+@app.post("/api/folders")
+def api_create_folder(name: str = Form(...)):
+    name = name.strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Name required"}, status_code=400)
+    with get_meta_connection() as conn:
+        root_id = get_root_folder_id(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
+            (name, root_id),
+        )
+        row = conn.execute(
+            "SELECT id FROM folders WHERE name = ? AND parent_id = ?",
+            (name, root_id),
+        ).fetchone()
+        folder_id = int(row["id"]) if row else root_id
+    invalidate_meta_structure_cache()
+    return JSONResponse({"ok": True, "id": folder_id, "name": name})
 
 
 @app.post("/folders")
@@ -9303,6 +9392,57 @@ def mark_entry_read(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
+    is_async = is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle")
+    include_history = is_async_action_request(request, "lectio-entry-read-toggle")
+
+    # For async toggles (post-list checkbox, entry pane toggle) pre-read the
+    # entry/feed for history while the reader lock is not contested, then fire
+    # the writes in a background thread so the JSON response returns immediately
+    # regardless of any ongoing background-refresh write lock on the reader DB.
+    if is_async:
+        _title, _link, _feed_title = "", "", ""
+        if read and include_history:
+            with get_reader() as reader:
+                entry_obj = reader.get_entry((feed_url, entry_id), None)
+                feed_obj = reader.get_feed(feed_url, None)
+            _title = str(getattr(entry_obj, "title", None) or "")
+            _link = str(getattr(entry_obj, "link", None) or "")
+            _feed_title = str(getattr(feed_obj, "title", None) or "")
+
+        _fu, _eid, _read, _do_hist = feed_url, entry_id, bool(read), include_history
+        _hist_args = (_title, _link, _feed_title)
+
+        def _bg_toggle() -> None:
+            try:
+                with get_reader() as reader:
+                    if _read:
+                        reader.mark_entry_as_read((_fu, _eid))
+                    else:
+                        reader.mark_entry_as_unread((_fu, _eid))
+            except Exception:
+                LOGGER.warning("background mark_entry_(un)read failed for %s/%s", _fu, _eid, exc_info=True)
+            try:
+                if _read:
+                    upsert_entry_read_state(_fu, _eid)
+                else:
+                    delete_entry_read_state(_fu, _eid)
+            except Exception:
+                LOGGER.warning("background entry_read_state write failed for %s/%s", _fu, _eid, exc_info=True)
+            if _read and _do_hist:
+                try:
+                    append_read_history(_fu, _eid, *_hist_args)
+                except Exception:
+                    LOGGER.warning("background append_read_history failed for %s/%s", _fu, _eid, exc_info=True)
+            with unread_counts_cache_lock:
+                global _unread_counts_generation
+                _unread_counts_generation += 1
+                unread_counts_cache.clear()
+
+        threading.Thread(target=_bg_toggle, daemon=True).start()
+        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
+
+    # Synchronous (full-page redirect) path — wait for writes before redirecting
+    # so the reloaded page reflects the correct read state.
     with get_reader() as reader:
         if read:
             reader.mark_entry_as_read((feed_url, entry_id))
@@ -9310,16 +9450,6 @@ def mark_entry_read(
                 upsert_entry_read_state(feed_url, entry_id)
             except Exception:
                 LOGGER.warning("upsert_entry_read_state failed in mark_entry_read (db contention?)", exc_info=True)
-            if is_async_action_request(request, "lectio-entry-read-toggle"):
-                entry_obj = reader.get_entry((feed_url, entry_id), None)
-                feed_obj = reader.get_feed(feed_url, None)
-                append_read_history(
-                    feed_url,
-                    entry_id,
-                    str(getattr(entry_obj, "title", None) or ""),
-                    str(getattr(entry_obj, "link", None) or ""),
-                    str(getattr(feed_obj, "title", None) or ""),
-                )
         else:
             reader.mark_entry_as_unread((feed_url, entry_id))
             try:
@@ -9330,9 +9460,6 @@ def mark_entry_read(
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
-
-    if is_async_action_request(request, "lectio-post-read-toggle") or is_async_action_request(request, "lectio-entry-read-toggle"):
-        return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""

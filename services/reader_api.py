@@ -3,7 +3,28 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import sqlite3
+
 from reader import make_reader
+from reader._storage import Storage as _ReaderStorage
+
+# Capture the original setup_db before class definition so the subclass can
+# call it even when _ReaderStorage is monkeypatched in tests.
+_reader_storage_setup_db = _ReaderStorage.setup_db
+
+
+class _LectioReaderStorage(_ReaderStorage):
+    """reader Storage subclass that tugs WAL auto-checkpoint to 200 pages
+    (~800 KB) on every new connection so the WAL file never balloons to
+    tens of MB between restarts."""
+
+    @staticmethod
+    def setup_db(db: sqlite3.Connection) -> None:
+        _reader_storage_setup_db(db)
+        try:
+            db.execute("PRAGMA wal_autocheckpoint=200")
+        except Exception:
+            pass
 
 # Some feeds have a leading newline (or other whitespace) before their <?xml
 # declaration, which violates the XML spec and causes Python's expat parser to
@@ -65,7 +86,11 @@ class ReaderApi:
         self._db_path = str(db_path)
 
     def client(self):
-        r = make_reader(self._db_path)
+        # Give reader's SQLite connections a 30-second busy-wait timeout so
+        # user-facing writes (mark-as-read, add feed) survive background-refresh
+        # write locks instead of failing immediately.
+        storage = _LectioReaderStorage(self._db_path, timeout=30.0)
+        r = make_reader(self._db_path, _storage=storage)
 
         # lazy_init callbacks are popped from the END of the list (LIFO order).
         # reader's own post_init (which creates the HTTPRetriever) is registered

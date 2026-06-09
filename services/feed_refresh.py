@@ -145,6 +145,8 @@ class FeedRefreshService:
 
         feed_state_map: dict[str, dict[str, object]] = {}
         domain_state_map: dict[str, dict[str, object]] = {}
+        # Short read transaction: load backoff state, then release the lock
+        # immediately so the per-feed HTTP fetches below don't hold it open.
         with self._get_meta_connection() as conn:
             placeholders = ",".join("?" for _ in feed_url_list)
             rows = conn.execute(
@@ -170,9 +172,10 @@ class FeedRefreshService:
                         "consecutive_failures": int(row["consecutive_failures"] or 0),
                         "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
                     }
+        # Read transaction committed; meta DB lock released before any HTTP fetches.
 
-            with self._get_reader() as reader:
-                for idx, feed_url in enumerate(feed_url_list, start=1):
+        with self._get_reader() as reader:
+            for idx, feed_url in enumerate(feed_url_list, start=1):
                     feed_started_at = time.perf_counter()
                     feed_state = feed_state_map.get(feed_url) or {}
                     domain = _feed_domain(feed_url)
@@ -236,27 +239,29 @@ class FeedRefreshService:
                                 feed_url,
                             )
 
-                        conn.execute(
-                            """
-                            INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
-                            VALUES (?, 0, NULL, NULL, ?)
-                            ON CONFLICT(feed_url) DO UPDATE SET
-                                consecutive_failures = 0,
-                                next_retry_at = NULL,
-                                last_error = NULL,
-                                last_success_at = excluded.last_success_at,
-                                acknowledged_at = NULL
-                            """,
-                            (feed_url, now_ts),
-                        )
-                        feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
-                        # A successful connection to the domain clears the domain-level backoff.
-                        if domain:
+                        # Short write transaction: released immediately after each feed.
+                        with self._get_meta_connection() as conn:
                             conn.execute(
-                                "DELETE FROM domain_failure_state WHERE domain = ?",
-                                (domain,),
+                                """
+                                INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                VALUES (?, 0, NULL, NULL, ?)
+                                ON CONFLICT(feed_url) DO UPDATE SET
+                                    consecutive_failures = 0,
+                                    next_retry_at = NULL,
+                                    last_error = NULL,
+                                    last_success_at = excluded.last_success_at,
+                                    acknowledged_at = NULL
+                                """,
+                                (feed_url, now_ts),
                             )
-                            domain_state_map.pop(domain, None)
+                            feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                            # A successful connection to the domain clears the domain-level backoff.
+                            if domain:
+                                conn.execute(
+                                    "DELETE FROM domain_failure_state WHERE domain = ?",
+                                    (domain,),
+                                )
+                                domain_state_map.pop(domain, None)
                     except Exception as exc:
                         # 410 Gone: the feed is permanently removed. Disable updates
                         # immediately instead of backing off and retrying forever.
@@ -269,18 +274,19 @@ class FeedRefreshService:
                                     pass
                                 self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
                                 error_count += 1
-                                conn.execute(
-                                    """
-                                    INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
-                                    VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
-                                    ON CONFLICT(feed_url) DO UPDATE SET
-                                        consecutive_failures = excluded.consecutive_failures,
-                                        next_retry_at = NULL,
-                                        last_error = excluded.last_error,
-                                        last_failure_at = excluded.last_failure_at
-                                    """,
-                                    (feed_url, now_ts),
-                                )
+                                with self._get_meta_connection() as conn:
+                                    conn.execute(
+                                        """
+                                        INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
+                                        VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
+                                        ON CONFLICT(feed_url) DO UPDATE SET
+                                            consecutive_failures = excluded.consecutive_failures,
+                                            next_retry_at = NULL,
+                                            last_error = excluded.last_error,
+                                            last_failure_at = excluded.last_failure_at
+                                        """,
+                                        (feed_url, now_ts),
+                                    )
                                 continue
                         except Exception:
                             pass
@@ -297,52 +303,54 @@ class FeedRefreshService:
                         next_retry = now_ts + backoff_seconds
                         error_message = self.humanize_feed_exception(exc)
 
-                        conn.execute(
-                            """
-                            INSERT INTO feed_failure_state (
-                                feed_url,
-                                consecutive_failures,
-                                next_retry_at,
-                                last_error,
-                                last_failure_at
-                            )
-                            VALUES (?, ?, ?, ?, ?)
-                            ON CONFLICT(feed_url) DO UPDATE SET
-                                consecutive_failures = excluded.consecutive_failures,
-                                next_retry_at = excluded.next_retry_at,
-                                last_error = excluded.last_error,
-                                last_failure_at = excluded.last_failure_at
-                            """,
-                            (feed_url, consecutive_failures, next_retry, error_message, now_ts),
-                        )
-                        feed_state_map[feed_url] = {
-                            "consecutive_failures": consecutive_failures,
-                            "next_retry_at": next_retry,
-                        }
-
-                        # Update domain-level backoff: use the max consecutive_failures
-                        # seen from any feed on this domain so far in this cycle.
-                        if domain:
-                            prev_domain = domain_state_map.get(domain) or {}
-                            prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
-                            domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
-                            domain_backoff = self.compute_failed_feed_backoff_seconds(domain_consecutive)
-                            domain_next_retry_new = now_ts + domain_backoff
+                        # Short write transaction: released immediately after each feed.
+                        with self._get_meta_connection() as conn:
                             conn.execute(
                                 """
-                                INSERT INTO domain_failure_state (domain, consecutive_failures, next_retry_at, last_failure_at)
-                                VALUES (?, ?, ?, ?)
-                                ON CONFLICT(domain) DO UPDATE SET
+                                INSERT INTO feed_failure_state (
+                                    feed_url,
+                                    consecutive_failures,
+                                    next_retry_at,
+                                    last_error,
+                                    last_failure_at
+                                )
+                                VALUES (?, ?, ?, ?, ?)
+                                ON CONFLICT(feed_url) DO UPDATE SET
                                     consecutive_failures = excluded.consecutive_failures,
                                     next_retry_at = excluded.next_retry_at,
+                                    last_error = excluded.last_error,
                                     last_failure_at = excluded.last_failure_at
                                 """,
-                                (domain, domain_consecutive, domain_next_retry_new, now_ts),
+                                (feed_url, consecutive_failures, next_retry, error_message, now_ts),
                             )
-                            domain_state_map[domain] = {
-                                "consecutive_failures": domain_consecutive,
-                                "next_retry_at": domain_next_retry_new,
+                            feed_state_map[feed_url] = {
+                                "consecutive_failures": consecutive_failures,
+                                "next_retry_at": next_retry,
                             }
+
+                            # Update domain-level backoff: use the max consecutive_failures
+                            # seen from any feed on this domain so far in this cycle.
+                            if domain:
+                                prev_domain = domain_state_map.get(domain) or {}
+                                prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
+                                domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
+                                domain_backoff = self.compute_failed_feed_backoff_seconds(domain_consecutive)
+                                domain_next_retry_new = now_ts + domain_backoff
+                                conn.execute(
+                                    """
+                                    INSERT INTO domain_failure_state (domain, consecutive_failures, next_retry_at, last_failure_at)
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(domain) DO UPDATE SET
+                                        consecutive_failures = excluded.consecutive_failures,
+                                        next_retry_at = excluded.next_retry_at,
+                                        last_failure_at = excluded.last_failure_at
+                                    """,
+                                    (domain, domain_consecutive, domain_next_retry_new, now_ts),
+                                )
+                                domain_state_map[domain] = {
+                                    "consecutive_failures": domain_consecutive,
+                                    "next_retry_at": domain_next_retry_new,
+                                }
 
                         if self._refresh_debug_enabled:
                             elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)

@@ -7,7 +7,7 @@ _EXPECTED_UA = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
 
 
 def test_reader_api_client_uses_configured_db_path(monkeypatch):
-    captured: dict[str, str] = {}
+    captured: dict = {}
 
     class FakeParser:
         lazy_init_funcs: list = []
@@ -15,21 +15,30 @@ def test_reader_api_client_uses_configured_db_path(monkeypatch):
             return fn
 
     class FakeReader:
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self._path = path
             self._parser = FakeParser()
             self.ok = True
 
-    def fake_make_reader(path: str):
+    class FakeStorage:
+        def __init__(self, path, **kwargs):
+            captured["storage_path"] = path
+            captured["storage_kwargs"] = kwargs
+
+    def fake_make_reader(path: str, **kwargs):
         captured["path"] = path
+        captured["make_reader_kwargs"] = kwargs
         return FakeReader(path)
 
     monkeypatch.setattr(reader_api, "make_reader", fake_make_reader)
+    monkeypatch.setattr(reader_api, "_LectioReaderStorage", FakeStorage)
 
     api = ReaderApi("my_reader.sqlite")
     client = api.client()
 
     assert captured["path"] == "my_reader.sqlite"
+    assert captured.get("storage_path") == "my_reader.sqlite"
+    assert captured["storage_kwargs"].get("timeout") == 30.0
     assert client.ok is True
 
 
@@ -50,12 +59,13 @@ def test_reader_api_registers_ua_lazy_init(monkeypatch):
         def __init__(self, path):
             self._parser = FakeParser()
 
-    def fake_make_reader(path):
+    def fake_make_reader(path, **kwargs):
         r = FakeReader(path)
         inserted.append(r)
         return r
 
     monkeypatch.setattr(reader_api, "make_reader", fake_make_reader)
+    monkeypatch.setattr(reader_api, "_LectioReaderStorage", lambda path, **kw: None)
     ReaderApi("test.sqlite").client()
 
     assert len(inserted) == 1
@@ -87,7 +97,8 @@ def test_reader_api_ua_hook_sets_lectio_header(monkeypatch):
         def __init__(self, path):
             self._parser = FakeParser()
 
-    monkeypatch.setattr(reader_api, "make_reader", lambda path: FakeReader(path))
+    monkeypatch.setattr(reader_api, "make_reader", lambda path, **kw: FakeReader(path))
+    monkeypatch.setattr(reader_api, "_LectioReaderStorage", lambda path, **kw: None)
 
     r = ReaderApi("test.sqlite").client()
 

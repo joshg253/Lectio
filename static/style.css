@@ -3374,6 +3374,91 @@ body[data-keyboard-open="1"] .action-modal-panel {
   cursor: pointer;
 }
 
+/* ── Unified Add Feed dialog ─────────────────────────────────────────────── */
+.afd-url-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.afd-url-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.afd-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: afd-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes afd-spin { to { transform: rotate(360deg); } }
+
+.afd-msg {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  margin-bottom: 0.35rem;
+  line-height: 1.4;
+}
+.afd-msg--ok    { border-color: #2e7d52; color: #1a5c3a; background: #d4edda; }
+.afd-msg--warn  { border-color: #b8860b; color: #7a5800; background: #fff3cd; }
+.afd-msg--error { border-color: #c0392b; color: #7b241c; background: #fde8e6; }
+@media (prefers-color-scheme: dark) {
+  .afd-msg--ok    { border-color: #2e7d52; color: #6fcf97; background: #0d2a1a; }
+  .afd-msg--warn  { border-color: #b8860b; color: #f2c94c; background: #2a1f00; }
+  .afd-msg--error { border-color: #c0392b; color: #eb5757; background: #2a0a08; }
+}
+
+.afd-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
+  max-height: 10rem;
+  overflow-y: auto;
+}
+.afd-pick-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+}
+.afd-pick-item:hover { background: var(--hover-bg); }
+.afd-pick-item span  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.afd-pf {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+}
+.afd-pf-header {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 0.1rem;
+}
+
+.afd-new-folder {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+.afd-new-folder input { flex: 1 1 auto; min-width: 0; }
+.afd-new-folder button { flex-shrink: 0; }
+
+#add-feed-modal .action-modal-label { margin-top: 0.3rem; }
+
 .action-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -3542,14 +3627,6 @@ body[data-keyboard-open="1"] .action-modal-panel {
     margin-top: 0.35rem;
   }
 
-  /* Bottom-sheet layout: panel anchors to the bottom edge of the screen so the
-     close button at the top is always reachable and the panel never overflows
-     above the viewport. dvh tracks the real visible height (excl. browser
-     chrome); vh is the fallback for older browsers. */
-  .action-modal {
-    padding: 0;
-    align-items: flex-end;
-  }
   .action-modal-panel,
   .feed-properties-panel {
     width: 100%;
@@ -3557,7 +3634,6 @@ body[data-keyboard-open="1"] .action-modal-panel {
     max-height: 92vh;
     max-height: 92dvh;
     min-height: 0;
-    border-radius: 14px 14px 0 0;
     resize: none;
   }
 }
@@ -4025,12 +4101,8 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 
 /* Dedup feeds modal */
-#dedup-modal {
-  z-index: 82;
-}
-.dedup-modal-panel {
-  width: min(680px, 100%);
-  max-width: calc(100vw - 1rem);
+.feeds-dedup-panel {
+  font-size: 0.85rem;
 }
 .dedup-modal-intro {
   margin-bottom: 0.6rem;
@@ -4164,6 +4236,74 @@ mark.highlight-mark {
 .highlight-mark-blue   { background: #b3d9ff; color: #0a2340; }
 .highlight-mark-pink   { background: #ffc0d6; color: #3a001a; }
 .highlight-mark-orange { background: #ffd0a0; color: #3a1a00; }
+
+/* ── Settings > Feeds > Folders table ───────────────────────────────────── */
+.settings-folders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.settings-folders-table th {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+.settings-folder-row td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.settings-folder-row:last-child td { border-bottom: none; }
+.settings-folder-name { font-weight: 500; }
+.settings-folder-feeds {
+  color: var(--muted);
+  text-align: right;
+  width: 3rem;
+}
+.settings-folder-status { width: 5rem; text-align: right; }
+.settings-folder-actions { width: 2rem; text-align: right; padding-right: 0.25rem; }
+.settings-folder-error-badge {
+  display: inline-block;
+  background: var(--danger, #c0392b);
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 0.4em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  min-width: 1.4em;
+  text-align: center;
+}
+.settings-folder-cadence {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: 0.3rem;
+}
+.settings-folder-props-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0.15rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.settings-folder-props-btn:hover { color: var(--ink); background: var(--hover-bg); }
+.settings-folder-props-btn .material-symbols-rounded { font-size: 17px; }
+
+/* ── Settings > Feeds > Duplicates inline panel ──────────────────────────── */
+.feeds-dedup-controls {
+  padding: 0.5rem 0 0.75rem;
+}
+.dedup-inline-actions {
+  padding-top: 0.75rem;
+}
 
 /* Highlights modal */
 .highlights-modal-panel {
