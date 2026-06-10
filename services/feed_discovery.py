@@ -23,18 +23,21 @@ _FEED_MIME_TYPES = frozenset({
     "application/xml",
 })
 
-# Probed in order when no <link> tags are found. RSS paths come first (enclosures aid thumbnail extraction).
+# Probed in order when no <link> tags are found.
 _COMMON_FEED_PATHS = [
-    "/rss",
-    "/rss.xml",
     "/feed",
     "/feed/",
     "/feed.xml",
+    "/rss",
+    "/rss.xml",
     "/atom.xml",
     "/atom",
     "/index.xml",
     "/feeds/posts/default",  # Blogger
 ]
+
+# WordPress-style query-param variants probed against the page URL itself.
+_FEED_QUERY_PARAMS = ["feed=rss2", "feed=rss", "feed=atom"]
 
 _HEADERS = {"User-Agent": "Lectio/1.0 (RSS auto-discovery; +https://github.com/joshg253/Lectio)"}
 
@@ -92,9 +95,8 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
             ),
         }
 
-    # Parse <link rel="alternate"> tags from the HTML. RSS first (enclosures aid thumbnail extraction).
-    rss_feeds: list[dict] = []
-    other_feeds: list[dict] = []
+    # Parse <link rel="alternate"> tags from the HTML; preserve declaration order.
+    feeds: list[dict] = []
     seen: set[str] = set()
     for m in _LINK_RE.finditer(resp.text[:200_000]):
         attrs = _parse_attrs(m.group(1))
@@ -108,28 +110,41 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         if absolute in seen:
             continue
         seen.add(absolute)
-        entry = {"url": absolute, "title": attrs.get("title", "").strip() or None}
-        (rss_feeds if mtype == "application/rss+xml" else other_feeds).append(entry)
+        feeds.append({"url": absolute, "title": attrs.get("title", "").strip() or None})
 
-    candidates = rss_feeds + other_feeds
-    if candidates:
+    if feeds:
         return {
-            "status": "feed" if len(candidates) == 1 else "feeds",
-            "feeds": candidates,
+            "status": "feed" if len(feeds) == 1 else "feeds",
+            "feeds": feeds,
             "message": "",
         }
 
-    # Probe common path suffixes
+    # Probe common path suffixes: first from the site root, then relative to the page path.
     parsed = urlparse(final_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    for suffix in _COMMON_FEED_PATHS:
-        probe = origin + suffix
-        try:
-            head = httpx.head(probe, timeout=5.0, follow_redirects=True, headers=_HEADERS)
-            if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
-                return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
-        except Exception:
-            continue
+    page_dir = parsed.path.rstrip("/")
+    prefixes = [""] + ([page_dir] if page_dir else [])
+    for prefix in prefixes:
+        for suffix in _COMMON_FEED_PATHS:
+            probe = origin + prefix + suffix
+            try:
+                head = httpx.head(probe, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                    return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
+            except Exception:
+                continue
+
+    # Also try WordPress-style query-param variants on the page URL itself.
+    if page_dir:
+        base_page = f"{origin}{page_dir}/"
+        for qp in _FEED_QUERY_PARAMS:
+            probe = f"{base_page}?{qp}"
+            try:
+                head = httpx.head(probe, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                    return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
+            except Exception:
+                continue
 
     return {"status": "none", "feeds": [], "message": "No RSS/Atom feed found at this URL."}
 
@@ -156,9 +171,8 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     if _ct_is_feed(ct):
         return [final_url]
 
-    # Parse HTML <link rel="alternate"> tags. RSS preferred (enclosures aid thumbnail extraction).
-    rss_candidates: list[str] = []
-    other_candidates: list[str] = []
+    # Parse HTML <link rel="alternate"> tags; preserve declaration order.
+    candidates: list[str] = []
     for m in _LINK_RE.finditer(resp.text):
         attrs = _parse_attrs(m.group(1))
         rel = attrs.get("rel", "").lower()
@@ -166,27 +180,43 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         href = attrs.get("href", "").strip()
         if "alternate" in rel and mtype in _FEED_MIME_TYPES and href:
             absolute = urljoin(final_url, href)
-            bucket = rss_candidates if mtype == "application/rss+xml" else other_candidates
-            if absolute not in rss_candidates and absolute not in other_candidates:
-                bucket.append(absolute)
-    candidates = rss_candidates + other_candidates
+            if absolute not in candidates:
+                candidates.append(absolute)
 
     if candidates:
         return candidates
 
-    # Probe common path suffixes with HEAD requests.
+    # Probe common path suffixes: first from the site root, then relative to the page path.
     parsed = urlparse(final_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    for suffix in _COMMON_FEED_PATHS:
-        probe_url = origin + suffix
-        try:
-            head = httpx.head(probe_url, timeout=5.0, follow_redirects=True, headers=_HEADERS)
-            if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
-                resolved = str(head.url)
-                if resolved not in candidates:
-                    candidates.append(resolved)
-                break  # first working path is enough
-        except Exception:
-            continue
+    page_dir = parsed.path.rstrip("/")
+    prefixes = [""] + ([page_dir] if page_dir else [])
+    for prefix in prefixes:
+        for suffix in _COMMON_FEED_PATHS:
+            probe_candidate = origin + prefix + suffix
+            try:
+                head = httpx.head(probe_candidate, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                    resolved = str(head.url)
+                    if resolved not in candidates:
+                        candidates.append(resolved)
+                    return candidates
+            except Exception:
+                continue
+
+    # Also try WordPress-style query-param variants on the page URL itself.
+    if page_dir:
+        base_page = f"{origin}{page_dir}/"
+        for qp in _FEED_QUERY_PARAMS:
+            probe_candidate = f"{base_page}?{qp}"
+            try:
+                head = httpx.head(probe_candidate, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                    resolved = str(head.url)
+                    if resolved not in candidates:
+                        candidates.append(resolved)
+                    return candidates
+            except Exception:
+                continue
 
     return candidates

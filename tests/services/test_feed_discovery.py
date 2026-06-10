@@ -133,12 +133,49 @@ class TestDiscoverFeedUrls:
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
-    def test_rss_preferred_over_atom_regardless_of_order(self):
-        """RSS candidate must come first even when Atom appears first in HTML (RSS enclosures aid thumbnails)."""
+    def test_declaration_order_preserved(self):
+        """Feeds are returned in the order they appear in the HTML, regardless of format."""
         html = (
             '<link rel="alternate" type="application/atom+xml" href="/atom.xml" />'
             '<link rel="alternate" type="application/rss+xml" href="/rss.xml" />'
         )
         with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
-        assert result == ["https://example.com/rss.xml", "https://example.com/atom.xml"]
+        assert result == ["https://example.com/atom.xml", "https://example.com/rss.xml"]
+
+    def test_subdir_path_relative_probing(self):
+        """Falls back to page-path-relative probing for subdirectory-hosted blogs."""
+        html = "<html><body>No feed links</body></html>"
+        head_resp = _mock_response("https://example.com/blog/feed/", "application/rss+xml")
+        head_resp.url = "https://example.com/blog/feed/"
+
+        def fake_head(url, **_kwargs):
+            if url == "https://example.com/blog/feed/":
+                return head_resp
+            not_found = MagicMock()
+            not_found.is_success = False
+            return not_found
+
+        with patch("httpx.get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
+            with patch("httpx.head", side_effect=fake_head):
+                result = discover_feed_urls("https://example.com/blog")
+        assert result == ["https://example.com/blog/feed/"]
+
+    def test_wordpress_query_param_probing(self):
+        """Falls back to ?feed=rss2 query-param probing when path probing finds nothing."""
+        html = "<html><body>No feed links</body></html>"
+        feed_url = "https://example.com/blog/?feed=rss2"
+        head_resp = _mock_response(feed_url, "application/rss+xml")
+        head_resp.url = feed_url
+
+        def fake_head(url, **_kwargs):
+            if url == feed_url:
+                return head_resp
+            not_found = MagicMock()
+            not_found.is_success = False
+            return not_found
+
+        with patch("httpx.get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
+            with patch("httpx.head", side_effect=fake_head):
+                result = discover_feed_urls("https://example.com/blog")
+        assert result == [feed_url]
