@@ -134,7 +134,9 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
             except Exception:
                 continue
 
-    # Also try WordPress-style query-param variants on the page URL itself.
+    # Probe WordPress-style query-param variants — collect ALL matches so the picker
+    # can show every format option (rss2 / rss / atom may all coexist).
+    qp_feeds: list[dict] = []
     if page_dir:
         base_page = f"{origin}{page_dir}/"
         for qp in _FEED_QUERY_PARAMS:
@@ -142,9 +144,18 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
             try:
                 head = httpx.head(probe, timeout=3.0, follow_redirects=True, headers=_HEADERS)
                 if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
-                    return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
+                    resolved = str(head.url)
+                    if not any(f["url"] == resolved for f in qp_feeds):
+                        qp_feeds.append({"url": resolved, "title": None})
             except Exception:
                 continue
+
+    if qp_feeds:
+        return {
+            "status": "feed" if len(qp_feeds) == 1 else "feeds",
+            "feeds": qp_feeds,
+            "message": "",
+        }
 
     return {"status": "none", "feeds": [], "message": "No RSS/Atom feed found at this URL."}
 
