@@ -9276,7 +9276,7 @@
       function apply(rawUrl, d) {
         if (d.status === 'feed') {
           selectedFeedUrl = d.feeds[0].url;
-          setMsg((d.feeds[0].title ? 'Feed found: ' + d.feeds[0].title : 'Feed found.'), 'ok');
+          setMsg('Feed found: ' + (d.feeds[0].title || d.feeds[0].url), 'ok');
           submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
         } else if (d.status === 'feeds') {
           setMsg(d.feeds.length + ' feeds found — pick one:');

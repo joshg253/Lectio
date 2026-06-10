@@ -128,7 +128,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for suffix in _COMMON_FEED_PATHS:
             probe = origin + prefix + suffix
             try:
-                head = httpx.head(probe, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                head = httpx.head(probe, timeout=3.0, follow_redirects=True, headers=_HEADERS)
                 if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
             except Exception:
@@ -140,7 +140,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for qp in _FEED_QUERY_PARAMS:
             probe = f"{base_page}?{qp}"
             try:
-                head = httpx.head(probe, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                head = httpx.head(probe, timeout=3.0, follow_redirects=True, headers=_HEADERS)
                 if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
             except Exception:
@@ -195,7 +195,7 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for suffix in _COMMON_FEED_PATHS:
             probe_candidate = origin + prefix + suffix
             try:
-                head = httpx.head(probe_candidate, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                head = httpx.head(probe_candidate, timeout=3.0, follow_redirects=True, headers=_HEADERS)
                 if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
@@ -210,7 +210,7 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for qp in _FEED_QUERY_PARAMS:
             probe_candidate = f"{base_page}?{qp}"
             try:
-                head = httpx.head(probe_candidate, timeout=5.0, follow_redirects=True, headers=_HEADERS)
+                head = httpx.head(probe_candidate, timeout=3.0, follow_redirects=True, headers=_HEADERS)
                 if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
