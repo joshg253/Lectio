@@ -8401,6 +8401,26 @@ def set_feed_user_title_route(feed_url: str = Form(...), user_title: str = Form(
     return JSONResponse({"ok": True, "user_title": user_title.strip() or None})
 
 
+@app.post("/feeds/fix-url-titles")
+def fix_url_titles():
+    """Find feeds whose display title is still a raw URL and queue them for refresh."""
+    with get_reader() as reader:
+        stale_urls = [
+            f.url
+            for f in reader.get_feeds()
+            if not (f.resolved_title or f.title)
+            or (f.resolved_title or f.title or "").lower().startswith("http")
+        ]
+    if stale_urls:
+        threading.Thread(
+            target=feed_refresh_service.update_feeds,
+            args=(stale_urls,),
+            daemon=True,
+            name="fix-url-titles",
+        ).start()
+    return JSONResponse({"queued": len(stale_urls)})
+
+
 @app.get("/folders/properties")
 def folder_properties(folder_id: int):
     return JSONResponse(get_folder_properties(folder_id))

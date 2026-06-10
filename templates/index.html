@@ -1349,6 +1349,9 @@
           {% else %}
           <p class="muted" style="padding:0.5rem 0">No folders yet.</p>
           {% endif %}
+          <div class="settings-actions" style="margin-top:0.75rem;border-top:1px solid var(--line);padding-top:0.75rem">
+            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
+          </div>
         </div>
 
         <div id="problematic-feeds-modal">
@@ -8134,10 +8137,33 @@
       _folderPropCloseOnClick = false;
     });
 
-    // Feeds tab: folder properties buttons in the Folders panel.
+    // Feeds tab: folder properties buttons + Fix URL Titles button.
     document.getElementById('settings-tab-feeds')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-settings-folder-id]');
-      if (btn) openFolderPropertiesModal(Number(btn.dataset.settingsFolderId));
+      const folderBtn = e.target.closest('[data-settings-folder-id]');
+      if (folderBtn) { openFolderPropertiesModal(Number(folderBtn.dataset.settingsFolderId)); return; }
+
+      if (e.target.closest('#fix-url-titles-btn')) {
+        const btn = document.getElementById('fix-url-titles-btn');
+        btn.disabled = true;
+        btn.textContent = 'Scanning…';
+        fetch('/feeds/fix-url-titles', { method: 'POST', credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(d => {
+            btn.disabled = false;
+            btn.textContent = 'Fix URL titles';
+            if (d.queued > 0) {
+              showToastMessage(`Queued ${d.queued} feed${d.queued !== 1 ? 's' : ''} for title refresh.`);
+            } else {
+              showToastMessage('No feeds with URL-style titles found.');
+            }
+          })
+          .catch(() => {
+            btn.disabled = false;
+            btn.textContent = 'Fix URL titles';
+            showToastMessage('Error running title fix.');
+          });
+        return;
+      }
     });
 
     // Feeds tab: view switching (Folders / Failing / Deactivated / Duplicates).
