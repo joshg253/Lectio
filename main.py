@@ -8168,7 +8168,19 @@ def _compare_one_feed(url: str) -> dict:
         "rss20": "RSS 2.0", "rss10": "RSS 1.0", "rss092": "RSS 0.92",
         "rss091n": "RSS 0.91", "atom10": "Atom 1.0", "atom03": "Atom 0.3",
     }
-    fmt = version_map.get(parsed.get("version", ""), parsed.get("version", "").upper() or "Feed")
+    ver = parsed.get("version", "")
+    fmt = version_map.get(ver) or (ver.upper() if ver else None)
+    if not fmt:
+        # feedparser didn't identify the version; sniff the body
+        snip = resp.text[:2000].lower()
+        if "<rss" in snip:
+            fmt = "RSS"
+        elif "<feed" in snip:
+            fmt = "Atom"
+        elif "<rdf:rdf" in snip:
+            fmt = "RDF"
+        else:
+            fmt = "Feed"
 
     latest = None
     if entries:
