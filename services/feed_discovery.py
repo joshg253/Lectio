@@ -23,15 +23,15 @@ _FEED_MIME_TYPES = frozenset({
     "application/xml",
 })
 
-# Probed in order when no <link> tags are found. Atom paths come first.
+# Probed in order when no <link> tags are found. RSS paths come first (enclosures aid thumbnail extraction).
 _COMMON_FEED_PATHS = [
-    "/atom.xml",
-    "/atom",
-    "/feed",
-    "/feed/",
     "/rss",
     "/rss.xml",
+    "/feed",
+    "/feed/",
     "/feed.xml",
+    "/atom.xml",
+    "/atom",
     "/index.xml",
     "/feeds/posts/default",  # Blogger
 ]
@@ -92,8 +92,8 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
             ),
         }
 
-    # Parse <link rel="alternate"> tags from the HTML
-    atom_feeds: list[dict] = []
+    # Parse <link rel="alternate"> tags from the HTML. RSS first (enclosures aid thumbnail extraction).
+    rss_feeds: list[dict] = []
     other_feeds: list[dict] = []
     seen: set[str] = set()
     for m in _LINK_RE.finditer(resp.text[:200_000]):
@@ -109,9 +109,9 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
             continue
         seen.add(absolute)
         entry = {"url": absolute, "title": attrs.get("title", "").strip() or None}
-        (atom_feeds if mtype == "application/atom+xml" else other_feeds).append(entry)
+        (rss_feeds if mtype == "application/rss+xml" else other_feeds).append(entry)
 
-    candidates = atom_feeds + other_feeds
+    candidates = rss_feeds + other_feeds
     if candidates:
         return {
             "status": "feed" if len(candidates) == 1 else "feeds",
@@ -156,8 +156,8 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     if _ct_is_feed(ct):
         return [final_url]
 
-    # Parse HTML <link rel="alternate"> tags, keeping Atom ahead of RSS.
-    atom_candidates: list[str] = []
+    # Parse HTML <link rel="alternate"> tags. RSS preferred (enclosures aid thumbnail extraction).
+    rss_candidates: list[str] = []
     other_candidates: list[str] = []
     for m in _LINK_RE.finditer(resp.text):
         attrs = _parse_attrs(m.group(1))
@@ -166,10 +166,10 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         href = attrs.get("href", "").strip()
         if "alternate" in rel and mtype in _FEED_MIME_TYPES and href:
             absolute = urljoin(final_url, href)
-            bucket = atom_candidates if mtype == "application/atom+xml" else other_candidates
-            if absolute not in atom_candidates and absolute not in other_candidates:
+            bucket = rss_candidates if mtype == "application/rss+xml" else other_candidates
+            if absolute not in rss_candidates and absolute not in other_candidates:
                 bucket.append(absolute)
-    candidates = atom_candidates + other_candidates
+    candidates = rss_candidates + other_candidates
 
     if candidates:
         return candidates

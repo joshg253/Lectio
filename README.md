@@ -65,7 +65,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 ### Feed management
 - **OPML import/export**
-- **RSS/Atom auto-discovery** — paste a website URL; probes for `<link rel="alternate">` and common feed path suffixes; Atom is preferred over RSS when both are advertised
+- **RSS/Atom auto-discovery** — paste a website URL; probes for `<link rel="alternate">` and common feed path suffixes; RSS is preferred over Atom when both are advertised (RSS `<enclosure>` tags improve thumbnail availability)
 - **Page Feed (FakeFeedz)** — subscribe to any webpage as a feed: new links mode or content-change mode, with optional CSS selector
 - **YouTube folder sync** — sync a folder to a YouTube channel's video feed via YouTube Data API
 - **Hide Shorts** — per-feed toggle (YouTube feeds only) to automatically mark YouTube Shorts as read at fetch time
