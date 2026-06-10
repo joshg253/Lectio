@@ -90,7 +90,9 @@ class ReaderApi:
         # user-facing writes (mark-as-read, add feed) survive background-refresh
         # write locks instead of failing immediately.
         storage = _LectioReaderStorage(self._db_path, timeout=30.0)
-        r = make_reader(self._db_path, _storage=storage)
+        # feed_root='' enables file:// URI support (absolute paths) for
+        # scraped page-feeds whose XML files are written to DATA_DIR/scraped-feeds/.
+        r = make_reader(self._db_path, feed_root='', _storage=storage)
 
         # lazy_init callbacks are popped from the END of the list (LIFO order).
         # reader's own post_init (which creates the HTTPRetriever) is registered
