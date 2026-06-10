@@ -3396,7 +3396,6 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .afd-pick-item:hover { background: var(--hover-bg); }
 .afd-pick-item span  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .afd-feed-meta { width: 100%; font-size: 0.76rem; color: var(--muted); padding-left: 1.4rem; }
-.afd-feed-titles { font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .afd-compare-btn {
   align-self: flex-start;
   margin-top: 0.15rem;

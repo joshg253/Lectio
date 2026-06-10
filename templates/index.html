@@ -9334,25 +9334,13 @@
             let meta = item.querySelector('.afd-feed-meta');
             if (!meta) { meta = document.createElement('div'); meta.className = 'afd-feed-meta'; item.append(meta); }
             if (res.error) { meta.textContent = res.error; return; }
-            const urlParam = (() => { try { return new URL(res.url).search.replace('?',''); } catch(_){return '';} })();
-            const imgLabel = res.entry_count
-              ? (res.image_count === res.entry_count ? '✓ images (' + res.image_count + '/' + res.entry_count + ')'
-                : res.image_count > 0 ? '~ images (' + res.image_count + '/' + res.entry_count + ')'
-                : '✗ no images')
-              : (res.has_images ? '✓ images' : '✗ no images');
             const parts = [
-              res.format + (urlParam ? ' (' + urlParam + ')' : ''),
+              res.format,
               res.full_text ? 'Full text' : 'Summaries',
-              imgLabel,
+              res.image_count > 0 ? '✓ images' : '✗ no images',
               res.latest_date,
             ].filter(Boolean);
             meta.textContent = parts.join(' · ');
-            if (res.sample_titles && res.sample_titles.length) {
-              const titles = document.createElement('div');
-              titles.className = 'afd-feed-meta afd-feed-titles';
-              titles.textContent = res.sample_titles.slice(0, 2).join(' / ');
-              item.append(titles);
-            }
           });
           btn.remove();
         } catch (_) { btn.disabled = false; btn.textContent = 'Compare feeds'; }
