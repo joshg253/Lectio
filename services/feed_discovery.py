@@ -47,6 +47,16 @@ def _ct_is_feed(content_type: str) -> bool:
     return base in _FEED_MIME_TYPES or "rss" in base or "atom" in base
 
 
+_FEED_BODY_RE = re.compile(
+    r"<\s*(?:rss|feed|rdf:rdf)\b",
+    re.IGNORECASE,
+)
+
+def _body_is_feed(text: str) -> bool:
+    """Content-sniff the first 1 KB for RSS/Atom root elements."""
+    return bool(_FEED_BODY_RE.search(text[:1024]))
+
+
 def _parse_attrs(tag_body: str) -> dict[str, str]:
     attrs: dict[str, str] = {}
     for m in _ATTR_RE.finditer(tag_body):
@@ -76,7 +86,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     ct = resp.headers.get("content-type", "")
     body_len = len(resp.content)
 
-    if resp.is_success and _ct_is_feed(ct):
+    if resp.is_success and (_ct_is_feed(ct) or _body_is_feed(resp.text)):
         return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": "", "direct": True}
 
     if not resp.is_success:
@@ -179,7 +189,7 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     final_url = str(resp.url)
     ct = resp.headers.get("content-type", "")
 
-    if _ct_is_feed(ct):
+    if _ct_is_feed(ct) or _body_is_feed(resp.text):
         return [final_url]
 
     # Parse HTML <link rel="alternate"> tags; preserve declaration order.
