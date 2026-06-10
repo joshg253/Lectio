@@ -268,7 +268,8 @@ def create_scraped_feed(
         # Seed existing links as hidden so they aren't surfaced as new entries.
         _scrape_link_list(conn, feed, initial=True)
     else:
-        # Capture initial hash silently; first actual change creates the first entry.
+        # Capture initial hash and create a first entry so the feed isn't empty on
+        # first view — subsequent page changes will generate additional entries.
         try:
             html = _fetch_html(source_url)
             sel = (selector or "").strip()
@@ -285,13 +286,22 @@ def create_scraped_feed(
                 "UPDATE scraped_feeds SET last_content_hash = ?, last_scraped_at = ? WHERE id = ?",
                 (initial_hash, now, feed_id),
             )
+            conn.execute(
+                "INSERT INTO scraped_entries (id, scraped_feed_id, title, entry_url, content, published_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), feed_id, feed_title, source_url, content[:_MAX_CONTENT_BYTES], now),
+            )
         except Exception as exc:
-            LOGGER.warning("[scraper] initial hash capture failed for %s: %s", source_url, exc)
+            LOGGER.warning("[scraper] initial setup failed for %s: %s", source_url, exc)
 
     _write_feed_file(conn, feed_id)
 
     file_url = feed_file_url(feed_id)
     reader.add_feed(file_url, exist_ok=True)
+    try:
+        reader.update_feed(file_url)
+    except Exception:
+        pass
     return feed_id, file_url
 
 

@@ -427,6 +427,26 @@ async def lifespan(app: FastAPI):
     # Warm lead image cache from DB so thumbnails are available on first render.
     lead_image_service.warm_cache_from_db()
 
+    # Ensure existing scraped file:// feeds have their entries imported into the
+    # reader DB. Feeds may be in backoff from stale "no retriever" errors that
+    # pre-date the feed_root='' fix — clear that state and force a reader sync.
+    def _sync_scraped_feeds() -> None:
+        try:
+            with get_meta_connection() as _sc:
+                _sf_rows = _sc.execute("SELECT id FROM scraped_feeds").fetchall()
+            for _sf_row in _sf_rows:
+                _sf_url = scraper_service.feed_file_url(str(_sf_row["id"]))
+                try:
+                    with get_meta_connection() as _sc:
+                        _sc.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (_sf_url,))
+                    with get_reader() as _r:
+                        _r.update_feed(_sf_url)
+                except Exception:
+                    pass
+        except Exception:
+            LOGGER.exception("[scraper] startup scraped-feed sync failed")
+    threading.Thread(target=_sync_scraped_feeds, daemon=True, name="sync-scraped-feeds").start()
+
     # Artwork tagger runs first so webcomic tagger won't clobber ArtStation feeds
     # that live in folders whose name also contains "comic".
     _auto_tag_artwork_feeds()
@@ -4216,6 +4236,20 @@ def get_feed_properties(feed_url: str) -> dict:
         _effective_next_retry = max(f for f in [_feed_next_retry or 0.0, _domain_next_retry or 0.0]) or None
         _backoff_active = bool(_effective_next_retry and _effective_next_retry > _now_ts)
         _backoff_domain_driven = _backoff_active and (_domain_next_retry or 0.0) > (_feed_next_retry or 0.0)
+
+        # If the reader reports no active error but our failure counter is still
+        # non-zero, surface a warning so the user isn't confused by "No known errors"
+        # next to a failure count.  This happens when the feed last fetched
+        # successfully (clearing last_exception) but the failure counter hasn't been
+        # reset yet (e.g. the feed was in backoff when the last success occurred).
+        if health == "ok" and _feed_failures > 0:
+            health = "warning"
+            _nf = _feed_failures
+            health_detail = (
+                f"Last update succeeded, but {_nf} consecutive failure"
+                f"{'s' if _nf != 1 else ''} still on record. "
+                "Will auto-clear on next successful refresh."
+            )
 
         props = {
             "feed_url": feed_url,

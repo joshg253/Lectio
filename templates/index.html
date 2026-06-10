@@ -4039,9 +4039,22 @@
     }
 
     if (feedPropUserTitle) {
+      feedPropUserTitle.addEventListener('focus', () => {
+        if (!feedPropUserTitle.value) {
+          feedPropUserTitle.value = feedPropUserTitle.placeholder;
+          feedPropUserTitle.select();
+        }
+      });
       feedPropUserTitle.addEventListener('blur', () => {
         const feedUrl = feedPropUserTitle.dataset.feedUrl;
-        if (feedUrl) saveFeedUserTitle(feedUrl, feedPropUserTitle.value.trim());
+        if (!feedUrl) return;
+        const trimmed = feedPropUserTitle.value.trim();
+        // If user focused and blurred without changing, clear so it stays as "no override".
+        if (trimmed === feedPropUserTitle.placeholder) {
+          feedPropUserTitle.value = '';
+          return;
+        }
+        saveFeedUserTitle(feedUrl, trimmed);
       });
     }
     if (feedPropResetTitleBtn) {
