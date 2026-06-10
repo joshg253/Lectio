@@ -5366,7 +5366,11 @@ textarea.hl-draft-pattern {
 .sett-avatar-row { display: flex; justify-content: center; padding: 0.75rem 0 0.5rem; }
 .sett-profile-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.25rem 0 0; }
 .sett-avatar-img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); background: var(--hover-bg); flex-shrink: 0; }
-.sett-theme-toggle { width: auto !important; height: auto !important; min-width: 0 !important; border-radius: 6px !important; padding: 0.4rem 0.7rem !important; display: flex !important; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.sett-theme-btns { display: flex; gap: 0.3rem; }
+.sett-theme-btn { display: flex; align-items: center; padding: 0.25rem 0.45rem; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.sett-theme-btn .material-symbols-rounded { font-size: 1.2rem; }
+.sett-theme-btn--active { background: var(--hover-bg); color: var(--ink); border-color: var(--accent); }
+.sett-theme-btn:hover:not(.sett-theme-btn--active) { background: var(--hover-bg); color: var(--ink); }
 
 /* Automation tab inside Settings */
 #settings-tab-automation { overflow-y: auto; }

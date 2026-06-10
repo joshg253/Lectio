@@ -1247,7 +1247,10 @@
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
         <div class="settings-section">
           <label class="settings-label">Theme</label>
-          <div><button type="button" id="theme-toggle" class="theme-toggle sett-theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button></div>
+          <div class="sett-theme-btns">
+            <button type="button" id="theme-btn-dark" class="sett-theme-btn" title="Dark mode" aria-label="Dark mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span></button>
+            <button type="button" id="theme-btn-light" class="sett-theme-btn" title="Light mode" aria-label="Light mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span></button>
+          </div>
         </div>
         <h4 class="settings-section-title" style="margin-top:1rem">Application</h4>
         <div class="settings-section">
@@ -1691,7 +1694,7 @@
   </div>
 
   <script>
-    const themeToggle = document.getElementById('theme-toggle');
+    const themeToggle = null; // replaced by two-button picker in Settings
     const themeStylesheet = document.getElementById('theme-stylesheet');
     let appUnreadCount = null;
     let unreadSinceLastFocus = false;
@@ -2029,12 +2032,10 @@
         themeStylesheet.href = `/static/themes/${theme}.css`;
       }
 
-      if (themeToggle) {
-        const nextThemeName = theme === 'dark' ? 'Light mode' : 'Dark mode';
-        themeToggle.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span> ${nextThemeName}`;
-        themeToggle.setAttribute('aria-label', `Switch to ${nextThemeName.toLowerCase()}`);
-        themeToggle.title = `Switch to ${nextThemeName.toLowerCase()}`;
-      }
+      const btnDark = document.getElementById('theme-btn-dark');
+      const btnLight = document.getElementById('theme-btn-light');
+      if (btnDark) { btnDark.classList.toggle('sett-theme-btn--active', theme === 'dark'); btnDark.setAttribute('aria-pressed', String(theme === 'dark')); }
+      if (btnLight) { btnLight.classList.toggle('sett-theme-btn--active', theme === 'light'); btnLight.setAttribute('aria-pressed', String(theme === 'light')); }
 
       updateDynamicFavicon();
     }
@@ -2064,13 +2065,9 @@
       }
     }
 
-    if (themeToggle) {
-      applyTheme(window.__lectioTheme || 'dark');
-      themeToggle.addEventListener('click', () => {
-        const nextTheme = window.__lectioTheme === 'dark' ? 'light' : 'dark';
-        applyTheme(nextTheme);
-      });
-    }
+    applyTheme(window.__lectioTheme || 'dark');
+    document.getElementById('theme-btn-dark')?.addEventListener('click', () => applyTheme('dark'));
+    document.getElementById('theme-btn-light')?.addEventListener('click', () => applyTheme('light'));
 
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
