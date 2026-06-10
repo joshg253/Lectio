@@ -1563,6 +1563,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN feed_thumbnail_url TEXT")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_crop TEXT NOT NULL DEFAULT 'cover'")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -1720,7 +1724,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None}
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover"}
+_VALID_THUMB_CROPS = frozenset({"cover", "top", "bottom"})
 
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -1753,6 +1758,18 @@ def upsert_feed_thumbnail_url(conn: sqlite3.Connection, feed_url: str, thumbnail
     conn.execute(
         "UPDATE feed_display_prefs SET feed_thumbnail_url = ? WHERE feed_url = ?",
         (thumbnail_url or None, feed_url),
+    )
+
+
+def upsert_feed_thumb_crop(conn: sqlite3.Connection, feed_url: str, crop: str) -> None:
+    crop = crop if crop in _VALID_THUMB_CROPS else "cover"
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET thumb_crop = ? WHERE feed_url = ?",
+        (crop, feed_url),
     )
 
 
@@ -4275,6 +4292,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
+            "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -5615,10 +5633,14 @@ def list_entries_for_feeds(
         elif _feed_thumb_setting == "__favicon__":
             _raw_thumb = None  # favicon mode treated as no-image
         _thumb = _raw_thumb if _show_thumb else None
+        _thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
+        if _thumb_crop not in _VALID_THUMB_CROPS:
+            _thumb_crop = "cover"
         rec.update(
             {
                 "thumbnail_url": _thumb,
                 "show_thumbnail": _show_thumb,
+                "thumb_crop": _thumb_crop,
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
                 "manual_tags": manual_tags,
@@ -8799,6 +8821,18 @@ def set_feed_thumbnail_url_route(
 ):
     with get_meta_connection() as conn:
         upsert_feed_thumbnail_url(conn, feed_url, thumbnail_url.strip() or None)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/feeds/thumb-crop")
+def set_feed_thumb_crop_route(
+    feed_url: str = Form(...),
+    crop: str = Form(...),
+):
+    if crop not in _VALID_THUMB_CROPS:
+        return JSONResponse({"error": "invalid crop"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_thumb_crop(conn, feed_url, crop)
     return JSONResponse({"ok": True})
 
 

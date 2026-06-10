@@ -3582,6 +3582,38 @@ body[data-keyboard-open="1"] .action-modal-panel {
   border-radius: 4px;
   border: 1px solid var(--border, #ccc);
 }
+.feed-prop-thumb-crop-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+.feed-prop-thumb-crop-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.feed-prop-thumb-crop-btns {
+  display: flex;
+  gap: 0.25rem;
+}
+.feed-prop-crop-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  opacity: 0.65;
+}
+.feed-prop-crop-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  opacity: 1;
+}
 .feed-prop-thumbnail-label {
   font-size: 0.8rem;
   color: var(--muted, #888);

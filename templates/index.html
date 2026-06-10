@@ -457,10 +457,15 @@
           data-post-read="{{ 1 if post.read else 0 }}"
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
+          data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt="" onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt=""
+              {% if post.thumb_crop == 'top' %}style="object-position:top"
+              {% elif post.thumb_crop == 'bottom' %}style="object-position:bottom"
+              {% endif %}
+              onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
           <div class="post-item-card">
@@ -1642,6 +1647,14 @@
             </div>
             <div id="feed-prop-thumb-preview" class="feed-prop-thumb-preview" style="display:none;">
               <img id="feed-prop-thumb-preview-img" src="" alt="" />
+            </div>
+          </div>
+          <div class="feed-prop-thumb-crop-row" id="feed-prop-thumb-crop-row">
+            <span class="feed-prop-thumb-crop-label">Crop</span>
+            <div class="feed-prop-thumb-crop-btns">
+              <button type="button" class="feed-prop-crop-btn" data-crop="top" title="Crop from top">Top</button>
+              <button type="button" class="feed-prop-crop-btn active" data-crop="cover" title="Crop from center (default)">Center</button>
+              <button type="button" class="feed-prop-crop-btn" data-crop="bottom" title="Crop from bottom">Bottom</button>
             </div>
           </div>
         </div>
@@ -3555,6 +3568,9 @@
         image.className = 'post-thumbnail-image';
         image.alt = '';
         image.src = thumbedLeadUrl;
+        const _crop = postItem?.dataset.thumbCrop;
+        if (_crop === 'top') image.style.objectPosition = 'top';
+        else if (_crop === 'bottom') image.style.objectPosition = 'bottom';
         image.onerror = () => {
           thumbnail.classList.add('is-empty');
           image.style.display = 'none';
@@ -3995,6 +4011,13 @@
             thumbSourceSelect.dataset.savedThumbUrl = data.feed_thumbnail_url || '';
           }
           if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
+
+          // Thumb crop position
+          const _cropVal = data.thumb_crop || 'cover';
+          document.querySelectorAll('.feed-prop-crop-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.crop === _cropVal);
+            btn.dataset.feedUrl = feedUrl;
+          });
 
           const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
@@ -4550,6 +4573,22 @@
       const resp = await fetch('/feeds/display-prefs', { method: 'POST', body });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     }
+
+    document.querySelectorAll('.feed-prop-crop-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const feedUrl = btn.dataset.feedUrl;
+        if (!feedUrl) return;
+        const crop = btn.dataset.crop;
+        document.querySelectorAll('.feed-prop-crop-btn').forEach(b => b.classList.toggle('active', b.dataset.crop === crop));
+        try {
+          await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop }), credentials: 'same-origin' });
+          // Update visible thumbnails immediately
+          document.querySelectorAll(`.post-item[data-feed-url="${CSS.escape(feedUrl)}"] .post-thumbnail-image`).forEach(img => {
+            img.style.objectPosition = crop === 'top' ? 'top' : crop === 'bottom' ? 'bottom' : '';
+          });
+        } catch (_e) {}
+      });
+    });
 
     // feedPropShowThumb listener removed — now handled by thumb-source dropdown
 
