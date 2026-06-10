@@ -7471,6 +7471,12 @@ def home(
         profile_name = get_setting(conn, PROFILE_NAME_SETTING_KEY) or ""
         profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
         _profile_lower = profile_email.lower()
+        _avatar_hash = hashlib.md5(_profile_lower.strip().encode()).hexdigest() if _profile_lower.strip() else ""
+        profile_avatar_url = (
+            f"https://www.gravatar.com/avatar/{_avatar_hash}?d=identicon&s=128"
+            if _avatar_hash else
+            "https://www.gravatar.com/avatar/?d=identicon&s=128"
+        )
         email_contacts = [
             c for c in get_email_contacts(conn)
             if c["address"].lower() != _profile_lower
@@ -7727,6 +7733,7 @@ def home(
             "email_bcc": email_bcc,
             "profile_name": profile_name,
             "profile_email": profile_email,
+            "profile_avatar_url": profile_avatar_url,
         },
     )
 
@@ -9270,10 +9277,22 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
     # Migrate lead-image in-memory caches: re-key (old_url, entry_id) → (new_url, entry_id).
     lead_image_service.rename_feed_url_in_cache(old_url, new_url)
 
+    # Clear any backoff/failure state the old URL accumulated so the new URL
+    # gets fetched immediately rather than waiting for the next scheduled retry.
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (new_url,))
+
     invalidate_meta_structure_cache()
     invalidate_problematic_feeds_cache()
     global _unread_counts_generation
     _unread_counts_generation += 1
+
+    threading.Thread(
+        target=feed_refresh_service.update_feeds,
+        args=([new_url],),
+        daemon=True,
+        name="refresh-after-url-change",
+    ).start()
 
     return JSONResponse({"ok": True, "new_url": new_url})
 

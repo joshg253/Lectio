@@ -102,7 +102,7 @@
     <section class="pane pane-folders">
       <header class="folders-pane-header">
         <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu folders-pane-menu">
-          <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="https://www.gravatar.com/avatar/?d=identicon&amp;s=64" alt="" /></summary>
+          <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="{{ profile_avatar_url }}" alt="" /></summary>
           <div class="menu-popover anchor-left">
             <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
             <hr class="menu-divider" />
@@ -1321,7 +1321,7 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
-          <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Duplicates</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Utilities</button>
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
@@ -1349,9 +1349,6 @@
           {% else %}
           <p class="muted" style="padding:0.5rem 0">No folders yet.</p>
           {% endif %}
-          <div class="settings-actions" style="margin-top:0.75rem;border-top:1px solid var(--line);padding-top:0.75rem">
-            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
-          </div>
         </div>
 
         <div id="problematic-feeds-modal">
@@ -1430,6 +1427,7 @@
 
         <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="duplicates" hidden>
           <div class="feeds-dedup-controls">
+            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
           </div>
           <div id="dedup-inline-results" hidden>
@@ -2071,13 +2069,6 @@
     applyTheme(window.__lectioTheme || 'dark');
     document.getElementById('theme-btn-dark')?.addEventListener('click', () => applyTheme('dark'));
     document.getElementById('theme-btn-light')?.addEventListener('click', () => applyTheme('light'));
-
-    // Seed hamburger avatar from server-rendered profile email (before settings load)
-    if (window.PROFILE_EMAIL && typeof _md5 === 'function') {
-      const _h = _md5(window.PROFILE_EMAIL.trim().toLowerCase());
-      const _mi = document.getElementById('menu-avatar-img');
-      if (_mi) _mi.src = `https://www.gravatar.com/avatar/${_h}?d=identicon&s=64`;
-    }
 
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
@@ -4421,7 +4412,12 @@
         const resp = await fetch('/feeds/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' }, credentials: 'same-origin', body: body.toString() });
         if (!resp.ok) throw new Error('request failed');
         closeFeedPropertiesModal();
+        // Remove from sidebar tree
         if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
+        // Remove from problematic-feeds panels (Failing / Acknowledged) if open
+        document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(feedUrl)}"]`)
+          .forEach(el => el.remove());
+        showToastMessage(`Unsubscribed from "${title}".`);
         if (wasActive) {
           const params = new URLSearchParams(window.location.search);
           params.delete('feed_url'); params.delete('entry_id');
