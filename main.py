@@ -8081,6 +8081,14 @@ def discover_feed_route(url: str = Query(...)):
     return JSONResponse(_probe_url(url.strip()))
 
 
+def _guid_type(ids: list[str]) -> str:
+    """Return 'url', 'string', or 'none' based on a sample of entry IDs."""
+    if not ids:
+        return "none"
+    url_count = sum(1 for g in ids if g.startswith("http://") or g.startswith("https://"))
+    return "url" if url_count > len(ids) // 2 else "string"
+
+
 def _compare_one_feed(url: str) -> dict:
     """Fetch and parse one feed URL, returning metadata for the Add Feed comparison picker."""
     _headers = {"User-Agent": "Lectio/1.0 (feed comparison; +https://github.com/joshg253/Lectio)"}
@@ -8108,6 +8116,12 @@ def _compare_one_feed(url: str) -> dict:
                 1 for item in items
                 if len(item.get("content_html") or item.get("content_text") or "") > 200
             )
+            date_field = "none"
+            if items:
+                if items[0].get("date_published"):
+                    date_field = "published"
+                elif items[0].get("date_modified"):
+                    date_field = "modified_only"
             latest = None
             if items:
                 raw = items[0].get("date_published") or items[0].get("date_modified")
@@ -8116,11 +8130,13 @@ def _compare_one_feed(url: str) -> dict:
                         latest = datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%b %-d, %Y")
                     except Exception:
                         latest = raw[:10]
-            sample_titles = [i["title"] for i in items[:3] if i.get("title")]
+            sample_title = next((i["title"] for i in items if i.get("title")), None)
             return {"url": url, "format": "JSON Feed", "title": data.get("title"),
                     "entry_count": len(items), "image_count": image_count,
                     "full_text": full_text_count > len(items) // 2 if items else False,
-                    "latest_date": latest, "sample_titles": sample_titles}
+                    "date_field": date_field,
+                    "guid_type": _guid_type([i.get("id", "") for i in items if i.get("id")]),
+                    "latest_date": latest, "sample_title": sample_title}
         except Exception as exc:
             return {"url": url, "error": f"JSON parse error: {exc}"}
 
@@ -8141,6 +8157,13 @@ def _compare_one_feed(url: str) -> dict:
         if len(content_val) > 200:
             full_text_count += 1
 
+    date_field = "none"
+    if entries:
+        if entries[0].get("published_parsed"):
+            date_field = "published"
+        elif entries[0].get("updated_parsed"):
+            date_field = "modified_only"
+
     version_map = {
         "rss20": "RSS 2.0", "rss10": "RSS 1.0", "rss092": "RSS 0.92",
         "rss091n": "RSS 0.91", "atom10": "Atom 1.0", "atom03": "Atom 0.3",
@@ -8156,12 +8179,14 @@ def _compare_one_feed(url: str) -> dict:
             except Exception:
                 pass
 
-    sample_titles = [e.get("title", "") for e in entries[:3] if e.get("title")]
+    sample_title = next((e.get("title") for e in entries if e.get("title")), None)
 
     return {"url": url, "format": fmt, "title": parsed.feed.get("title"),
             "entry_count": len(entries), "image_count": image_count,
             "full_text": full_text_count > len(entries) // 2 if entries else False,
-            "latest_date": latest, "sample_titles": sample_titles}
+            "date_field": date_field,
+            "guid_type": _guid_type([e.get("id", "") for e in entries if e.get("id")]),
+            "latest_date": latest, "sample_title": sample_title}
 
 
 @app.get("/feeds/compare")

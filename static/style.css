@@ -3395,7 +3395,14 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .afd-pick-item:hover { background: var(--hover-bg); }
 .afd-pick-item span  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.afd-feed-meta { width: 100%; font-size: 0.76rem; color: var(--muted); padding-left: 1.4rem; }
+.afd-feed-meta { width: 100%; display: flex; flex-wrap: wrap; gap: 0.25rem; padding-left: 1.3rem; margin-top: 0.1rem; }
+.afd-chip { font-size: 0.72rem; padding: 0.05rem 0.35rem; border-radius: 3px;
+  background: var(--hover-bg); color: var(--muted); white-space: nowrap; }
+.afd-chip--good  { background: #1a3d1a; color: #7ec87e; }
+.afd-chip--bad   { background: #3d1a1a; color: #d97070; }
+.afd-chip--title { background: transparent; color: var(--muted); font-style: italic; }
+[data-theme="light"] .afd-chip--good { background: #e8f5e9; color: #2e7d32; }
+[data-theme="light"] .afd-chip--bad  { background: #ffebee; color: #c62828; }
 .afd-compare-btn {
   align-self: flex-start;
   margin-top: 0.15rem;

@@ -2026,6 +2026,7 @@
     function applyTheme(theme) {
       window.localStorage.setItem('lectio-theme', theme);
       window.__lectioTheme = theme;
+      document.documentElement.setAttribute('data-theme', theme);
 
       if (themeStylesheet) {
         themeStylesheet.href = `/static/themes/${theme}.css`;
@@ -9334,13 +9335,31 @@
             let meta = item.querySelector('.afd-feed-meta');
             if (!meta) { meta = document.createElement('div'); meta.className = 'afd-feed-meta'; item.append(meta); }
             if (res.error) { meta.textContent = res.error; return; }
-            const parts = [
-              res.format,
-              res.full_text ? 'Full text' : 'Summaries',
-              res.image_count > 0 ? '✓ images' : '✗ no images',
-              res.latest_date,
-            ].filter(Boolean);
-            meta.textContent = parts.join(' · ');
+            meta.innerHTML = '';
+            function chip(text, cls) {
+              const s = document.createElement('span');
+              s.textContent = text;
+              if (cls) s.className = 'afd-chip afd-chip--' + cls;
+              else s.className = 'afd-chip';
+              return s;
+            }
+            const tags = [
+              chip(res.format),
+              chip(res.full_text ? '✓ Full text' : 'Summaries', res.full_text ? 'good' : null),
+              chip(res.image_count > 0 ? '✓ images' : '✗ no images', res.image_count > 0 ? 'good' : 'bad'),
+              chip(res.date_field === 'published' ? '✓ pub dates'
+                 : res.date_field === 'modified_only' ? '⚠ modified-only' : '✗ no dates',
+                   res.date_field === 'published' ? 'good' : 'bad'),
+              chip(res.guid_type === 'url' ? '✓ URL IDs'
+                 : res.guid_type === 'string' ? 'string IDs' : '✗ no IDs',
+                   res.guid_type === 'url' ? 'good' : res.guid_type === 'string' ? null : 'bad'),
+            ];
+            if (res.latest_date) tags.push(chip(res.latest_date));
+            if (res.sample_title) {
+              const t = res.sample_title.length > 48 ? res.sample_title.slice(0, 48) + '…' : res.sample_title;
+              tags.push(chip('"' + t + '"', 'title'));
+            }
+            tags.forEach(t => meta.append(t));
           });
           btn.remove();
         } catch (_) { btn.disabled = false; btn.textContent = 'Compare feeds'; }
