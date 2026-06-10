@@ -8127,7 +8127,7 @@ def _compare_one_feed(url: str) -> dict:
                 raw = items[0].get("date_published") or items[0].get("date_modified")
                 if raw:
                     try:
-                        latest = datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%b %-d, %Y")
+                        latest = datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%b %-d, %Y %H:%M")
                     except Exception:
                         latest = raw[:10]
             sample_title = next((i["title"] for i in items if i.get("title")), None)
@@ -8175,7 +8175,7 @@ def _compare_one_feed(url: str) -> dict:
         ts = entries[0].get("published_parsed") or entries[0].get("updated_parsed")
         if ts:
             try:
-                latest = datetime(*ts[:6]).strftime("%b %-d, %Y")
+                latest = datetime(*ts[:6]).strftime("%b %-d, %Y %H:%M")
             except Exception:
                 pass
 
