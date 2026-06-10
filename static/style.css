@@ -5254,7 +5254,7 @@ textarea.hl-draft-pattern {
   min-width: min(520px, 100%);
   max-width: 680px;
   width: 94vw;
-  height: min(580px, 88vh);
+  height: min(600px, 88vh);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -5265,6 +5265,7 @@ textarea.hl-draft-pattern {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.25rem;
+  flex-shrink: 0;
 }
 .settings-tab-bar { margin-bottom: 0.75rem; overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
 .settings-tab-bar::-webkit-scrollbar { display: none; }

@@ -1236,7 +1236,7 @@
       <!-- Account tab (profile + appearance + app settings) -->
       <div id="settings-tab-account" class="settings-tab-panel">
         <div class="sett-profile-row">
-          <img id="sett-avatar-img" class="sett-avatar-img" src="https://www.gravatar.com/avatar/?d=mp&s=128" alt="Avatar" />
+          <img id="sett-avatar-img" class="sett-avatar-img" src="https://www.gravatar.com/avatar/?d=identicon&s=128" alt="Avatar" />
           <div class="settings-section" style="flex:1">
             <label class="settings-label" for="sett-profile-name">Name</label>
             <input type="text" id="sett-profile-name" class="settings-input" placeholder="Your name" maxlength="200" />
@@ -7766,7 +7766,7 @@
         const img = document.getElementById('sett-avatar-img');
         if (!img) return;
         const hash = email ? _md5(email) : '';
-        img.src = `https://www.gravatar.com/avatar/${hash}?d=mp&s=128`;
+        img.src = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=128`;
       }
 
       document.getElementById('sett-profile-email')?.addEventListener('input', updateSettAvatar);
