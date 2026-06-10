@@ -830,6 +830,9 @@ class LeadImageService:
             inline = self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
             if inline:
                 _found_inline = True
+                # Always persist the inline image so fast_only=True lookups at
+                # render time find it in the cache without re-parsing the entry.
+                self.store_entry_lead_image(feed_url_str, entry_id_str, inline)
                 # For feeds manually locked to og_scrape, the source page is the
                 # authoritative image source — fall through even when an inline
                 # image exists (e.g. album cover) so we can find the real hero image.
