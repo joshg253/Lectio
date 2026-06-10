@@ -8081,6 +8081,83 @@ def discover_feed_route(url: str = Query(...)):
     return JSONResponse(_probe_url(url.strip()))
 
 
+def _compare_one_feed(url: str) -> dict:
+    """Fetch and parse one feed URL, returning metadata for the Add Feed comparison picker."""
+    _headers = {"User-Agent": "Lectio/1.0 (feed comparison; +https://github.com/joshg253/Lectio)"}
+    try:
+        resp = httpx.get(url, timeout=10.0, follow_redirects=True, headers=_headers)
+    except Exception as exc:
+        return {"url": url, "error": str(exc).split("\n")[0][:120]}
+    if not resp.is_success:
+        return {"url": url, "error": f"HTTP {resp.status_code}"}
+
+    ct = resp.headers.get("content-type", "").lower()
+
+    # JSON Feed (feedparser doesn't handle it)
+    if "json" in ct:
+        try:
+            import json as _j
+            data = _j.loads(resp.text)
+            items = data.get("items", [])
+            has_images = any(
+                item.get("image") or item.get("banner_image") or
+                any(a.get("mime_type", "").startswith("image") for a in item.get("attachments") or [])
+                for item in items
+            )
+            latest = None
+            if items:
+                raw = items[0].get("date_published") or items[0].get("date_modified")
+                if raw:
+                    try:
+                        latest = datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%b %-d, %Y")
+                    except Exception:
+                        latest = raw[:10]
+            return {"url": url, "format": "JSON Feed", "title": data.get("title"),
+                    "entry_count": len(items), "has_images": has_images, "latest_date": latest}
+        except Exception as exc:
+            return {"url": url, "error": f"JSON parse error: {exc}"}
+
+    # RSS / Atom via feedparser
+    parsed = feedparser.parse(resp.text)
+    if parsed.bozo and not parsed.entries:
+        return {"url": url, "error": "Could not parse feed"}
+
+    entries = parsed.entries
+    has_images = False
+    for entry in entries:
+        if any(enc.get("type", "").startswith("image") for enc in entry.get("enclosures", [])):
+            has_images = True; break
+        if entry.get("media_content") or entry.get("media_thumbnail"):
+            has_images = True; break
+
+    version_map = {
+        "rss20": "RSS 2.0", "rss10": "RSS 1.0", "rss092": "RSS 0.92",
+        "rss091n": "RSS 0.91", "atom10": "Atom 1.0", "atom03": "Atom 0.3",
+    }
+    fmt = version_map.get(parsed.get("version", ""), parsed.get("version", "").upper() or "Feed")
+
+    latest = None
+    if entries:
+        ts = entries[0].get("published_parsed") or entries[0].get("updated_parsed")
+        if ts:
+            try:
+                latest = datetime(*ts[:6]).strftime("%b %-d, %Y")
+            except Exception:
+                pass
+
+    return {"url": url, "format": fmt, "title": parsed.feed.get("title"),
+            "entry_count": len(entries), "has_images": has_images, "latest_date": latest}
+
+
+@app.get("/feeds/compare")
+def compare_feeds_route(urls: list[str] = Query(..., alias="url")):
+    from concurrent.futures import ThreadPoolExecutor
+    capped = [u.strip() for u in urls[:6]]
+    with ThreadPoolExecutor(max_workers=len(capped)) as ex:
+        results = list(ex.map(_compare_one_feed, capped))
+    return JSONResponse(results)
+
+
 @app.post("/api/folders")
 def api_create_folder(name: str = Form(...)):
     name = name.strip()

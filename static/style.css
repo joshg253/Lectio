@@ -3385,15 +3385,30 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .afd-pick-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.4rem;
+  gap: 0.15rem 0.4rem;
   font-size: 0.88rem;
   cursor: pointer;
   padding: 0.2rem 0.35rem;
   border-radius: 4px;
 }
 .afd-pick-item:hover { background: var(--hover-bg); }
-.afd-pick-item span  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.afd-pick-item span  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.afd-feed-meta { width: 100%; font-size: 0.76rem; color: var(--muted); padding-left: 1.4rem; }
+.afd-compare-btn {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.afd-compare-btn:hover { background: var(--hover-bg); }
+.afd-compare-btn:disabled { opacity: 0.5; cursor: default; }
 
 .afd-pf {
   display: grid;

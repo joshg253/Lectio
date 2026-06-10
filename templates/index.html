@@ -9313,6 +9313,37 @@
           sp.textContent = f.title || f.url; sp.title = f.url;
           lbl.append(rb, sp); pickEl.append(lbl);
         });
+        if (feeds.length > 1) {
+          const btn = document.createElement('button');
+          btn.type = 'button'; btn.className = 'afd-compare-btn'; btn.textContent = 'Compare feeds';
+          btn.addEventListener('click', () => compareFeedsPicker(feeds, btn));
+          pickEl.append(btn);
+        }
+      }
+
+      async function compareFeedsPicker(feeds, btn) {
+        btn.disabled = true; btn.textContent = 'Comparing…';
+        const params = feeds.map(f => 'url=' + encodeURIComponent(f.url)).join('&');
+        try {
+          const r = await fetch('/feeds/compare?' + params);
+          const results = await r.json();
+          results.forEach(res => {
+            const rb = pickEl.querySelector('input[value="' + CSS.escape(res.url) + '"]');
+            const item = rb?.closest('.afd-pick-item');
+            if (!item) return;
+            let meta = item.querySelector('.afd-feed-meta');
+            if (!meta) { meta = document.createElement('div'); meta.className = 'afd-feed-meta'; item.append(meta); }
+            if (res.error) { meta.textContent = res.error; return; }
+            const parts = [
+              res.format,
+              res.entry_count != null ? res.entry_count + ' entries' : null,
+              res.has_images ? '✓ images' : '✗ no images',
+              res.latest_date,
+            ].filter(Boolean);
+            meta.textContent = parts.join(' · ');
+          });
+          btn.remove();
+        } catch (_) { btn.disabled = false; btn.textContent = 'Compare feeds'; }
       }
 
       folderSelect.addEventListener('change', () => {
