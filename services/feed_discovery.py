@@ -77,7 +77,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     body_len = len(resp.content)
 
     if resp.is_success and _ct_is_feed(ct):
-        return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": ""}
+        return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": "", "direct": True}
 
     if not resp.is_success:
         return {"status": "error", "feeds": [], "message": f"HTTP {resp.status_code} — server denied the request."}

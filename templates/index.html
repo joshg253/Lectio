@@ -9274,14 +9274,23 @@
       }
 
       function apply(rawUrl, d) {
-        if (d.status === 'feed') {
+        if (d.status === 'feed' || d.status === 'feeds') {
           selectedFeedUrl = d.feeds[0].url;
-          setMsg('Feed found: ' + (d.feeds[0].title || d.feeds[0].url), 'ok');
-          submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
-        } else if (d.status === 'feeds') {
-          setMsg(d.feeds.length + ' feeds found — pick one:');
-          renderPicker(d.feeds);
-          submitBtn.textContent = 'Add Feed'; submitBtn.disabled = true;
+          if (d.direct) {
+            const fid = folderSelect.value === '__new__' ? null : folderSelect.value;
+            if (fid) {
+              document.getElementById('afd-ff-url').value = selectedFeedUrl;
+              document.getElementById('afd-ff-folder').value = fid;
+              document.getElementById('afd-feed-form').submit();
+              return;
+            }
+            setMsg('Direct feed URL.', 'ok');
+            submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
+          } else {
+            if (d.feeds.length > 1) setMsg(d.feeds.length + ' feeds found — pick one:');
+            renderPicker(d.feeds);
+            submitBtn.textContent = 'Add Feed';
+          }
         } else if (d.status === 'none' || d.status === 'blocked') {
           setMsg(d.message, 'warn');
           pfSection.hidden = false; isPageFeedMode = true; selectedFeedUrl = rawUrl;
