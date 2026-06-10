@@ -3425,22 +3425,27 @@ body[data-keyboard-open="1"] .action-modal-panel {
   border-radius: 6px;
   margin-bottom: 0.4rem;
 }
-.afd-pf-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.2rem;
-  background: none;
-  border: none;
-  padding: 0;
+.afd-pf > summary {
+  list-style: none;
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--muted);
   cursor: pointer;
+  user-select: none;
 }
-.afd-pf-toggle:hover { color: var(--fg); }
-.afd-pf-chevron { font-size: 1rem; transition: transform 0.15s; }
-.afd-pf-toggle[aria-expanded="true"] .afd-pf-chevron { transform: rotate(90deg); }
-#afd-pf-body { display: grid; gap: 0.4rem; }
+.afd-pf > summary::-webkit-details-marker { display: none; }
+.afd-pf > summary::before {
+  content: 'chevron_right';
+  font-family: 'Material Symbols Rounded';
+  font-size: 1rem;
+  vertical-align: -0.15em;
+  margin-right: 0.15rem;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.afd-pf[open] > summary::before { transform: rotate(90deg); }
+.afd-pf > summary:hover { color: var(--fg); }
+.afd-pf[open] { gap: 0.4rem; }
 
 .afd-new-folder {
   display: flex;
