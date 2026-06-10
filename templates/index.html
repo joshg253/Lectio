@@ -102,9 +102,9 @@
     <section class="pane pane-folders">
       <header class="folders-pane-header">
         <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu folders-pane-menu">
-          <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><span class="material-symbols-rounded" aria-hidden="true">menu</span></summary>
+          <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="https://www.gravatar.com/avatar/?d=identicon&amp;s=64" alt="" /></summary>
           <div class="menu-popover anchor-left">
-            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Settings</button>
+            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
             <hr class="menu-divider" />
             <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
             <div class="flyout-item">
@@ -2068,6 +2068,13 @@
     applyTheme(window.__lectioTheme || 'dark');
     document.getElementById('theme-btn-dark')?.addEventListener('click', () => applyTheme('dark'));
     document.getElementById('theme-btn-light')?.addEventListener('click', () => applyTheme('light'));
+
+    // Seed hamburger avatar from server-rendered profile email (before settings load)
+    if (window.PROFILE_EMAIL && typeof _md5 === 'function') {
+      const _h = _md5(window.PROFILE_EMAIL.trim().toLowerCase());
+      const _mi = document.getElementById('menu-avatar-img');
+      if (_mi) _mi.src = `https://www.gravatar.com/avatar/${_h}?d=identicon&s=64`;
+    }
 
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
@@ -7758,12 +7765,16 @@
         return [a, b, c, d].map(n => (n < 0 ? n + 0x100000000 : n).toString(16).padStart(8, '0').match(/../g).reverse().join('')).join('');
       }
 
+      function updateAvatarFromEmail(email) {
+        const hash = email ? _md5(email.trim().toLowerCase()) : '';
+        const settImg = document.getElementById('sett-avatar-img');
+        const menuImg = document.getElementById('menu-avatar-img');
+        if (settImg) settImg.src = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=128`;
+        if (menuImg) menuImg.src = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+      }
+
       function updateSettAvatar() {
-        const email = (document.getElementById('sett-profile-email')?.value || '').trim().toLowerCase();
-        const img = document.getElementById('sett-avatar-img');
-        if (!img) return;
-        const hash = email ? _md5(email) : '';
-        img.src = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=128`;
+        updateAvatarFromEmail(document.getElementById('sett-profile-email')?.value || '');
       }
 
       document.getElementById('sett-profile-email')?.addEventListener('input', updateSettAvatar);

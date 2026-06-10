@@ -5248,6 +5248,7 @@ textarea.hl-draft-pattern {
 .topbar-icon-btn:hover { background: var(--hover-bg); color: var(--ink); }
 .topbar-overflow-btn { list-style: none; }
 .topbar-overflow-btn::-webkit-details-marker { display: none; }
+.menu-avatar-img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--line); background: var(--hover-bg); display: block; }
 
 /* ── Settings modal ─────────────────────────────────────────────────── */
 .settings-modal-panel {
