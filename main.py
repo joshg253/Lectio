@@ -8099,10 +8099,14 @@ def _compare_one_feed(url: str) -> dict:
             import json as _j
             data = _j.loads(resp.text)
             items = data.get("items", [])
-            has_images = any(
-                item.get("image") or item.get("banner_image") or
+            image_count = sum(
+                1 for item in items
+                if item.get("image") or item.get("banner_image") or
                 any(a.get("mime_type", "").startswith("image") for a in item.get("attachments") or [])
-                for item in items
+            )
+            full_text_count = sum(
+                1 for item in items
+                if len(item.get("content_html") or item.get("content_text") or "") > 200
             )
             latest = None
             if items:
@@ -8112,8 +8116,11 @@ def _compare_one_feed(url: str) -> dict:
                         latest = datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%b %-d, %Y")
                     except Exception:
                         latest = raw[:10]
+            sample_titles = [i["title"] for i in items[:3] if i.get("title")]
             return {"url": url, "format": "JSON Feed", "title": data.get("title"),
-                    "entry_count": len(items), "has_images": has_images, "latest_date": latest}
+                    "entry_count": len(items), "image_count": image_count,
+                    "full_text": full_text_count > len(items) // 2 if items else False,
+                    "latest_date": latest, "sample_titles": sample_titles}
         except Exception as exc:
             return {"url": url, "error": f"JSON parse error: {exc}"}
 
@@ -8123,12 +8130,16 @@ def _compare_one_feed(url: str) -> dict:
         return {"url": url, "error": "Could not parse feed"}
 
     entries = parsed.entries
-    has_images = False
+    image_count = 0
+    full_text_count = 0
     for entry in entries:
-        if any(enc.get("type", "").startswith("image") for enc in entry.get("enclosures", [])):
-            has_images = True; break
-        if entry.get("media_content") or entry.get("media_thumbnail"):
-            has_images = True; break
+        has_enc = any(enc.get("type", "").startswith("image") for enc in entry.get("enclosures", []))
+        has_media = bool(entry.get("media_content") or entry.get("media_thumbnail"))
+        if has_enc or has_media:
+            image_count += 1
+        content_val = (entry.get("content") or [{}])[0].get("value") or ""
+        if len(content_val) > 200:
+            full_text_count += 1
 
     version_map = {
         "rss20": "RSS 2.0", "rss10": "RSS 1.0", "rss092": "RSS 0.92",
@@ -8145,8 +8156,12 @@ def _compare_one_feed(url: str) -> dict:
             except Exception:
                 pass
 
+    sample_titles = [e.get("title", "") for e in entries[:3] if e.get("title")]
+
     return {"url": url, "format": fmt, "title": parsed.feed.get("title"),
-            "entry_count": len(entries), "has_images": has_images, "latest_date": latest}
+            "entry_count": len(entries), "image_count": image_count,
+            "full_text": full_text_count > len(entries) // 2 if entries else False,
+            "latest_date": latest, "sample_titles": sample_titles}
 
 
 @app.get("/feeds/compare")
