@@ -9355,11 +9355,13 @@
                    res.guid_type === 'url' ? 'good' : res.guid_type === 'string' ? null : 'bad'),
             ];
             if (res.latest_date) tags.push(chip(res.latest_date));
-            if (res.sample_title) {
-              const t = res.sample_title.length > 48 ? res.sample_title.slice(0, 48) + '…' : res.sample_title;
-              tags.push(chip('"' + t + '"', 'title'));
-            }
             tags.forEach(t => meta.append(t));
+            if (res.sample_title) {
+              let titleRow = item.querySelector('.afd-feed-title-row');
+              if (!titleRow) { titleRow = document.createElement('div'); titleRow.className = 'afd-feed-meta afd-feed-title-row'; item.append(titleRow); }
+              const t = res.sample_title.length > 60 ? res.sample_title.slice(0, 60) + '…' : res.sample_title;
+              titleRow.append(chip('"' + t + '"', 'title'));
+            }
           });
           btn.remove();
         } catch (_) { btn.disabled = false; btn.textContent = 'Compare feeds'; }

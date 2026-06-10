@@ -3380,7 +3380,7 @@ body[data-keyboard-open="1"] .action-modal-panel {
   flex-direction: column;
   gap: 0.25rem;
   margin-bottom: 0.35rem;
-  max-height: 10rem;
+  max-height: 24rem;
   overflow-y: auto;
 }
 .afd-pick-item {
