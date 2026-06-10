@@ -458,6 +458,7 @@
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
+          data-thumb-strategy="{{ post.thumb_strategy or '' }}"
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
             {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}')"{% endif %}>
@@ -3552,6 +3553,10 @@
         // list thumbnail generated from `post.thumbnail_url` intact.
         return;
       }
+
+      // When the feed uses a per-entry inline thumbnail strategy, the lead image
+      // (typically og_scrape) must not overwrite the inline thumbnail in the list.
+      if (postItem.dataset.thumbStrategy === 'inline') return;
 
       // /thumb requires an absolute URL. When the server proxied the image through
       // /api/img (CORP-restricted domains), leadImageUrl is a relative path like

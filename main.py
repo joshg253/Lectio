@@ -5691,6 +5691,7 @@ def list_entries_for_feeds(
                 "thumbnail_url": _thumb,
                 "show_thumbnail": _show_thumb,
                 "thumb_crop": _thumb_crop,
+                "thumb_strategy": _thumb_strategy or "",
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
                 "manual_tags": manual_tags,
