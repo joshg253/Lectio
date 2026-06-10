@@ -1567,6 +1567,16 @@ class LeadImageService:
                 return False
             if query_h is not None and query_h < self._LEAD_IMAGE_MIN_HEIGHT:
                 return False
+            # Jetpack/WP CDN: resize=W,H (or resize=W%2CH) specifies the exact
+            # served dimensions — they override filename-embedded dimensions.
+            for _rm in re.finditer(r"(?:^|&)resize=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", query, re.IGNORECASE):
+                try:
+                    _rw, _rh = int(_rm.group(1)), int(_rm.group(2))
+                    if _rw < self._LEAD_IMAGE_MIN_WIDTH or _rh < self._LEAD_IMAGE_MIN_HEIGHT:
+                        return False
+                except ValueError:
+                    pass
+                break
 
         if width is None or height is None:
             url_path_no_query = image_url.split("?")[0]

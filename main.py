@@ -5066,6 +5066,87 @@ def _bs4_content_fallback(raw_html: str) -> str:
         return ""
 
 
+_BBCODE_SIGNAL_RE = re.compile(
+    r'\[(?:b|i|u|s|strike|url|img|quote|code|list|color|size|h[1-6]|center|spoiler)[\]=\s/\]]',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_bbcode(text: str) -> bool:
+    """True when text contains more BBCode tags than HTML tags."""
+    bb = len(_BBCODE_SIGNAL_RE.findall(text))
+    ht = len(re.findall(r'<[a-z]', text, re.IGNORECASE))
+    return bb >= 2 and bb > ht
+
+
+def _safe_bb_url(raw: str) -> str:
+    """Return raw only if it's http(s); block everything else."""
+    stripped = raw.strip()
+    return stripped if re.match(r'https?://', stripped, re.IGNORECASE) else '#'
+
+
+def _bbcode_to_html(text: str) -> str:
+    """Convert common BBCode tags to HTML. Escapes the source first."""
+    import html as _html
+    out = _html.escape(text, quote=False)  # escape < > & but leave quotes for regex
+
+    # block-level
+    def _list_items(s: str) -> str:
+        return re.sub(r'\[\*\]', '<li>', s, flags=re.IGNORECASE)
+
+    out = re.sub(r'\[list=1\](.*?)\[/list\]',
+                 lambda m: '<ol>' + _list_items(m.group(1)) + '</ol>', out, flags=re.I | re.S)
+    out = re.sub(r'\[list\](.*?)\[/list\]',
+                 lambda m: '<ul>' + _list_items(m.group(1)) + '</ul>', out, flags=re.I | re.S)
+    out = re.sub(r'\[quote=([^\]]{1,100})\](.*?)\[/quote\]',
+                 r'<blockquote><cite>\1</cite>\2</blockquote>', out, flags=re.I | re.S)
+    out = re.sub(r'\[quote\](.*?)\[/quote\]',
+                 r'<blockquote>\1</blockquote>', out, flags=re.I | re.S)
+    out = re.sub(r'\[code\](.*?)\[/code\]',
+                 r'<pre><code>\1</code></pre>', out, flags=re.I | re.S)
+    out = re.sub(r'\[center\](.*?)\[/center\]',
+                 r'<div style="text-align:center">\1</div>', out, flags=re.I | re.S)
+    out = re.sub(r'\[spoiler(?:=[^\]]*)?\](.*?)\[/spoiler\]',
+                 r'<details><summary>Spoiler</summary>\1</details>', out, flags=re.I | re.S)
+    out = re.sub(r'\[h([1-6])\](.*?)\[/h\1\]',
+                 r'<h\1>\2</h\1>', out, flags=re.I | re.S)
+
+    # inline
+    out = re.sub(r'\[b\](.*?)\[/b\]', r'<strong>\1</strong>', out, flags=re.I | re.S)
+    out = re.sub(r'\[i\](.*?)\[/i\]', r'<em>\1</em>', out, flags=re.I | re.S)
+    out = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', out, flags=re.I | re.S)
+    out = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', out, flags=re.I | re.S)
+    out = re.sub(r'\[strike\](.*?)\[/strike\]', r'<s>\1</s>', out, flags=re.I | re.S)
+    out = re.sub(r'\[color=([^\]]{1,30})\](.*?)\[/color\]',
+                 r'<span style="color:\1">\2</span>', out, flags=re.I | re.S)
+    out = re.sub(r'\[size=(\d{1,3})\](.*?)\[/size\]',
+                 r'<span style="font-size:\1px">\2</span>', out, flags=re.I | re.S)
+
+    # links / images — sanitize URLs
+    def _url_tag(m: re.Match) -> str:
+        href = _safe_bb_url(_html.unescape(m.group(1)))
+        label = m.group(2).strip() or href
+        return f'<a href="{_html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">{label}</a>'
+
+    out = re.sub(r'\[url=([^\]]{1,500})\](.*?)\[/url\]', _url_tag, out, flags=re.I | re.S)
+    out = re.sub(
+        r'\[url\](https?://[^\[]{1,500})\[/url\]',
+        lambda m: f'<a href="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}"'
+                  f' target="_blank" rel="noopener noreferrer">{_html.escape(m.group(1))}</a>',
+        out, flags=re.I | re.S,
+    )
+    out = re.sub(
+        r'\[img(?:=[^\]]*)?\](https?://[^\[]{1,500})\[/img\]',
+        lambda m: f'<img src="{_html.escape(_safe_bb_url(_html.unescape(m.group(1))), quote=True)}"'
+                  f' loading="lazy" style="max-width:100%">',
+        out, flags=re.I | re.S,
+    )
+
+    # newlines
+    out = out.replace('\n', '<br>\n')
+    return out
+
+
 def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
     """Remove the lead-image opener from content HTML using BeautifulSoup.
 
@@ -5812,6 +5893,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html = None
         if content and content.value and content.is_html:
             content_html = content.value
+        # BBCode fallback: feeds that emit BBCode markup instead of HTML
+        # (e.g. Nexus Mods).  feedparser marks description as text/html but
+        # the value has [b]...[/b] brackets.  Also handles is_html=False text.
+        if content and content.value:
+            _cv = content_html or content.value
+            if _looks_like_bbcode(_cv):
+                content_html = _bbcode_to_html(content_html if content_html else content.value)
 
         # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
         # of http://).  The reader library resolves these as relative paths, producing
@@ -5928,6 +6016,29 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         return f'<a href="{esc}" target="_blank" rel="noopener noreferrer">{html.escape(url)}</a>'
                     base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(base_html))
                 content_html = embed_html + f"<div>{base_html}</div>"
+
+        # Podcast audio player — inject <audio controls> for entries with an
+        # audio enclosure when the content doesn't already have an <audio> tag.
+        _audio_url: str | None = None
+        for _enc in (getattr(entry, "enclosures", None) or []):
+            _enc_url = getattr(_enc, "url", None) or ""
+            _enc_type = (getattr(_enc, "type", None) or "").lower()
+            if _enc_url and (
+                _enc_type.startswith("audio/")
+                or any(_enc_url.lower().endswith(ext) for ext in (".mp3", ".m4a", ".ogg", ".opus", ".wav"))
+            ):
+                _audio_url = _enc_url
+                break
+        if _audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
+            _safe_audio_url = html.escape(_audio_url, quote=True)
+            _audio_player = (
+                f'<div class="podcast-player" style="margin:1em 0;">'
+                f'<audio controls style="width:100%">'
+                f'<source src="{_safe_audio_url}">'
+                f'Your browser does not support the audio element.'
+                f'</audio></div>'
+            )
+            content_html = _audio_player + (content_html or "")
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         feed_tag_suggestions = get_feed_tag_suggestions(
