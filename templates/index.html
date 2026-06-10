@@ -1123,17 +1123,22 @@
       <div id="afd-pick" class="afd-pick" hidden></div>
 
       <div id="afd-pf" class="afd-pf" hidden>
-        <div class="afd-pf-header">Page Feed options</div>
-        <label class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional)</span></label>
-        <input id="afd-pf-title" placeholder="Detected from page title" />
-        <label class="action-modal-label">Scraping mode</label>
-        <div class="fakefeedz-modes">
-          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
-          <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
+        <button type="button" class="afd-pf-toggle" id="afd-pf-toggle" aria-expanded="false">
+          <span class="material-symbols-rounded afd-pf-chevron" aria-hidden="true">chevron_right</span>
+          Page Feed options
+        </button>
+        <div id="afd-pf-body" hidden>
+          <label class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional)</span></label>
+          <input id="afd-pf-title" placeholder="Detected from page title" />
+          <label class="action-modal-label">Scraping mode</label>
+          <div class="fakefeedz-modes">
+            <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="link_list" checked /> <strong>Link list</strong> — new links on the page become entries</label>
+            <label class="fakefeedz-mode-label"><input type="radio" name="afd-mode" value="change_detect" /> <strong>Change detect</strong> — entry posted when page content changes</label>
+          </div>
+          <label class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
+          <input id="afd-pf-selector" placeholder="e.g. .changelog a, article a" />
+          <p class="action-modal-hint">For link list, selects link elements. For change detect, selects the content region to watch.</p>
         </div>
-        <label class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
-        <input id="afd-pf-selector" placeholder="e.g. .changelog a, article a" />
-        <p class="action-modal-hint">For link list, selects link elements. For change detect, selects the content region to watch.</p>
       </div>
 
       <label for="afd-folder" class="action-modal-label">Folder</label>
@@ -9237,6 +9242,10 @@
         msgEl.hidden = true; msgEl.className = 'afd-msg'; msgEl.textContent = '';
         pickEl.hidden = true; pickEl.innerHTML = '';
         pfSection.hidden = true;
+        const pfBody = document.getElementById('afd-pf-body');
+        const pfToggle = document.getElementById('afd-pf-toggle');
+        if (pfBody) pfBody.hidden = true;
+        if (pfToggle) pfToggle.setAttribute('aria-expanded', 'false');
         document.getElementById('afd-pf-title').value = '';
         document.getElementById('afd-pf-selector').value = '';
         modal.querySelector('input[name="afd-mode"][value="link_list"]').checked = true;
@@ -9407,6 +9416,14 @@
           document.getElementById('afd-ff-folder').value = fid;
           feedForm.submit();
         }
+      });
+
+      document.getElementById('afd-pf-toggle')?.addEventListener('click', () => {
+        const body = document.getElementById('afd-pf-body');
+        const toggle = document.getElementById('afd-pf-toggle');
+        const expanded = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', String(!expanded));
+        body.hidden = expanded;
       });
 
       urlInput.addEventListener('input', () => schedule(urlInput.value.trim()));

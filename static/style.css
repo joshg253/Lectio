@@ -3425,12 +3425,22 @@ body[data-keyboard-open="1"] .action-modal-panel {
   border-radius: 6px;
   margin-bottom: 0.4rem;
 }
-.afd-pf-header {
+.afd-pf-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: none;
+  border: none;
+  padding: 0;
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--muted);
-  margin-bottom: 0.1rem;
+  cursor: pointer;
 }
+.afd-pf-toggle:hover { color: var(--fg); }
+.afd-pf-chevron { font-size: 1rem; transition: transform 0.15s; }
+.afd-pf-toggle[aria-expanded="true"] .afd-pf-chevron { transform: rotate(90deg); }
+#afd-pf-body { display: grid; gap: 0.4rem; }
 
 .afd-new-folder {
   display: flex;
