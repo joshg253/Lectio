@@ -5254,8 +5254,11 @@ textarea.hl-draft-pattern {
   min-width: min(520px, 100%);
   max-width: 680px;
   width: 94vw;
-  /* Let native popups (datalist, etc.) escape the modal without clipping. */
-  overflow: visible;
+  height: min(580px, 88vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  resize: none;
 }
 .settings-modal-header {
   display: flex;
@@ -5266,7 +5269,7 @@ textarea.hl-draft-pattern {
 .settings-tab-bar { margin-bottom: 0.75rem; overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
 .settings-tab-bar::-webkit-scrollbar { display: none; }
 .settings-tab-bar .hl-tab-btn { padding: 0.35rem 0.65rem; white-space: nowrap; flex-shrink: 0; }
-.settings-tab-panel { display: flex; flex-direction: column; gap: 0; overflow-y: auto; max-height: 70vh; }
+.settings-tab-panel { display: flex; flex-direction: column; gap: 0; overflow-y: auto; flex: 1; min-height: 0; }
 .settings-tab-panel[hidden] { display: none; }
 .settings-section {
   display: grid;
@@ -5333,6 +5336,7 @@ textarea.hl-draft-pattern {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  justify-content: flex-end;
   padding: 0.5rem 0 0.25rem;
   flex-wrap: wrap;
 }
