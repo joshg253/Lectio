@@ -9334,8 +9334,9 @@
             let meta = item.querySelector('.afd-feed-meta');
             if (!meta) { meta = document.createElement('div'); meta.className = 'afd-feed-meta'; item.append(meta); }
             if (res.error) { meta.textContent = res.error; return; }
+            const urlParam = (() => { try { return new URL(res.url).search.replace('?',''); } catch(_){return '';} })();
             const parts = [
-              res.format,
+              res.format + (urlParam ? ' (' + urlParam + ')' : ''),
               res.entry_count != null ? res.entry_count + ' entries' : null,
               res.has_images ? '✓ images' : '✗ no images',
               res.latest_date,

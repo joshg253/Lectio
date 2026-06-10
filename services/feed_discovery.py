@@ -37,7 +37,7 @@ _COMMON_FEED_PATHS = [
 ]
 
 # WordPress-style query-param variants probed against the page URL itself.
-_FEED_QUERY_PARAMS = ["feed=rss2", "feed=rss", "feed=atom"]
+_FEED_QUERY_PARAMS = ["feed=rss2", "feed=rss", "feed=atom", "feed=json"]
 
 _HEADERS = {"User-Agent": "Lectio/1.0 (RSS auto-discovery; +https://github.com/joshg253/Lectio)"}
 
