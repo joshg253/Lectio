@@ -1586,6 +1586,10 @@ def ensure_meta_schema() -> None:
         conn.execute(
             "UPDATE feed_display_prefs SET thumb_crop = 'cover' WHERE thumb_crop NOT IN ('cover', 'left', 'contain', 'smart')"
         )
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_strategy TEXT")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -1743,8 +1747,9 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover"}
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None}
 _VALID_THUMB_CROPS = frozenset({"cover", "left", "contain", "smart"})
+_VALID_THUMB_STRATEGIES = frozenset({"inline"})
 
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -1789,6 +1794,18 @@ def upsert_feed_thumb_crop(conn: sqlite3.Connection, feed_url: str, crop: str) -
     conn.execute(
         "UPDATE feed_display_prefs SET thumb_crop = ? WHERE feed_url = ?",
         (crop, feed_url),
+    )
+
+
+def upsert_feed_thumb_strategy(conn: sqlite3.Connection, feed_url: str, strategy: str | None) -> None:
+    s = strategy if strategy in _VALID_THUMB_STRATEGIES else None
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET thumb_strategy = ? WHERE feed_url = ?",
+        (s, feed_url),
     )
 
 
@@ -4312,6 +4329,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
+            "thumb_strategy": _disp.get("thumb_strategy") or None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -5652,13 +5670,18 @@ def list_entries_for_feeds(
             rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
         _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
-        _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False, fast_only=True)
         _feed_thumb_setting = _feed_prefs.get("feed_thumbnail_url")
         _show_thumb = bool(_feed_prefs.get("show_lead_image_as_thumb", 1))
+        _thumb_strategy = _feed_prefs.get("thumb_strategy") or None
         if _feed_thumb_setting and _feed_thumb_setting != "__favicon__":
-            _raw_thumb = str(_feed_thumb_setting)  # override per-entry
+            _raw_thumb = str(_feed_thumb_setting)  # pinned URL override
         elif _feed_thumb_setting == "__favicon__":
-            _raw_thumb = None  # favicon mode treated as no-image
+            _raw_thumb = None
+        elif _thumb_strategy == "inline":
+            # Use first image from feed content HTML — bypasses the og_scrape cache
+            _raw_thumb = lead_image_service.extract_inline_thumb_url(entry)
+        else:
+            _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False, fast_only=True)
         _thumb = _raw_thumb if _show_thumb else None
         _thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _thumb_crop not in _VALID_THUMB_CROPS:
@@ -8860,6 +8883,16 @@ def set_feed_thumb_crop_route(
         return JSONResponse({"error": "invalid crop"}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_thumb_crop(conn, feed_url, crop)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/feeds/thumb-strategy")
+def set_feed_thumb_strategy_route(
+    feed_url: str = Form(...),
+    strategy: str = Form(...),
+):
+    with get_meta_connection() as conn:
+        upsert_feed_thumb_strategy(conn, feed_url, strategy or None)
     return JSONResponse({"ok": True})
 
 

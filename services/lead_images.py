@@ -658,6 +658,40 @@ class LeadImageService:
 
         return None
 
+    def extract_inline_thumb_url(self, entry: object) -> str | None:
+        """Return the first inline image from the entry's feed-content HTML.
+
+        Intentionally bypasses the lead-image cache so the result is independent
+        of the feed's primary strategy (e.g. og_scrape).  No HTTP requests are
+        made; only the content already stored in the reader DB is used.
+        """
+        entry_link = str(getattr(entry, "link", "") or "")
+        feed_url = str(getattr(entry, "feed_url", "") or "")
+        base_url = entry_link or feed_url
+
+        html_candidates: list[str] = []
+        try:
+            content = getattr(entry, "get_content", lambda **_: None)(prefer_summary=False)
+            if content and getattr(content, "value", None) and getattr(content, "is_html", False):
+                html_candidates.append(str(content.value))
+        except Exception:
+            pass
+        summary = getattr(entry, "summary", None)
+        if isinstance(summary, str) and summary.strip():
+            html_candidates.append(summary)
+
+        for html_candidate in html_candidates:
+            if feed_url:
+                html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+            inline_image = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
+            if (
+                inline_image
+                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
+                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
+            ):
+                return inline_image
+        return None
+
     def resolve_entry_lead_image_url(self, entry: object, content_html: str | None, summary: str | None) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url_str = str(getattr(entry, "feed_url", "") or "")

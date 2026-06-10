@@ -1642,8 +1642,11 @@
           <div class="feed-prop-thumb-override">
             <select id="feed-prop-thumb-source" class="feed-prop-strategy-select">
               <option value="__disabled__">Disabled</option>
-              <option value="">Per-entry image (auto)</option>
-              <optgroup id="feed-prop-thumb-strategies-group" label="Pin image from this entry (all entries use same URL)"></optgroup>
+              <optgroup label="Per-entry">
+                <option value="">Auto (same as article image source)</option>
+                <option value="__per_entry_inline__">Inline — first image from feed content</option>
+              </optgroup>
+              <optgroup id="feed-prop-thumb-strategies-group" label="Pin image from this entry (same URL for all posts)"></optgroup>
               <option value="__custom__">Custom URL…</option>
             </select>
             <div id="feed-prop-thumb-custom-row" style="display:none;margin-top:0.4rem;">
@@ -4046,10 +4049,10 @@
           const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
             doStrategyRefresh(feedUrl, activeEntryId);
-            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb);
+            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb, data.thumb_strategy || null);
           } else {
             renderStrategyGrid(data.strategy_cache || []);
-            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb);
+            updateThumbSourceSelect(data.strategy_cache || [], data.feed_thumbnail_url || null, _showThumb, data.thumb_strategy || null);
           }
         }
 
@@ -4133,7 +4136,8 @@
         previewUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
       } else if (val.startsWith('__strat__')) {
         previewUrl = val.slice(9);
-      } else if (val === '') {
+      } else if (val === '' || val === '__per_entry_inline__') {
+        // For per-entry modes, show first strategy cache entry as a representative preview
         previewUrl = select.dataset.autoPreviewUrl || null;
       }
 
@@ -4159,7 +4163,7 @@
       }
     }
 
-    function updateThumbSourceSelect(strategyCache, currentThumbUrl, showThumb) {
+    function updateThumbSourceSelect(strategyCache, currentThumbUrl, showThumb, thumbStrategy) {
       const select = document.getElementById('feed-prop-thumb-source');
       const group = document.getElementById('feed-prop-thumb-strategies-group');
       if (!select || !group) return;
@@ -4176,10 +4180,13 @@
         group.appendChild(opt);
       });
       select.dataset.autoPreviewUrl = _firstStratUrl;
+      select.dataset.thumbStrategy = thumbStrategy || '';
 
-      // Set current selection: showThumb=false → Disabled, otherwise use thumbUrl
+      // Set current selection: showThumb=false → Disabled, otherwise use thumbUrl/strategy
       if (!showThumb) {
         select.value = '__disabled__';
+      } else if (!currentThumbUrl && thumbStrategy === 'inline') {
+        select.value = '__per_entry_inline__';
       } else if (!currentThumbUrl) {
         select.value = '';
       } else if (currentThumbUrl === '__favicon__') {
@@ -4298,7 +4305,7 @@
         const _ts = document.getElementById('feed-prop-thumb-source');
         const currentThumbUrl = _ts?.dataset.savedThumbUrl || null;
         const _showThumb = _ts?.value !== '__disabled__';
-        updateThumbSourceSelect(data.strategy_cache || [], currentThumbUrl, _showThumb);
+        updateThumbSourceSelect(data.strategy_cache || [], currentThumbUrl, _showThumb, _ts?.dataset.thumbStrategy || null);
       } catch (e) {
         if (feedPropStratEmpty) {
           feedPropStratEmpty.textContent = `Refresh failed: ${e.message}`;
@@ -4724,11 +4731,26 @@
         await Promise.all([
           fetch('/feeds/thumbnail-url', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, thumbnail_url: '' }), credentials: 'same-origin' }),
           saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 0),
+          fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: '' }), credentials: 'same-origin' }),
         ]);
+        select.dataset.thumbStrategy = '';
         return;
       }
       // Re-enable thumbnails if they were disabled
       await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 1);
+      if (val === '__per_entry_inline__') {
+        // Per-entry inline: clear pinned URL, set thumb_strategy=inline
+        await Promise.all([
+          fetch('/feeds/thumbnail-url', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, thumbnail_url: '' }), credentials: 'same-origin' }),
+          fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: 'inline' }), credentials: 'same-origin' }),
+        ]);
+        select.dataset.savedThumbUrl = '';
+        select.dataset.thumbStrategy = 'inline';
+        return;
+      }
+      // Any other selection clears thumb_strategy
+      await fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: '' }), credentials: 'same-origin' });
+      select.dataset.thumbStrategy = '';
       let url = '';
       if (val === '__favicon__') url = '__favicon__';
       else if (val.startsWith('__strat__')) url = val.slice(9);
