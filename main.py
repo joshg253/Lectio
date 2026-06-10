@@ -4140,11 +4140,7 @@ def get_feed_title_map() -> dict[str, str]:
 
 def get_feed_properties(feed_url: str) -> dict:
     with get_reader() as reader:
-        feed_obj = None
-        for feed in reader.get_feeds():
-            if feed.url == feed_url:
-                feed_obj = feed
-                break
+        feed_obj = reader.get_feed(feed_url, None)
 
         if feed_obj is None:
             return {
@@ -4157,9 +4153,7 @@ def get_feed_properties(feed_url: str) -> dict:
         unread_posts = 0
         newest_post_dt = None
         last_received_dt = None
-        for entry in reader.get_entries():
-            if entry.feed_url != feed_url:
-                continue
+        for entry in reader.get_entries(feed=feed_url):
             total_posts += 1
             if not entry.read:
                 unread_posts += 1
@@ -4355,32 +4349,32 @@ def get_folder_properties(folder_id: int) -> dict:
     feed_stats: dict[str, dict] = {}
 
     with get_reader() as reader:
-        for entry in reader.get_entries():
-            if entry.feed_url not in feed_urls:
-                continue
-            total_articles += 1
-            if not entry.read:
-                unread_articles += 1
-            fs = feed_stats.setdefault(entry.feed_url, {
-                "title": None,
-                "count": 0,
-                "oldest": None,
-                "newest": None,
-            })
-            fs["count"] += 1
-            published = entry.published or entry.updated or entry.added
-            if published:
-                if fs["oldest"] is None or published < fs["oldest"]:
-                    fs["oldest"] = published
-                if fs["newest"] is None or published > fs["newest"]:
-                    fs["newest"] = published
+        for url in feed_urls:
+            for entry in reader.get_entries(feed=url):
+                total_articles += 1
+                if not entry.read:
+                    unread_articles += 1
+                fs = feed_stats.setdefault(url, {
+                    "title": None,
+                    "count": 0,
+                    "oldest": None,
+                    "newest": None,
+                })
+                fs["count"] += 1
+                published = entry.published or entry.updated or entry.added
+                if published:
+                    if fs["oldest"] is None or published < fs["oldest"]:
+                        fs["oldest"] = published
+                    if fs["newest"] is None or published > fs["newest"]:
+                        fs["newest"] = published
 
-        for feed in reader.get_feeds():
-            if feed.url in feed_stats:
-                feed_stats[feed.url]["title"] = (
-                    getattr(feed, "resolved_title", None)
-                    or getattr(feed, "title", None)
-                    or feed.url
+        for url in list(feed_stats):
+            feed_obj = reader.get_feed(url, None)
+            if feed_obj:
+                feed_stats[url]["title"] = (
+                    getattr(feed_obj, "resolved_title", None)
+                    or getattr(feed_obj, "title", None)
+                    or url
                 )
 
     now = datetime.now(tz=timezone.utc)
