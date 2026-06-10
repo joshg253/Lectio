@@ -358,6 +358,7 @@
         alt="{{ selected_entry.image_title_text or '' }}"
         {% if selected_entry.image_title_text %}title="{{ selected_entry.image_title_text }}"{% endif %}
         loading="lazy"
+        onerror="var _s=this.getAttribute('src');if(!_s||_s.startsWith('/api/img?')){this.style.display='none'}else{this.setAttribute('src','/api/img?u='+encodeURIComponent(this.src))}"
       />
       {% if selected_entry.image_title_text %}
       <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>

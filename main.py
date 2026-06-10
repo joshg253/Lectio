@@ -433,12 +433,27 @@ async def lifespan(app: FastAPI):
     def _sync_scraped_feeds() -> None:
         try:
             with get_meta_connection() as _sc:
-                _sf_rows = _sc.execute("SELECT id FROM scraped_feeds").fetchall()
+                _sf_rows = _sc.execute("SELECT id, mode FROM scraped_feeds").fetchall()
             for _sf_row in _sf_rows:
-                _sf_url = scraper_service.feed_file_url(str(_sf_row["id"]))
+                _sf_id = str(_sf_row["id"])
+                _sf_url = scraper_service.feed_file_url(_sf_id)
                 try:
                     with get_meta_connection() as _sc:
                         _sc.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (_sf_url,))
+                        # link_list feeds seed initial links as hidden so only new links
+                        # appear as entries.  If ALL entries are still hidden (nothing has
+                        # appeared yet), unhide them so the feed isn't permanently empty.
+                        if str(_sf_row["mode"]) == "link_list":
+                            _visible = _sc.execute(
+                                "SELECT count(*) FROM scraped_entries WHERE scraped_feed_id=? AND NOT hidden",
+                                (_sf_id,),
+                            ).fetchone()[0]
+                            if _visible == 0:
+                                _sc.execute(
+                                    "UPDATE scraped_entries SET hidden=0 WHERE scraped_feed_id=?",
+                                    (_sf_id,),
+                                )
+                                scraper_service._write_feed_file(_sc, _sf_id)
                     with get_reader() as _r:
                         _r.update_feed(_sf_url)
                 except Exception:
@@ -1567,6 +1582,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_crop TEXT NOT NULL DEFAULT 'cover'")
         except Exception:
             pass
+        # Normalize removed crop values (top/bottom) to 'cover'
+        conn.execute(
+            "UPDATE feed_display_prefs SET thumb_crop = 'cover' WHERE thumb_crop NOT IN ('cover', 'left', 'contain', 'smart')"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -1725,7 +1744,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
 _DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover"}
-_VALID_THUMB_CROPS = frozenset({"cover", "top", "bottom"})
+_VALID_THUMB_CROPS = frozenset({"cover", "left", "contain", "smart"})
 
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -5104,9 +5123,17 @@ def _safe_bb_url(raw: str) -> str:
 
 
 def _bbcode_to_html(text: str) -> str:
-    """Convert common BBCode tags to HTML. Escapes the source first."""
+    """Convert common BBCode tags to HTML.
+
+    Only HTML-escapes the source when it contains no existing HTML markup
+    (i.e. pure BBCode text).  For mixed content (feedparser adds <br/> etc.)
+    we leave the existing tags intact and only apply BBCode substitutions.
+    """
     import html as _html
-    out = _html.escape(text, quote=False)  # escape < > & but leave quotes for regex
+    if re.search(r'<[a-z!]', text, re.IGNORECASE):
+        out = text  # already has HTML — don't double-escape
+    else:
+        out = _html.escape(text, quote=False)
 
     # block-level
     def _list_items(s: str) -> str:

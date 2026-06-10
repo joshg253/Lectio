@@ -459,11 +459,11 @@
           data-post-link="{{ post.link or '' }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
         >
-          <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %}">
+          <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
+            {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}')"{% endif %}>
             {% if post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt=""
-              {% if post.thumb_crop == 'top' %}style="object-position:top"
-              {% elif post.thumb_crop == 'bottom' %}style="object-position:bottom"
+              {% if post.thumb_crop == 'left' %}style="object-position:left center"
               {% endif %}
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
@@ -1544,10 +1544,15 @@
             </span>
           </dd>
           <dt>Feed title</dt><dd id="feed-prop-real-title">-</dd>
-          <dt>Website</dt><dd id="feed-prop-website">-</dd>
+          <dt>Website</dt>
+          <dd id="feed-prop-website-row">
+            <span id="feed-prop-website">-</span>
+            <a id="feed-prop-website-open" href="#" target="_blank" rel="noopener noreferrer" class="feed-prop-inline-btn feed-prop-open-btn" hidden title="Open in new tab">&#x2197;</a>
+          </dd>
           <dt>XML address</dt>
           <dd id="feed-prop-xml-row">
             <span id="feed-prop-xml">-</span>
+            <a id="feed-prop-xml-open" href="#" target="_blank" rel="noopener noreferrer" class="feed-prop-inline-btn feed-prop-open-btn" hidden title="Open in new tab">&#x2197;</a>
             <button type="button" id="feed-prop-change-url-btn" class="feed-prop-inline-btn" title="Change feed URL">Edit</button>
             <span id="feed-prop-change-url-wrap" hidden>
               <input type="url" id="feed-prop-change-url-input" class="feed-prop-url-input" placeholder="New feed URL" autocomplete="off" />
@@ -1638,7 +1643,7 @@
             <select id="feed-prop-thumb-source" class="feed-prop-strategy-select">
               <option value="__disabled__">Disabled</option>
               <option value="">Per-entry image (auto)</option>
-              <optgroup id="feed-prop-thumb-strategies-group" label="Pin a strategy image"></optgroup>
+              <optgroup id="feed-prop-thumb-strategies-group" label="Pin image from this entry (all entries use same URL)"></optgroup>
               <option value="__custom__">Custom URL…</option>
             </select>
             <div id="feed-prop-thumb-custom-row" style="display:none;margin-top:0.4rem;">
@@ -1646,15 +1651,18 @@
               <button type="button" id="feed-prop-thumbnail-url-save" class="feed-prop-thumbnail-save">Save</button>
             </div>
             <div id="feed-prop-thumb-preview" class="feed-prop-thumb-preview" style="display:none;">
-              <img id="feed-prop-thumb-preview-img" src="" alt="" />
+              <div id="feed-prop-thumb-preview-tile" class="post-thumbnail feed-prop-thumb-preview-tile crop-cover">
+                <img id="feed-prop-thumb-preview-img" class="post-thumbnail-image" src="" alt="" />
+              </div>
             </div>
           </div>
           <div class="feed-prop-thumb-crop-row" id="feed-prop-thumb-crop-row">
-            <span class="feed-prop-thumb-crop-label">Crop</span>
+            <span class="feed-prop-thumb-crop-label">Fit</span>
             <div class="feed-prop-thumb-crop-btns">
-              <button type="button" class="feed-prop-crop-btn" data-crop="top" title="Crop from top">Top</button>
-              <button type="button" class="feed-prop-crop-btn active" data-crop="cover" title="Crop from center (default)">Center</button>
-              <button type="button" class="feed-prop-crop-btn" data-crop="bottom" title="Crop from bottom">Bottom</button>
+              <button type="button" class="feed-prop-crop-btn" data-crop="left" title="Crop — show left side of image">Left</button>
+              <button type="button" class="feed-prop-crop-btn active" data-crop="cover" title="Crop — show center of image (default)">Center</button>
+              <button type="button" class="feed-prop-crop-btn" data-crop="contain" title="Keep aspect ratio — blank bars above/below wide images">Keep aspect</button>
+              <button type="button" class="feed-prop-crop-btn" data-crop="smart" title="Smart fit — keep aspect with subtle backdrop fill">Smart</button>
             </div>
           </div>
         </div>
@@ -2099,7 +2107,10 @@
           popover.style.right = (window.innerWidth - rect.right) + 'px';
           popover.style.left = 'auto';
         } else {
-          popover.style.left = rect.left + 'px';
+          // Clamp left so popover stays within the viewport
+          const popW = popover.offsetWidth || 200;
+          const clampedLeft = Math.min(rect.left, window.innerWidth - popW - 8);
+          popover.style.left = Math.max(0, clampedLeft) + 'px';
           popover.style.right = 'auto';
         }
       });
@@ -2887,7 +2898,9 @@
     const feedPropResetTitleBtn = document.getElementById('feed-prop-reset-title-btn');
     const feedPropRealTitle = document.getElementById('feed-prop-real-title');
     const feedPropWebsite = document.getElementById('feed-prop-website');
+    const feedPropWebsiteOpen = document.getElementById('feed-prop-website-open');
     const feedPropXml = document.getElementById('feed-prop-xml');
+    const feedPropXmlOpen = document.getElementById('feed-prop-xml-open');
     const feedPropChangeUrlBtn = document.getElementById('feed-prop-change-url-btn');
     const feedPropChangeUrlWrap = document.getElementById('feed-prop-change-url-wrap');
     const feedPropChangeUrlInput = document.getElementById('feed-prop-change-url-input');
@@ -3569,8 +3582,7 @@
         image.alt = '';
         image.src = thumbedLeadUrl;
         const _crop = postItem?.dataset.thumbCrop;
-        if (_crop === 'top') image.style.objectPosition = 'top';
-        else if (_crop === 'bottom') image.style.objectPosition = 'bottom';
+        if (_crop === 'left') image.style.objectPosition = 'left center';
         image.onerror = () => {
           thumbnail.classList.add('is-empty');
           image.style.display = 'none';
@@ -3855,7 +3867,9 @@
       if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = true;
       setFeedPropText(feedPropRealTitle, '-');
       setFeedPropText(feedPropWebsite, '-');
+      if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
       setFeedPropText(feedPropXml, feedUrl);
+      if (feedPropXmlOpen) { feedPropXmlOpen.href = feedUrl || '#'; feedPropXmlOpen.hidden = !feedUrl; }
       setFeedPropText(feedPropHealth, '-');
       setFeedPropText(feedPropHealthDetail, '-');
       setFeedPropText(feedPropTotal, '-');
@@ -3923,7 +3937,17 @@
         if (feedPropResetTitleBtn) feedPropResetTitleBtn.hidden = !data.user_title;
         setFeedPropText(feedPropRealTitle, data.real_title || data.feed_url || feedUrl);
         setFeedPropText(feedPropWebsite, data.website || '-');
+        if (feedPropWebsiteOpen) {
+          const ws = (data.website || '').trim();
+          feedPropWebsiteOpen.href = ws || '#';
+          feedPropWebsiteOpen.hidden = !ws;
+        }
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
+        if (feedPropXmlOpen) {
+          const xu = (data.feed_url || feedUrl || '').trim();
+          feedPropXmlOpen.href = xu || '#';
+          feedPropXmlOpen.hidden = !xu;
+        }
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
         if (feedPropChangeUrlInput) feedPropChangeUrlInput.value = '';
         if (feedPropChangeUrlStatus) feedPropChangeUrlStatus.textContent = '';
@@ -4109,12 +4133,26 @@
         previewUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
       } else if (val.startsWith('__strat__')) {
         previewUrl = val.slice(9);
+      } else if (val === '') {
+        previewUrl = select.dataset.autoPreviewUrl || null;
       }
 
+      const previewTile = document.getElementById('feed-prop-thumb-preview-tile');
       if (preview && previewImg) {
         if (previewUrl) {
           previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}`;
           preview.style.display = '';
+          // Apply current crop to preview tile
+          const _activeCropBtn = document.querySelector('.feed-prop-crop-btn.active');
+          const _crop = _activeCropBtn?.dataset.crop || 'cover';
+          if (previewTile) {
+            previewTile.className = previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + _crop;
+            if (_crop === 'smart') {
+              previewTile.style.backgroundImage = `url('/thumb?url=${encodeURIComponent(previewUrl)}')`;
+            } else {
+              previewTile.style.backgroundImage = '';
+            }
+          }
         } else {
           preview.style.display = 'none';
         }
@@ -4128,13 +4166,16 @@
 
       // Rebuild strategy options
       group.innerHTML = '';
+      let _firstStratUrl = '';
       (strategyCache || []).forEach(row => {
         if (!row.image_url) return;
+        if (!_firstStratUrl) _firstStratUrl = row.image_url;
         const opt = document.createElement('option');
         opt.value = '__strat__' + row.image_url;
         opt.textContent = row.strategy;
         group.appendChild(opt);
       });
+      select.dataset.autoPreviewUrl = _firstStratUrl;
 
       // Set current selection: showThumb=false → Disabled, otherwise use thumbUrl
       if (!showThumb) {
@@ -4582,9 +4623,33 @@
         document.querySelectorAll('.feed-prop-crop-btn').forEach(b => b.classList.toggle('active', b.dataset.crop === crop));
         try {
           await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop }), credentials: 'same-origin' });
+          // Update preview tile crop
+          const _previewTile = document.getElementById('feed-prop-thumb-preview-tile');
+          const _previewImg = document.getElementById('feed-prop-thumb-preview-img');
+          if (_previewTile) {
+            _previewTile.className = _previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + crop;
+            if (crop === 'smart' && _previewImg) {
+              _previewTile.style.backgroundImage = `url('${_previewImg.src}')`;
+            } else {
+              _previewTile.style.backgroundImage = '';
+            }
+          }
           // Update visible thumbnails immediately
-          document.querySelectorAll(`.post-item[data-feed-url="${CSS.escape(feedUrl)}"] .post-thumbnail-image`).forEach(img => {
-            img.style.objectPosition = crop === 'top' ? 'top' : crop === 'bottom' ? 'bottom' : '';
+          document.querySelectorAll(`.post-item[data-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
+            postItem.dataset.thumbCrop = crop;
+            const thumb = postItem.querySelector('.post-thumbnail');
+            const img = postItem.querySelector('.post-thumbnail-image');
+            if (thumb instanceof HTMLElement) {
+              thumb.className = thumb.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + crop;
+              if (crop === 'smart' && img instanceof HTMLImageElement) {
+                thumb.style.backgroundImage = `url('${img.src}')`;
+              } else {
+                thumb.style.backgroundImage = '';
+              }
+            }
+            if (img instanceof HTMLImageElement) {
+              img.style.objectPosition = crop === 'left' ? 'left center' : '';
+            }
           });
         } catch (_e) {}
       });
@@ -5022,6 +5087,14 @@
               img.className = 'entry-readability-lead-image';
               img.alt = titleText;
               img.loading = 'lazy';
+              img.onerror = function() {
+                const _s = this.getAttribute('src');
+                if (!_s || _s.startsWith('/api/img?')) {
+                  this.style.display = 'none';
+                } else {
+                  this.setAttribute('src', '/api/img?u=' + encodeURIComponent(this.src));
+                }
+              };
               entryReadabilityContainer.appendChild(img);
             }
 
@@ -5172,6 +5245,14 @@
                 img.src = data.url;
                 img.alt = '';
                 img.loading = 'lazy';
+                img.onerror = function() {
+                  const _s = this.getAttribute('src');
+                  if (!_s || _s.startsWith('/api/img?')) {
+                    this.style.display = 'none';
+                  } else {
+                    this.setAttribute('src', '/api/img?u=' + encodeURIComponent(this.src));
+                  }
+                };
                 entryBody.prepend(img);
                 entryBody.removeAttribute('data-lead-image-pending');
                 const muted = entryBody.querySelector('.muted');
