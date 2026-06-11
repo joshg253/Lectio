@@ -504,6 +504,33 @@ class LeadImageService:
         fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
         return time.time() - fetched_at >= max_age_seconds
 
+    def get_cached_entry_thumbnail(self, feed_url: str, entry_id: str, entry_link: str) -> str | None:
+        """Return only the cached lead-image URL for thumb=auto mode.
+
+        Unlike extract_entry_thumbnail_url, this never falls back to inline
+        media_thumbnail / enclosure fields. That fallback is wrong when the
+        feed strategy is og_scrape: the inline RSS image is not the article's
+        hero image, and showing it contradicts the user's "Auto (same as
+        article image source)" choice.
+
+        Returns the cached URL (or None for explicit 'no image' or
+        uncached entries). YouTube feeds return their computed thumbnail
+        directly without a cache lookup.
+        """
+        if feed_url and "youtube.com/feeds/videos.xml" in feed_url:
+            video_id = self._extract_video_id(entry_link)
+            return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None
+        if feed_url and self._is_feed_none_strategy(feed_url):
+            return None
+        cached = self._cache.get((feed_url, entry_id))
+        if not cached:
+            return None
+        if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
+            return None
+        if not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True, skip_logo_patterns=True):
+            return None
+        return cached
+
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url = str(getattr(entry, "feed_url", "") or "")

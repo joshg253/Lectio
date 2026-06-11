@@ -145,10 +145,13 @@
       <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
         {% if root_folder_row %}
         {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
+        {# Compact query fragments for tree/folder/feed links — omit default values #}
+        {% set _tree_sq = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
+        {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
         <div class="tree-block root-tree-block">
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -176,7 +179,7 @@
                 <span class="tree-toggle-spacer"></span>
                 {% endif %}
                 <a
-                  href="/?folder_id={{ row.id }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
                   class="tree-item child-item {% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
                   data-folder-name="{{ row.name }}"
@@ -193,7 +196,7 @@
                 <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
                   <a
                     class="feed-link {% if selected_feed_url == feed.url %}active{% endif %}"
-                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}{{ _tree_sq }}{{ _tree_rfq }}"
                     data-feed-url="{{ feed.url }}"
                     data-folder-id="{{ row.id }}"
                     title="{{ feed.url }}"
@@ -221,7 +224,7 @@
               <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
                 <a
                   class="feed-link {% if selected_feed_url == feed.url and selected_folder_id == root_folder_row.id %}active{% endif %}"
-                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ tree_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  href="/?folder_id={{ root_folder_row.id }}&list_feed_url={{ feed.url | urlencode }}{{ _tree_sq }}{{ _tree_rfq }}"
                   data-feed-url="{{ feed.url }}"
                   data-folder-id="{{ root_folder_row.id }}"
                   title="{{ feed.url }}"
@@ -256,7 +259,7 @@
               <li>
                 <a
                   class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
-                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}{{ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != 'all' else '') }}"
                   title="#{{ tag_row.name }}"
                 >
                   <span class="tag-label">#{{ tag_row.name }}</span>
@@ -289,8 +292,8 @@
         {% set tb_base = '/?folder_id=' ~ selected_folder_id %}
         {% if selected_feed_url %}{% set tb_base = tb_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
         {% if selected_tag %}{% set tb_base = tb_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
-        {% set tb_sort = '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
-        {% set tb_rf = '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '&star_only=0') ~ '&resume_read_filter=' ~ selected_resume_read_filter %}
+        {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
+        {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
         {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
         {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
@@ -306,11 +309,11 @@
                 <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
               </summary>
               <div class="menu-popover anchor-left toolbar-dropdown-popover">
-                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
-                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
-                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
+                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
+                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'all' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
-                <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
+                <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
               </div>
             </details>
             <details class="toolbar-dropdown sort-menu">
@@ -454,8 +457,9 @@
         {% for post in posts %}
         {% set list_feed_query = '&list_feed_url=' ~ (selected_feed_url | urlencode) if selected_feed_url else '' %}
         {% set tag_query = '&tag=' ~ (selected_tag | urlencode) if selected_tag else '' %}
-        {% set sort_query = '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
-        {% set read_filter_query = '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '&star_only=0') ~ '&resume_read_filter=' ~ selected_resume_read_filter %}
+        {# Only include sort/filter params when non-default to keep URLs clean #}
+        {% set sort_query = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
+        {% set read_filter_query = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         <div
           class="post-item {% if selected_entry and selected_entry.feed_url == post.feed_url and selected_entry.id == post.id %}active{% endif %}{% if post.read %} is-read{% endif %}"
           data-post-feed-url="{{ post.feed_url }}"
@@ -499,7 +503,7 @@
                       class="feed-name post-feed-link"
                       data-feed-url="{{ post.feed_url }}"
                       data-folder-id="{{ post_feed_folder_id }}"
-                      href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}"
+                      href="/?folder_id={{ post_feed_folder_id }}&list_feed_url={{ post.feed_url | urlencode }}{{ sort_query }}{{ read_filter_query }}"
                     >{{ post.feed_title }}</a>
                   </span>
                 </div>
@@ -4633,7 +4637,7 @@
             }
           }
           // Update visible thumbnails immediately
-          document.querySelectorAll(`.post-item[data-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
+          document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
             postItem.dataset.thumbCrop = crop;
             const thumb = postItem.querySelector('.post-thumbnail');
             const img = postItem.querySelector('.post-thumbnail-image');

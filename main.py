@@ -4633,8 +4633,29 @@ def build_star_only_query(star_only: str | int | bool | None) -> str:
     return "&star_only=1" if normalize_star_only(star_only) else ""
 
 
-def build_resume_read_filter_query(read_filter: str | None) -> str:
-    return f"&resume_read_filter={quote_plus(normalize_resume_read_filter(read_filter))}"
+def build_sort_query(sort_by: str | None, sort_dir: str | None) -> str:
+    """Return URL fragment for sort params, omitting defaults (post/asc)."""
+    sb = normalize_sort_by(sort_by)
+    sd = normalize_sort_dir(sort_dir)
+    parts = []
+    if sb != DEFAULT_SORT_BY:
+        parts.append(f"&sort_by={quote_plus(sb)}")
+    if sd != DEFAULT_SORT_DIR:
+        parts.append(f"&sort_dir={quote_plus(sd)}")
+    return "".join(parts)
+
+
+def build_read_filter_query(read_filter: str | None) -> str:
+    """Return URL fragment for read_filter, omitting default 'all'."""
+    rf = normalize_read_filter(read_filter)
+    return f"&read_filter={quote_plus(rf)}" if rf != "all" else ""
+
+
+def build_resume_read_filter_query(read_filter: str | None, *, active_read_filter: str | None = None) -> str:
+    """Return URL fragment for resume_read_filter, omitting when same as active filter."""
+    rrf = normalize_resume_read_filter(read_filter)
+    active = normalize_read_filter(active_read_filter) if active_read_filter is not None else "all"
+    return f"&resume_read_filter={quote_plus(rrf)}" if rrf != active else ""
 
 
 def upsert_entry_read_state(feed_url: str, entry_id: str, read_at: datetime | None = None) -> None:
@@ -5733,7 +5754,14 @@ def list_entries_for_feeds(
             # Use first image from feed content HTML — bypasses the og_scrape cache
             _raw_thumb = lead_image_service.extract_inline_thumb_url(entry)
         else:
-            _raw_thumb = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False, fast_only=True)
+            # Auto: use the same cached lead image shown in the article view.
+            # Don't fall back to inline media_thumbnail/enclosure fields — that
+            # shows the wrong image for og_scrape-strategy feeds.
+            _raw_thumb = lead_image_service.get_cached_entry_thumbnail(
+                feed_url_str,
+                str(getattr(entry, "id", "") or ""),
+                str(getattr(entry, "link", "") or ""),
+            )
         _thumb = _raw_thumb if _show_thumb else None
         _thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _thumb_crop not in _VALID_THUMB_CROPS:
@@ -9461,19 +9489,18 @@ def move_feed(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
 ):
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
+    read_filter_query = build_read_filter_query(read_filter)
 
     if from_folder_id == to_folder_id:
         return RedirectResponse(
             url=(
                 f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-                f"&sort_by={quote_plus(normalized_sort_by)}"
-                f"&sort_dir={quote_plus(normalized_sort_dir)}"
-                f"&read_filter={quote_plus(normalized_read_filter)}"
+                f"{sort_query}"
+                f"{read_filter_query}"
                 f"{star_only_query}"
                 f"{resume_read_filter_query}"
                 f"&message={quote_plus('Feed is already in that folder.')}"
@@ -9492,9 +9519,8 @@ def move_feed(
     return RedirectResponse(
         url=(
             f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-            f"&sort_by={quote_plus(normalized_sort_by)}"
-            f"&sort_dir={quote_plus(normalized_sort_dir)}"
-            f"&read_filter={quote_plus(normalized_read_filter)}"
+            f"{sort_query}"
+            f"{read_filter_query}"
             f"{star_only_query}"
             f"{resume_read_filter_query}"
             f"&message={quote_plus(message)}"
@@ -9632,11 +9658,11 @@ def unsubscribe_feed(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
 ):
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
+    sort_query_s = build_sort_query(sort_by, sort_dir)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
+    read_filter_query_s = build_read_filter_query(read_filter)
 
     ok = True
     message = "Feed unsubscribed."
@@ -9678,9 +9704,8 @@ def unsubscribe_feed(
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}"
-            f"&sort_by={quote_plus(normalized_sort_by)}"
-            f"&sort_dir={quote_plus(normalized_sort_dir)}"
-            f"&read_filter={quote_plus(normalized_read_filter)}"
+            f"{sort_query_s}"
+            f"{read_filter_query_s}"
             f"{star_only_query}"
             f"{resume_read_filter_query}"
             f"&message={quote_plus(message)}"
@@ -9927,19 +9952,14 @@ def refresh(
     entry_id: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
-    star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     sort_query = (
-        f"&sort_by={quote_plus(normalized_sort_by)}"
-        f"&sort_dir={quote_plus(normalized_sort_dir)}"
-        f"&read_filter={quote_plus(normalized_read_filter)}"
-        f"{star_only_query}"
-        f"{resume_read_filter_query}"
+        build_sort_query(sort_by, sort_dir)
+        + build_read_filter_query(read_filter)
+        + build_star_only_query(star_only)
+        + build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     )
     entry_query = ""
     if feed_url and entry_id:
@@ -9988,20 +10008,15 @@ def refresh_feed(
     entry_id: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
-    star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
     retry_after_seconds = 0 if _is_local_dev_feed(feed_url) else check_and_mark_manual_refresh()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     sort_query = (
-        f"&sort_by={quote_plus(normalized_sort_by)}"
-        f"&sort_dir={quote_plus(normalized_sort_dir)}"
-        f"&read_filter={quote_plus(normalized_read_filter)}"
-        f"{star_only_query}"
-        f"{resume_read_filter_query}"
+        build_sort_query(sort_by, sort_dir)
+        + build_read_filter_query(read_filter)
+        + build_star_only_query(star_only)
+        + build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     )
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if entry_id else ""
     if retry_after_seconds > 0:
@@ -10047,13 +10062,12 @@ def mark_folder_as_read(
     resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
+    normalized_read_filter_mr = normalize_read_filter(read_filter)
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = ""
-    if sort_by is not None or sort_dir is not None:
-        sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
-    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter_mr)
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
@@ -10092,12 +10106,11 @@ def mark_feed_as_read(
         unread_counts_cache.clear()
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = ""
-    if sort_by is not None or sort_dir is not None:
-        sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
-    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    _nrf_fmr = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_fmr)
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message})
@@ -10198,10 +10211,11 @@ def mark_entry_read(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
+    _nrf_er = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_er)
 
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
 
@@ -10260,10 +10274,11 @@ def toggle_entry_saved(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
+    _nrf_es = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_es)
 
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
 
@@ -10310,10 +10325,11 @@ def set_entry_manual_tags(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}"
+    _nrf_et = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_et)
 
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
     message = "Tags updated." if tags else "Tags cleared."
@@ -10431,10 +10447,10 @@ def mark_entries_range_read(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = f"&sort_by={quote_plus(normalized_sort_by)}&sort_dir={quote_plus(normalized_sort_dir)}"
-    read_filter_query = f"&read_filter={quote_plus(normalized_read_filter)}"
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
     star_only_query = build_star_only_query(normalized_star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
 
     if is_async_action_request(request, "lectio-post-range-read"):
@@ -10504,14 +10520,11 @@ def mark_entries_older_than_read(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-        if sort_by is not None or sort_dir is not None
-        else ""
-    )
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
-    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    _nrf_mot = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message})
@@ -10571,14 +10584,11 @@ def mark_entries_newer_than_unread(
 
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
-    sort_query = (
-        f"&sort_by={quote_plus(normalize_sort_by(sort_by))}&sort_dir={quote_plus(normalize_sort_dir(sort_dir))}"
-        if sort_by is not None or sort_dir is not None
-        else ""
-    )
-    read_filter_query = f"&read_filter={quote_plus(normalize_read_filter(read_filter))}" if read_filter is not None else ""
-    star_only_query = build_star_only_query(star_only) if star_only is not None else ""
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter) if resume_read_filter is not None else ""
+    _nrf_mnu = normalize_read_filter(read_filter)
+    sort_query = build_sort_query(sort_by, sort_dir)
+    read_filter_query = build_read_filter_query(read_filter)
+    star_only_query = build_star_only_query(star_only)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mnu)
     message = "No read posts newer than that." if unmarked_count == 0 else f"Marked {unmarked_count} posts as unread."
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days, "message": message})
@@ -10632,12 +10642,10 @@ def update_global_note_setting(
     q: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    normalized_sort_by = normalize_sort_by(sort_by)
-    normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_query = normalize_search_query(q)
     star_only_query = build_star_only_query(star_only)
-    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter)
+    resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     trimmed_note = note_text.strip()
 
     with get_meta_connection() as conn:
@@ -10662,9 +10670,8 @@ def update_global_note_setting(
     return RedirectResponse(
         url=(
             f"/?folder_id={target_folder_id}{list_feed_query}{tag_query}"
-            f"&sort_by={quote_plus(normalized_sort_by)}"
-            f"&sort_dir={quote_plus(normalized_sort_dir)}"
-            f"&read_filter={quote_plus(normalized_read_filter)}"
+            f"{build_sort_query(sort_by, sort_dir)}"
+            f"{build_read_filter_query(read_filter)}"
             f"{star_only_query}{resume_read_filter_query}{q_query}"
             f"&message={quote_plus('Note saved.')}"
         ),
