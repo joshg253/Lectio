@@ -62,7 +62,7 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename

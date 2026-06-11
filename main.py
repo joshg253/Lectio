@@ -4690,6 +4690,54 @@ _DIV_TAG_RE = re.compile(r'<(/?)div\b[^>]*>', re.IGNORECASE)
 _AUDIO_SRC_RE = re.compile(r'<audio\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
 _KG_AUDIO_CARD_RE = re.compile(r'<div\b[^>]*\bkg-audio-card\b[^>]*>', re.IGNORECASE)
 
+# Webcomic navigation button detection — alt text and src filename patterns.
+_COMIC_NAV_ALT_RE = re.compile(
+    r'\balt=["\'](?:prev(?:ious)?|next(?:\s+page)?|first|last|back|forward|newer|older|beginning)["\']',
+    re.IGNORECASE,
+)
+_COMIC_NAV_SRC_RE = re.compile(
+    r'src=["\'][^"\']*[/_-](?:prev(?:ious)?|next|first|last|nav|back)[^"\']*\.(?:png|gif|jpe?g|svg)["\']',
+    re.IGNORECASE,
+)
+
+
+def _strip_comic_nav_images(content: str) -> str:
+    """Strip <a href="..."><img alt="prev/next/..."></a> navigation button combos from webcomic feeds."""
+    def _check_nav(m: re.Match) -> str:
+        tag = m.group(0)
+        if _COMIC_NAV_ALT_RE.search(tag) or _COMIC_NAV_SRC_RE.search(tag):
+            return ""
+        return tag
+    result = re.sub(
+        r'<a\b[^>]*>(?:\s*<img\b[^>]*/?\s*>\s*)+</a>',
+        _check_nav,
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Clean up empty <p> blocks left behind
+    result = re.sub(r'<p\b[^>]*>\s*</p>', "", result, flags=re.IGNORECASE)
+    return result
+
+
+def _strip_qwantz_nav(content: str) -> str:
+    """Strip site-nav table and prev/next row from Dinosaur Comics (qwantz.com) entries."""
+    # Remove the site-nav table that appears before the comic image
+    content = re.sub(
+        r'<table\b[^>]*>.*?</table>\s*(?=<img\b)',
+        "",
+        content,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Remove the table row containing the prev/next navigation links (rel="prev" anchor)
+    content = re.sub(
+        r'<tr\b[^>]*>.*?rel=["\']prev["\'].*?</tr>',
+        "",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return content
+
 
 def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     """Remove every <div> block whose opening tag's class contains all of class_markers.
@@ -6219,6 +6267,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 return m.group(0)
             content_html = re.sub(r"<img\b[^>]*/?>", _strip_bad_img, content_html, flags=re.IGNORECASE) or None
 
+        # Webcomic nav button cleanup — strip <a><img alt="Previous/Next/..."></a> combos
+        # that comic feeds embed before and after the strip image for in-site navigation.
+        if isinstance(content_html, str) and _COMIC_NAV_ALT_RE.search(content_html):
+            content_html = _strip_comic_nav_images(content_html) or None
+
         # Strip orphaned <source> elements (meaningless outside <picture>/<video>,
         # but some feeds — notably Substack — include them for WebP alternatives).
         # Safe to remove: the <img> fallback still renders the image.
@@ -6617,6 +6670,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # raw <img> tag in a <pre> block would show it as literal HTML text.
         _summary = entry.summary
         if isinstance(_summary, str):
+            # Dinosaur Comics: strip site-nav table and prev/next row from the summary
+            if "qwantz.com" in (entry.link or ""):
+                _summary = _strip_qwantz_nav(_summary)
+            # Webcomic nav button images in summary (same as content_html path above)
+            if _COMIC_NAV_ALT_RE.search(_summary):
+                _summary = _strip_comic_nav_images(_summary)
             _summary_no_imgs = re.sub(r"<img\b[^>]*/?>", "", _summary, flags=re.IGNORECASE).strip()
             _summary_text_only = re.sub(r"<[^>]+>", " ", _summary_no_imgs)
             _summary_text_only = html.unescape(re.sub(r"\s+", " ", _summary_text_only)).strip()
