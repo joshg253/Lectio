@@ -8946,8 +8946,14 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
             pass
     else:
         lead_image_service.store_feed_strategy(feed_url, strategy, manual=True)
-    # Clear cached images so entries re-resolve under the new strategy.
+    # Clear cached images and the strategy comparison grid so entries
+    # re-resolve under the new strategy.
     lead_image_service.clear_lead_image_cache(feed_url)
+    try:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM feed_strategy_cache WHERE feed_url = ?", (feed_url,))
+    except Exception:
+        pass
     # Re-fetch images for recent entries using the new strategy.  Bypass the
     # chunk-backfill semaphore so this isn't silently dropped if another
     # backfill is in flight.  _do_backfill_entry_list already skips entries
@@ -9015,6 +9021,26 @@ def set_feed_thumb_strategy_route(
 ):
     with get_meta_connection() as conn:
         upsert_feed_thumb_strategy(conn, feed_url, strategy or None)
+    # When switching to auto (no override), backfill any entries not yet in
+    # entry_lead_images so thumbnails appear without waiting for the next
+    # scheduled refresh.  Already-cached entries are skipped by the backfill.
+    if not strategy:
+        def _backfill(furl: str) -> None:
+            try:
+                with get_reader() as reader:
+                    entries = list(reader.get_entries(feed=furl, limit=50))
+                posts = [
+                    {
+                        "feed_url": str(getattr(e, "feed_url", "") or ""),
+                        "id": str(getattr(e, "id", "") or ""),
+                        "link": str(getattr(e, "link", "") or ""),
+                    }
+                    for e in entries
+                ]
+                lead_image_service._do_backfill_entry_list(posts)
+            except Exception:
+                pass
+        threading.Thread(target=_backfill, args=(feed_url,), daemon=True).start()
     return JSONResponse({"ok": True})
 
 

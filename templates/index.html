@@ -4286,7 +4286,7 @@
           ? `<button class="feed-prop-use-as-thumb" data-url="${row.image_url}" title="Use as thumbnail">📌</button>`
           : '';
         const img = row.image_url
-          ? `<img class="feed-prop-strat-thumb" src="/thumb?url=${encodeURIComponent(row.image_url)}" alt="" loading="lazy" data-full-url="${row.image_url.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" />`
+          ? `<img class="feed-prop-strat-thumb" src="/thumb?url=${encodeURIComponent(row.image_url)}" alt="" loading="lazy" data-full-url="${row.image_url.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'feed-prop-strat-thumb feed-prop-strat-thumb-empty',textContent:'no image'}))" />`
           : `<div class="feed-prop-strat-thumb feed-prop-strat-thumb-empty">no image</div>`;
         return `<div class="feed-prop-strat-card${activeClass}" data-strategy="${label}" ${title}>
           ${img}
