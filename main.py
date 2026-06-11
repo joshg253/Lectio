@@ -5264,8 +5264,13 @@ def _bbcode_to_html(text: str) -> str:
     out = re.sub(r'\[strike\](.*?)\[/strike\]', r'<s>\1</s>', out, flags=re.I | re.S)
     out = re.sub(r'\[color=([^\]]{1,30})\](.*?)\[/color\]',
                  r'<span style="color:\1">\2</span>', out, flags=re.I | re.S)
-    out = re.sub(r'\[size=(\d{1,3})\](.*?)\[/size\]',
-                 r'<span style="font-size:\1px">\2</span>', out, flags=re.I | re.S)
+    # [size=1..7] maps to the HTML <font size> scale; larger values treated as px.
+    _BB_SIZE_EM = {1: 0.6, 2: 0.75, 3: 1.0, 4: 1.15, 5: 1.4, 6: 2.0, 7: 3.0}
+    def _bb_size(m: re.Match) -> str:
+        n = int(m.group(1))
+        css = f'{_BB_SIZE_EM[n]}em' if n in _BB_SIZE_EM else f'{n}px'
+        return f'<span style="font-size:{css}">{m.group(2)}</span>'
+    out = re.sub(r'\[size=(\d{1,3})\](.*?)\[/size\]', _bb_size, out, flags=re.I | re.S)
 
     # links / images — sanitize URLs
     def _url_tag(m: re.Match) -> str:
