@@ -4367,7 +4367,14 @@
         const _ts = document.getElementById('feed-prop-thumb-source');
         const currentThumbUrl = _ts?.dataset.savedThumbUrl || null;
         const _showThumb = _ts?.value !== '__disabled__';
+        const _preVal = _ts?.value;  // preserve any user-initiated change in flight
         updateThumbSourceSelect(data.strategy_cache || [], currentThumbUrl, _showThumb, _ts?.dataset.thumbStrategy || null);
+        // If updateThumbSourceSelect overwrote a pending user selection, restore it
+        if (_ts && _preVal !== undefined && _ts.value !== _preVal
+            && [..._ts.options].some(o => o.value === _preVal)) {
+          _ts.value = _preVal;
+          applyThumbSourceUI();
+        }
       } catch (e) {
         if (feedPropStratEmpty) {
           feedPropStratEmpty.textContent = `Refresh failed: ${e.message}`;
@@ -4789,17 +4796,17 @@
       await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 1);
       if (val === '__per_entry_inline__') {
         // Per-entry inline: clear pinned URL, set thumb_strategy=inline
+        select.dataset.thumbStrategy = 'inline';  // update immediately so doStrategyRefresh sees it
         await Promise.all([
           fetch('/feeds/thumbnail-url', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, thumbnail_url: '' }), credentials: 'same-origin' }),
           fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: 'inline' }), credentials: 'same-origin' }),
         ]);
         select.dataset.savedThumbUrl = '';
-        select.dataset.thumbStrategy = 'inline';
         return;
       }
       // Any other selection clears thumb_strategy
+      select.dataset.thumbStrategy = '';  // update immediately so doStrategyRefresh sees it
       await fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: '' }), credentials: 'same-origin' });
-      select.dataset.thumbStrategy = '';
       let url = '';
       if (val === '__favicon__') url = '__favicon__';
       else if (val.startsWith('__strat__')) url = val.slice(9);
