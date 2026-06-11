@@ -491,6 +491,10 @@ class LeadImageService:
                     "UPDATE entry_lead_images SET image_url = NULL WHERE image_url = ?",
                     (image_url,),
                 )
+                conn.execute(
+                    "UPDATE feed_strategy_cache SET image_url = NULL WHERE image_url = ?",
+                    (image_url,),
+                )
             for row in rows:
                 self._cache[(row[0], row[1])] = None
         except Exception:
