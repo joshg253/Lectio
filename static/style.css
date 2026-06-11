@@ -1849,10 +1849,17 @@ button:hover, .button-link:hover {
   display: none;
 }
 
-/* crop-left: show left edge of image */
-.post-thumbnail.crop-left .post-thumbnail-image {
-  object-position: left center;
-}
+/* crop-left: legacy alias kept for any cached pages */
+.post-thumbnail.crop-left .post-thumbnail-image { object-position: left center; }
+/* cover position variants */
+.post-thumbnail.crop-cover-top-left .post-thumbnail-image    { object-position: left top; }
+.post-thumbnail.crop-cover-top .post-thumbnail-image         { object-position: center top; }
+.post-thumbnail.crop-cover-top-right .post-thumbnail-image   { object-position: right top; }
+.post-thumbnail.crop-cover-left .post-thumbnail-image        { object-position: left center; }
+.post-thumbnail.crop-cover-right .post-thumbnail-image       { object-position: right center; }
+.post-thumbnail.crop-cover-bottom-left .post-thumbnail-image { object-position: left bottom; }
+.post-thumbnail.crop-cover-bottom .post-thumbnail-image      { object-position: center bottom; }
+.post-thumbnail.crop-cover-bottom-right .post-thumbnail-image{ object-position: right bottom; }
 
 /* crop-contain: letterbox — keep full image, blank bars from theme bg */
 .post-thumbnail.crop-contain {
@@ -3614,21 +3621,46 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .feed-prop-thumb-crop-row {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
+  align-items: flex-start;
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+}
+.feed-prop-crop-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
 }
 .feed-prop-thumb-crop-label {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: var(--muted);
   white-space: nowrap;
-  flex: 0 0 auto;
 }
-.feed-prop-thumb-crop-btns {
+/* 3×3 position dot grid */
+.feed-prop-crop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 16px);
+  gap: 4px;
+}
+.feed-prop-crop-pos-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--hover-bg);
+  border: 1.5px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+}
+.feed-prop-crop-pos-btn:hover { border-color: var(--accent); }
+.feed-prop-crop-pos-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* Mode buttons (Fill / Fit / Smart) */
+.feed-prop-crop-mode-btns {
   display: flex;
   gap: 0.25rem;
 }
-.feed-prop-crop-btn {
+.feed-prop-crop-mode-btn {
   font-size: 0.75rem;
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
@@ -3638,7 +3670,7 @@ body[data-keyboard-open="1"] .action-modal-panel {
   cursor: pointer;
   opacity: 0.65;
 }
-.feed-prop-crop-btn.active {
+.feed-prop-crop-mode-btn.active {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;

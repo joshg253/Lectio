@@ -474,8 +474,6 @@
             {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}')"{% endif %}>
             {% if post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt=""
-              {% if post.thumb_crop == 'left' %}style="object-position:left center"
-              {% endif %}
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
@@ -1671,12 +1669,27 @@
             </div>
           </div>
           <div class="feed-prop-thumb-crop-row" id="feed-prop-thumb-crop-row">
-            <span class="feed-prop-thumb-crop-label">Fit</span>
-            <div class="feed-prop-thumb-crop-btns">
-              <button type="button" class="feed-prop-crop-btn" data-crop="left" title="Crop — show left side of image">Left</button>
-              <button type="button" class="feed-prop-crop-btn active" data-crop="cover" title="Crop — show center of image (default)">Center</button>
-              <button type="button" class="feed-prop-crop-btn" data-crop="contain" title="Keep aspect ratio — blank bars above/below wide images">Keep aspect</button>
-              <button type="button" class="feed-prop-crop-btn" data-crop="smart" title="Smart fit — keep aspect with subtle backdrop fill">Smart</button>
+            <div class="feed-prop-crop-section" id="feed-prop-crop-pos-section">
+              <span class="feed-prop-thumb-crop-label">Position</span>
+              <div class="feed-prop-crop-grid">
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="top-left" aria-label="Top left" title="Top left"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="top" aria-label="Top" title="Top center"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="top-right" aria-label="Top right" title="Top right"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="left" aria-label="Left" title="Middle left"></button>
+                <button type="button" class="feed-prop-crop-pos-btn active" data-pos="center" aria-label="Center" title="Center"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="right" aria-label="Right" title="Middle right"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="bottom-left" aria-label="Bottom left" title="Bottom left"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="bottom" aria-label="Bottom" title="Bottom center"></button>
+                <button type="button" class="feed-prop-crop-pos-btn" data-pos="bottom-right" aria-label="Bottom right" title="Bottom right"></button>
+              </div>
+            </div>
+            <div class="feed-prop-crop-section">
+              <span class="feed-prop-thumb-crop-label">Mode</span>
+              <div class="feed-prop-crop-mode-btns">
+                <button type="button" class="feed-prop-crop-mode-btn active" data-mode="cover" title="Fill — crop to fill thumbnail; position sets which part shows">Fill</button>
+                <button type="button" class="feed-prop-crop-mode-btn" data-mode="contain" title="Fit — show full image with blank bars">Fit</button>
+                <button type="button" class="feed-prop-crop-mode-btn" data-mode="smart" title="Smart — show full image with blurred backdrop fill">Smart</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1818,47 +1831,35 @@
         const rawRead = (node.getAttribute('data-read-iso') || '').trim();
         const readDisplay = (node.getAttribute('data-read-display') || '').trim();
         let raw = '';
-        let altDisplay = '';
-        let titlePrefix = '';
-        
+        let mainDisplay = '';
+
         if ((window.CURRENT_SORT_BY || 'post') === 'received') {
           raw = (node.getAttribute('data-received-iso') || '').trim();
-          altDisplay = (node.getAttribute('data-post-display') || '').trim();
-          titlePrefix = 'Posted';
+          mainDisplay = (node.getAttribute('data-received-display') || '').trim();
         } else {
           raw = (node.getAttribute('data-post-iso') || '').trim();
-          altDisplay = (node.getAttribute('data-received-display') || '').trim();
-          titlePrefix = 'Received';
+          mainDisplay = (node.getAttribute('data-post-display') || '').trim();
         }
-        
-        const inHistory = (node.getAttribute('data-read-display') || '').trim();
-        if (inHistory && window.location.search.includes('read_filter=history')) {
+
+        if (rawRead && readDisplay && window.location.search.includes('read_filter=history')) {
           raw = rawRead;
-          altDisplay = (node.getAttribute('data-post-display') || '').trim();
-          titlePrefix = 'Read';
+          mainDisplay = readDisplay;
         }
 
         if (!raw) {
-          if (altDisplay) node.title = `${titlePrefix} ${altDisplay}`;
+          if (mainDisplay) node.title = mainDisplay;
           continue;
         }
-        
+
         const date = new Date(raw);
-        if (Number.isNaN(date.getTime())) {
-          continue;
-        }
-        
+        if (Number.isNaN(date.getTime())) continue;
+
         const relative = formatRelativeDate(date);
         node.textContent = relative;
         if (node instanceof HTMLTimeElement) node.dateTime = date.toISOString();
-        
-        // Tooltip shows the full date
-        if (altDisplay) {
-          node.title = `${titlePrefix} ${altDisplay}`;
-        } else {
-          const fullDate = localTimeFormatterShortWithYear.format(date);
-          node.title = `${titlePrefix} ${fullDate}`;
-        }
+
+        // Tooltip shows the absolute formatted version of the same date being displayed
+        node.title = mainDisplay || localTimeFormatterShortWithYear.format(date);
       }
     }
 
@@ -4034,12 +4035,12 @@
           }
           if (feedPropRefreshBtn) feedPropRefreshBtn.dataset.feedUrl = feedUrl;
 
-          // Thumb crop position
+          // Thumb crop position + mode
           const _cropVal = data.thumb_crop || 'cover';
-          document.querySelectorAll('.feed-prop-crop-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.crop === _cropVal);
+          document.querySelectorAll('.feed-prop-crop-pos-btn, .feed-prop-crop-mode-btn').forEach(btn => {
             btn.dataset.feedUrl = feedUrl;
           });
+          updateCropUI(_cropVal);
 
           const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
@@ -4116,6 +4117,52 @@
       feedPropPresetBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.preset === presetName));
     }
 
+    // Crop helpers
+    function parseCropValue(v) {
+      if (!v || v === 'cover') return { mode: 'cover', pos: 'center' };
+      if (v === 'left') return { mode: 'cover', pos: 'left' };  // backward compat
+      if (v === 'contain') return { mode: 'contain', pos: 'center' };
+      if (v === 'smart') return { mode: 'smart', pos: 'center' };
+      if (v.startsWith('cover-')) return { mode: 'cover', pos: v.slice(6) };
+      return { mode: 'cover', pos: 'center' };
+    }
+    function buildCropValue(mode, pos) {
+      if (mode === 'contain') return 'contain';
+      if (mode === 'smart') return 'smart';
+      return pos === 'center' ? 'cover' : `cover-${pos}`;
+    }
+    function getActiveCropValue() {
+      const mode = document.querySelector('.feed-prop-crop-mode-btn.active')?.dataset.mode || 'cover';
+      const pos = document.querySelector('.feed-prop-crop-pos-btn.active')?.dataset.pos || 'center';
+      return buildCropValue(mode, pos);
+    }
+    function updateCropUI(cropVal) {
+      const { mode, pos } = parseCropValue(cropVal);
+      document.querySelectorAll('.feed-prop-crop-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+      document.querySelectorAll('.feed-prop-crop-pos-btn').forEach(b => b.classList.toggle('active', b.dataset.pos === pos));
+      const posSection = document.getElementById('feed-prop-crop-pos-section');
+      if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
+    }
+    function applyCropToThumbnails(feedUrl, cropVal) {
+      const previewTile = document.getElementById('feed-prop-thumb-preview-tile');
+      if (previewTile) {
+        previewTile.className = previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + cropVal;
+        const previewImg = document.getElementById('feed-prop-thumb-preview-img');
+        if (cropVal === 'smart' && previewImg) previewTile.style.backgroundImage = `url('${previewImg.src}')`;
+        else previewTile.style.backgroundImage = '';
+      }
+      document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
+        postItem.dataset.thumbCrop = cropVal;
+        const thumb = postItem.querySelector('.post-thumbnail');
+        if (thumb instanceof HTMLElement) {
+          thumb.className = thumb.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + cropVal;
+          const img = postItem.querySelector('.post-thumbnail-image');
+          if (cropVal === 'smart' && img instanceof HTMLImageElement) thumb.style.backgroundImage = `url('${img.src}')`;
+          else thumb.style.backgroundImage = '';
+        }
+      });
+    }
+
     function applyThumbSourceUI() {
       const select = document.getElementById('feed-prop-thumb-source');
       const customRow = document.getElementById('feed-prop-thumb-custom-row');
@@ -4142,8 +4189,7 @@
           previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}`;
           preview.style.display = '';
           // Apply current crop to preview tile
-          const _activeCropBtn = document.querySelector('.feed-prop-crop-btn.active');
-          const _crop = _activeCropBtn?.dataset.crop || 'cover';
+          const _crop = getActiveCropValue();
           if (previewTile) {
             previewTile.className = previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + _crop;
             if (_crop === 'smart') {
@@ -4617,43 +4663,30 @@
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     }
 
-    document.querySelectorAll('.feed-prop-crop-btn').forEach(btn => {
+    document.querySelectorAll('.feed-prop-crop-pos-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const feedUrl = btn.dataset.feedUrl;
         if (!feedUrl) return;
-        const crop = btn.dataset.crop;
-        document.querySelectorAll('.feed-prop-crop-btn').forEach(b => b.classList.toggle('active', b.dataset.crop === crop));
-        try {
-          await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop }), credentials: 'same-origin' });
-          // Update preview tile crop
-          const _previewTile = document.getElementById('feed-prop-thumb-preview-tile');
-          const _previewImg = document.getElementById('feed-prop-thumb-preview-img');
-          if (_previewTile) {
-            _previewTile.className = _previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + crop;
-            if (crop === 'smart' && _previewImg) {
-              _previewTile.style.backgroundImage = `url('${_previewImg.src}')`;
-            } else {
-              _previewTile.style.backgroundImage = '';
-            }
-          }
-          // Update visible thumbnails immediately
-          document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
-            postItem.dataset.thumbCrop = crop;
-            const thumb = postItem.querySelector('.post-thumbnail');
-            const img = postItem.querySelector('.post-thumbnail-image');
-            if (thumb instanceof HTMLElement) {
-              thumb.className = thumb.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + crop;
-              if (crop === 'smart' && img instanceof HTMLImageElement) {
-                thumb.style.backgroundImage = `url('${img.src}')`;
-              } else {
-                thumb.style.backgroundImage = '';
-              }
-            }
-            if (img instanceof HTMLImageElement) {
-              img.style.objectPosition = crop === 'left' ? 'left center' : '';
-            }
-          });
-        } catch (_e) {}
+        const mode = document.querySelector('.feed-prop-crop-mode-btn.active')?.dataset.mode || 'cover';
+        if (mode !== 'cover') return;
+        const cropVal = buildCropValue(mode, btn.dataset.pos);
+        document.querySelectorAll('.feed-prop-crop-pos-btn').forEach(b => b.classList.toggle('active', b === btn));
+        applyCropToThumbnails(feedUrl, cropVal);
+        try { await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop: cropVal }), credentials: 'same-origin' }); } catch (_e) {}
+      });
+    });
+    document.querySelectorAll('.feed-prop-crop-mode-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const feedUrl = btn.dataset.feedUrl;
+        if (!feedUrl) return;
+        const mode = btn.dataset.mode;
+        const pos = document.querySelector('.feed-prop-crop-pos-btn.active')?.dataset.pos || 'center';
+        const cropVal = buildCropValue(mode, pos);
+        document.querySelectorAll('.feed-prop-crop-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+        const posSection = document.getElementById('feed-prop-crop-pos-section');
+        if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
+        applyCropToThumbnails(feedUrl, cropVal);
+        try { await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop: cropVal }), credentials: 'same-origin' }); } catch (_e) {}
       });
     });
 

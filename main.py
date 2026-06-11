@@ -1582,9 +1582,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_crop TEXT NOT NULL DEFAULT 'cover'")
         except Exception:
             pass
-        # Normalize removed crop values (top/bottom) to 'cover'
+        # Migrate legacy 'left' value to 'cover-left'
+        conn.execute("UPDATE feed_display_prefs SET thumb_crop = 'cover-left' WHERE thumb_crop = 'left'")
+        # Normalize any unknown values to 'cover'
         conn.execute(
-            "UPDATE feed_display_prefs SET thumb_crop = 'cover' WHERE thumb_crop NOT IN ('cover', 'left', 'contain', 'smart')"
+            "UPDATE feed_display_prefs SET thumb_crop = 'cover' WHERE thumb_crop NOT IN "
+            "('cover','cover-top-left','cover-top','cover-top-right','cover-left','cover-right',"
+            "'cover-bottom-left','cover-bottom','cover-bottom-right','contain','smart')"
         )
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_strategy TEXT")
@@ -1748,7 +1752,12 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
 _DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None}
-_VALID_THUMB_CROPS = frozenset({"cover", "left", "contain", "smart"})
+_VALID_THUMB_CROPS = frozenset({
+    "cover", "cover-top-left", "cover-top", "cover-top-right",
+    "cover-left", "cover-right",
+    "cover-bottom-left", "cover-bottom", "cover-bottom-right",
+    "contain", "smart",
+})
 _VALID_THUMB_STRATEGIES = frozenset({"inline"})
 
 
