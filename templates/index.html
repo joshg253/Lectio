@@ -3557,7 +3557,8 @@
         return;
       }
 
-      const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl);
+      const _thumbCrop = postItem.dataset.thumbCrop || 'cover';
+      const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl) + '&crop=' + encodeURIComponent(_thumbCrop);
       if (existingImage instanceof HTMLImageElement) {
         if (existingImage.getAttribute('src') !== thumbedLeadUrl) {
           const prevSrc = existingImage.getAttribute('src');
@@ -3573,6 +3574,7 @@
             }
           };
           existingImage.setAttribute('src', thumbedLeadUrl);
+          if (_thumbCrop === 'smart') thumbnail.style.backgroundImage = `url('${setThumbCropParam(thumbedLeadUrl, 'cover')}')`;
         }
         existingImage.style.display = '';
       } else {
@@ -3580,8 +3582,6 @@
         image.className = 'post-thumbnail-image';
         image.alt = '';
         image.src = thumbedLeadUrl;
-        const _crop = postItem?.dataset.thumbCrop;
-        if (_crop === 'left') image.style.objectPosition = 'left center';
         image.onerror = () => {
           thumbnail.classList.add('is-empty');
           image.style.display = 'none';
