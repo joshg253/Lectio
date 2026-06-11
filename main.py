@@ -8389,7 +8389,19 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -
     try:
         img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
         iw, ih = img.size
-        if crop in ("contain", "smart"):
+        if crop == "smart":
+            # Adaptive: fill as much of the slot as possible while cropping
+            # at most 40 % of either image dimension.  For images whose aspect
+            # ratio is close to the slot (6:7) this is identical to cover;
+            # for extreme wide/tall images it backs off to avoid showing only
+            # a tiny sliver.
+            _MAX_CROP = 0.4
+            cover_s   = max(_THUMB_W / iw, _THUMB_H / ih)
+            contain_s = min(_THUMB_W / iw, _THUMB_H / ih)
+            cap_w = _THUMB_W / (iw * (1.0 - _MAX_CROP))
+            cap_h = _THUMB_H / (ih * (1.0 - _MAX_CROP))
+            scale = max(contain_s, min(cover_s, cap_w, cap_h))
+        elif crop == "contain":
             # Scale to fit; CSS handles letterboxing / blurred backdrop.
             scale = min(_THUMB_W / iw, _THUMB_H / ih)
         else:
@@ -8397,7 +8409,16 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -
         new_w = max(1, round(iw * scale))
         new_h = max(1, round(ih * scale))
         img = img.resize((new_w, new_h), _PILImage.LANCZOS)
-        if crop not in ("contain", "smart"):
+        if crop in ("smart", "contain"):
+            # Center-crop any dimension that overflows the slot; leave shorter
+            # dimensions as-is so the blurred background fills the gap.
+            if new_w > _THUMB_W or new_h > _THUMB_H:
+                left = max(0, (new_w - _THUMB_W) // 2)
+                top  = max(0, (new_h - _THUMB_H) // 2)
+                img  = img.crop((left, top,
+                                 left + min(new_w, _THUMB_W),
+                                 top  + min(new_h, _THUMB_H)))
+        else:
             h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
             ex = max(0, new_w - _THUMB_W)
             ey = max(0, new_h - _THUMB_H)
