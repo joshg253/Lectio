@@ -1354,7 +1354,6 @@ button:hover, .button-link:hover {
 }
 
 .toolbar-dropdown-popover {
-  position: fixed;
   min-width: 160px;
   z-index: 1500;
 }

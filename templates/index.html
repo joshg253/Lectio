@@ -2098,26 +2098,6 @@
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
 
     // Position toolbar dropdowns using fixed positioning to escape .pane overflow:hidden
-    document.querySelectorAll('.toolbar-dropdown').forEach(dd => {
-      dd.addEventListener('toggle', () => {
-        if (!dd.open) return;
-        const summary = dd.querySelector('summary');
-        const popover = dd.querySelector('.toolbar-dropdown-popover');
-        if (!summary || !popover) return;
-        const rect = summary.getBoundingClientRect();
-        popover.style.top = (rect.bottom + 4) + 'px';
-        if (dd.classList.contains('sort-menu')) {
-          popover.style.right = (window.innerWidth - rect.right) + 'px';
-          popover.style.left = 'auto';
-        } else {
-          // Clamp left so popover stays within the viewport
-          const popW = popover.offsetWidth || 200;
-          const clampedLeft = Math.min(rect.left, window.innerWidth - popW - 8);
-          popover.style.left = Math.max(0, clampedLeft) + 'px';
-          popover.style.right = 'auto';
-        }
-      });
-    });
 
     appUnreadCount = getUnreadCountFromRootBadge();
     lastFocusedUnreadCount = getUnreadCountForFavicon();
