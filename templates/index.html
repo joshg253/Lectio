@@ -471,9 +471,9 @@
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
-            {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}')"{% endif %}>
+            {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}" alt=""
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}" alt=""
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
@@ -4118,6 +4118,13 @@
     }
 
     // Crop helpers
+    function setThumbCropParam(src, cropVal) {
+      try {
+        const u = new URL(src, location.origin);
+        u.searchParams.set('crop', cropVal);
+        return u.pathname + u.search;
+      } catch (_) { return src; }
+    }
     function parseCropValue(v) {
       if (!v || v === 'cover') return { mode: 'cover', pos: 'center' };
       if (v === 'left') return { mode: 'cover', pos: 'left' };  // backward compat
@@ -4148,8 +4155,14 @@
       if (previewTile) {
         previewTile.className = previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + cropVal;
         const previewImg = document.getElementById('feed-prop-thumb-preview-img');
-        if (cropVal === 'smart' && previewImg) previewTile.style.backgroundImage = `url('${previewImg.src}')`;
-        else previewTile.style.backgroundImage = '';
+        if (previewImg instanceof HTMLImageElement) {
+          if (cropVal === 'smart') {
+            previewTile.style.backgroundImage = `url('${setThumbCropParam(previewImg.src, 'cover')}')`;
+          } else {
+            previewTile.style.backgroundImage = '';
+          }
+          previewImg.src = setThumbCropParam(previewImg.src, cropVal);
+        }
       }
       document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
         postItem.dataset.thumbCrop = cropVal;
@@ -4157,8 +4170,14 @@
         if (thumb instanceof HTMLElement) {
           thumb.className = thumb.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + cropVal;
           const img = postItem.querySelector('.post-thumbnail-image');
-          if (cropVal === 'smart' && img instanceof HTMLImageElement) thumb.style.backgroundImage = `url('${img.src}')`;
-          else thumb.style.backgroundImage = '';
+          if (img instanceof HTMLImageElement) {
+            if (cropVal === 'smart') {
+              thumb.style.backgroundImage = `url('${setThumbCropParam(img.src, 'cover')}')`;
+            } else {
+              thumb.style.backgroundImage = '';
+            }
+            img.src = setThumbCropParam(img.src, cropVal);
+          }
         }
       });
     }
@@ -4186,14 +4205,14 @@
       const previewTile = document.getElementById('feed-prop-thumb-preview-tile');
       if (preview && previewImg) {
         if (previewUrl) {
-          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}`;
+          const _crop = getActiveCropValue();
+          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}&crop=${encodeURIComponent(_crop)}`;
           preview.style.display = '';
           // Apply current crop to preview tile
-          const _crop = getActiveCropValue();
           if (previewTile) {
             previewTile.className = previewTile.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + _crop;
             if (_crop === 'smart') {
-              previewTile.style.backgroundImage = `url('/thumb?url=${encodeURIComponent(previewUrl)}')`;
+              previewTile.style.backgroundImage = `url('/thumb?url=${encodeURIComponent(previewUrl)}&crop=cover')`;
             } else {
               previewTile.style.backgroundImage = '';
             }
@@ -4211,16 +4230,18 @@
 
       // Rebuild strategy options
       group.innerHTML = '';
-      let _firstStratUrl = '';
       (strategyCache || []).forEach(row => {
         if (!row.image_url) return;
-        if (!_firstStratUrl) _firstStratUrl = row.image_url;
         const opt = document.createElement('option');
         opt.value = '__strat__' + row.image_url;
         opt.textContent = row.strategy;
         group.appendChild(opt);
       });
-      select.dataset.autoPreviewUrl = _firstStratUrl;
+      // autoPreviewUrl: use the active image-extraction strategy's image, not just the first one
+      const _activeImageStrat = feedPropStrategy?.value || 'auto';
+      const _autoRow = (strategyCache || []).find(r => r.strategy === _activeImageStrat && r.image_url)
+                    || (strategyCache || []).find(r => r.image_url);
+      select.dataset.autoPreviewUrl = _autoRow?.image_url || '';
       select.dataset.thumbStrategy = thumbStrategy || '';
 
       // Set current selection: showThumb=false → Disabled, otherwise use thumbUrl/strategy

@@ -8257,14 +8257,18 @@ def debug_clear_lead_image_cache(
 
 def _purge_thumb_cache_for_urls(urls: list[str]) -> None:
     """Delete /thumb cache entries for the given image URLs (DB + legacy files)."""
+    _all_crops = list(_THUMB_COVER_POS) + ["contain", "smart"]
     keys: list[str] = []
     for url in urls:
         if not url:
             continue
-        cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
-        keys.append(cache_key)
+        # Purge all crop variants (new format) plus the legacy no-crop key.
+        for crop in _all_crops:
+            keys.append(hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{crop}".encode()).hexdigest())
+        old_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
+        keys.append(old_key)
         try:
-            (THUMB_CACHE_DIR / f"{cache_key}.jpg").unlink(missing_ok=True)
+            (THUMB_CACHE_DIR / f"{old_key}.jpg").unlink(missing_ok=True)
         except Exception:
             pass
     if keys:
@@ -8308,9 +8312,23 @@ def debug_toggle_feed_bypass(request: Request, feed_url: str = Form(...)):
 _THUMB_W = 144
 _THUMB_H = 168
 
+# Cover-mode crop: map crop value → (horizontal fraction, vertical fraction), 0=start 1=end.
+_THUMB_COVER_POS: dict[str, tuple[float, float]] = {
+    "cover":              (0.5, 0.5),
+    "cover-top-left":     (0.0, 0.0),
+    "cover-top":          (0.5, 0.0),
+    "cover-top-right":    (1.0, 0.0),
+    "cover-left":         (0.0, 0.5),
+    "cover-right":        (1.0, 0.5),
+    "cover-bottom-left":  (0.0, 1.0),
+    "cover-bottom":       (0.5, 1.0),
+    "cover-bottom-right": (1.0, 1.0),
+    "left":               (0.0, 0.5),  # legacy alias
+}
+
 
 @app.get("/thumb")
-def thumbnail_proxy(url: str = Query(...)) -> Response:
+def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
@@ -8318,7 +8336,11 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)
 
-    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}".encode()).hexdigest()
+    # Normalise: unknown values → cover; contain/smart use fit-scale (no crop).
+    if crop not in _THUMB_COVER_POS and crop not in ("contain", "smart"):
+        crop = "cover"
+
+    cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{crop}".encode()).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
     try:
@@ -8362,13 +8384,21 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
     try:
         img = _PILImage.open(io.BytesIO(raw)).convert("RGB")
         iw, ih = img.size
-        scale = max(_THUMB_W / iw, _THUMB_H / ih)
+        if crop in ("contain", "smart"):
+            # Scale to fit; CSS handles letterboxing / blurred backdrop.
+            scale = min(_THUMB_W / iw, _THUMB_H / ih)
+        else:
+            scale = max(_THUMB_W / iw, _THUMB_H / ih)
         new_w = max(1, round(iw * scale))
         new_h = max(1, round(ih * scale))
         img = img.resize((new_w, new_h), _PILImage.LANCZOS)
-        left = (new_w - _THUMB_W) // 2
-        top = (new_h - _THUMB_H) // 2
-        img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
+        if crop not in ("contain", "smart"):
+            h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
+            ex = max(0, new_w - _THUMB_W)
+            ey = max(0, new_h - _THUMB_H)
+            left = round(ex * h_frac)
+            top = round(ey * v_frac)
+            img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85, optimize=True)
         jpeg_bytes = buf.getvalue()
