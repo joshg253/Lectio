@@ -6428,12 +6428,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             if _in_feed_title_is_lead_img:
                 break
 
-        # Check persisted alt text (from a previous background HTML fetch).
+        # Check persisted alt/title text (from a previous background HTML fetch).
         # Always prefer persisted (from source-page scrape) over a low-confidence
         # in-feed title that came from a different image.
         _persisted_alt = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
-        if _persisted_alt:
-            image_title_text = _persisted_alt
+        _persisted_title = lead_image_service.get_entry_image_title(str(entry.feed_url), str(entry.id))
+        if _persisted_alt or _persisted_title:
+            image_title_text = _persisted_title or _persisted_alt  # title preferred
         elif image_title_text is None:
             pass  # stays None; source-page scrape below will attempt to fill it
 
@@ -6576,7 +6577,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # fetch so the render doesn't block on a slow HTTP GET; alt text will appear
         # on the next open once the background thread stores it in the DB.
         _needs_source_scrape = (image_title_text is None or
-                                (not _in_feed_title_is_lead_img and not _persisted_alt))
+                                (not _in_feed_title_is_lead_img and not _persisted_alt and not _persisted_title))
         if _needs_source_scrape and lead_image_url and entry.link:
             if entry.link in lead_image_service._source_html_cache:
                 _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url)
@@ -6594,9 +6595,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 )
 
         # Drop trivially generic alt texts that add no information (e.g. Bootstrap
-        # class names used as alt values, or single-word placeholder strings).
+        # class names used as alt values, single-word placeholders, or navigation
+        # labels from wrongly-selected nav thumbnails like "Previous" / "Next").
         _TRIVIAL_ALT_TEXTS = frozenset({"responsive image", "image", "photo", "picture",
-                                         "img", "thumbnail", "banner", "featured image"})
+                                         "img", "thumbnail", "banner", "featured image",
+                                         "previous", "next", "first", "last", "random",
+                                         "prev", "newer", "older"})
         if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
             image_title_text = None
 
@@ -9073,7 +9077,7 @@ def set_feed_thumb_crop_route(
 @app.post("/feeds/thumb-strategy")
 def set_feed_thumb_strategy_route(
     feed_url: str = Form(...),
-    strategy: str = Form(...),
+    strategy: str = Form(default=""),  # Pydantic v2: empty form field → missing, so use default
 ):
     with get_meta_connection() as conn:
         upsert_feed_thumb_strategy(conn, feed_url, strategy or None)

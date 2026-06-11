@@ -129,7 +129,7 @@ class LeadImageService:
     # Detects site-chrome structural elements (header logo, branding, navigation,
     # and related/recent-post sidebars) that contain decorative images, not article content.
     _SITE_CHROME_CONTEXT_RE = re.compile(
-        r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b)',
+        r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b|\bcomic-navigation\b|\bnav-links\b)',
         re.IGNORECASE,
     )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
