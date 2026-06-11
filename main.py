@@ -5128,10 +5128,14 @@ _BBCODE_SIGNAL_RE = re.compile(
 
 
 def _looks_like_bbcode(text: str) -> bool:
-    """True when text contains more BBCode tags than HTML tags."""
-    bb = len(_BBCODE_SIGNAL_RE.findall(text))
-    ht = len(re.findall(r'<[a-z]', text, re.IGNORECASE))
-    return bb >= 2 and bb > ht
+    """True when text contains BBCode markup (at least two BBCode tag patterns).
+
+    The old heuristic (bb > ht) rejected mixed-content feeds like Nexus Mods
+    where <br> tags pushed the HTML count above the BBCode count even though
+    the article body is primarily BBCode.  _bbcode_to_html() already handles
+    mixed content safely (it skips html.escape when HTML tags are present).
+    """
+    return len(_BBCODE_SIGNAL_RE.findall(text)) >= 2
 
 
 def _safe_bb_url(raw: str) -> str:
@@ -6320,8 +6324,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     image_title_text = _title_val
                     _in_feed_title_is_lead_img = True
                     break
-                if image_title_text is None:
-                    image_title_text = _title_val  # low-confidence; may be overridden below
+                if image_title_text is None and not lead_image_url:
+                    # Only accept a low-confidence title (from a different image) when
+                    # there is no separate lead_image_url already determined.  With a
+                    # known lead image (e.g. OG) the in-feed title would belong to an
+                    # unrelated inline image and would show the wrong text.
+                    image_title_text = _title_val
             if _in_feed_title_is_lead_img:
                 break
 
@@ -6496,6 +6504,16 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                                          "img", "thumbnail", "banner", "featured image"})
         if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
             image_title_text = None
+
+        # Drop captions that merely restate the article title — not useful as a photo
+        # caption and would clutter the reading experience (e.g. WordPress/Blogger hero
+        # images whose alt= is auto-populated with the post title).
+        if image_title_text and entry.title:
+            _norm_cap = " ".join(re.sub(r"<[^>]+>", "", image_title_text).split()).lower()
+            _norm_etitle = " ".join(html.unescape(str(entry.title)).split()).lower()
+            if _norm_etitle and (_norm_cap == _norm_etitle or
+                                  (len(_norm_etitle) > 20 and _norm_etitle in _norm_cap)):
+                image_title_text = None
 
         # Inject image_title_text as alt attribute on the first <img> in content_html
         # and insert a caption <p> immediately after it so it appears inline under
