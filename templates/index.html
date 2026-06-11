@@ -292,11 +292,12 @@
         {% set tb_sort = '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
         {% set tb_rf = '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '&star_only=0') ~ '&resume_read_filter=' ~ selected_resume_read_filter %}
         {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
-        {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else 'All') %}
+        {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
+        {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
-        {% set sort_by_label = 'Published' if selected_sort_by == 'post' else 'Received' %}
-        {% set sort_dir_label = 'newest' if selected_sort_dir == 'desc' else 'oldest' %}
+        {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
+        {% set sort_dir_label = 'desc' if selected_sort_dir == 'desc' else 'asc' %}
         <div class="toolbar-row-1">
           <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
             <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
@@ -415,22 +416,20 @@
         </div>
         <div class="toolbar-row-2">
           <details class="toolbar-dropdown filter-menu">
-            <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter posts">
-              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">filter_list</span>
-              <span class="toolbar-dd-label">{{ filter_label }}</span>
+            <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter: {{ filter_label }}">
+              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">{{ filter_icon }}</span>
               <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
             </summary>
             <div class="menu-popover anchor-left toolbar-dropdown-popover">
-              <a class="menu-item {% if not filter_is_active %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}">All</a>
-              <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}">Unread</a>
-              <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}">Starred</a>
+              <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
+              <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+              <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
               <hr class="menu-divider" />
-              <a class="menu-item filter-history-item" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
+              <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
             </div>
           </details>
           <details class="toolbar-dropdown sort-menu">
             <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
-              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">swap_vert</span>
               <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
               <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
             </summary>
