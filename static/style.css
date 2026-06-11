@@ -1289,25 +1289,26 @@ button:hover, .button-link:hover {
   border-bottom: 1px solid var(--line);
 }
 
-.toolbar-row-1 {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.toolbar-row-1 .posts-search-form {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.toolbar-row-1 .posts-search-form .topbar-search-input {
-  width: 100%;
-}
-
-.toolbar-row-2 {
+.toolbar-row-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.toolbar-search-row {
+  margin-top: 0.25rem;
+}
+
+.toolbar-search-row .posts-search-form {
+  width: 100%;
+}
+
+.toolbar-search-row .topbar-search-input {
+  width: 100%;
+}
+
+.toolbar-search-hidden {
+  display: none;
 }
 
 .sort-group {
@@ -1411,8 +1412,7 @@ button:hover, .button-link:hover {
 .mark-read-popover {
   position: absolute;
   top: calc(100% + 0.35rem);
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
   min-width: 200px;
   z-index: 60;
   border: 1px solid var(--line);

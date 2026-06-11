@@ -298,7 +298,135 @@
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
         {% set sort_dir_label = 'desc' if selected_sort_dir == 'desc' else 'asc' %}
-        <div class="toolbar-row-1">
+        <div class="toolbar-row-main">
+          <div class="sort-group">
+            <details class="toolbar-dropdown filter-menu">
+              <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter: {{ filter_label }}">
+                <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">{{ filter_icon }}</span>
+                <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+              </summary>
+              <div class="menu-popover anchor-left toolbar-dropdown-popover">
+                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
+                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
+                <hr class="menu-divider" />
+                <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
+              </div>
+            </details>
+            <details class="toolbar-dropdown sort-menu">
+              <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
+                <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
+                <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
+              </summary>
+              <div class="menu-popover anchor-left toolbar-dropdown-popover">
+                <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=desc' ~ tb_rf }}">Published newest</a>
+                <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
+                <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
+                <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
+              </div>
+            </details>
+          </div>
+          <div class="sort-group">
+            <button type="button" id="toolbar-search-btn" class="sort-pill{% if selected_query %} active{% endif %}" title="Search posts" aria-label="Search posts" aria-expanded="{{ 'true' if selected_query else 'false' }}">
+              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">search</span>
+            </button>
+            <div class="mark-read-group" role="group" aria-label="Mark posts read options">
+              <details class="mark-read-menu">
+                <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
+                  <span class="material-symbols-rounded mark-read-trigger-icon" aria-hidden="true">done_all</span>
+                  <span class="material-symbols-rounded mark-read-trigger-caret" aria-hidden="true">arrow_drop_down</span>
+                </summary>
+                <div class="mark-read-popover" role="menu" aria-label="Mark read actions">
+                <p class="mark-read-header-label">Mark as read:</p>
+                {% set _mr_hidden %}
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                  <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                  <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                  <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                  <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                {% endset %}
+                {% if selected_feed_url %}
+                <form method="post" action="/feeds/mark-read" class="mark-read-action-form">
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  <input type="hidden" name="feed_url" value="{{ selected_feed_url }}" />
+                  <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                  <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                  <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                  <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                  <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                  <button type="submit" class="mark-read-action" role="menuitem">
+                    <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">rss_feed</span>
+                    <span>This feed</span>
+                  </button>
+                </form>
+                {% else %}
+                <form method="post" action="/folders/mark-read" class="mark-read-action-form">
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                  <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                  <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                  <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                  <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                  <button type="submit" class="mark-read-action" role="menuitem">
+                    <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">folder</span>
+                    <span>This folder</span>
+                  </button>
+                </form>
+                {% endif %}
+
+                <p class="mark-read-section-label">Older than:</p>
+
+                {% for age_days, age_label in [(1, '1 day'), (2, '2 days'), (7, '1 week'), (14, '2 weeks'), (30, '1 month')] %}
+                <form method="post" action="/entries/mark-older-than-read" class="mark-read-action-form">
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  <input type="hidden" name="max_age_days" value="{{ age_days }}" />
+                  {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                  <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                  <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                  <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                  <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                  <button type="submit" class="mark-read-action" role="menuitem">
+                    <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
+                    <span>{{ age_label }}</span>
+                  </button>
+                </form>
+                {% endfor %}
+
+                <hr class="mark-read-divider" />
+                <p class="mark-read-header-label">Mark as unread:</p>
+                <p class="mark-read-section-label">Newer than:</p>
+
+                {% for age_days, age_label in [(30, '1 month'), (14, '2 weeks'), (7, '1 week')] %}
+                <form method="post" action="/entries/mark-newer-than-unread" class="mark-unread-action-form">
+                  <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
+                  <input type="hidden" name="min_age_days" value="{{ age_days }}" />
+                  {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
+                  {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
+                  <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
+                  <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
+                  <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
+                  <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
+                  <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
+                  <button type="submit" class="mark-read-action" role="menuitem">
+                    <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
+                    <span>{{ age_label }}</span>
+                  </button>
+                </form>
+                {% endfor %}
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+        <div id="toolbar-search-row" class="toolbar-search-row{% if not selected_query %} toolbar-search-hidden{% endif %}">
           <form method="get" action="/" class="posts-search-form" role="search" aria-label="Search posts">
             <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
             {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
@@ -319,127 +447,6 @@
               autocomplete="off"
             />
           </form>
-          <div class="sort-group mark-read-group" role="group" aria-label="Mark posts read options">
-            <details class="mark-read-menu">
-              <summary class="sort-pill mark-read-summary" title="Mark posts as read options" aria-label="Mark posts as read options">
-                <span class="material-symbols-rounded mark-read-trigger-icon" aria-hidden="true">done_all</span>
-                <span class="material-symbols-rounded mark-read-trigger-caret" aria-hidden="true">arrow_drop_down</span>
-              </summary>
-              <div class="mark-read-popover" role="menu" aria-label="Mark read actions">
-              <p class="mark-read-header-label">Mark as read:</p>
-              {% set _mr_hidden %}
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-              {% endset %}
-              {% if selected_feed_url %}
-              <form method="post" action="/feeds/mark-read" class="mark-read-action-form">
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                <input type="hidden" name="feed_url" value="{{ selected_feed_url }}" />
-                <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-                <button type="submit" class="mark-read-action" role="menuitem">
-                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">rss_feed</span>
-                  <span>This feed</span>
-                </button>
-              </form>
-              {% else %}
-              <form method="post" action="/folders/mark-read" class="mark-read-action-form">
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-                <button type="submit" class="mark-read-action" role="menuitem">
-                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">folder</span>
-                  <span>This folder</span>
-                </button>
-              </form>
-              {% endif %}
-
-              <p class="mark-read-section-label">Older than:</p>
-
-              {% for age_days, age_label in [(1, '1 day'), (2, '2 days'), (7, '1 week'), (14, '2 weeks'), (30, '1 month')] %}
-              <form method="post" action="/entries/mark-older-than-read" class="mark-read-action-form">
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                <input type="hidden" name="max_age_days" value="{{ age_days }}" />
-                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-                <button type="submit" class="mark-read-action" role="menuitem">
-                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
-                  <span>{{ age_label }}</span>
-                </button>
-              </form>
-              {% endfor %}
-
-              <hr class="mark-read-divider" />
-              <p class="mark-read-header-label">Mark as unread:</p>
-              <p class="mark-read-section-label">Newer than:</p>
-
-              {% for age_days, age_label in [(30, '1 month'), (14, '2 weeks'), (7, '1 week')] %}
-              <form method="post" action="/entries/mark-newer-than-unread" class="mark-unread-action-form">
-                <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
-                <input type="hidden" name="min_age_days" value="{{ age_days }}" />
-                {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
-                {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
-                <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
-                <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
-                <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
-                <input type="hidden" name="star_only" value="{{ 1 if selected_star_only else 0 }}" />
-                <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
-                <button type="submit" class="mark-read-action" role="menuitem">
-                  <span class="material-symbols-rounded mark-read-action-icon" aria-hidden="true">history</span>
-                  <span>{{ age_label }}</span>
-                </button>
-              </form>
-              {% endfor %}
-            </div>
-            </details>
-          </div>
-        </div>
-        <div class="toolbar-row-2">
-          <details class="toolbar-dropdown filter-menu">
-            <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter: {{ filter_label }}">
-              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">{{ filter_icon }}</span>
-              <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
-            </summary>
-            <div class="menu-popover anchor-left toolbar-dropdown-popover">
-              <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=0&resume_read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
-              <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread&star_only=0&resume_read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
-              <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
-              <hr class="menu-divider" />
-              <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history&star_only=0&resume_read_filter=' ~ resume_filter }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
-            </div>
-          </details>
-          <details class="toolbar-dropdown sort-menu">
-            <summary class="sort-pill toolbar-dropdown-summary {% if sort_is_active %}active{% endif %}" title="Sort posts">
-              <span class="toolbar-dd-label">{{ sort_by_label }} {{ sort_dir_label }}</span>
-              <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
-            </summary>
-            <div class="menu-popover anchor-right toolbar-dropdown-popover">
-              <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=desc' ~ tb_rf }}">Published newest</a>
-              <a class="menu-item {% if selected_sort_by == 'post' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=post&sort_dir=asc' ~ tb_rf }}">Published oldest</a>
-              <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'desc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=desc' ~ tb_rf }}">Received newest</a>
-              <a class="menu-item {% if selected_sort_by == 'received' and selected_sort_dir == 'asc' %}active{% endif %}" href="{{ tb_base ~ '&sort_by=received&sort_dir=asc' ~ tb_rf }}">Received oldest</a>
-            </div>
-          </details>
         </div>
       </div>
       {% endif %}
@@ -9716,14 +9723,43 @@
       }
     }
 
+    function openSearchRow() {
+      const row = document.getElementById('toolbar-search-row');
+      const btn = document.getElementById('toolbar-search-btn');
+      if (!row) return;
+      row.classList.remove('toolbar-search-hidden');
+      btn?.classList.add('active');
+      btn?.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeSearchRow() {
+      const row = document.getElementById('toolbar-search-row');
+      const btn = document.getElementById('toolbar-search-btn');
+      if (!row) return;
+      row.classList.add('toolbar-search-hidden');
+      btn?.classList.remove('active');
+      btn?.setAttribute('aria-expanded', 'false');
+    }
+
     function focusSearchInput() {
       const searchInput = document.getElementById('topbar-search-input');
       if (!(searchInput instanceof HTMLInputElement)) {
         return;
       }
+      openSearchRow();
       searchInput.focus();
       searchInput.select();
     }
+
+    document.getElementById('toolbar-search-btn')?.addEventListener('click', () => {
+      const row = document.getElementById('toolbar-search-row');
+      if (row?.classList.contains('toolbar-search-hidden')) {
+        openSearchRow();
+        document.getElementById('topbar-search-input')?.focus();
+      } else {
+        closeSearchRow();
+      }
+    });
 
     function shouldHandleGlobalShortcut(event) {
       if (event.defaultPrevented) {
@@ -9878,9 +9914,12 @@
         return;
       }
 
-      // Blur search input if focused
+      // Close search row if focused and empty, or just blur if has content
       const searchInput = document.getElementById('topbar-search-input');
       if (searchInput instanceof HTMLInputElement && document.activeElement === searchInput) {
+        if (!searchInput.value.trim()) {
+          closeSearchRow();
+        }
         searchInput.blur();
         event.preventDefault();
         return;
