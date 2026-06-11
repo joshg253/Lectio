@@ -297,7 +297,7 @@
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
-        {% set sort_dir_label = 'desc' if selected_sort_dir == 'desc' else 'asc' %}
+        {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
         <div class="toolbar-row-main">
           <div class="sort-group">
             <details class="toolbar-dropdown filter-menu">
