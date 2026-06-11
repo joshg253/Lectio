@@ -6169,8 +6169,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 str(entry.feed_url), str(entry.id), entry.link
             )
             _fetch_t0 = time.monotonic()
+            # Wait briefly so fast-responding sites deliver the image on first
+            # open without a polling round-trip. Cap at 0.8 s — Squarespace,
+            # WordPress.com, and other slow hosts routinely exceed 3 s, so the
+            # old 3 s timeout made opening 3 unread entries feel like a ~9 s hang.
             lead_image_service.wait_for_source_fetch(
-                str(entry.feed_url), str(entry.id), timeout=3.0
+                str(entry.feed_url), str(entry.id), timeout=0.8
             )
             _fetch_ms = int((time.monotonic() - _fetch_t0) * 1000)
             LOGGER.info("[perf] entry_detail: source_fetch_wait=%dms %s", _fetch_ms, entry.link)
