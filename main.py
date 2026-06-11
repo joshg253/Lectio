@@ -8236,6 +8236,9 @@ def thumbnail_proxy(url: str = Query(...)) -> Response:
     try:
         with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = client.get(url)
+            if resp.status_code in (404, 410):
+                # Image is permanently gone — null it out so it isn't re-attempted
+                lead_image_service.invalidate_image_url(url)
             resp.raise_for_status()
             raw = resp.content
             src_content_type = resp.headers.get("content-type", "")

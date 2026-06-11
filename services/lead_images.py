@@ -474,6 +474,28 @@ class LeadImageService:
             pass
         return old_url
 
+    def invalidate_image_url(self, image_url: str) -> None:
+        """Null out any cached entry whose stored image_url matches.
+
+        Called when the thumbnail proxy discovers the image is gone (404/410).
+        Nulling rather than deleting preserves fetched_at so the source-fetch
+        isn't re-triggered on the next page open.
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(
+                    "SELECT feed_url, entry_id FROM entry_lead_images WHERE image_url = ?",
+                    (image_url,),
+                ).fetchall()
+                conn.execute(
+                    "UPDATE entry_lead_images SET image_url = NULL WHERE image_url = ?",
+                    (image_url,),
+                )
+            for row in rows:
+                self._cache[(row[0], row[1])] = None
+        except Exception:
+            pass
+
     def _is_cache_key_stale(self, cache_key: tuple[str, str], *, max_age_seconds: int) -> bool:
         fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
         return time.time() - fetched_at >= max_age_seconds
