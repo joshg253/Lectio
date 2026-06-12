@@ -6765,8 +6765,6 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url),
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
-            "thumb_crop_override": lead_image_service.get_entry_thumb_crop(str(entry.feed_url), str(entry.id)),
-            "feed_thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
