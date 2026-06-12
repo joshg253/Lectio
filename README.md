@@ -50,7 +50,8 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 ### Lead images
 - Per-feed **image extraction strategy**: Auto-detect, Webcomic (source-page scrape), Artwork (for art-portfolio feeds like ArtStation), Feed content only, Source scraping, Media RSS, or None
 - **Strategy comparison** in Feed Properties — runs all strategies against the current article, shows results side-by-side with actual image dimensions
-- Pin any strategy result as the post thumbnail; set a custom URL or feed favicon as a fixed thumbnail; choose thumbnail fit mode (Fill / Fit / Smart) and anchor position via a 3×3 grid
+- Pin any strategy result as the post thumbnail; set a custom URL or feed favicon as a fixed thumbnail (saving a custom URL re-enables thumbnails if they were disabled); choose thumbnail fit mode (Fill / Fit / Smart) and anchor position via a 3×3 grid
+- **Smart crop sensitivity** — per-feed in Feed Properties (shown when fit mode is Smart): minimum fraction of the image the content-aware crop must keep (0.5–1.0, default 0.9); lower values crop more aggressively
 - **Caption source** — Alt / Title checkboxes select which HTML attribute to show as the image caption; **↺ Auto** applies title-preferred logic with junk suppression; text is pre-loaded at refresh (no pop-in)
 - Art-portfolio feeds (ArtStation) auto-assigned **Artwork** strategy; feeds in "comic"-named folders auto-assigned **Webcomic**
 - GitHub release feeds (`github.com/*/releases.atom`) auto-assigned **og_scrape** strategy (GitHub generates a unique social-preview card per release) with list thumbnails suppressed

@@ -1598,6 +1598,11 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN thumb_strategy TEXT")
         except Exception:
             pass
+        try:
+            # Per-feed SmartCrop min_scale (NULL = default 0.9); applies when thumb_crop='smart'.
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN smart_min_scale REAL")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -1755,7 +1760,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None}
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -1813,6 +1818,18 @@ def upsert_feed_thumb_crop(conn: sqlite3.Connection, feed_url: str, crop: str) -
     conn.execute(
         "UPDATE feed_display_prefs SET thumb_crop = ? WHERE feed_url = ?",
         (crop, feed_url),
+    )
+
+
+def upsert_feed_smart_min_scale(conn: sqlite3.Connection, feed_url: str, min_scale: float | None) -> None:
+    value = min(1.0, max(0.5, min_scale)) if min_scale is not None else None
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET smart_min_scale = ? WHERE feed_url = ?",
+        (value, feed_url),
     )
 
 
@@ -4349,6 +4366,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
+            "smart_min_scale": float(_disp["smart_min_scale"]) if _disp.get("smart_min_scale") is not None else None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -5792,11 +5810,13 @@ def list_entries_for_feeds(
             _feed_thumb_crop = "cover"
         _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, str(getattr(entry, "id", "") or ""))
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
+        _smart_ms = _feed_prefs.get("smart_min_scale")
         rec.update(
             {
                 "thumbnail_url": _thumb,
                 "show_thumbnail": _show_thumb,
                 "thumb_crop": _thumb_crop,
+                "smart_min_scale": float(_smart_ms) if _smart_ms is not None else None,
                 "thumb_strategy": _thumb_strategy or "",
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
@@ -6200,7 +6220,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # audio enclosure when the content doesn't already have an <audio> tag.
         _audio_url: str | None = None
         for _enc in (getattr(entry, "enclosures", None) or []):
-            _enc_url = getattr(_enc, "url", None) or ""
+            _enc_url = getattr(_enc, "href", None) or getattr(_enc, "url", None) or ""
             _enc_type = (getattr(_enc, "type", None) or "").lower()
             if _enc_url and (
                 _enc_type.startswith("audio/")
@@ -8374,7 +8394,7 @@ _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
 
 
 @app.get("/thumb")
-def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -> Response:
+def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default="")) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
@@ -8386,10 +8406,10 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -
     if crop not in _THUMB_COVER_POS and crop not in ("contain", "smart"):
         crop = "cover"
 
-    # Read global SmartCrop min_scale setting (clamped 0.5–1.0, default 0.9).
-    _smart_ms_raw = get_cached_setting("smart_min_scale")
+    # Per-feed SmartCrop min_scale arrives as the `ms` query param (clamped 0.5–1.0,
+    # default 0.9). Set in Feed Properties; absent for feeds using the default.
     try:
-        _smart_min_scale = min(1.0, max(0.5, float(_smart_ms_raw or "0.9")))
+        _smart_min_scale = min(1.0, max(0.5, float(ms or "0.9")))
     except (ValueError, TypeError):
         _smart_min_scale = 0.9
 
@@ -9139,7 +9159,12 @@ def set_feed_thumbnail_url_route(
     thumbnail_url: str = Form(default=""),
 ):
     with get_meta_connection() as conn:
-        upsert_feed_thumbnail_url(conn, feed_url, thumbnail_url.strip() or None)
+        cleaned = thumbnail_url.strip() or None
+        upsert_feed_thumbnail_url(conn, feed_url, cleaned)
+        # Pinning a thumbnail URL implies the user wants thumbnails visible —
+        # re-enable them if the feed was previously set to Disabled.
+        if cleaned:
+            upsert_feed_display_pref(conn, feed_url, "show_lead_image_as_thumb", 1)
     return JSONResponse({"ok": True})
 
 
@@ -9152,6 +9177,22 @@ def set_feed_thumb_crop_route(
         return JSONResponse({"error": "invalid crop"}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_thumb_crop(conn, feed_url, crop)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/feeds/smart-min-scale")
+def set_feed_smart_min_scale_route(
+    feed_url: str = Form(...),
+    min_scale: str = Form(default=""),  # empty → clear back to default
+):
+    parsed: float | None = None
+    if min_scale.strip():
+        try:
+            parsed = float(min_scale)
+        except ValueError:
+            return JSONResponse({"error": "invalid min_scale"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_smart_min_scale(conn, feed_url, parsed)
     return JSONResponse({"ok": True})
 
 
@@ -9522,7 +9563,6 @@ def get_all_settings():
         "instapaper_password_masked": _masked(instapaper_pw),
         "contacts": contacts,
         "email_to_default": email_to_default,
-        "smart_min_scale": get_runtime_setting("smart_min_scale", "0.9"),
     })
 
 
@@ -9540,7 +9580,6 @@ async def save_all_settings(request: Request):
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         "email_contacts", EMAIL_TO_SETTING_KEY,
-        "smart_min_scale",
     }
 
     import json as _json
@@ -9573,13 +9612,6 @@ async def save_all_settings(request: Request):
             # Don't overwrite a real secret with the masked placeholder
             if key in _SENSITIVE and str_val.startswith("••"):
                 continue
-            # Clamp smart_min_scale to the valid 0.5–1.0 range.
-            if key == "smart_min_scale" and str_val:
-                try:
-                    clamped = min(1.0, max(0.5, float(str_val)))
-                    str_val = f"{clamped:.2f}"
-                except (ValueError, TypeError):
-                    str_val = "0.90"
             if str_val:
                 set_setting(conn, key, str_val)
             else:

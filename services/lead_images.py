@@ -87,11 +87,13 @@ class LeadImageService:
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
+    # www.blogger.com hosts only widget chrome like the "Powered By Blogger" button —
+    # Blogger content images live on bp.blogspot.com / blogger.googleusercontent.com.
     # Also includes YouTube image CDNs — YouTube thumbnails are handled explicitly for
     # YouTube feeds (early-return in extract_entry_thumbnail_url lines 343-351); for all
     # other feeds they represent embedded video thumbnails, not the article's lead image.
     _SITE_CHROME_DOMAIN_PATTERNS = re.compile(
-        r"(?:resources\.blogblog\.com|i\.ytimg\.com|img\.youtube\.com)",
+        r"(?:resources\.blogblog\.com|www\.blogger\.com|i\.ytimg\.com|img\.youtube\.com)",
         re.IGNORECASE,
     )
     # Keep old name as alias so callers outside this class still work.
@@ -129,7 +131,10 @@ class LeadImageService:
     # Detects site-chrome structural elements (header logo, branding, navigation,
     # and related/recent-post sidebars) that contain decorative images, not article content.
     _SITE_CHROME_CONTEXT_RE = re.compile(
-        r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b|\bcomic-navigation\b|\bnav-links\b)',
+        r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b|\bcomic-navigation\b|\bnav-links\b'
+        # Nav menus and dropdowns (e.g. krita.org's language-picker icon) and
+        # CMS sidebar/footer widgets (e.g. Blogger's "Powered By Blogger" button).
+        r'|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)',
         re.IGNORECASE,
     )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
@@ -625,8 +630,13 @@ class LeadImageService:
             if enclosures and isinstance(enclosures, (list, tuple)):
                 for enc in enclosures:
                     try:
-                        url = enc.url if hasattr(enc, "url") else (enc.get("url") if isinstance(enc, dict) else None)
-                        etype = enc.type if hasattr(enc, "type") else (enc.get("type") if isinstance(enc, dict) else "") or ""
+                        # reader's Enclosure uses .href; feedparser dicts use "href" or "url".
+                        if isinstance(enc, dict):
+                            url = enc.get("href") or enc.get("url")
+                            etype = enc.get("type") or ""
+                        else:
+                            url = getattr(enc, "href", None) or getattr(enc, "url", None)
+                            etype = getattr(enc, "type", None) or ""
                     except Exception:
                         continue
                     if url and etype.startswith("image"):

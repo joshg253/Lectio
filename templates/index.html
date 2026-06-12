@@ -469,11 +469,12 @@
           data-post-link="{{ post.link or '' }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
+          data-smart-ms="{{ post.smart_min_scale or '' }}"
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
             {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}" alt=""
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}" alt=""
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
@@ -1265,9 +1266,6 @@
             <button type="button" id="theme-btn-dark" class="sett-theme-btn" title="Dark mode" aria-label="Dark mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span></button>
             <button type="button" id="theme-btn-light" class="sett-theme-btn" title="Light mode" aria-label="Light mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span></button>
           </div>
-          <label class="settings-label" for="sett-smart-min-scale" style="margin-top:0.75rem">Smart crop sensitivity</label>
-          <input type="number" id="sett-smart-min-scale" class="settings-input settings-input--short" min="0.5" max="1.0" step="0.05" placeholder="0.9" />
-          <p class="settings-hint">Controls how tightly Smart mode can zoom in to find the best crop region. Lower = more aggressive repositioning (0.5–1.0, default 0.9). Changing this clears existing Smart thumbnails.</p>
         </div>
         <h4 class="settings-section-title" style="margin-top:1rem">Application</h4>
         <div class="settings-section">
@@ -1693,6 +1691,12 @@
                 <button type="button" class="feed-prop-crop-mode-btn" data-mode="contain" title="Fit — show full image with blank bars">Fit</button>
                 <button type="button" class="feed-prop-crop-mode-btn" data-mode="smart" title="Smart — content-aware crop; trims the least interesting sides">Smart</button>
               </div>
+            </div>
+            <div class="feed-prop-crop-section" id="feed-prop-smart-ms-section" style="display:none;">
+              <span class="feed-prop-thumb-crop-label">Smart crop sensitivity</span>
+              <input type="number" id="feed-prop-smart-min-scale" class="settings-input settings-input--short"
+                min="0.5" max="1.0" step="0.05" placeholder="0.9"
+                title="Minimum fraction of the image the smart crop must keep (0.5–1.0); lower values crop more aggressively" />
             </div>
           </div>
         </div>
@@ -3561,7 +3565,9 @@
       }
 
       const _thumbCrop = postItem.dataset.thumbCrop || 'cover';
-      const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl) + '&crop=' + encodeURIComponent(_thumbCrop);
+      const _smartMs = postItem.dataset.smartMs || '';
+      const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl) + '&crop=' + encodeURIComponent(_thumbCrop)
+        + (_thumbCrop === 'smart' && _smartMs ? '&ms=' + encodeURIComponent(_smartMs) : '');
       if (existingImage instanceof HTMLImageElement) {
         if (existingImage.getAttribute('src') !== thumbedLeadUrl) {
           const prevSrc = existingImage.getAttribute('src');
@@ -4044,6 +4050,11 @@
             btn.dataset.feedUrl = feedUrl;
           });
           updateCropUI(_cropVal);
+          const smartMsInput = document.getElementById('feed-prop-smart-min-scale');
+          if (smartMsInput) {
+            smartMsInput.dataset.feedUrl = feedUrl;
+            smartMsInput.value = data.smart_min_scale != null ? String(data.smart_min_scale) : '';
+          }
 
           const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
@@ -4128,6 +4139,14 @@
         return u.pathname + u.search;
       } catch (_) { return src; }
     }
+    function setThumbMsParam(src, ms) {
+      try {
+        const u = new URL(src, location.origin);
+        if (ms) u.searchParams.set('ms', ms);
+        else u.searchParams.delete('ms');
+        return u.pathname + u.search;
+      } catch (_) { return src; }
+    }
     function parseCropValue(v) {
       if (!v || v === 'cover') return { mode: 'cover', pos: 'center' };
       if (v === 'left') return { mode: 'cover', pos: 'left' };  // backward compat
@@ -4152,6 +4171,8 @@
       document.querySelectorAll('.feed-prop-crop-pos-btn').forEach(b => b.classList.toggle('active', b.dataset.pos === pos));
       const posSection = document.getElementById('feed-prop-crop-pos-section');
       if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
+      const msSection = document.getElementById('feed-prop-smart-ms-section');
+      if (msSection) msSection.style.display = mode === 'smart' ? '' : 'none';
     }
     function applyCropToThumbnails(feedUrl, cropVal) {
       const previewTile = document.getElementById('feed-prop-thumb-preview-tile');
@@ -4209,7 +4230,8 @@
       if (preview && previewImg) {
         if (previewUrl) {
           const _crop = getActiveCropValue();
-          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}&crop=${encodeURIComponent(_crop)}`;
+          const _ms = _crop === 'smart' ? (document.getElementById('feed-prop-smart-min-scale')?.value?.trim() || '') : '';
+          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}&crop=${encodeURIComponent(_crop)}` + (_ms ? `&ms=${encodeURIComponent(_ms)}` : '');
           preview.style.display = '';
           // Apply current crop to preview tile
           if (previewTile) {
@@ -4716,8 +4738,36 @@
         document.querySelectorAll('.feed-prop-crop-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
         const posSection = document.getElementById('feed-prop-crop-pos-section');
         if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
+        const msSection = document.getElementById('feed-prop-smart-ms-section');
+        if (msSection) msSection.style.display = mode === 'smart' ? '' : 'none';
         applyCropToThumbnails(feedUrl, cropVal);
         try { await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop: cropVal }), credentials: 'same-origin' }); } catch (_e) {}
+      });
+    });
+
+    document.getElementById('feed-prop-smart-min-scale')?.addEventListener('change', async () => {
+      const input = document.getElementById('feed-prop-smart-min-scale');
+      const feedUrl = input?.dataset.feedUrl;
+      if (!feedUrl) return;
+      let ms = input.value.trim();
+      if (ms) {
+        const parsed = parseFloat(ms);
+        if (Number.isNaN(parsed)) { input.value = ''; ms = ''; }
+        else { ms = String(Math.min(1.0, Math.max(0.5, parsed))); input.value = ms; }
+      }
+      try {
+        await fetch('/feeds/smart-min-scale', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, min_scale: ms }), credentials: 'same-origin' });
+      } catch (_e) { return; }
+      // Re-render this feed's smart-cropped thumbnails with the new sensitivity.
+      const previewImg = document.getElementById('feed-prop-thumb-preview-img');
+      if (previewImg instanceof HTMLImageElement && previewImg.src) {
+        previewImg.src = setThumbMsParam(previewImg.src, ms);
+      }
+      document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
+        postItem.dataset.smartMs = ms;
+        if ((postItem.dataset.thumbCrop || 'cover') !== 'smart') return;
+        const img = postItem.querySelector('.post-thumbnail-image');
+        if (img instanceof HTMLImageElement && img.src) img.src = setThumbMsParam(img.src, ms);
       });
     });
 
@@ -4768,9 +4818,12 @@
         const body = new URLSearchParams({ feed_url: feedUrl, thumbnail_url: newUrl });
         const resp = await fetch('/feeds/thumbnail-url', { method: 'POST', body, credentials: 'same-origin' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        // A pinned URL implies thumbnails on (server re-enables the show flag);
+        // clear any per-entry-inline strategy override like the dropdown branches do.
+        await fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: '' }), credentials: 'same-origin' });
         btn.textContent = 'Saved';
         const _ts2 = document.getElementById('feed-prop-thumb-source');
-        if (_ts2) _ts2.dataset.savedThumbUrl = newUrl;
+        if (_ts2) { _ts2.dataset.savedThumbUrl = newUrl; _ts2.dataset.thumbStrategy = ''; }
         applyThumbSourceUI();
         setTimeout(() => { btn.textContent = 'Save'; }, 1500);
       } catch (e) {
@@ -7999,7 +8052,6 @@
         v('sett-profile-email', d.profile_email);
         v('sett-tz-display', d.tz_display);
         v('sett-maint-hour', d.maintenance_hour);
-        v('sett-smart-min-scale', d.smart_min_scale);
         const maintLast = document.getElementById('sett-maint-last');
         if (maintLast) {
           if (d.maintenance_last_ran_at) {
@@ -8116,7 +8168,6 @@
             profile_email: g('sett-profile-email'),
             tz_display: g('sett-tz-display'),
             maintenance_hour: g('sett-maint-hour'),
-            smart_min_scale: g('sett-smart-min-scale'),
           };
         } else if (scope === 'profile') {
           payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };

@@ -351,3 +351,84 @@ def test_css_bg_after_preferred_does_not_override(tmp_path):
     result = service._fetch_source_lead_image("https://example.com/article")
 
     assert result == "https://cdn.example.com/uploads/article-hero.jpg"
+
+
+def test_extract_thumbnail_uses_reader_enclosure_href(tmp_path: Path):
+    """reader's Enclosure exposes .href (not .url) — the enclosure fast path
+    must read it (regression: invisibleoranges.com entries got no images)."""
+    from reader import Enclosure
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://www.invisibleoranges.com/feed/",
+        entry_id="https://www.invisibleoranges.com/?p=63411",
+        link="https://www.invisibleoranges.com/upcoming-metal-releases",
+    )
+    entry.enclosures = (
+        Enclosure(href="https://media.invisibleoranges.com/uploads/2025/04/25/UMR.png", type="image/png", length=286389),
+    )
+
+    thumb = service.extract_entry_thumbnail_url(entry)
+
+    assert thumb == "https://media.invisibleoranges.com/uploads/2025/04/25/UMR.png"
+
+
+def test_extract_thumbnail_reads_dict_enclosures(tmp_path: Path):
+    """feedparser-style dict enclosures work with either 'href' or 'url' keys."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    for key in ("href", "url"):
+        entry = _FakeEntry(
+            feed_url="https://example.com/feed.xml",
+            entry_id=f"enc-{key}",
+            link="https://example.com/article",
+        )
+        entry.enclosures = [{key: "https://cdn.example.com/photos/cover.jpg", "type": "image/jpeg"}]
+
+        assert service.extract_entry_thumbnail_url(entry) == "https://cdn.example.com/photos/cover.jpg"
+
+
+def test_blogger_chrome_domain_rejected(tmp_path: Path):
+    """www.blogger.com hosts only widget chrome (e.g. the 'Powered By Blogger'
+    button) — never article images (regression: greasespot.net lead image)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    assert not service._is_image_url_acceptable(
+        "https://www.blogger.com/buttons/blogger-simple-kahki.gif", None, None
+    )
+
+
+def test_source_scan_skips_nav_menu_icons(tmp_path: Path):
+    """Images inside nav menus/dropdowns are site chrome, not lead images
+    (regression: krita.org language-picker icon)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body>"
+        '<ul class="navbar-nav"><li class="nav-item dropdown">'
+        '<a class="nav-link dropdown-toggle" href="#">'
+        '<img src="/aether/languages.png" alt="">'
+        "</a></li></ul>"
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    assert service._fetch_source_lead_image("https://krita.org/en/posts/release/") is None
+
+
+def test_source_scan_skips_widget_images_but_keeps_article_image(tmp_path: Path):
+    """Sidebar/footer widget images are skipped; a real article image still wins."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body>"
+        "<article>"
+        '<img src="https://cdn.example.com/uploads/article-photo.jpg" srcset="article-photo.jpg 1920w">'
+        "</article>"
+        "<div class='widget BloggerButton'><div class='widget-content'>"
+        "<a href='https://example.org'><img alt='Powered By Example' src='https://cdn.example.org/buttons/button.gif'/></a>"
+        "</div></div>"
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    result = service._fetch_source_lead_image("https://example.com/article")
+
+    assert result == "https://cdn.example.com/uploads/article-photo.jpg"
