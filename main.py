@@ -9165,10 +9165,10 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
             try:
                 with get_reader() as reader:
                     entries = list(reader.get_entries(feed=furl, limit=50))
-                if strategy in ("inline", "artwork"):
-                    # _do_backfill_entry_list skips inline/artwork (no source-page
+                if strategy in ("inline", "artwork", "enclosure"):
+                    # _do_backfill_entry_list skips inline/artwork/enclosure (no source-page
                     # fetches needed), so run inline extraction directly using full
-                    # Entry objects which carry the feed content.
+                    # Entry objects which carry the feed content and enclosures.
                     for entry in entries:
                         furl_str = str(getattr(entry, "feed_url", "") or "")
                         eid = str(getattr(entry, "id", "") or "")

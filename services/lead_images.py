@@ -1111,8 +1111,8 @@ class LeadImageService:
                         time.sleep(0.05)
                         continue
 
-                # For inline/none-classified feeds, source scraping won't help.
-                if strategy in ("inline", "artwork", "none"):
+                # For inline/enclosure/none-classified feeds, source scraping won't help.
+                if strategy in ("inline", "artwork", "none", "enclosure"):
                     continue
 
                 is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
@@ -1875,6 +1875,19 @@ class LeadImageService:
                         best_area = area
                         best_url = url
 
+            # <enclosure> — feedparser stores these as fp_entry.enclosures (list of dicts
+            # with "url", "type", optional "length").  Used by feeds like Invisible Oranges
+            # that attach image enclosures instead of media:thumbnail / media:content.
+            if best_url is None:
+                for enc in getattr(fp_entry, "enclosures", []) or []:
+                    if not isinstance(enc, dict):
+                        continue
+                    url = enc.get("url") or enc.get("href") or ""
+                    etype = (enc.get("type") or "").lower()
+                    if url and "image" in etype and self._is_image_url_acceptable(url, None, None):
+                        best_url = url
+                        break
+
             if best_url and not self._should_bypass_cached_url(entry_link=link, cached_url=best_url):
                 result[link] = best_url
 
@@ -2403,6 +2416,27 @@ class LeadImageService:
         results.append({
             "strategy": "media_rss", "image_url": media_url,
             "image_alt": None, "image_title": None, "error": media_error,
+        })
+
+        # --- enclosure: per-entry image already stored by reader (no live re-fetch) ---
+        encl_url: str | None = None
+        encl_error: str | None = None
+        try:
+            for enc in (getattr(entry, "enclosures", None) or []):
+                if isinstance(enc, dict):
+                    eu = enc.get("href") or enc.get("url")
+                    et = enc.get("type") or ""
+                else:
+                    eu = getattr(enc, "href", None) or getattr(enc, "url", None)
+                    et = getattr(enc, "type", None) or ""
+                if eu and str(et).startswith("image/"):
+                    encl_url = eu
+                    break
+        except Exception as exc:
+            encl_error = str(exc)
+        results.append({
+            "strategy": "enclosure", "image_url": encl_url,
+            "image_alt": None, "image_title": None, "error": encl_error,
         })
 
         # --- og_scrape: og:image / hero image from the article source page ---

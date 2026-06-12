@@ -1629,6 +1629,7 @@
                 <option value="inline">Feed content — first image from feed HTML</option>
                 <option value="og_scrape">Source page — og:image / article hero</option>
                 <option value="media_rss">Media RSS — media:thumbnail from feed XML</option>
+                <option value="enclosure">Enclosure — per-post image already in reader DB</option>
                 <option value="none">None</option>
               </select>
               <div id="feed-prop-strategy-hint" class="feed-prop-strategy-hint"></div>
@@ -2941,7 +2942,7 @@
     const feedPropRefreshBtn = document.getElementById('feed-prop-refresh-btn');
     const STRATEGY_LABELS = {
       inline: 'Feed content', og_scrape: 'Source page', webcomic: 'Webcomic',
-      artwork: 'Artwork', media_rss: 'Media RSS', youtube: 'YouTube',
+      artwork: 'Artwork', media_rss: 'Media RSS', enclosure: 'Enclosure', youtube: 'YouTube',
     };
     const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
     const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
@@ -4139,7 +4140,7 @@
       });
     }
 
-    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss']);
+    const SELECTABLE_STRATEGIES = new Set(['inline', 'og_scrape', 'media_rss', 'enclosure']);
     const PRESET_STRATEGIES = new Set(['webcomic', 'artwork']);
     function setActivePreset(presetName) {
       feedPropPresetBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.preset === presetName));
