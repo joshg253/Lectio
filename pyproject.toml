@@ -10,6 +10,7 @@ dependencies = [
     "feedparser",
     "httpx",
     "pillow>=11.0",
+    "smartcrop>=0.5",
     "itsdangerous",
     "jinja2",
     "python-multipart",
