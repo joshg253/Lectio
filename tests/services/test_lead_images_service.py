@@ -432,3 +432,111 @@ def test_source_scan_skips_widget_images_but_keeps_article_image(tmp_path: Path)
     result = service._fetch_source_lead_image("https://example.com/article")
 
     assert result == "https://cdn.example.com/uploads/article-photo.jpg"
+
+
+# --- piwik/matomo tracker URLs rejected ---
+
+def test_piwik_url_rejected_as_tracker(tmp_path: Path):
+    """piwik.php tracking pixels must be rejected (regression: krita.org 1×1 image)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://stats.kde.org/piwik.php?idsite=13", None, None
+    )
+    assert not service._is_image_url_acceptable(
+        "https://example.com/matomo/matomo.php?idsite=1", None, None
+    )
+
+
+# --- tiny explicit dimensions rejected as spacers/tracking pixels ---
+
+def test_small_explicit_dims_rejected(tmp_path: Path):
+    """Images with both explicit dims ≤ 10px must be rejected as tracking/spacer pixels."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    # Classic 1×1 tracking pixel
+    assert not service._is_source_image_tag_acceptable(
+        {"width": "1", "height": "1"}, "https://stats.example.com/tracker.gif"
+    )
+    # 10×10 is still within the tiny-dims threshold
+    assert not service._is_source_image_tag_acceptable(
+        {"width": "10", "height": "10"}, "https://cdn.example.com/spacer.gif"
+    )
+
+
+# --- enclosure fallback in test_entry_strategies media_rss card ---
+
+def test_strategy_test_includes_enclosure_in_media_rss(tmp_path: Path, monkeypatch):
+    """Tuning tab media_rss card must fall back to entry enclosures when the feed has
+    no <media:thumbnail> elements (regression: Invisible Oranges Tuning showed nothing)."""
+    from reader import Enclosure
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    monkeypatch.setattr(service, "_fetch_feed_media_thumbnails", lambda _url: {})
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **kw: None)
+
+    entry = _FakeEntry(
+        feed_url="https://www.invisibleoranges.com/feed/",
+        entry_id="io-tuning-1",
+        link="https://www.invisibleoranges.com/review",
+    )
+    entry.enclosures = (
+        Enclosure(
+            href="https://media.invisibleoranges.com/uploads/2025/04/cover.png",
+            type="image/png",
+            length=42000,
+        ),
+    )
+
+    results = service.test_entry_strategies(entry)
+    media_rss = next(r for r in results if r["strategy"] == "media_rss")
+
+    assert media_rss["image_url"] == "https://media.invisibleoranges.com/uploads/2025/04/cover.png"
+    assert media_rss["error"] is None
+
+
+# --- WebP picture <source srcset> fallback for alt/title ---
+
+def test_fetch_caption_webp_picture_fallback(tmp_path: Path):
+    """Alt/title from <img> inside <picture>/<source type=image/webp> must be returned
+    when lead_image_url is the WebP srcset URL (regression: Wondermark captions)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry_link = "https://wondermark.com/1k75/"
+    webp_url = "https://cdn.example.com/strips/1k75.webp"
+    html = (
+        "<html><body><article>"
+        "<picture>"
+        '<source type="image/webp" srcset="https://cdn.example.com/strips/1k75.webp">'
+        '<img src="https://cdn.example.com/strips/1k75.png"'
+        ' alt="Panel one" title="In a world where everything went wrong">'
+        "</picture>"
+        "</article></body></html>"
+    )
+    service._source_html_cache[entry_link] = (entry_link, html)
+
+    alt, title = service.fetch_entry_image_caption(entry_link, lead_image_url=webp_url)
+
+    assert alt == "Panel one"
+    assert title == "In a world where everything went wrong"
+
+
+# --- BBCode [img] conversion ---
+
+def test_bbcode_img_converted_before_extraction(tmp_path: Path):
+    """[img]…[/img] BBCode must be converted to <img src=…> before inline extraction
+    (regression: Nexus Mods Tuning tab showed no images)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    # Converter unit test
+    assert service._bbcode_img_to_html("[img]https://cdn.example.com/art.jpg[/img]") == (
+        '<img src="https://cdn.example.com/art.jpg">'
+    )
+
+    # End-to-end: extract_inline_thumb_url must surface the image
+    entry = _FakeEntry(
+        feed_url="https://www.nexusmods.com/rss/",
+        entry_id="nexus-1",
+        link="https://www.nexusmods.com/mods/12345",
+        content_html="Mod description\n[img]https://staticdelivery.nexusmods.com/mods/img.jpg[/img]\n",
+    )
+    thumb = service.extract_inline_thumb_url(entry)
+
+    assert thumb == "https://staticdelivery.nexusmods.com/mods/img.jpg"

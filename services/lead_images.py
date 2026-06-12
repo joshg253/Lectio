@@ -61,6 +61,16 @@ class LeadImageService:
         r"^(https://(?:\d+\.bp\.blogspot\.com|(?:blogger|lh\d+)\.googleusercontent\.com)/.+?)/w\d+-h\d+[^/]*/(.+)$",
         re.IGNORECASE,
     )
+    # BBCode [img]...[/img] found in some feed content (e.g. Nexus Mods).  Only
+    # the img tag is converted here — enough for inline image extraction.
+    _BBCODE_IMG_RE = re.compile(
+        r'\[img(?:=[^\]]*)?](https?://[^\[]{1,500})\[/img]', re.IGNORECASE
+    )
+
+    @classmethod
+    def _bbcode_img_to_html(cls, text: str) -> str:
+        """Convert [img]url[/img] BBCode tags to <img src="url"> for image extraction."""
+        return cls._BBCODE_IMG_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
         r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
@@ -115,7 +125,7 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(
-        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image)",
+        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|piwik|matomo|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image)",
         re.IGNORECASE,
     )
     _AVATAR_HINT_PATTERNS = re.compile(
@@ -773,6 +783,7 @@ class LeadImageService:
         for html_candidate in html_candidates:
             if feed_url:
                 html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+            html_candidate = self._bbcode_img_to_html(html_candidate)
             inline_image = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
             if (
                 inline_image
@@ -1300,6 +1311,11 @@ class LeadImageService:
 
         width_attr = self._parse_positive_int_attr(attrs, "width")
         height_attr = self._parse_positive_int_attr(attrs, "height")
+
+        # Explicit tiny dimensions (e.g. width="1" height="1") → tracking/spacer pixel.
+        if width_attr is not None and height_attr is not None:
+            if width_attr <= 10 and height_attr <= 10:
+                return False
 
         # Reject images whose alt or title text explicitly calls them a logo/icon,
         # even when the URL path doesn't contain those terms — but only when the
@@ -2005,6 +2021,37 @@ class LeadImageService:
                             _strip(attrs.get("alt", "")),
                             _strip(attrs.get("title", "")),
                         )
+            # Fallback: lead_image_url may be a WebP srcset URL substituted by
+            # _extract_preferred_source_image_data when a <picture>/<source
+            # type="image/webp"> element wraps an <img> tag.  The <img src> holds
+            # the JPEG/PNG fallback, which won't match above.  Scan for <picture>
+            # elements whose WebP srcset contains lead_image_url and return the
+            # enclosed <img>'s alt/title.
+            for tag_match in self._IMG_TAG_RE.finditer(source_html):
+                pre_ctx = source_html[max(0, tag_match.start() - 600):tag_match.start()]
+                pic_pos = pre_ctx.rfind("<picture")
+                if pic_pos == -1:
+                    continue
+                wm = self._WEBP_SOURCE_SRCSET_RE.search(pre_ctx[pic_pos:])
+                if not wm:
+                    continue
+                wsrcset = wm.group(1) or wm.group(2)
+                for wu in self._parse_srcset_urls_descending(wsrcset):
+                    if not wu:
+                        continue
+                    wr = urljoin(final_url, wu)
+                    if self._urls_equivalent(wr, lead_image_url):
+                        tag = tag_match.group(0)
+                        wb_attrs: dict[str, str] = {}
+                        for am in self._IMG_ATTR_RE.finditer(tag):
+                            k = am.group(1).strip().lower()
+                            v = html.unescape((am.group(2) or am.group(3) or am.group(4) or "").strip())
+                            if k and v:
+                                wb_attrs[k] = v
+                        return (
+                            _strip(wb_attrs.get("alt", "")),
+                            _strip(wb_attrs.get("title", "")),
+                        )
             return (None, None)
 
         # No specific URL: use scored path and return combined as title, no separate alt.
@@ -2289,6 +2336,7 @@ class LeadImageService:
             for html_candidate in html_candidates:
                 if feed_url:
                     html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+                html_candidate = self._bbcode_img_to_html(html_candidate)
                 img = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
                 if img:
                     inline_url = img
@@ -2328,13 +2376,28 @@ class LeadImageService:
             "image_alt": inline_alt, "image_title": inline_title, "error": inline_error,
         })
 
-        # --- media_rss: media:thumbnail / media:content from the live feed XML ---
+        # --- media_rss: media:thumbnail / media:content from the live feed XML,
+        #     with fallback to image enclosures on the entry itself ---
         media_url: str | None = None
         media_error: str | None = None
         try:
             if feed_url:
                 thumbs = self._fetch_feed_media_thumbnails(feed_url)
                 media_url = thumbs.get(entry_link) if entry_link else None
+            # Fallback: reader's Enclosure objects (.href) — same fix as the main
+            # extraction path.  Lets feeds whose images live in <enclosure> rather
+            # than <media:thumbnail> still show a card in the Tuning tab.
+            if not media_url:
+                for enc in (getattr(entry, "enclosures", None) or []):
+                    if isinstance(enc, dict):
+                        enc_url = enc.get("href") or enc.get("url")
+                        enc_type = enc.get("type") or ""
+                    else:
+                        enc_url = getattr(enc, "href", None) or getattr(enc, "url", None)
+                        enc_type = getattr(enc, "type", None) or ""
+                    if enc_url and str(enc_type).startswith("image/"):
+                        media_url = enc_url
+                        break
         except Exception as exc:
             media_error = str(exc)
         results.append({

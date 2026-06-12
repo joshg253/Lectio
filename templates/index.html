@@ -470,11 +470,12 @@
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
           data-smart-ms="{{ post.smart_min_scale or '' }}"
+          data-fill-zoom="{{ post.fill_zoom or '' }}"
         >
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
             {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
             {% if post.thumbnail_url %}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}" alt=""
+            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}{% if post.fill_zoom and post.fill_zoom != 1.0 and post.thumb_crop != 'smart' and post.thumb_crop != 'contain' %}&fz={{ post.fill_zoom }}{% endif %}" alt=""
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
           </div>
@@ -1697,6 +1698,12 @@
               <input type="number" id="feed-prop-smart-min-scale" class="settings-input settings-input--short"
                 min="0.5" max="1.0" step="0.05" placeholder="0.9"
                 title="Minimum fraction of the image the smart crop must keep (0.5–1.0); lower values crop more aggressively" />
+            </div>
+            <div class="feed-prop-crop-section" id="feed-prop-fill-zoom-section" style="display:none;">
+              <span class="feed-prop-thumb-crop-label">Fill zoom</span>
+              <input type="number" id="feed-prop-fill-zoom" class="settings-input settings-input--short"
+                min="0.5" max="2.0" step="0.05" placeholder="1.0"
+                title="Zoom multiplier for Fill crop (1.0 = tight fill; &lt;1.0 shows more image with black bars; &gt;1.0 crops more aggressively)" />
             </div>
           </div>
         </div>
@@ -3566,8 +3573,10 @@
 
       const _thumbCrop = postItem.dataset.thumbCrop || 'cover';
       const _smartMs = postItem.dataset.smartMs || '';
+      const _fillZoom = postItem.dataset.fillZoom || '';
       const thumbedLeadUrl = '/thumb?url=' + encodeURIComponent(leadImageUrl) + '&crop=' + encodeURIComponent(_thumbCrop)
-        + (_thumbCrop === 'smart' && _smartMs ? '&ms=' + encodeURIComponent(_smartMs) : '');
+        + (_thumbCrop === 'smart' && _smartMs ? '&ms=' + encodeURIComponent(_smartMs) : '')
+        + (_thumbCrop !== 'smart' && _thumbCrop !== 'contain' && _fillZoom && parseFloat(_fillZoom) !== 1.0 ? '&fz=' + encodeURIComponent(_fillZoom) : '');
       if (existingImage instanceof HTMLImageElement) {
         if (existingImage.getAttribute('src') !== thumbedLeadUrl) {
           const prevSrc = existingImage.getAttribute('src');
@@ -4055,6 +4064,11 @@
             smartMsInput.dataset.feedUrl = feedUrl;
             smartMsInput.value = data.smart_min_scale != null ? String(data.smart_min_scale) : '';
           }
+          const fillZoomInput = document.getElementById('feed-prop-fill-zoom');
+          if (fillZoomInput) {
+            fillZoomInput.dataset.feedUrl = feedUrl;
+            fillZoomInput.value = data.fill_zoom != null ? String(data.fill_zoom) : '';
+          }
 
           const _showThumb = data.show_lead_image_as_thumb !== false;
           if (activeEntryId) {
@@ -4147,6 +4161,14 @@
         return u.pathname + u.search;
       } catch (_) { return src; }
     }
+    function setThumbFzParam(src, fz) {
+      try {
+        const u = new URL(src, location.origin);
+        if (fz && parseFloat(fz) !== 1.0) u.searchParams.set('fz', fz);
+        else u.searchParams.delete('fz');
+        return u.pathname + u.search;
+      } catch (_) { return src; }
+    }
     function parseCropValue(v) {
       if (!v || v === 'cover') return { mode: 'cover', pos: 'center' };
       if (v === 'left') return { mode: 'cover', pos: 'left' };  // backward compat
@@ -4173,6 +4195,8 @@
       if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
       const msSection = document.getElementById('feed-prop-smart-ms-section');
       if (msSection) msSection.style.display = mode === 'smart' ? '' : 'none';
+      const fzSection = document.getElementById('feed-prop-fill-zoom-section');
+      if (fzSection) fzSection.style.display = mode === 'cover' ? '' : 'none';
     }
     function applyCropToThumbnails(feedUrl, cropVal) {
       const previewTile = document.getElementById('feed-prop-thumb-preview-tile');
@@ -4231,7 +4255,8 @@
         if (previewUrl) {
           const _crop = getActiveCropValue();
           const _ms = _crop === 'smart' ? (document.getElementById('feed-prop-smart-min-scale')?.value?.trim() || '') : '';
-          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}&crop=${encodeURIComponent(_crop)}` + (_ms ? `&ms=${encodeURIComponent(_ms)}` : '');
+          const _fz = (_crop !== 'smart' && _crop !== 'contain') ? (document.getElementById('feed-prop-fill-zoom')?.value?.trim() || '') : '';
+          previewImg.src = `/thumb?url=${encodeURIComponent(previewUrl)}&crop=${encodeURIComponent(_crop)}` + (_ms ? `&ms=${encodeURIComponent(_ms)}` : '') + (_fz && parseFloat(_fz) !== 1.0 ? `&fz=${encodeURIComponent(_fz)}` : '');
           preview.style.display = '';
           // Apply current crop to preview tile
           if (previewTile) {
@@ -4740,6 +4765,8 @@
         if (posSection) posSection.style.opacity = mode === 'cover' ? '' : '0.4';
         const msSection = document.getElementById('feed-prop-smart-ms-section');
         if (msSection) msSection.style.display = mode === 'smart' ? '' : 'none';
+        const fzSection = document.getElementById('feed-prop-fill-zoom-section');
+        if (fzSection) fzSection.style.display = mode === 'cover' ? '' : 'none';
         applyCropToThumbnails(feedUrl, cropVal);
         try { await fetch('/feeds/thumb-crop', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, crop: cropVal }), credentials: 'same-origin' }); } catch (_e) {}
       });
@@ -4768,6 +4795,33 @@
         if ((postItem.dataset.thumbCrop || 'cover') !== 'smart') return;
         const img = postItem.querySelector('.post-thumbnail-image');
         if (img instanceof HTMLImageElement && img.src) img.src = setThumbMsParam(img.src, ms);
+      });
+    });
+
+    document.getElementById('feed-prop-fill-zoom')?.addEventListener('change', async () => {
+      const input = document.getElementById('feed-prop-fill-zoom');
+      const feedUrl = input?.dataset.feedUrl;
+      if (!feedUrl) return;
+      let fz = input.value.trim();
+      if (fz) {
+        const parsed = parseFloat(fz);
+        if (Number.isNaN(parsed)) { input.value = ''; fz = ''; }
+        else { fz = String(Math.min(2.0, Math.max(0.5, parsed))); input.value = fz; }
+      }
+      try {
+        await fetch('/feeds/fill-zoom', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, zoom: fz }), credentials: 'same-origin' });
+      } catch (_e) { return; }
+      // Re-render this feed's fill-cropped thumbnails with the new zoom.
+      const previewImg = document.getElementById('feed-prop-thumb-preview-img');
+      if (previewImg instanceof HTMLImageElement && previewImg.src) {
+        previewImg.src = setThumbFzParam(previewImg.src, fz);
+      }
+      document.querySelectorAll(`.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"]`).forEach(postItem => {
+        postItem.dataset.fillZoom = fz;
+        const crop = postItem.dataset.thumbCrop || 'cover';
+        if (crop === 'smart' || crop === 'contain') return;
+        const img = postItem.querySelector('.post-thumbnail-image');
+        if (img instanceof HTMLImageElement && img.src) img.src = setThumbFzParam(img.src, fz);
       });
     });
 

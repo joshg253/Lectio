@@ -1603,6 +1603,11 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN smart_min_scale REAL")
         except Exception:
             pass
+        try:
+            # Per-feed Fill zoom multiplier (NULL = default 1.0); applies to cover crop modes.
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN fill_zoom REAL")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS websub_subscriptions (
@@ -1760,7 +1765,7 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None}
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -1829,6 +1834,18 @@ def upsert_feed_smart_min_scale(conn: sqlite3.Connection, feed_url: str, min_sca
     )
     conn.execute(
         "UPDATE feed_display_prefs SET smart_min_scale = ? WHERE feed_url = ?",
+        (value, feed_url),
+    )
+
+
+def upsert_feed_fill_zoom(conn: sqlite3.Connection, feed_url: str, zoom: float | None) -> None:
+    value = min(2.0, max(0.5, zoom)) if zoom is not None else None
+    conn.execute(
+        "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
+        (feed_url,),
+    )
+    conn.execute(
+        "UPDATE feed_display_prefs SET fill_zoom = ? WHERE feed_url = ?",
         (value, feed_url),
     )
 
@@ -4367,6 +4384,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
             "smart_min_scale": float(_disp["smart_min_scale"]) if _disp.get("smart_min_scale") is not None else None,
+            "fill_zoom": float(_disp["fill_zoom"]) if _disp.get("fill_zoom") is not None else None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -5811,12 +5829,14 @@ def list_entries_for_feeds(
         _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, str(getattr(entry, "id", "") or ""))
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         _smart_ms = _feed_prefs.get("smart_min_scale")
+        _fill_zm = _feed_prefs.get("fill_zoom")
         rec.update(
             {
                 "thumbnail_url": _thumb,
                 "show_thumbnail": _show_thumb,
                 "thumb_crop": _thumb_crop,
                 "smart_min_scale": float(_smart_ms) if _smart_ms is not None else None,
+                "fill_zoom": float(_fill_zm) if _fill_zm is not None else None,
                 "thumb_strategy": _thumb_strategy or "",
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
@@ -8394,7 +8414,7 @@ _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
 
 
 @app.get("/thumb")
-def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default="")) -> Response:
+def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
@@ -8413,9 +8433,22 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     except (ValueError, TypeError):
         _smart_min_scale = 0.9
 
+    # Per-feed Fill zoom multiplier arrives as the `fz` query param (clamped 0.5–2.0,
+    # default 1.0). Values < 1.0 show more of the image with black letterbox bars;
+    # values > 1.0 crop more aggressively than the default tight fill.
+    try:
+        _fill_zoom = min(2.0, max(0.5, float(fz or "1.0")))
+    except (ValueError, TypeError):
+        _fill_zoom = 1.0
+
     # "smart.2" busts old center-crop smart-mode entries when switching to content-aware crop.
-    # Include min_scale in the smart cache key so changing it busts stale thumbnails.
-    _crop_cache_key = f"smart.2_m{_smart_min_scale:.2f}" if crop == "smart" else crop
+    # Include min_scale / fill_zoom in the cache key so changing either busts stale thumbnails.
+    if crop == "smart":
+        _crop_cache_key = f"smart.2_m{_smart_min_scale:.2f}"
+    elif crop in _THUMB_COVER_POS or crop == "cover":
+        _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}"
+    else:
+        _crop_cache_key = crop
     cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}".encode()).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
@@ -8520,16 +8553,25 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                                  left + min(new_w, _THUMB_W),
                                  top  + min(new_h, _THUMB_H)))
         else:
-            scale = max(_THUMB_W / iw, _THUMB_H / ih)
+            scale = max(_THUMB_W / iw, _THUMB_H / ih) * _fill_zoom
             new_w = max(1, round(iw * scale))
             new_h = max(1, round(ih * scale))
             img = img.resize((new_w, new_h), _PILImage.LANCZOS)
-            h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
-            ex = max(0, new_w - _THUMB_W)
-            ey = max(0, new_h - _THUMB_H)
-            left = round(ex * h_frac)
-            top = round(ey * v_frac)
-            img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
+            if new_w >= _THUMB_W and new_h >= _THUMB_H:
+                # Zoom ≥ 1.0: image fills frame — crop with anchor position.
+                h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
+                ex = max(0, new_w - _THUMB_W)
+                ey = max(0, new_h - _THUMB_H)
+                left = round(ex * h_frac)
+                top = round(ey * v_frac)
+                img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
+            else:
+                # Zoom < 1.0: image smaller than frame — paste centered on black canvas.
+                canvas = _PILImage.new("RGB", (_THUMB_W, _THUMB_H), (0, 0, 0))
+                paste_left = (_THUMB_W - new_w) // 2
+                paste_top = (_THUMB_H - new_h) // 2
+                canvas.paste(img, (paste_left, paste_top))
+                img = canvas
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85, optimize=True)
         jpeg_bytes = buf.getvalue()
@@ -9117,23 +9159,33 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
         pass
     # Re-fetch images for recent entries using the new strategy.  Bypass the
     # chunk-backfill semaphore so this isn't silently dropped if another
-    # backfill is in flight.  _do_backfill_entry_list already skips entries
-    # that are in cache (none are — we just cleared) and respects strategy
-    # (source-fetches for og_scrape, skips for inline/none).
+    # backfill is in flight.
     if strategy not in ("auto", "none"):
         def _refetch(furl: str) -> None:
             try:
                 with get_reader() as reader:
                     entries = list(reader.get_entries(feed=furl, limit=50))
-                posts = [
-                    {
-                        "feed_url": str(getattr(e, "feed_url", "") or ""),
-                        "id": str(getattr(e, "id", "") or ""),
-                        "link": str(getattr(e, "link", "") or ""),
-                    }
-                    for e in entries
-                ]
-                lead_image_service._do_backfill_entry_list(posts)
+                if strategy in ("inline", "artwork"):
+                    # _do_backfill_entry_list skips inline/artwork (no source-page
+                    # fetches needed), so run inline extraction directly using full
+                    # Entry objects which carry the feed content.
+                    for entry in entries:
+                        furl_str = str(getattr(entry, "feed_url", "") or "")
+                        eid = str(getattr(entry, "id", "") or "")
+                        if not furl_str or not eid:
+                            continue
+                        url = lead_image_service.extract_entry_thumbnail_url(entry)
+                        lead_image_service.store_entry_lead_image(furl_str, eid, url)
+                else:
+                    posts = [
+                        {
+                            "feed_url": str(getattr(e, "feed_url", "") or ""),
+                            "id": str(getattr(e, "id", "") or ""),
+                            "link": str(getattr(e, "link", "") or ""),
+                        }
+                        for e in entries
+                    ]
+                    lead_image_service._do_backfill_entry_list(posts)
             except Exception:
                 pass
         threading.Thread(target=_refetch, args=(feed_url,), daemon=True).start()
@@ -9193,6 +9245,22 @@ def set_feed_smart_min_scale_route(
             return JSONResponse({"error": "invalid min_scale"}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_smart_min_scale(conn, feed_url, parsed)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/feeds/fill-zoom")
+def set_feed_fill_zoom_route(
+    feed_url: str = Form(...),
+    zoom: str = Form(default=""),  # empty → clear back to default 1.0
+):
+    parsed: float | None = None
+    if zoom.strip():
+        try:
+            parsed = float(zoom)
+        except ValueError:
+            return JSONResponse({"error": "invalid zoom"}, status_code=400)
+    with get_meta_connection() as conn:
+        upsert_feed_fill_zoom(conn, feed_url, parsed)
     return JSONResponse({"ok": True})
 
 
