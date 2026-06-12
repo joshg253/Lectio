@@ -1372,6 +1372,10 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE entry_lead_images ADD COLUMN thumb_crop TEXT")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE feed_strategy_cache ADD COLUMN image_alt TEXT")
         except Exception:
             pass
@@ -5777,9 +5781,11 @@ def list_entries_for_feeds(
                 str(getattr(entry, "link", "") or ""),
             )
         _thumb = _raw_thumb if _show_thumb else None
-        _thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
-        if _thumb_crop not in _VALID_THUMB_CROPS:
-            _thumb_crop = "cover"
+        _feed_thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
+        if _feed_thumb_crop not in _VALID_THUMB_CROPS:
+            _feed_thumb_crop = "cover"
+        _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, str(getattr(entry, "id", "") or ""))
+        _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
         rec.update(
             {
                 "thumbnail_url": _thumb,
@@ -6740,6 +6746,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url),
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
+            "thumb_crop_override": lead_image_service.get_entry_thumb_crop(str(entry.feed_url), str(entry.id)),
+            "feed_thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
@@ -7573,6 +7581,18 @@ def entry_lead_image_status(feed_url: str, entry_id: str):
     if in_progress:
         return JSONResponse({"status": "pending", "url": None})
     return JSONResponse({"status": "none", "url": None})
+
+
+@app.post("/entries/thumb-crop")
+def set_entry_thumb_crop_route(
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+    crop: str = Form(default=""),
+):
+    """Save (or clear) a per-entry thumbnail crop override."""
+    effective = crop.strip() if crop.strip() in _VALID_THUMB_CROPS else None
+    lead_image_service.store_entry_thumb_crop(feed_url, entry_id, effective)
+    return JSONResponse({"ok": True, "crop": effective})
 
 
 @app.get("/entries/readability")

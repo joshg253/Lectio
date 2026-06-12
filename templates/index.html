@@ -5345,6 +5345,68 @@
         }
         schedulePoll();
       }
+
+      // Per-entry thumbnail crop strip
+      const cropStrip = document.querySelector('.entry-thumb-crop-strip');
+      if (cropStrip && !cropStrip.dataset.bound) {
+        cropStrip.dataset.bound = '1';
+        const feedUrl = cropStrip.dataset.feedUrl || '';
+        const entryId = cropStrip.dataset.entryId || '';
+
+        function applyEntryCropActive(crop) {
+          cropStrip.querySelectorAll('.feed-prop-crop-pos-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.crop === crop);
+          });
+          cropStrip.querySelectorAll('.entry-thumb-crop-mode-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.crop === crop);
+          });
+          const resetBtn = cropStrip.querySelector('.entry-thumb-crop-reset');
+          if (resetBtn) resetBtn.classList.toggle('active', !crop);
+        }
+
+        function refreshListThumb(effectiveCrop) {
+          const postItem = document.querySelector(
+            `.post-item[data-post-feed-url="${CSS.escape(feedUrl)}"][data-post-entry-id="${CSS.escape(entryId)}"]`
+          );
+          if (!postItem) return;
+          postItem.dataset.thumbCrop = effectiveCrop;
+          const thumbnail = postItem.querySelector('.post-thumbnail');
+          const thumbImg = postItem.querySelector('.post-thumbnail-image');
+          const leadUrl = document.querySelector('.entry-pane-title')?.getAttribute('data-post-lead-image-url') || '';
+          if (!thumbImg || !leadUrl) return;
+          const newUrl = '/thumb?url=' + encodeURIComponent(leadUrl) + '&crop=' + encodeURIComponent(effectiveCrop);
+          thumbImg.setAttribute('src', newUrl);
+          if (thumbnail) {
+            // Update blurred backdrop class and background
+            thumbnail.className = thumbnail.className.replace(/\bcrop-\S+/g, '').trim() + ' crop-' + effectiveCrop;
+            if (effectiveCrop === 'smart') {
+              thumbnail.style.backgroundImage = "url('" + setThumbCropParam(newUrl, 'cover') + "')";
+            } else if (effectiveCrop === 'contain') {
+              thumbnail.style.backgroundImage = "url('" + setThumbCropParam(newUrl, 'cover') + "')";
+            } else {
+              thumbnail.style.backgroundImage = '';
+            }
+          }
+        }
+
+        // Set initial active state
+        applyEntryCropActive(cropStrip.dataset.override || '');
+
+        cropStrip.querySelectorAll('.feed-prop-crop-pos-btn, .entry-thumb-crop-mode-btn, .entry-thumb-crop-reset').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const crop = btn.dataset.crop || '';
+            const feedDefault = cropStrip.dataset.feedDefault || 'cover';
+            cropStrip.dataset.override = crop;
+            applyEntryCropActive(crop);
+            const effectiveCrop = crop || feedDefault;
+            refreshListThumb(effectiveCrop);
+            try {
+              const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, crop });
+              await fetch('/entries/thumb-crop', { method: 'POST', body, credentials: 'same-origin' });
+            } catch (_e) { /* best-effort */ }
+          });
+        });
+      }
     }
 
     bindEntryPaneInteractions();

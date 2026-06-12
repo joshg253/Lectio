@@ -189,6 +189,7 @@ class LeadImageService:
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._alt_cache: dict[tuple[str, str], str | None] = {}
         self._title_cache: dict[tuple[str, str], str | None] = {}
+        self._entry_crop_cache: dict[tuple[str, str], str] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
         # Semaphore ensures at most one chunk-backfill thread runs at a time;
@@ -324,7 +325,7 @@ class LeadImageService:
         """Load stored lead-image records into in-memory caches."""
         try:
             with self._get_meta_connection() as conn:
-                rows = conn.execute("SELECT feed_url, entry_id, image_url, image_alt, image_title, fetched_at FROM entry_lead_images").fetchall()
+                rows = conn.execute("SELECT * FROM entry_lead_images").fetchall()
             for row in rows:
                 url = row["image_url"]
                 key = (str(row["feed_url"]), str(row["entry_id"]))
@@ -345,6 +346,9 @@ class LeadImageService:
                 title = row["image_title"] if "image_title" in row.keys() else None
                 if title is not None:
                     self._title_cache[key] = str(title)
+                ec = row["thumb_crop"] if "thumb_crop" in row.keys() else None
+                if ec:
+                    self._entry_crop_cache[key] = str(ec)
                 try:
                     self._fetched_at_cache[key] = float(row["fetched_at"])
                 except Exception:
@@ -359,6 +363,26 @@ class LeadImageService:
     def get_entry_image_title(self, feed_url: str, entry_id: str) -> str | None:
         """Return the persisted raw title-attribute text for an entry's lead image, or None."""
         return self._title_cache.get((feed_url, entry_id))
+
+    def get_entry_thumb_crop(self, feed_url: str, entry_id: str) -> str | None:
+        """Return the per-entry thumbnail crop override, or None to use the feed default."""
+        return self._entry_crop_cache.get((feed_url, entry_id))
+
+    def store_entry_thumb_crop(self, feed_url: str, entry_id: str, crop: str | None) -> None:
+        """Persist (or clear) a per-entry thumbnail crop override."""
+        key = (feed_url, entry_id)
+        if crop:
+            self._entry_crop_cache[key] = crop
+        else:
+            self._entry_crop_cache.pop(key, None)
+        try:
+            with self._get_meta_connection() as conn:
+                conn.execute(
+                    "UPDATE entry_lead_images SET thumb_crop = ? WHERE feed_url = ? AND entry_id = ?",
+                    (crop or None, feed_url, entry_id),
+                )
+        except Exception:
+            pass
 
     def store_entry_image_alt(
         self,
