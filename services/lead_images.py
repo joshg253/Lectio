@@ -211,6 +211,9 @@ class LeadImageService:
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
         self._SOURCE_HTML_CACHE_MAX = 8
+        # Events signalled when queue_source_html_fetch completes; lets the first-open entry
+        # render wait briefly for caption text rather than deferring to the next open.
+        self._source_html_fetch_events: dict[str, threading.Event] = {}
 
     # ------------------------------------------------------------------
     # Feed lead-image strategy helpers
@@ -2204,6 +2207,8 @@ class LeadImageService:
         if html_key in self._source_fetch_in_progress:
             return
         self._source_fetch_in_progress.add(html_key)
+        event = threading.Event()
+        self._source_html_fetch_events[entry_link] = event
 
         def _bg() -> None:
             try:
@@ -2223,8 +2228,21 @@ class LeadImageService:
                 pass
             finally:
                 self._source_fetch_in_progress.discard(html_key)
+                event.set()
+                self._source_html_fetch_events.pop(entry_link, None)
 
         threading.Thread(target=_bg, daemon=True).start()
+
+    def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 3.0) -> bool:
+        """Block until the in-flight queue_source_html_fetch for this entry finishes (or timeout).
+
+        Returns True if the fetch completed within the timeout, False otherwise.
+        If no fetch is in progress, returns True immediately.
+        """
+        event = self._source_html_fetch_events.get(entry_link)
+        if event is None:
+            return True
+        return event.wait(timeout=timeout)
 
     def test_entry_strategies(self, entry: object) -> list[dict]:
         """Test each lead-image strategy against a single entry in isolation.

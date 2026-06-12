@@ -1764,6 +1764,12 @@ _VALID_THUMB_CROPS = frozenset({
 })
 _VALID_THUMB_STRATEGIES = frozenset({"inline"})
 
+# Caption text that is purely a date (e.g. "June 12, 2026" or "6/12/2026") — strip it.
+_DATE_ONLY_CAP_RE = re.compile(
+    r"^\s*(?:\w+ \d{1,2},?\s*\d{4}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2})\s*$",
+    re.IGNORECASE,
+)
+
 
 def get_feed_display_prefs(conn: sqlite3.Connection, feed_url: str) -> dict:
     row = conn.execute("SELECT * FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
@@ -6599,6 +6605,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     entry_id=str(entry.id),
                     lead_image_url=lead_image_url,
                 )
+                lead_image_service.wait_for_source_html_fetch(entry.link, 3.0)
+                if entry.link in lead_image_service._source_html_cache:
+                    _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url)
+                    _fa = (re.sub(r"<[^>]+>", "", _fa).strip() or None) if _fa else None
+                    _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
+                    if _fa or _ft:
+                        image_title_text = _ft or _fa
 
         # Drop trivially generic alt texts that add no information (e.g. Bootstrap
         # class names used as alt values, single-word placeholders, or navigation
@@ -6610,14 +6623,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
             image_title_text = None
 
-        # Drop captions that merely restate the article title — not useful as a photo
-        # caption and would clutter the reading experience (e.g. WordPress/Blogger hero
-        # images whose alt= is auto-populated with the post title).
+        # Drop date-only captions (e.g. "June 12, 2026") — pure dates carry no comic/article content.
+        if image_title_text and _DATE_ONLY_CAP_RE.match(image_title_text):
+            image_title_text = None
+
+        # Drop captions that merely restate the article title (or a tail portion of it) — not
+        # useful as a photo caption (e.g. WordPress hero images, comic alt=page-title suffix).
         if image_title_text and entry.title:
             _norm_cap = " ".join(re.sub(r"<[^>]+>", "", image_title_text).split()).lower()
             _norm_etitle = " ".join(html.unescape(str(entry.title)).split()).lower()
-            if _norm_etitle and (_norm_cap == _norm_etitle or
-                                  (len(_norm_etitle) > 20 and _norm_etitle in _norm_cap)):
+            if _norm_etitle and (
+                _norm_cap == _norm_etitle
+                or (len(_norm_etitle) > 20 and _norm_etitle in _norm_cap)
+                or (len(_norm_cap) >= 8 and _norm_etitle.endswith(_norm_cap))
+            ):
                 image_title_text = None
 
         # Inject image_title_text as alt attribute on the first <img> in content_html
@@ -8369,8 +8388,16 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -
     if crop not in _THUMB_COVER_POS and crop not in ("contain", "smart"):
         crop = "cover"
 
+    # Read global SmartCrop min_scale setting (clamped 0.5–1.0, default 0.9).
+    _smart_ms_raw = get_cached_setting("smart_min_scale")
+    try:
+        _smart_min_scale = min(1.0, max(0.5, float(_smart_ms_raw or "0.9")))
+    except (ValueError, TypeError):
+        _smart_min_scale = 0.9
+
     # "smart.2" busts old center-crop smart-mode entries when switching to content-aware crop.
-    _crop_cache_key = "smart.2" if crop == "smart" else crop
+    # Include min_scale in the smart cache key so changing it busts stale thumbnails.
+    _crop_cache_key = f"smart.2_m{_smart_min_scale:.2f}" if crop == "smart" else crop
     cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}".encode()).hexdigest()
     cached_headers = {"Cache-Control": "public, max-age=604800, immutable"}
 
@@ -8434,7 +8461,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover")) -
                     if _sc_scale < 1.0
                     else img
                 )
-                _sc_res = _sc_mod.SmartCrop().crop(_sc_img, _THUMB_W, _THUMB_H)
+                _sc_res = _sc_mod.SmartCrop().crop(_sc_img, _THUMB_W, _THUMB_H, min_scale=_smart_min_scale)
                 _c = _sc_res["top_crop"]
                 # Convert crop coords back to original image space then crop.
                 _x1 = max(0, round(_c["x"] / _sc_scale))
@@ -9497,6 +9524,7 @@ def get_all_settings():
         "instapaper_password_masked": _masked(instapaper_pw),
         "contacts": contacts,
         "email_to_default": email_to_default,
+        "smart_min_scale": get_runtime_setting("smart_min_scale", "0.9"),
     })
 
 
@@ -9514,6 +9542,7 @@ async def save_all_settings(request: Request):
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         "email_contacts", EMAIL_TO_SETTING_KEY,
+        "smart_min_scale",
     }
 
     import json as _json
@@ -9546,6 +9575,13 @@ async def save_all_settings(request: Request):
             # Don't overwrite a real secret with the masked placeholder
             if key in _SENSITIVE and str_val.startswith("••"):
                 continue
+            # Clamp smart_min_scale to the valid 0.5–1.0 range.
+            if key == "smart_min_scale" and str_val:
+                try:
+                    clamped = min(1.0, max(0.5, float(str_val)))
+                    str_val = f"{clamped:.2f}"
+                except (ValueError, TypeError):
+                    str_val = "0.90"
             if str_val:
                 set_setting(conn, key, str_val)
             else:
