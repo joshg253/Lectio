@@ -8562,7 +8562,8 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     if crop == "smart":
         _crop_cache_key = f"smart.2_m{_smart_min_scale:.2f}"
     elif crop in _THUMB_COVER_POS or crop == "cover":
-        _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}"
+        # "_p2" suffix busts entries cached before position-aware paste (zoom < 1 fix).
+        _crop_cache_key = f"{crop}_z{_fill_zoom:.2f}" + ("_p2" if _fill_zoom < 1.0 else "")
     else:
         _crop_cache_key = crop
     cache_key = hashlib.sha256(f"{url}|{_THUMB_W}|{_THUMB_H}|{_crop_cache_key}".encode()).hexdigest()
