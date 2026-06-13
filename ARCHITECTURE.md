@@ -47,7 +47,72 @@ The priority is fast triage, not always showing three panes.
 
 ## Deployment path
 
-Current target is local-first single-user. Later phases may add basic auth behind a reverse proxy for VPS deployment. Keep auth non-invasive so that path does not require a rewrite.
+Current target is local-first single-user, with optional login auth behind a reverse proxy for VPS deployment. The next phase is multi-user (see "Multi-user tenancy"), introduced as a storage-layer strategy so the single-user path stays the zero-config default and the route layer does not require a rewrite.
+
+## Multi-user tenancy
+
+Lectio is single-user today. Multi-user is introduced as a **storage-layer
+strategy behind a resolver**, so the UI/API and service layers never learn which
+tenancy mode is active. Two modes, one interface:
+
+```
+get_current_user(request) -> user_id        # auth layer, resolved once per request
+tenancy.reader_db_for(user_id)              # storage layer
+tenancy.meta_db_for(user_id)
+```
+
+- **isolated** (shipping first): each user gets their own reader + meta +
+  starred-archive DB under `DATA_DIR/users/{user_id}/`. Reader-native (no fight
+  with the single-tenant `reader` storage model), strongest isolation, trivial
+  cost at small scale. The global `get_reader()` / `get_meta_connection()`
+  singletons become per-user resolutions backed by an LRU connection pool keyed
+  by `user_id` (one user reproduces today's behavior exactly).
+- **shared-content** (deferred): one global feed/entry store plus per-user
+  overlays for read/star/folders/subscriptions. Biggest caching/refresh win
+  (single fetch per feed serves all subscribers) but only worth building at real
+  scale. Because routes/services go through the resolver, switching modes is a
+  storage swap, not a route rewrite.
+
+Implementation status: the resolver and per-user connection pools exist
+(`services/tenancy.py`; `get_reader()` / `get_meta_connection()` /
+`get_starred_archive_connection()` in main.py resolve through it). The current
+user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`, so nothing
+sets a non-default user yet — auth wiring, a users table, per-user API tokens,
+and the data migration are the remaining phases (see Plan.md).
+
+### What stays global in every mode
+
+Content-addressed caches hold no per-user data and are shared across all users:
+
+- **`thumb_cache`** — keyed by `sha256(url|W|H|crop)`.
+- **`/api/img` proxy cache** — keyed by source URL.
+- **`entry_lead_images` / `feed_strategy_cache`** — derived from public pages,
+  keyed by feed + entry.
+
+This is safe today because **no authenticated/private feeds exist** — all feed
+and image content is publicly fetchable. If private feeds are added later, those
+feeds must be excluded from the global caches.
+
+### Security posture
+
+Multi-user makes these structural changes mandatory (not optional hardening):
+
+- **Per-user identity** — a users table with argon2/bcrypt hashing replaces the
+  single `LECTIO_USERNAME`/`PASSWORD` env credential, which is demoted to a
+  first-admin bootstrap seed. `session["authenticated"]` becomes
+  `session["user_id"]`.
+- **Per-user API tokens** — Fever/GReader cannot share one `LECTIO_FEVER_PASSWORD`
+  once there is more than one user; the protocols derive everything from it.
+- **Authorization** — every per-user route scopes by `user_id`. This is the
+  largest code surface, but the resolver localizes it to the storage seam.
+- **SSRF hardening** — `/api/img` and `/thumb` validate the resolved IP, then let
+  httpx re-resolve and follow redirects, leaving a DNS-rebind / redirect bypass
+  of the pre-check. Pin the validated IP for the connection and re-check each
+  redirect hop. Low-risk single-user; a real internal-probe vector once
+  untrusted users can add feeds and image URLs.
+
+Deferred behind hooks: per-user rate-limits/quotas on refresh, scraping, and
+thumb generation (not needed for a handful of trusted users).
 
 ## Extension strategy
 
@@ -174,4 +239,4 @@ Storage: `websub_subscriptions (feed_url TEXT PK, hub_url TEXT, secret TEXT, lea
 
 ## Security direction
 
-Keep the local-first path simple. Add auth only when exposing the app beyond trusted local use.
+Keep the local-first path simple. Add auth only when exposing the app beyond trusted local use. The multi-user phase makes per-user identity, per-user API tokens, route-level authorization, and SSRF hardening mandatory — see "Multi-user tenancy → Security posture".

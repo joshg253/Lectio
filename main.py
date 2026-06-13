@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import hashlib
 import html
 import io
@@ -44,6 +45,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from services import scraper_service
 from services import takeout_service
+from services import tenancy
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
@@ -170,6 +172,18 @@ READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
 THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
 STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
 THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
+
+# Bind the tenancy resolver. The DEFAULT_USER_ID resolves to these legacy paths,
+# so single-user behavior is unchanged and no migration is needed yet. The thumb
+# cache (THUMB_DB_PATH) is intentionally NOT routed through tenancy — it is a
+# content-addressed global cache shared across all users. See services/tenancy.py.
+tenancy.configure(
+    data_dir=DATA_DIR,
+    legacy_reader=READER_DB_PATH,
+    legacy_meta=META_DB_PATH,
+    legacy_starred=STARRED_ARCHIVE_DB_PATH,
+)
+
 ROOT_FOLDER_NAME = "All Feeds"
 _LECTIO_FOLDER_NAME = "_Lectio"
 
@@ -1100,7 +1114,11 @@ _meta_conn_local = threading.local()
 
 
 def get_meta_connection() -> sqlite3.Connection:
-    """Per-thread persistent SQLite connection.
+    """Per-(thread, user) persistent SQLite connection to the meta DB.
+
+    The target DB is resolved through the tenancy seam from the current user
+    (defaults to the single legacy user). Each worker thread keeps one
+    connection per user_id it has served.
 
     Opening a fresh connection per request was a measured bottleneck: simple
     SELECTs that take 5ms standalone took 2-3s under 8-way concurrency because
@@ -1113,10 +1131,15 @@ def get_meta_connection() -> sqlite3.Connection:
     `with get_meta_connection() as conn:` pattern continues to work and is
     transaction-scoped per call site, while the underlying connection persists.
     """
-    conn = getattr(_meta_conn_local, "conn", None)
+    uid = tenancy.current_user_id()
+    pool = getattr(_meta_conn_local, "pool", None)
+    if pool is None:
+        pool = {}
+        _meta_conn_local.pool = pool
+    conn = pool.get(uid)
     if conn is not None:
         return conn
-    conn = sqlite3.connect(str(META_DB_PATH), timeout=10.0)
+    conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=10.0)
     conn.row_factory = sqlite3.Row
     # WAL + busy_timeout so overlapping writers (e.g. background refresh writing
     # folder_feeds while a request persists a setting) wait briefly instead of
@@ -1126,7 +1149,7 @@ def get_meta_connection() -> sqlite3.Connection:
     # Keep WAL small: checkpoint at 200 pages (~800KB) rather than the default
     # 1000 pages so the file never balloons to tens of MB between restarts.
     conn.execute("PRAGMA wal_autocheckpoint=200")
-    _meta_conn_local.conn = conn
+    pool[uid] = conn
     return conn
 
 
@@ -1154,7 +1177,8 @@ def ensure_thumb_schema() -> None:
 
 
 def get_starred_archive_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(STARRED_ARCHIVE_DB_PATH))
+    # Per-user DB (resolved via tenancy); returns a fresh connection per call.
+    conn = sqlite3.connect(str(tenancy.starred_archive_db_path()))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -3863,8 +3887,14 @@ def _check_and_flush_batch_times() -> None:
         LOGGER.exception("[email-batch] error in _check_and_flush_batch_times")
 
 
-reader_api = ReaderApi(READER_DB_PATH)
 _reader_thread_local = threading.local()
+
+# Cap on distinct users' Reader handles kept open per worker thread. Reader open
+# is expensive, so we persist handles; but with many users a thread could
+# accumulate one connection per user, so we LRU-evict (and close) the least
+# recently used beyond this bound. Generous for the small-tenant target; a
+# handful of users never hit it.
+_READER_POOL_MAX_PER_THREAD = 8
 
 
 class _PersistentReaderProxy:
@@ -3890,11 +3920,34 @@ class _PersistentReaderProxy:
 
 
 def get_reader():
-    proxy = getattr(_reader_thread_local, "proxy", None)
+    """Per-(thread, user) persistent Reader, resolved via the tenancy seam.
+
+    The current user comes from :func:`tenancy.current_user_id` (defaults to the
+    single legacy user). Each worker thread keeps an LRU pool of Reader handles
+    keyed by user_id so cross-user requests on the same thread don't reopen, and
+    so one user's handle is never shared across threads (SQLite affinity)."""
+    uid = tenancy.current_user_id()
+    pool = getattr(_reader_thread_local, "pool", None)
+    if pool is None:
+        pool = collections.OrderedDict()
+        _reader_thread_local.pool = pool
+
+    proxy = pool.get(uid)
     if proxy is not None:
+        pool.move_to_end(uid)  # mark most-recently-used
         return proxy
-    proxy = _PersistentReaderProxy(reader_api.client())
-    _reader_thread_local.proxy = proxy
+
+    proxy = _PersistentReaderProxy(ReaderApi(tenancy.reader_db_path(uid)).client())
+    pool[uid] = proxy
+    # Evict + close the least-recently-used handles beyond the per-thread cap.
+    # Safe because the pool is thread-local and a thread serves one request at a
+    # time, so an evicted handle is never mid-use on another thread.
+    while len(pool) > _READER_POOL_MAX_PER_THREAD:
+        _evicted_uid, evicted = pool.popitem(last=False)
+        try:
+            evicted._reader.close()
+        except Exception:
+            LOGGER.debug("evicted reader close failed", exc_info=True)
     return proxy
 
 
