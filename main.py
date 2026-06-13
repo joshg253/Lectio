@@ -33,7 +33,7 @@ def _parse_month_first_pubdate(date_string: str):
 
 feedparser.registerDateHandler(_parse_month_first_pubdate)
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image as _PILImage
@@ -4847,6 +4847,19 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+def _find_entry_audio_url(entry) -> str | None:
+    """Return the first audio enclosure URL from an entry object, or None."""
+    for enc in (getattr(entry, "enclosures", None) or []):
+        enc_url = getattr(enc, "href", None) or getattr(enc, "url", None) or ""
+        enc_type = (getattr(enc, "type", None) or "").lower()
+        if enc_url and (
+            enc_type.startswith("audio/")
+            or any(enc_url.lower().endswith(ext) for ext in (".mp3", ".m4a", ".ogg", ".opus", ".wav"))
+        ):
+            return enc_url
+    return None
+
+
 def _transform_kg_audio_cards(content_html: str) -> str:
     """Replace Ghost CMS kg-audio-card widgets with plain <audio controls> elements.
 
@@ -6238,24 +6251,21 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Podcast audio player — inject <audio controls> for entries with an
         # audio enclosure when the content doesn't already have an <audio> tag.
-        _audio_url: str | None = None
-        for _enc in (getattr(entry, "enclosures", None) or []):
-            _enc_url = getattr(_enc, "href", None) or getattr(_enc, "url", None) or ""
-            _enc_type = (getattr(_enc, "type", None) or "").lower()
-            if _enc_url and (
-                _enc_type.startswith("audio/")
-                or any(_enc_url.lower().endswith(ext) for ext in (".mp3", ".m4a", ".ogg", ".opus", ".wav"))
-            ):
-                _audio_url = _enc_url
-                break
+        # Point the player at /entries/media/audio so signed URLs that have
+        # expired are automatically refreshed server-side before redirect.
+        _audio_url: str | None = _find_entry_audio_url(entry)
         if _audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
-            _safe_audio_url = html.escape(_audio_url, quote=True)
+            _safe_feed_url = quote_plus(feed_url)
+            _safe_entry_id = quote_plus(entry_id)
+            _media_play_url = f"/entries/media/audio?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
+            _media_dl_url = f"/entries/media/download?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
             _audio_player = (
                 f'<div class="podcast-player" style="margin:1em 0;">'
-                f'<audio controls style="width:100%">'
-                f'<source src="{_safe_audio_url}">'
-                f'Your browser does not support the audio element.'
-                f'</audio></div>'
+                f'<audio controls preload="metadata" style="width:100%" src="{_media_play_url}"></audio>'
+                f'<div style="margin-top:6px; font-size:0.85em;">'
+                f'<a href="{_media_dl_url}" download>Download audio</a>'
+                f'</div>'
+                f'</div>'
             )
             content_html = _audio_player + (content_html or "")
 
@@ -7638,6 +7648,110 @@ def entry_lead_image_status(feed_url: str, entry_id: str):
     if in_progress:
         return JSONResponse({"status": "pending", "url": None})
     return JSONResponse({"status": "none", "url": None})
+
+
+@app.get("/entries/media/audio")
+def media_audio_redirect(feed_url: str, entry_id: str):
+    """Redirect to the entry's audio enclosure URL.
+
+    If the stored URL returns a non-2xx response (e.g. Patreon signed URLs
+    expire after ~24 h), the feed is refreshed once to obtain a fresh URL
+    before redirecting.
+    """
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        audio_url = _find_entry_audio_url(entry)
+        if not audio_url:
+            raise HTTPException(status_code=404, detail="No audio enclosure found")
+
+        # Quick validity check; refresh the feed if the URL is expired.
+        try:
+            head = httpx.head(
+                audio_url,
+                follow_redirects=True,
+                timeout=4.0,
+                headers={"User-Agent": READABILITY_USER_AGENT},
+            )
+            if head.status_code not in (200, 206):
+                try:
+                    feed_refresh_service.update_feeds([feed_url])
+                    fresh = reader.get_entry((feed_url, entry_id), None)
+                    if fresh:
+                        fresh_url = _find_entry_audio_url(fresh)
+                        if fresh_url:
+                            audio_url = fresh_url
+                except Exception:
+                    LOGGER.warning("Audio URL refresh failed for %s", feed_url, exc_info=True)
+        except Exception:
+            pass  # Network error on HEAD — try the stored URL anyway
+
+    return RedirectResponse(audio_url, status_code=302)
+
+
+@app.get("/entries/media/download")
+def media_audio_download(feed_url: str, entry_id: str):
+    """Proxy the entry's audio enclosure as an attachment download.
+
+    Handles expired signed URLs the same way as /entries/media/audio.
+    Uses a streaming proxy so the file is downloaded through the server,
+    which avoids cross-origin restrictions on the browser download attribute.
+    """
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        audio_url = _find_entry_audio_url(entry)
+        if not audio_url:
+            raise HTTPException(status_code=404, detail="No audio enclosure found")
+        entry_title = str(entry.title or "audio")
+
+        # Refresh if expired.
+        try:
+            head = httpx.head(
+                audio_url,
+                follow_redirects=True,
+                timeout=4.0,
+                headers={"User-Agent": READABILITY_USER_AGENT},
+            )
+            if head.status_code not in (200, 206):
+                try:
+                    feed_refresh_service.update_feeds([feed_url])
+                    fresh = reader.get_entry((feed_url, entry_id), None)
+                    if fresh:
+                        fresh_url = _find_entry_audio_url(fresh)
+                        if fresh_url:
+                            audio_url = fresh_url
+                except Exception:
+                    LOGGER.warning("Audio URL refresh failed for %s", feed_url, exc_info=True)
+        except Exception:
+            pass
+
+    # Derive a clean filename from the URL path, falling back to entry title.
+    parsed_path = urlparse(audio_url).path.rstrip("/").split("/")[-1]
+    if parsed_path and "." in parsed_path:
+        filename = re.sub(r"[^\w.\-]", "_", parsed_path)
+    else:
+        safe_title = re.sub(r"[^\w\- ]", "", entry_title).strip()[:80] or "audio"
+        filename = safe_title.replace(" ", "_") + ".mp3"
+
+    def _stream():
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+            headers={"User-Agent": READABILITY_USER_AGENT},
+        ) as client:
+            with client.stream("GET", audio_url) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_bytes(chunk_size=65536):
+                    yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/entries/thumb-crop")
