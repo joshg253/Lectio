@@ -98,8 +98,9 @@ user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`.
 
 Remaining (see Plan.md): per-user API tokens for the Fever/GReader protocols
 (they currently run as the default user — a background pre-sync thread reads the
-legacy DBs), per-user background refresh, account-management UI, SSRF hardening,
-and the data migration of the existing single-user DBs into a user.
+legacy DBs), per-user background refresh, account-management UI, and the data
+migration of the existing single-user DBs into a user. (SSRF hardening of the
+`/api/img` and `/thumb` proxies has landed — see "Security posture".)
 
 ### What stays global in every mode
 
@@ -126,11 +127,13 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   once there is more than one user; the protocols derive everything from it.
 - **Authorization** — every per-user route scopes by `user_id`. This is the
   largest code surface, but the resolver localizes it to the storage seam.
-- **SSRF hardening** — `/api/img` and `/thumb` validate the resolved IP, then let
-  httpx re-resolve and follow redirects, leaving a DNS-rebind / redirect bypass
-  of the pre-check. Pin the validated IP for the connection and re-check each
-  redirect hop. Low-risk single-user; a real internal-probe vector once
-  untrusted users can add feeds and image URLs.
+- **SSRF hardening** — `url_guard.safe_get` / `safe_get_async` follow redirects
+  manually and re-validate every hop against private/loopback/link-local space.
+  `/api/img` (auth-exempt) and `/thumb` use them with `follow_redirects=False`,
+  closing the redirect-to-internal bypass. Still open: service-layer fetches
+  (lead-image / scraper / source-proxy) that pass `follow_redirects=True` should
+  adopt the same helpers; and full DNS-rebind closure needs connection IP-pinning
+  (the validate→connect window is now small but nonzero).
 
 Deferred behind hooks: per-user rate-limits/quotas on refresh, scraping, and
 thumb generation (not needed for a handful of trusted users).

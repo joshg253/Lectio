@@ -48,9 +48,16 @@ Phasing:
    multi mode, their background pre-sync runs as the default user (reads the
    legacy DBs). Each user needs their own token + per-user routing for these
    protocols. Until then, the Fever/GReader APIs are effectively single-user.
-4. **SSRF hardening** — pin the validated IP for the actual connection and
-   re-check each redirect hop in `/api/img` and `/thumb` (DNS-rebind / redirect
-   bypass of the pre-check). Independent; can land anytime.
+4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
+   `url_guard.safe_get` / `safe_get_async` follow redirects manually and
+   re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
+   and `/thumb` now use them with `follow_redirects=False`, closing the
+   redirect-to-internal bypass. 18 new tests. Remaining hardening: (a) the
+   service-layer fetches that still pass `follow_redirects=True` (lead-image /
+   scraper / source-proxy in main.py + services) should adopt the same helpers;
+   (b) full DNS-rebind closure needs connection IP-pinning (the validate→connect
+   TOCTOU window is now small but nonzero) — deferred as lower-priority for the
+   trusted-user threat model.
 5. **Data migration** — move existing single-user DBs into the per-user layout
    (`DATA_DIR/users/{uid}/…`); keep global caches where they are. Always back up
    first (`scripts/backup_databases.py`). Note: in multi mode the default/legacy

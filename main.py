@@ -47,6 +47,7 @@ from services import passwords
 from services import scraper_service
 from services import takeout_service
 from services import tenancy
+from services import url_guard
 from services.users import UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
@@ -8793,14 +8794,18 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             return Response(content=jpeg_bytes, media_type="image/jpeg", headers=cached_headers)
 
     try:
-        with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            resp = client.get(url)
+        # follow_redirects=False so url_guard.safe_get validates every hop
+        # (SSRF: a public thumbnail URL must not redirect to an internal target).
+        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
             if resp.status_code in (404, 410):
                 # Image is permanently gone — null it out so it isn't re-attempted
                 lead_image_service.invalidate_image_url(url)
             resp.raise_for_status()
             raw = resp.content
             src_content_type = resp.headers.get("content-type", "")
+    except url_guard.UnsafeURLError:
+        return Response(status_code=403)
     except Exception:
         return Response(status_code=502)
 
@@ -11482,40 +11487,32 @@ async def api_img_proxy(u: str) -> Response:
     Fetches external images on behalf of the browser so that
     Cross-Origin-Resource-Policy restrictions (same-site / same-origin) set by
     the image server do not prevent them from loading in the entry pane.
-    Only http:// and https:// URLs are accepted; private / loopback addresses
-    are blocked to prevent SSRF.
+    Only http:// and https:// URLs are accepted. SSRF is prevented by
+    url_guard.safe_get_async, which validates the initial URL and every redirect
+    hop against private / loopback / link-local IP space.
     """
-    import ipaddress
-    import socket as _socket
-    parsed = urlparse(u)
-    if parsed.scheme not in ("http", "https"):
-        return Response(status_code=400)
-    host = parsed.hostname or ""
-    try:
-        addr_infos = _socket.getaddrinfo(host, None, type=_socket.SOCK_STREAM)
-        for _fam, _typ, _proto, _can, _sockaddr in addr_infos:
-            ip = ipaddress.ip_address(_sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
-                return Response(status_code=403)
-    except Exception:
+    if urlparse(u).scheme not in ("http", "https"):
         return Response(status_code=400)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
-            resp = await client.get(
-                u,
-                headers={"User-Agent": READABILITY_USER_AGENT},
+        # follow_redirects=False so safe_get_async controls (and re-validates)
+        # each hop instead of httpx silently bouncing to an internal address.
+        async with httpx.AsyncClient(follow_redirects=False, timeout=12.0) as client:
+            resp = await url_guard.safe_get_async(
+                client, u, headers={"User-Agent": READABILITY_USER_AGENT}
             )
-            content_type = resp.headers.get("content-type", "")
-            if not content_type.startswith("image/"):
-                return Response(status_code=422)
-            cache_ctrl = resp.headers.get("cache-control", "public, max-age=86400")
-            return Response(
-                content=resp.content,
-                media_type=content_type,
-                headers={"Cache-Control": cache_ctrl},
-            )
+    except url_guard.UnsafeURLError:
+        return Response(status_code=403)
     except Exception:
         return Response(status_code=502)
+    content_type = resp.headers.get("content-type", "")
+    if not content_type.startswith("image/"):
+        return Response(status_code=422)
+    cache_ctrl = resp.headers.get("cache-control", "public, max-age=86400")
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={"Cache-Control": cache_ctrl},
+    )
 
 
 @app.get("/healthz")

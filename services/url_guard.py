@@ -25,6 +25,16 @@ import os
 import socket
 from urllib.parse import urlparse
 
+import httpx
+
+# Max redirect hops to follow when fetching an externally-influenced URL. Each
+# hop is re-validated, so this just bounds work / loops.
+DEFAULT_MAX_REDIRECTS = 5
+
+
+class UnsafeURLError(Exception):
+    """Raised when a fetch target (initial URL or a redirect hop) is unsafe."""
+
 
 def _debug_bypass_enabled() -> bool:
     return os.getenv("LECTIO_DEBUG", "0") == "1"
@@ -109,3 +119,67 @@ def is_safe_outbound_url(url: str) -> bool:
         has_public = True
     # Require at least one confirmed public address (guards against all-private results).
     return has_public
+
+
+def _redirect_target(resp: httpx.Response) -> str | None:
+    """Absolute URL of a redirect response's Location, or None."""
+    loc = resp.headers.get("location")
+    if not loc:
+        return None
+    # Resolve relative redirects against the responding request's URL.
+    return str(resp.url.join(loc))
+
+
+def safe_get(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict | None = None,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+) -> httpx.Response:
+    """SSRF-safe sync GET that validates the initial URL AND every redirect hop.
+
+    ``client`` MUST be created with ``follow_redirects=False`` so this function
+    controls redirect handling. Each hop is checked with
+    :func:`is_safe_outbound_url` before the request is made, closing the gap
+    where httpx's automatic redirect following would bounce a public URL to an
+    internal address after the pre-check passed. Raises :class:`UnsafeURLError`
+    for an unsafe hop or too many redirects.
+    """
+    current = url
+    for _ in range(max_redirects + 1):
+        if not is_safe_outbound_url(current):
+            raise UnsafeURLError(current)
+        resp = client.get(current, headers=headers)
+        if resp.is_redirect:
+            nxt = _redirect_target(resp)
+            if nxt is None:
+                return resp  # 3xx without Location — hand back as-is
+            current = nxt
+            continue
+        return resp
+    raise UnsafeURLError(f"too many redirects starting from {url!r}")
+
+
+async def safe_get_async(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    headers: dict | None = None,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+) -> httpx.Response:
+    """Async counterpart of :func:`safe_get`. ``client`` MUST use
+    ``follow_redirects=False``."""
+    current = url
+    for _ in range(max_redirects + 1):
+        if not is_safe_outbound_url(current):
+            raise UnsafeURLError(current)
+        resp = await client.get(current, headers=headers)
+        if resp.is_redirect:
+            nxt = _redirect_target(resp)
+            if nxt is None:
+                return resp
+            current = nxt
+            continue
+        return resp
+    raise UnsafeURLError(f"too many redirects starting from {url!r}")
