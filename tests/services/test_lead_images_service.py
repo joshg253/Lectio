@@ -518,6 +518,76 @@ def test_fetch_caption_webp_picture_fallback(tmp_path: Path):
     assert title == "In a world where everything went wrong"
 
 
+# --- Webcomic hover-text balloon / og:description fallback ---
+
+def test_webcomic_caption_uses_alt_text_balloon(tmp_path: Path):
+    """When the comic <img> has no alt/title, the WordPress Webcomic plugin's
+    comic-alt-text balloon supplies the hover joke (regression: Wondermark)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry_link = "https://wondermark.com/c/1586/"
+    img_url = "https://wondermark.com/wp-content/uploads/1586jet.png"
+    html = (
+        "<html><head>"
+        '<meta property="og:description" content="A meta description that differs.">'
+        "</head><body><article>"
+        f'<img src="{img_url}" alt="" />'
+        '<div class="comic-alt-text"><p>The joke in the hover text.</p></div>'
+        "</article></body></html>"
+    )
+    service._source_html_cache[entry_link] = (entry_link, html)
+
+    alt, title = service.fetch_entry_image_caption(
+        entry_link, lead_image_url=img_url, is_webcomic=True
+    )
+
+    assert alt is None
+    assert title == "The joke in the hover text."
+
+
+def test_webcomic_caption_falls_back_to_og_description(tmp_path: Path):
+    """No balloon present: og:description supplies the caption for webcomic feeds."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry_link = "https://example-comic.com/strip/42/"
+    img_url = "https://example-comic.com/strips/42.png"
+    html = (
+        "<html><head>"
+        '<meta property="og:description" content="Otto needs investment capital.">'
+        "</head><body>"
+        f'<img src="{img_url}" alt="" />'
+        "</body></html>"
+    )
+    service._source_html_cache[entry_link] = (entry_link, html)
+
+    alt, title = service.fetch_entry_image_caption(
+        entry_link, lead_image_url=img_url, is_webcomic=True
+    )
+
+    assert title == "Otto needs investment capital."
+
+
+def test_non_webcomic_does_not_use_og_description(tmp_path: Path):
+    """Non-webcomic feeds must NOT pull og:description as an image caption — it is
+    the article excerpt, not the image's alt/title."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry_link = "https://news.example.com/article/"
+    img_url = "https://news.example.com/hero.jpg"
+    html = (
+        "<html><head>"
+        '<meta property="og:description" content="Article excerpt text.">'
+        "</head><body>"
+        f'<img src="{img_url}" alt="" />'
+        "</body></html>"
+    )
+    service._source_html_cache[entry_link] = (entry_link, html)
+
+    alt, title = service.fetch_entry_image_caption(
+        entry_link, lead_image_url=img_url, is_webcomic=False
+    )
+
+    assert alt is None
+    assert title is None
+
+
 # --- BBCode [img] conversion ---
 
 def test_bbcode_img_converted_before_extraction(tmp_path: Path):

@@ -6642,9 +6642,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # on the next open once the background thread stores it in the DB.
         _needs_source_scrape = (image_title_text is None or
                                 (not _in_feed_title_is_lead_img and not _persisted_alt and not _persisted_title))
+        _is_wc_feed = lead_image_service._is_feed_webcomic(str(entry.feed_url))
         if _needs_source_scrape and lead_image_url and entry.link:
             if entry.link in lead_image_service._source_html_cache:
-                _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url)
+                _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url, is_webcomic=_is_wc_feed)
                 _fa = (re.sub(r"<[^>]+>", "", _fa).strip() or None) if _fa else None
                 _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
                 if _fa or _ft:
@@ -6659,7 +6660,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 )
                 lead_image_service.wait_for_source_html_fetch(entry.link, 3.0)
                 if entry.link in lead_image_service._source_html_cache:
-                    _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url)
+                    _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url, is_webcomic=_is_wc_feed)
                     _fa = (re.sub(r"<[^>]+>", "", _fa).strip() or None) if _fa else None
                     _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
                     if _fa or _ft:

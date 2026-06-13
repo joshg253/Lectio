@@ -1044,14 +1044,14 @@ class LeadImageService:
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
                     _found_og_scrape = True
-                    self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url)
+                    self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
                 self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
                 time.sleep(0.15)
                 continue
             image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
             if image_url:
                 _found_og_scrape = True
-                self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url)
+                self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
             self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
             time.sleep(0.15)
 
@@ -1153,7 +1153,7 @@ class LeadImageService:
                 is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
                 if image_url:
-                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url)
+                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
                 self.store_entry_lead_image(feed_url, entry_id, image_url)
                 time.sleep(0.15)
 
@@ -2006,19 +2006,62 @@ class LeadImageService:
             domain_cache[domain] = ok
         return ok
 
+    # WordPress "Webcomic" plugin (mgsisk) renders the cartoonist's hover/secret
+    # text in a hidden balloon: <div class="comic-alt-text"><p>…</p></div>.
+    # The comic <img> itself carries no alt/title, so this is the only place the
+    # joke lives in the page DOM.
+    _WEBCOMIC_ALT_TEXT_RE = re.compile(
+        r'<div[^>]*\bclass=["\'][^"\']*\bcomic-alt-text\b[^"\']*["\'][^>]*>(.*?)</div>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    _OG_DESCRIPTION_RE = re.compile(
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']*)["\']',
+        re.IGNORECASE,
+    )
+
+    def _extract_webcomic_alt_text(self, html_text: str) -> str | None:
+        """Return the webcomic hover/secret text from a source page, or None.
+
+        Looks first for the `comic-alt-text` balloon used by the WordPress
+        Webcomic plugin, then falls back to the og:description meta tag.
+        """
+        m = self._WEBCOMIC_ALT_TEXT_RE.search(html_text)
+        if m:
+            text = re.sub(r"<[^>]+>", " ", m.group(1))
+            text = html.unescape(text).strip()
+            if text:
+                return text
+        m = self._OG_DESCRIPTION_RE.search(html_text)
+        if m:
+            text = html.unescape(m.group(1)).strip()
+            if text:
+                return text
+        return None
+
     def fetch_entry_image_caption(
-        self, entry_link: str, lead_image_url: str | None = None
+        self, entry_link: str, lead_image_url: str | None = None, is_webcomic: bool = False
     ) -> tuple[str | None, str | None]:
         """Return (alt, title) attribute text separately for the lead image on the source page.
 
         Uses the same HTML cache and scanning logic as fetch_entry_image_alt, but returns
         the raw alt and title attributes independently instead of combining them.
         When lead_image_url is provided, scans for that specific image URL.
+        When is_webcomic is set and the image carries no alt/title, falls back to the
+        webcomic hover-text balloon / og:description so the joke still surfaces.
         Returns (None, None) if the image is not found or the page cannot be fetched.
         """
         import re as _re
 
         _strip = lambda s: _re.sub(r"<[^>]+>", "", s).strip() or None if s else None
+
+        def _finalize(alt: str | None, title: str | None, page_html: str | None) -> tuple[str | None, str | None]:
+            # Webcomic hover text lives in a balloon element / og:description, not the
+            # <img>.  When the image carries no alt/title, surface that text as the title.
+            if is_webcomic and not alt and not title and page_html:
+                fallback = self._extract_webcomic_alt_text(page_html)
+                if fallback:
+                    return alt, fallback
+            return alt, title
 
         # Deathbulge SPA: API returns combined alt_text only; return as title, no alt.
         _db_spa_m = re.match(r'https?://(?:www\.)?deathbulge\.com/#/comics/(\d+)', entry_link)
@@ -2065,9 +2108,10 @@ class LeadImageService:
                         continue
                     resolved = urljoin(final_url, image_url)
                     if self._urls_equivalent(resolved, lead_image_url):
-                        return (
+                        return _finalize(
                             _strip(attrs.get("alt", "")),
                             _strip(attrs.get("title", "")),
+                            source_html,
                         )
             # Fallback: lead_image_url may be a WebP srcset URL substituted by
             # _extract_preferred_source_image_data when a <picture>/<source
@@ -2096,17 +2140,25 @@ class LeadImageService:
                             v = html.unescape((am.group(2) or am.group(3) or am.group(4) or "").strip())
                             if k and v:
                                 wb_attrs[k] = v
-                        return (
+                        return _finalize(
                             _strip(wb_attrs.get("alt", "")),
                             _strip(wb_attrs.get("title", "")),
+                            source_html,
                         )
-            return (None, None)
+            return _finalize(None, None, source_html)
 
-        # No specific URL: use scored path and return combined as title, no separate alt.
+        # No specific URL: for webcomics, prefer the hover-text balloon over a scored
+        # img title (which can pick up site-chrome banners). Otherwise use scored path.
+        if is_webcomic:
+            wc_text = self._extract_webcomic_alt_text(source_html)
+            if wc_text:
+                return (None, wc_text)
         _, alt_text = self._extract_preferred_source_image_data(source_html, final_url, entry_link)
-        return (None, _strip(alt_text))
+        return _finalize(None, _strip(alt_text), source_html)
 
-    def _maybe_store_alt_from_cache(self, feed_url: str, entry_id: str, entry_link: str, image_url: str) -> None:
+    def _maybe_store_alt_from_cache(
+        self, feed_url: str, entry_id: str, entry_link: str, image_url: str, is_webcomic: bool = False
+    ) -> None:
         """If source HTML is in cache and alt not yet stored, extract and persist alt/title.
 
         Called immediately after a source-page lead-image fetch so the caption text
@@ -2114,7 +2166,9 @@ class LeadImageService:
         """
         if (feed_url, entry_id) in self._alt_cache:
             return
-        alt, title = self.fetch_entry_image_caption(entry_link, lead_image_url=image_url)
+        alt, title = self.fetch_entry_image_caption(
+            entry_link, lead_image_url=image_url, is_webcomic=is_webcomic
+        )
         self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
 
     def _fetch_source_lead_image(self, entry_link: str, is_webcomic: bool = False) -> str | None:
@@ -2268,7 +2322,7 @@ class LeadImageService:
                 # HTML is now in _source_html_cache from the lead-image fetch.
                 # Extract and persist alt text while we have it — no second HTTP fetch.
                 if image_url:
-                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url)
+                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
             except Exception:
                 pass
             finally:
@@ -2326,7 +2380,8 @@ class LeadImageService:
                         self._source_html_cache.popitem(last=False)
                     if feed_url and entry_id and lead_image_url:
                         alt, title = self.fetch_entry_image_caption(
-                            entry_link, lead_image_url=lead_image_url
+                            entry_link, lead_image_url=lead_image_url,
+                            is_webcomic=self._is_feed_webcomic(feed_url),
                         )
                         self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
             except Exception:
@@ -2501,7 +2556,7 @@ class LeadImageService:
             if entry_link:
                 wc_url = self._fetch_source_lead_image(entry_link, is_webcomic=True)
                 if wc_url:
-                    wc_alt, wc_title = self.fetch_entry_image_caption(entry_link, lead_image_url=wc_url)
+                    wc_alt, wc_title = self.fetch_entry_image_caption(entry_link, lead_image_url=wc_url, is_webcomic=True)
         except Exception as exc:
             wc_error = str(exc)
         results.append({
