@@ -64,7 +64,7 @@ Phasing:
 1. ~~**Tenancy resolver + per-user connection pool**~~ — DONE (see Recently
    Completed). `services/tenancy.py` + per-(thread, user) pools in main.py.
 2. ~~**Users table + per-user auth**~~ — DONE (core + account/admin UI at
-   `/account`). Remaining: link `/account` from the main settings UI; optional
+   `/account`, linked from the main menu in multi mode). Remaining: optional
    user deletion (today: disable).
 3. ~~**Per-user API tokens**~~ + ~~**per-user scheduled refresh**~~ — DONE.
    Remaining background work still running as the default user only (lower

@@ -123,6 +123,15 @@
             <hr class="menu-divider" />
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
+            {% if multi_user or auth_enabled %}
+            <hr class="menu-divider" />
+            {% if multi_user %}
+            <a class="menu-item" href="/account"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Account{% if current_user %} ({{ current_user }}){% endif %}</a>
+            {% endif %}
+            {% if auth_enabled %}
+            <a class="menu-item" href="/logout"><span class="material-symbols-rounded" aria-hidden="true">logout</span> Sign out</a>
+            {% endif %}
+            {% endif %}
           </div>
         </details>
         <a class="menu-brand topbar-brand" href="/">Lectio</a>

@@ -190,6 +190,11 @@ def _scenario_account_ui() -> None:
         assert client.post("/login", data={"username": admin, "password": admin_pw},
                            follow_redirects=False).status_code == 303
 
+        # The main UI exposes an Account link in multi mode.
+        home = client.get("/")
+        assert home.status_code == 200
+        assert "/account" in home.text
+
         r = client.get("/account")
         assert r.status_code == 200
         assert admin in r.text

@@ -8667,6 +8667,9 @@ def home(
                     post["read"] = True
                     break
 
+    # Auto-refresh cadence shown in the menu: the bound user's own value in multi
+    # mode (the menu form posts to set *their* setting), the cached global in single.
+    _arm = _effective_auto_refresh_minutes()
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -8703,8 +8706,8 @@ def home(
             "selected_entry": selected_entry,
             "message": message,
             "no_rss_url": no_rss_url,
-            "auto_refresh_enabled": getattr(app.state, "auto_refresh_minutes", 0) > 0,
-            "auto_refresh_minutes": getattr(app.state, "auto_refresh_minutes", 0),
+            "auto_refresh_enabled": _arm > 0,
+            "auto_refresh_minutes": _arm,
             "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
             "static_asset_version": STATIC_ASSET_VERSION,
             "debug_mode": DEBUG_MODE,
@@ -8714,6 +8717,9 @@ def home(
             "profile_name": profile_name,
             "profile_email": profile_email,
             "profile_avatar_url": profile_avatar_url,
+            "multi_user": MULTI_USER,
+            "auth_enabled": AUTH_ENABLED,
+            "current_user": _current_web_user(request),
         },
     )
 

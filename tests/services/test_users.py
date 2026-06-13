@@ -19,14 +19,16 @@ def test_empty_store(store):
 
 
 def test_create_and_get(store):
-    store.create("alice", "pw", is_admin=True)
+    secret = "super-secret-passphrase"
+    store.create("alice", secret, is_admin=True)
     assert store.count() == 1
     row = store.get("alice")
     assert row["username"] == "alice"
     assert row["is_admin"] == 1
     assert row["disabled"] == 0
-    assert row["password_hash"]  # hashed, not plaintext
-    assert "pw" not in row["password_hash"]
+    # Stored as a self-describing scheme hash, never the plaintext.
+    assert passwords.identify(row["password_hash"]) in passwords.available_schemes()
+    assert secret not in row["password_hash"]
 
 
 def test_duplicate_username_rejected(store):
