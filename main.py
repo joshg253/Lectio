@@ -7518,61 +7518,97 @@ def _start_background_update(feed_url: str) -> None:
 _FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
 
 
+def _background_user_ids() -> list[str]:
+    """Users that background work (scheduled refresh, maintenance) should run for.
+
+    Single mode: just the implicit default user. Multi mode: every enabled
+    account. Each is processed under its own tenancy context so the work hits
+    that user's databases."""
+    if not MULTI_USER or user_store is None:
+        return [tenancy.DEFAULT_USER_ID]
+    return [u["username"] for u in user_store.list_users() if not u["disabled"]]
+
+
+def _effective_auto_refresh_minutes() -> int:
+    """Auto-refresh cadence for the currently-bound user. Multi mode reads the
+    user's own setting; single mode uses the cached app.state value."""
+    if MULTI_USER:
+        with get_meta_connection() as conn:
+            return get_auto_refresh_minutes(conn)
+    return getattr(app.state, "auto_refresh_minutes", 0)
+
+
+def _run_scheduled_refresh_for_all_users() -> None:
+    """One scheduled-refresh pass across every background user, each under its
+    own tenancy context so the refresh hits that user's databases."""
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                _scheduled_refresh_tick()
+            except Exception:
+                LOGGER.exception("scheduled refresh failed for user %r", uid)
+
+
 def scheduled_refresh_loop(stop_event: threading.Event) -> None:
     while not stop_event.wait(SCHEDULER_POLL_SECONDS):
-        global_minutes = getattr(app.state, "auto_refresh_minutes", 0)
-        if global_minutes <= 0:
-            continue
+        _run_scheduled_refresh_for_all_users()
 
-        now_ts = time.time()
-        feeds_to_refresh: set[str] = set()
-        folders_to_mark: list[tuple[str, str]] = []
 
-        with get_meta_connection() as conn:
-            disabled = get_disabled_feed_urls(conn)
-            # Load all folders and their per-folder cadence settings.
-            folder_rows = conn.execute("SELECT id, cadence_minutes FROM folders").fetchall()
-            for folder in folder_rows:
-                fid = int(folder["id"])
-                cadence = folder["cadence_minutes"]
-                effective_minutes = cadence if (cadence and cadence > 0) else global_minutes
-                key = f"{_FOLDER_CADENCE_LAST_REFRESH_PREFIX}{fid}"
-                last_ts_str = get_setting(conn, key)
-                last_ts = float(last_ts_str) if last_ts_str else 0.0
-                if (now_ts - last_ts) < effective_minutes * 60:
-                    continue
-                # This folder is due — collect its feeds.
-                folder_feed_rows = conn.execute(
-                    "SELECT feed_url FROM folder_feeds WHERE folder_id = ?", (fid,)
-                ).fetchall()
-                for row in folder_feed_rows:
-                    url = str(row["feed_url"])
-                    if url not in disabled:
-                        feeds_to_refresh.add(url)
-                folders_to_mark.append((key, str(now_ts)))
-            if folders_to_mark:
-                for key, val in folders_to_mark:
-                    set_setting(conn, key, val)
-                # Keep legacy global timestamp for monitoring / debug.
-                app.state.last_scheduled_refresh_started_at = time.monotonic()
-                with get_meta_connection() as _sc:
-                    scraper_service.refresh_all_scraped_feeds(_sc)
+def _scheduled_refresh_tick() -> None:
+    """One scheduled-refresh pass for the currently-bound tenancy user."""
+    global_minutes = _effective_auto_refresh_minutes()
+    if global_minutes <= 0:
+        return
 
-        if not feeds_to_refresh:
-            continue
+    now_ts = time.time()
+    feeds_to_refresh: set[str] = set()
+    folders_to_mark: list[tuple[str, str]] = []
 
-        if REFRESH_DEBUG_ENABLED:
-            LOGGER.info(
-                "[refresh] scheduled run: global_minutes=%d feed_count=%d folder_count=%d",
-                global_minutes,
-                len(feeds_to_refresh),
-                len(folders_to_mark),
-            )
-        feed_refresh_service.update_feeds(feeds_to_refresh)
-        _run_automation_after_refresh(feeds_to_refresh)
-        if websub_service:
-            websub_service.renew_expiring_subscriptions()
-            websub_service.maybe_discover_hubs(list(feeds_to_refresh))
+    with get_meta_connection() as conn:
+        disabled = get_disabled_feed_urls(conn)
+        # Load all folders and their per-folder cadence settings.
+        folder_rows = conn.execute("SELECT id, cadence_minutes FROM folders").fetchall()
+        for folder in folder_rows:
+            fid = int(folder["id"])
+            cadence = folder["cadence_minutes"]
+            effective_minutes = cadence if (cadence and cadence > 0) else global_minutes
+            key = f"{_FOLDER_CADENCE_LAST_REFRESH_PREFIX}{fid}"
+            last_ts_str = get_setting(conn, key)
+            last_ts = float(last_ts_str) if last_ts_str else 0.0
+            if (now_ts - last_ts) < effective_minutes * 60:
+                continue
+            # This folder is due — collect its feeds.
+            folder_feed_rows = conn.execute(
+                "SELECT feed_url FROM folder_feeds WHERE folder_id = ?", (fid,)
+            ).fetchall()
+            for row in folder_feed_rows:
+                url = str(row["feed_url"])
+                if url not in disabled:
+                    feeds_to_refresh.add(url)
+            folders_to_mark.append((key, str(now_ts)))
+        if folders_to_mark:
+            for key, val in folders_to_mark:
+                set_setting(conn, key, val)
+            # Keep legacy global timestamp for monitoring / debug.
+            app.state.last_scheduled_refresh_started_at = time.monotonic()
+            with get_meta_connection() as _sc:
+                scraper_service.refresh_all_scraped_feeds(_sc)
+
+    if not feeds_to_refresh:
+        return
+
+    if REFRESH_DEBUG_ENABLED:
+        LOGGER.info(
+            "[refresh] scheduled run: global_minutes=%d feed_count=%d folder_count=%d",
+            global_minutes,
+            len(feeds_to_refresh),
+            len(folders_to_mark),
+        )
+    feed_refresh_service.update_feeds(feeds_to_refresh)
+    _run_automation_after_refresh(feeds_to_refresh)
+    if websub_service:
+        websub_service.renew_expiring_subscriptions()
+        websub_service.maybe_discover_hubs(list(feeds_to_refresh))
 
 
 def _run_daily_maintenance() -> None:

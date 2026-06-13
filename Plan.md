@@ -12,6 +12,15 @@ This file is the backlog and staging area for future work.
   `get_starred_archive_connection()` resolves per-user; the thumb cache stays
   global. 30 new tests; full suite green (332).
 
+- **Multi-user Phase 3b — per-user scheduled refresh**. The background
+  `scheduled_refresh_loop` now iterates every enabled user (`_background_user_ids`)
+  and runs each pass (`_scheduled_refresh_tick`) under that user's tenancy
+  context, reading their own cadence (`_effective_auto_refresh_minutes`) and
+  refreshing their own feeds. One user's failure doesn't stop the others. Single
+  mode runs once as the default user (unchanged). 5 new tests. Still default-user
+  only (noted below): WebSub push routing, daily maintenance VACUUM/cleanup, and
+  YouTube sync.
+
 - **Multi-user Phase 3 — per-user API tokens + account/admin UI**. Each user has
   an `api_token` (auth DB) serving both protocols. Fever resolves
   `md5(username:api_token)` → user; GReader ClientLogin verifies username+token
@@ -55,12 +64,17 @@ Phasing:
 2. ~~**Users table + per-user auth**~~ — DONE (core + account/admin UI at
    `/account`). Remaining: link `/account` from the main settings UI; optional
    user deletion (today: disable).
-3. ~~**Per-user API tokens**~~ — DONE for Fever + GReader (see Recently
-   Completed). Remaining: per-user **background refresh** — the refresh daemon /
-   WebSub push and Fever's `sync_feed_entries`-after-refresh still run as the
-   default user, so a non-default user's feeds are only refreshed when something
-   binds their context. Needs a per-user refresh schedule (iterate users, bind
-   each) before multi-user is fully autonomous.
+3. ~~**Per-user API tokens**~~ + ~~**per-user scheduled refresh**~~ — DONE.
+   Remaining background work still running as the default user only (lower
+   priority; scheduled refresh covers the feeds within the cadence window):
+   - **WebSub push callback** — a push carries only a topic (feed URL); needs to
+     find which users subscribe to it (across per-user `websub_subscriptions`)
+     and refresh each. Until then a push refreshes only the default user; other
+     users still get the content on their next scheduled pass.
+   - **Daily maintenance** (VACUUM / orphan cleanup / log prune) and **YouTube
+     sync** — run on the default user's DBs only.
+   - **Update scheduling policy** — revisit cadence/fairness across many users
+     (currently each user is processed sequentially every poll tick).
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
    `url_guard.safe_get` / `safe_get_async` follow redirects manually and
    re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
