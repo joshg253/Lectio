@@ -84,3 +84,94 @@ def test_persistence_across_instances(tmp_path):
     UserStore(path).create("alice", "pw")
     # A fresh store over the same file sees the user.
     assert UserStore(path).verify_login("alice", "pw") == "alice"
+
+
+# --- API tokens (Fever + GReader) -------------------------------------------
+
+
+def test_create_generates_api_token(store):
+    store.create("alice", "pw")
+    tok = store.get_api_token("alice")
+    assert tok and "pw" not in tok
+
+
+def test_verify_api_token(store):
+    store.create("alice", "pw")
+    tok = store.get_api_token("alice")
+    assert store.verify_api_token("alice", tok) == "alice"
+    assert store.verify_api_token("alice", "wrong") is None
+    assert store.verify_api_token("ghost", "x") is None
+
+
+def test_disabled_user_api_token_rejected(store):
+    store.create("alice", "pw")
+    tok = store.get_api_token("alice")
+    store.set_disabled("alice", True)
+    assert store.verify_api_token("alice", tok) is None
+
+
+def test_fever_user_for_key(store):
+    import hashlib
+
+    store.create("alice", "pw")
+    store.create("bob", "pw")
+    tok_a = store.get_api_token("alice")
+    key_a = hashlib.md5(f"alice:{tok_a}".encode()).hexdigest()
+    assert store.fever_user_for_key(key_a) == "alice"
+    assert store.fever_user_for_key("deadbeef") is None
+    # alice's token under bob's name must not authenticate.
+    assert store.fever_user_for_key(hashlib.md5(f"bob:{tok_a}".encode()).hexdigest()) is None
+
+
+def test_greader_token_issue_and_resolve(store):
+    store.create("alice", "pw")
+    token = store.issue_greader_token("alice")
+    assert store.resolve_greader_token(token) == "alice"
+    assert store.resolve_greader_token("nope") is None
+    assert store.resolve_greader_token("") is None
+
+
+def test_greader_token_expires(store):
+    store.create("alice", "pw")
+    token = store.issue_greader_token("alice", lifetime=-1)  # already expired
+    assert store.resolve_greader_token(token) is None
+
+
+def test_disabled_user_greader_token_rejected(store):
+    store.create("alice", "pw")
+    token = store.issue_greader_token("alice")
+    store.set_disabled("alice", True)
+    assert store.resolve_greader_token(token) is None
+
+
+def test_regenerate_api_token_revokes_old_and_greader(store):
+    store.create("alice", "pw")
+    old = store.get_api_token("alice")
+    gtoken = store.issue_greader_token("alice")
+    new = store.regenerate_api_token("alice")
+    assert new and new != old
+    assert store.verify_api_token("alice", old) is None
+    assert store.verify_api_token("alice", new) == "alice"
+    # Rotating the credential drops bearer tokens minted from the old one.
+    assert store.resolve_greader_token(gtoken) is None
+
+
+def test_regenerate_unknown_user_returns_none(store):
+    assert store.regenerate_api_token("ghost") is None
+
+
+def test_api_token_backfilled_on_migration(tmp_path):
+    # Simulate a pre-token users table: create the row without api_token, then
+    # reopen so ensure_schema's migration backfills one.
+    import sqlite3
+
+    path = tmp_path / "auth.sqlite"
+    UserStore(path)  # creates schema (with api_token)
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE users SET api_token = NULL")  # no users yet → no-op, but exercises column
+        c.execute(
+            "INSERT INTO users (username, password_hash, is_admin, disabled, created_at, api_token) "
+            "VALUES ('legacy', 'x', 0, 0, 0, NULL)"
+        )
+    store = UserStore(path)  # re-run ensure_schema → backfill
+    assert store.get_api_token("legacy")

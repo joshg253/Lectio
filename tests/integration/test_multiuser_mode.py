@@ -58,6 +58,34 @@ def test_multi_mode_e2e(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_multi_api_per_user_e2e(tmp_path):
+    proc = _run_harness(
+        "multi_api",
+        tmp_path / "data",
+        {
+            "LECTIO_SECURITY_MODE": "multi",
+            "LECTIO_ADMIN_USERNAME": "adminuser",
+            "LECTIO_ADMIN_PASSWORD": "admin-pw",
+        },
+    )
+    assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_account_ui_e2e(tmp_path):
+    proc = _run_harness(
+        "account_ui",
+        tmp_path / "data",
+        {
+            "LECTIO_SECURITY_MODE": "multi",
+            "LECTIO_ADMIN_USERNAME": "adminuser",
+            "LECTIO_ADMIN_PASSWORD": "admin-pw",
+        },
+    )
+    assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_single_mode_invariance_e2e(tmp_path):
     proc = _run_harness(
         "single",

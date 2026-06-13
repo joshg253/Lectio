@@ -22,26 +22,36 @@ class FeverService:
         get_reader: Callable,
         fever_api_key: str,  # precomputed md5(username:fever_password).hexdigest()
         root_folder_name: str = "All Feeds",
+        current_user: Callable[[], str] | None = None,
+        presync: bool = True,
     ) -> None:
         self._get_meta = get_meta_connection
         self._get_reader = get_reader
-        self._api_key = fever_api_key.lower()
+        self._api_key = (fever_api_key or "").lower()
         self._root_folder_name = root_folder_name
-        self._synced = False
+        # In multi-user mode each user's meta DB has its own entry-ID map, so the
+        # "already synced" flag is tracked per user. current_user() yields the
+        # tenancy user bound to the current request (a constant in single mode).
+        self._current_user = current_user or (lambda: "default")
+        self._synced_users: set[str] = set()
         self._sync_lock = threading.Lock()
-        # Pre-sync in background so the first request isn't slow.
-        threading.Thread(target=self._ensure_synced, daemon=True).start()
+        # Pre-sync in background so the first request isn't slow. Skipped in
+        # multi-user mode, where the pre-sync would run as the (unbound) default
+        # user; each user is instead synced lazily on their first request.
+        if presync:
+            threading.Thread(target=self._ensure_synced, daemon=True).start()
 
     # ------------------------------------------------------------------ auth
 
     def check_auth(self, api_key: str) -> bool:
-        return hmac.compare_digest(api_key.lower(), self._api_key)
+        return bool(self._api_key) and hmac.compare_digest(api_key.lower(), self._api_key)
 
     # ------------------------------------------------------------------ ID sync
 
     def _ensure_synced(self) -> None:
+        uid = self._current_user()
         with self._sync_lock:
-            if self._synced:
+            if uid in self._synced_users:
                 return
             reader = self._get_reader()
             rows = [(str(e.feed_url), str(e.id)) for e in reader.get_entries()]
@@ -50,7 +60,7 @@ class FeverService:
                     "INSERT OR IGNORE INTO fever_entry_map (feed_url, entry_id) VALUES (?, ?)",
                     rows,
                 )
-            self._synced = True
+            self._synced_users.add(uid)
 
     def sync_feed_entries(self, feed_url: str) -> None:
         """Insert any new entries for a specific feed into the ID map. Call after refresh."""

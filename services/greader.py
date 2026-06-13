@@ -234,12 +234,13 @@ class GReaderService:
 
     # ------------------------------------------------------------------ data methods
 
-    def get_user_info(self) -> dict[str, Any]:
+    def get_user_info(self, username: str | None = None) -> dict[str, Any]:
+        name = username or self._username
         return {
             "userId": "1",
-            "userName": self._username,
+            "userName": name,
             "userProfileId": "1",
-            "userEmail": self._username,
+            "userEmail": name,
             "isBloggerUser": False,
             "signupTimeSec": 0,
             "isMultiLoginEnabled": False,

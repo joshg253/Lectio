@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Account — Lectio</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
+  <style>
+    .account-wrap { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    .account-wrap header { display: flex; justify-content: space-between; align-items: baseline; }
+    .account-section { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid var(--border, #ccc); border-radius: 8px; }
+    .account-section h2 { margin-top: 0; font-size: 1.05rem; }
+    .account-section form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
+    .account-section input[type="text"], .account-section input[type="password"], .account-section select { padding: .4rem .5rem; }
+    .account-token { display: inline-block; padding: .3rem .5rem; background: rgba(127,127,127,.15); border-radius: 4px; word-break: break-all; }
+    .account-msg { padding: .5rem .75rem; background: rgba(40,160,80,.15); border-radius: 6px; }
+    .account-users { width: 100%; border-collapse: collapse; margin: .5rem 0; }
+    .account-users th, .account-users td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid rgba(127,127,127,.25); }
+  </style>
+</head>
+<body class="account-page">
+  <div class="account-wrap">
+    <header>
+      <h1>Account</h1>
+      <a href="/">&larr; Back to Lectio</a>
+    </header>
+
+    {% if message %}<p class="account-msg" role="status">{{ message }}</p>{% endif %}
+    {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
+
+    <p>Signed in as <strong>{{ username }}</strong>{% if is_admin %} <em>(admin)</em>{% endif %}.</p>
+
+    <section class="account-section">
+      <h2>Change password</h2>
+      <form method="post" action="/account/password">
+        {{ csrf_input(request) | safe }}
+        <input type="password" name="current_password" placeholder="Current password" autocomplete="current-password" required />
+        <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
+        <input type="password" name="confirm_password" placeholder="Confirm new password" autocomplete="new-password" required />
+        <button type="submit">Change password</button>
+      </form>
+    </section>
+
+    <section class="account-section">
+      <h2>API token (Fever / GReader clients)</h2>
+      <p>Configure your RSS client (Capy, Reeder, etc.) with username <code>{{ username }}</code> and this token as the password:</p>
+      <p><code class="account-token">{{ api_token }}</code></p>
+      <form method="post" action="/account/api-token/regenerate"
+            onsubmit="return confirm('Regenerate token? Existing clients will stop syncing until you update them.');">
+        {{ csrf_input(request) | safe }}
+        <button type="submit">Regenerate token</button>
+      </form>
+    </section>
+
+    {% if is_admin %}
+    <section class="account-section">
+      <h2>Users</h2>
+      <table class="account-users">
+        <thead><tr><th>User</th><th>Admin</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+        {% for u in users %}
+          <tr>
+            <td>{{ u.username }}</td>
+            <td>{{ 'yes' if u.is_admin else '' }}</td>
+            <td>{{ 'disabled' if u.disabled else 'active' }}</td>
+            <td>
+              {% if u.username != username %}
+              <form method="post" action="/admin/users/disable" style="margin:0">
+                {{ csrf_input(request) | safe }}
+                <input type="hidden" name="username" value="{{ u.username }}" />
+                <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
+                <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
+              </form>
+              {% else %}<span>—</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+
+      <h2>Create user</h2>
+      <form method="post" action="/admin/users/create">
+        {{ csrf_input(request) | safe }}
+        <input type="text" name="username" placeholder="username" required />
+        <input type="password" name="password" placeholder="password" autocomplete="new-password" required />
+        <label><input type="checkbox" name="is_admin" value="1" /> admin</label>
+        <button type="submit">Create user</button>
+      </form>
+
+      <h2>Reset a user's password</h2>
+      <form method="post" action="/admin/users/reset-password">
+        {{ csrf_input(request) | safe }}
+        <select name="username">
+          {% for u in users %}<option value="{{ u.username }}">{{ u.username }}</option>{% endfor %}
+        </select>
+        <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
+        <button type="submit">Reset password</button>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+</body>
+</html>

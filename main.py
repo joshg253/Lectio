@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Sequence, cast
-from urllib.parse import quote, quote_plus, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, urlencode, urlparse
 
 import feedparser
 import httpx
@@ -48,7 +48,7 @@ from services import scraper_service
 from services import takeout_service
 from services import tenancy
 from services import url_guard
-from services.users import UserStore
+from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
@@ -754,12 +754,40 @@ class _TenancyMiddleware:
     def __init__(self, app):
         self.app = app
 
+    @staticmethod
+    def _greader_user_from_scope(scope) -> str | None:
+        """Resolve a /greader/ request's bearer token to a user, using only the
+        Authorization header / query string (no body read needed)."""
+        if user_store is None:
+            return None
+        token = ""
+        for key, val in scope.get("headers", []):
+            if key == b"authorization":
+                auth = val.decode("latin-1")
+                if auth.startswith("GoogleLogin auth="):
+                    token = auth[17:].strip()
+                elif auth.startswith("Bearer "):
+                    token = auth[7:].strip()
+                break
+        if not token:
+            qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+            token = (qs.get("token") or [""])[0]
+        return user_store.resolve_greader_token(token)
+
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or not MULTI_USER:
             return await self.app(scope, receive, send)
-        session = scope.get("session") or {}
-        uid = session.get("user_id")
-        if uid and session.get("authenticated") and tenancy.is_valid_user_id(uid):
+        path = scope.get("path", "")
+        uid: str | None = None
+        if path.startswith("/greader/"):
+            # API requests carry their identity in a bearer token, not a session.
+            uid = self._greader_user_from_scope(scope)
+        else:
+            session = scope.get("session") or {}
+            sid = session.get("user_id")
+            if sid and session.get("authenticated") and tenancy.is_valid_user_id(sid):
+                uid = sid
+        if uid and tenancy.is_valid_user_id(uid):
             token = tenancy.set_current_user(uid)
             try:
                 return await self.app(scope, receive, send)
@@ -5178,14 +5206,22 @@ websub_service: WebSubService | None = (
     else None
 )
 
+# In multi mode the protocol services are always constructed (auth is handled
+# per-user via user_store, not the service's own credential); their data methods
+# operate on whatever the tenancy context resolves to. In single mode they keep
+# the env-credential behavior and are only built when that credential exists.
 fever_service: FeverService | None = (
     FeverService(
         get_meta_connection=get_meta_connection,
         get_reader=get_reader,
-        fever_api_key=FEVER_API_KEY,
+        fever_api_key=FEVER_API_KEY or "",
         root_folder_name=ROOT_FOLDER_NAME,
+        current_user=tenancy.current_user_id,
+        # In multi mode, skip the default-user pre-sync; each user syncs lazily
+        # under their bound context on first request.
+        presync=not MULTI_USER,
     )
-    if FEVER_API_KEY
+    if (FEVER_API_KEY or MULTI_USER)
     else None
 )
 
@@ -5197,7 +5233,7 @@ greader_service: GReaderService | None = (
         password=_FEVER_PASSWORD,
         root_folder_name=ROOT_FOLDER_NAME,
     )
-    if _FEVER_PASSWORD and AUTH_USERNAME
+    if ((_FEVER_PASSWORD and AUTH_USERNAME) or MULTI_USER)
     else None
 )
 
@@ -8111,6 +8147,153 @@ async def login_submit(request: Request, next: str = "/"):
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
+
+
+# --- Account / user management (multi mode only) -----------------------------
+
+
+def _current_web_user(request: Request) -> str | None:
+    """The logged-in web session's user_id (multi mode), or None."""
+    if not MULTI_USER or not request.session.get("authenticated"):
+        return None
+    uid = request.session.get("user_id")
+    return uid if uid and tenancy.is_valid_user_id(uid) else None
+
+
+def _is_web_admin(username: str | None) -> bool:
+    if not username or user_store is None:
+        return False
+    row = user_store.get(username)
+    return bool(row and row["is_admin"] and not row["disabled"])
+
+
+def _account_redirect(*, msg: str | None = None, error: str | None = None) -> RedirectResponse:
+    params: dict[str, str] = {}
+    if msg:
+        params["msg"] = msg
+    if error:
+        params["error"] = error
+    url = "/account" + ("?" + urlencode(params) if params else "")
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/account")
+def account_page(request: Request, msg: str | None = None, error: str | None = None):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    uid = _current_web_user(request)
+    if not uid:
+        return RedirectResponse(url="/login?next=/account", status_code=303)
+    row = user_store.get(uid)
+    if not row:
+        request.session.clear()
+        return RedirectResponse(url="/login", status_code=303)
+    is_admin = bool(row["is_admin"])
+    return templates.TemplateResponse(
+        request,
+        "account.html",
+        {
+            "username": uid,
+            "is_admin": is_admin,
+            "api_token": row["api_token"],
+            "users": user_store.list_users() if is_admin else [],
+            "message": msg,
+            "error": error,
+            "static_asset_version": STATIC_ASSET_VERSION,
+        },
+    )
+
+
+@app.post("/account/password")
+async def account_change_password(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    uid = _current_web_user(request)
+    if not uid:
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    current = str(form.get("current_password") or "")
+    new = str(form.get("new_password") or "")
+    confirm = str(form.get("confirm_password") or "")
+    if user_store.verify_login(uid, current, default_scheme=PASSWORD_HASH_SCHEME) is None:
+        return _account_redirect(error="Current password is incorrect.")
+    if not new or new != confirm:
+        return _account_redirect(error="New password and confirmation do not match.")
+    user_store.set_password(uid, new, scheme=PASSWORD_HASH_SCHEME)
+    return _account_redirect(msg="Password changed.")
+
+
+@app.post("/account/api-token/regenerate")
+async def account_regenerate_token(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    uid = _current_web_user(request)
+    if not uid:
+        return RedirectResponse(url="/login", status_code=303)
+    user_store.regenerate_api_token(uid)
+    return _account_redirect(msg="API token regenerated — update your RSS clients with the new token.")
+
+
+@app.post("/admin/users/create")
+async def admin_create_user(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    username = str(form.get("username") or "").strip()
+    password = str(form.get("password") or "")
+    is_admin = bool(form.get("is_admin"))
+    if not tenancy.is_valid_user_id(username):
+        return _account_redirect(error="Invalid username — use 1–64 letters, digits, _ or -.")
+    if not password:
+        return _account_redirect(error="A password is required.")
+    try:
+        user_store.create(username, password, is_admin=is_admin, scheme=PASSWORD_HASH_SCHEME)
+        provision_user_storage(username)
+    except UserExistsError:
+        return _account_redirect(error=f"User {username!r} already exists.")
+    except Exception:
+        LOGGER.exception("admin create user failed")
+        return _account_redirect(error="Could not create user (see server logs).")
+    return _account_redirect(msg=f"Created user {username!r}.")
+
+
+@app.post("/admin/users/disable")
+async def admin_disable_user(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    username = str(form.get("username") or "")
+    disabled = str(form.get("disabled") or "0") == "1"
+    if username == admin and disabled:
+        return _account_redirect(error="You cannot disable your own account.")
+    if user_store.get(username) is None:
+        return _account_redirect(error="No such user.")
+    user_store.set_disabled(username, disabled)
+    return _account_redirect(msg=f"{'Disabled' if disabled else 'Enabled'} {username!r}.")
+
+
+@app.post("/admin/users/reset-password")
+async def admin_reset_password(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    username = str(form.get("username") or "")
+    new = str(form.get("new_password") or "")
+    if user_store.get(username) is None:
+        return _account_redirect(error="No such user.")
+    if not new:
+        return _account_redirect(error="A new password is required.")
+    user_store.set_password(username, new, scheme=PASSWORD_HASH_SCHEME)
+    return _account_redirect(msg=f"Reset password for {username!r}.")
 
 
 @app.get("/")
@@ -11646,9 +11829,22 @@ async def _fever_handler(request: Request) -> Response:
         return Response(status_code=404)
 
     api_key = params.get("api_key", "")
+    if MULTI_USER:
+        # Per-user: resolve the api_key (md5(username:api_token)) to a user and
+        # bind the tenancy context so the dispatch reads that user's data.
+        username = user_store.fever_user_for_key(api_key) if user_store else None
+        if not username:
+            return JSONResponse({"api_version": 3, "auth": 0})
+        with tenancy.user_context(username):
+            return JSONResponse(_fever_build_result(params))
     if not fever_service.check_auth(api_key):
         return JSONResponse({"api_version": 3, "auth": 0})
+    return JSONResponse(_fever_build_result(params))
 
+
+def _fever_build_result(params: dict) -> dict:
+    """Build the Fever response for an authenticated request. Runs under the
+    caller's tenancy context (the bound user in multi mode)."""
     result: dict = {
         "api_version": 3,
         "auth": 1,
@@ -11701,7 +11897,7 @@ async def _fever_handler(request: Request) -> Response:
     if "favicons" in params:
         result["favicons"] = []
 
-    return JSONResponse(result)
+    return result
 
 
 @app.get("/fever")
@@ -11719,6 +11915,16 @@ async def fever_post(request: Request) -> Response:
 # ================================================================== GReader API
 
 
+def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
+    """Run ``fn`` in a background thread under tenancy user ``uid``.
+
+    Manually-created threads do not inherit contextvars, so a request that
+    captures its user and hands work to a daemon thread must re-bind the context
+    there or the work runs as the default user. No-op rebinding in single mode."""
+    with tenancy.user_context(uid):
+        fn(*args, **kwargs)
+
+
 def _greader_token(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("GoogleLogin auth="):
@@ -11728,18 +11934,44 @@ def _greader_token(request: Request) -> str:
     return request.query_params.get("token", "")
 
 
+def _resolve_greader_user(request: Request) -> str | None:
+    """Username authorized for this GReader request, or None.
+
+    Multi mode: resolve the bearer token via the global token store. Single mode:
+    the legacy service validates the token and the user is the implicit default.
+    """
+    token = _greader_token(request)
+    if MULTI_USER:
+        return user_store.resolve_greader_token(token) if user_store else None
+    if greader_service and greader_service.check_token(token):
+        return tenancy.DEFAULT_USER_ID
+    return None
+
+
 def _greader_ok(request: Request) -> bool:
-    return bool(greader_service and greader_service.check_token(_greader_token(request)))
+    return _resolve_greader_user(request) is not None
 
 
 @app.post("/greader/accounts/ClientLogin")
 async def greader_login(request: Request) -> Response:
-    """Authenticate and return a GReader auth token."""
-    if not greader_service:
-        return Response("Error=ServiceUnavailable\n", status_code=503)
+    """Authenticate and return a GReader auth token.
+
+    Multi mode: credentials are the username + the user's API token. Single mode:
+    the legacy service credential (LECTIO_FEVER_PASSWORD)."""
     form = await request.form()
     email = str(form.get("Email") or form.get("email") or "")
     passwd = str(form.get("Passwd") or form.get("passwd") or "")
+    if MULTI_USER:
+        if user_store is None:
+            return Response("Error=ServiceUnavailable\n", status_code=503)
+        local = email.split("@")[0] if "@" in email else email
+        username = user_store.verify_api_token(local, passwd)
+        if not username:
+            return Response("Error=BadAuthentication\n", status_code=403)
+        token = user_store.issue_greader_token(username)
+        return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
+    if not greader_service:
+        return Response("Error=ServiceUnavailable\n", status_code=503)
     token = greader_service.authenticate(email, passwd)
     if not token:
         return Response("Error=BadAuthentication\n", status_code=403)
@@ -11750,7 +11982,8 @@ async def greader_login(request: Request) -> Response:
 def greader_user_info(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_user_info())  # type: ignore[union-attr]
+    username = tenancy.current_user_id() if MULTI_USER else None
+    return JSONResponse(greader_service.get_user_info(username))  # type: ignore[union-attr]
 
 
 @app.get("/greader/reader/api/0/tag/list")
@@ -11876,8 +12109,8 @@ async def greader_mark_all_as_read(request: Request) -> Response:
     # ts is in microseconds; convert to seconds for the service.
     timestamp = int(ts_raw) // 1_000_000 if ts_raw else None
     threading.Thread(
-        target=greader_service.mark_all_as_read,  # type: ignore[union-attr]
-        args=(stream_id, timestamp),
+        target=_run_in_user_context,
+        args=(tenancy.current_user_id(), greader_service.mark_all_as_read, stream_id, timestamp),
         daemon=True,
     ).start()
     return Response("OK")

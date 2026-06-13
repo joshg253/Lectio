@@ -85,6 +85,162 @@ def _scenario_single() -> None:
         assert r.status_code == 200, r.status_code
         # Still the default user after an authenticated single-mode request.
         assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+        # Account/admin UI is multi-mode only → 404 in single mode (even authed).
+        assert client.get("/account", follow_redirects=False).status_code == 404
+
+
+def _add_folder(username: str, folder_name: str) -> None:
+    """Add a folder under the root for a user (so GReader tag-list has content)."""
+    with tenancy.user_context(username):
+        conn = main.get_meta_connection()
+        root = conn.execute(
+            "SELECT id FROM folders WHERE name=? AND parent_id IS NULL",
+            (main.ROOT_FOLDER_NAME,),
+        ).fetchone()
+        conn.execute(
+            "INSERT OR IGNORE INTO folders (name, parent_id) VALUES (?, ?)",
+            (folder_name, root["id"]),
+        )
+        conn.commit()
+
+
+def _scenario_multi_api() -> None:
+    import hashlib
+
+    assert main.MULTI_USER and main.user_store is not None
+
+    with TestClient(main.app) as client:
+        admin = os.environ["LECTIO_ADMIN_USERNAME"]
+        main.user_store.create("bob", "bob-pw", scheme=main.PASSWORD_HASH_SCHEME)
+        main.provision_user_storage("bob")
+
+        tok_admin = main.user_store.get_api_token(admin)
+        tok_bob = main.user_store.get_api_token("bob")
+        assert tok_admin and tok_bob and tok_admin != tok_bob
+
+        _add_folder(admin, "AdminFolder")
+        _add_folder("bob", "BobFolder")
+
+        # --- GReader ClientLogin returns a per-user bearer token ---
+        def client_login(user, token):
+            r = client.post(
+                "/greader/accounts/ClientLogin",
+                data={"Email": user, "Passwd": token},
+            )
+            assert r.status_code == 200, (user, r.status_code, r.text)
+            for line in r.text.splitlines():
+                if line.startswith("Auth="):
+                    return line[5:]
+            raise AssertionError("no Auth token in ClientLogin response")
+
+        # Wrong token is rejected.
+        bad = client.post("/greader/accounts/ClientLogin", data={"Email": admin, "Passwd": "wrong"})
+        assert bad.status_code == 403, bad.status_code
+
+        auth_admin = client_login(admin, tok_admin)
+        auth_bob = client_login("bob", tok_bob)
+        assert auth_admin != auth_bob
+
+        def greader_get(path, token):
+            return client.get(path, headers={"Authorization": f"GoogleLogin auth={token}"})
+
+        # user-info reflects the bearer token's user.
+        assert greader_get("/greader/reader/api/0/user-info", auth_admin).json()["userName"] == admin
+        assert greader_get("/greader/reader/api/0/user-info", auth_bob).json()["userName"] == "bob"
+
+        # tag-list routes to each user's own folders — no cross-user bleed.
+        admin_tags = greader_get("/greader/reader/api/0/tag/list", auth_admin).text
+        bob_tags = greader_get("/greader/reader/api/0/tag/list", auth_bob).text
+        assert "AdminFolder" in admin_tags and "BobFolder" not in admin_tags
+        assert "BobFolder" in bob_tags and "AdminFolder" not in bob_tags
+
+        # No/garbage token → 401.
+        assert greader_get("/greader/reader/api/0/user-info", "garbage").status_code == 401
+
+        # --- Fever: api_key = md5(username:api_token) resolves to the user ---
+        def fever_key(user, token):
+            return hashlib.md5(f"{user}:{token}".encode()).hexdigest()
+
+        r = client.post("/fever", data={"api": "", "api_key": fever_key(admin, tok_admin)})
+        assert r.json()["auth"] == 1, r.json()
+        r = client.post("/fever", data={"api": "", "api_key": "deadbeef"})
+        assert r.json()["auth"] == 0, r.json()
+        # A user's key with another user's name must not authenticate.
+        r = client.post("/fever", data={"api": "", "api_key": fever_key("bob", tok_admin)})
+        assert r.json()["auth"] == 0, r.json()
+
+
+def _csrf_token(html: str) -> str:
+    import re
+
+    m = re.search(r'name="_csrf" value="([^"]+)"', html)
+    assert m, "no _csrf token in rendered form"
+    return m.group(1)
+
+
+def _scenario_account_ui() -> None:
+    assert main.MULTI_USER and main.user_store is not None
+    admin = os.environ["LECTIO_ADMIN_USERNAME"]
+    admin_pw = os.environ["LECTIO_ADMIN_PASSWORD"]
+
+    with TestClient(main.app) as client:
+        # Unauthenticated → redirected to login by the auth gate.
+        assert client.get("/account", follow_redirects=False).status_code == 303
+
+        assert client.post("/login", data={"username": admin, "password": admin_pw},
+                           follow_redirects=False).status_code == 303
+
+        r = client.get("/account")
+        assert r.status_code == 200
+        assert admin in r.text
+        assert "Create user" in r.text  # admin section present
+
+        # Admin creates a user → provisioned storage.
+        tok = _csrf_token(r.text)
+        r = client.post("/admin/users/create",
+                        data={"_csrf": tok, "username": "carol", "password": "carol-pw"},
+                        follow_redirects=False)
+        assert r.status_code == 303
+        assert main.user_store.get("carol") is not None
+        assert (tenancy.user_data_dir("carol") / "lectio_meta.sqlite3").exists()
+
+        # Change own password.
+        tok = _csrf_token(client.get("/account").text)
+        r = client.post("/account/password",
+                        data={"_csrf": tok, "current_password": admin_pw,
+                              "new_password": "newadminpw", "confirm_password": "newadminpw"},
+                        follow_redirects=False)
+        assert r.status_code == 303
+        assert main.user_store.verify_login(admin, "newadminpw",
+                                            default_scheme=main.PASSWORD_HASH_SCHEME) == admin
+
+        # Wrong current password is rejected (redirect carries an error).
+        tok = _csrf_token(client.get("/account").text)
+        r = client.post("/account/password",
+                        data={"_csrf": tok, "current_password": "nope",
+                              "new_password": "x", "confirm_password": "x"},
+                        follow_redirects=False)
+        assert r.status_code == 303 and "error" in r.headers["location"]
+
+        # Regenerate own API token.
+        old_token = main.user_store.get_api_token(admin)
+        tok = _csrf_token(client.get("/account").text)
+        r = client.post("/account/api-token/regenerate", data={"_csrf": tok}, follow_redirects=False)
+        assert r.status_code == 303
+        assert main.user_store.get_api_token(admin) != old_token
+
+        # --- non-admin cannot reach admin actions ---
+        assert client.post("/login", data={"username": "carol", "password": "carol-pw"},
+                           follow_redirects=False).status_code == 303
+        r = client.get("/account")
+        assert r.status_code == 200
+        assert "Create user" not in r.text  # admin section hidden
+        tok = _csrf_token(r.text)
+        r = client.post("/admin/users/create",
+                        data={"_csrf": tok, "username": "dave", "password": "x"},
+                        follow_redirects=False)
+        assert r.status_code == 403
+        assert main.user_store.get("dave") is None
 
 
 def main_entry() -> None:
@@ -93,6 +249,10 @@ def main_entry() -> None:
         _scenario_multi()
     elif scenario == "single":
         _scenario_single()
+    elif scenario == "multi_api":
+        _scenario_multi_api()
+    elif scenario == "account_ui":
+        _scenario_account_ui()
     else:
         raise SystemExit(f"unknown SCENARIO: {scenario!r}")
     print("HARNESS PASS")

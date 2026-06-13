@@ -89,8 +89,12 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **WebSub (PubSubHubbub)** — feeds that advertise a hub receive real-time push updates instead of waiting for the next poll; HMAC-verified, subscriptions renewed automatically. Requires `LECTIO_PUBLIC_URL` in `.env`.
 
 ### API compatibility
-- **GReader API** — Google Reader-compatible API at `/greader`; works with Capy, Readrops, Aggregator, Read You, and other Android/desktop clients. Authenticate with your Lectio username and `LECTIO_FEVER_PASSWORD`.
-- **Fever API** — Fever-compatible API at `/fever`; works with Reeder, FeedMe, NetNewsWire, etc. Set `LECTIO_FEVER_PASSWORD` in `.env` to enable. Uses a dedicated password (not your main login) because Fever transmits credentials as MD5.
+- **GReader API** — Google Reader-compatible API at `/greader`; works with Capy, Readrops, Aggregator, Read You, and other Android/desktop clients. Authenticate with your Lectio username and `LECTIO_FEVER_PASSWORD` (single mode) or your per-user API token from `/account` (multi mode).
+- **Fever API** — Fever-compatible API at `/fever`; works with Reeder, FeedMe, NetNewsWire, etc. Set `LECTIO_FEVER_PASSWORD` in `.env` to enable (single mode), or use your per-user API token from `/account` (multi mode). Uses a dedicated credential (not your main login) because Fever transmits credentials as MD5.
+
+### Multi-user (optional)
+- **Security modes** — `LECTIO_SECURITY_MODE=single` (default) is the classic single-user setup. `multi` enables per-user accounts: each user gets isolated databases under `data/users/<username>/`, while thumbnails and image caches stay shared. Set the bootstrap admin with `LECTIO_ADMIN_USERNAME` / `LECTIO_ADMIN_PASSWORD` (created on first start), and pick a password hashing scheme with `LECTIO_PASSWORD_HASH_SCHEME` (`scrypt` default, `pbkdf2_sha256`, or `argon2` with `argon2-cffi` installed).
+- **Account page** — visit `/account` to change your password and view/regenerate your API token; admins can create/disable users and reset passwords. In multi mode each user authenticates to the GReader/Fever APIs with their own username + API token (shown on `/account`).
 
 ### Data portability
 - **Takeout / Export & Import** — ZIP archive containing feeds (OPML), rules, contacts, tags, starred entries, read history, and settings; imports non-destructively

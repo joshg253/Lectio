@@ -96,11 +96,27 @@ user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`.
   routes to the user's own DBs. A username doubles as the tenancy `user_id` and a
   path segment, so it must match the resolver's slug charset.
 
-Remaining (see Plan.md): per-user API tokens for the Fever/GReader protocols
-(they currently run as the default user — a background pre-sync thread reads the
-legacy DBs), per-user background refresh, account-management UI, and the data
-migration of the existing single-user DBs into a user. (SSRF hardening of the
-`/api/img` and `/thumb` proxies has landed — see "Security posture".)
+Per-user API tokens (Fever + GReader): each user has an `api_token` in the auth
+DB, serving both protocols (as the single `LECTIO_FEVER_PASSWORD` did before).
+Fever resolves `md5(username:api_token)` to a user; GReader ClientLogin verifies
+username + token and mints a global bearer token (`greader_api_tokens`, a global
+table because a request carries only the token and must resolve to a user before
+the context is bound). GReader binds context in `_TenancyMiddleware` from the
+header/query token (no body read); Fever binds in its handler (api_key is in the
+body). The protocol services' data methods are user-independent and reused
+as-is; Fever's entry-map sync is tracked per user. Background work spawned by a
+request (GReader mark-all-as-read) re-binds the captured user via
+`_run_in_user_context`, since threads don't inherit contextvars.
+
+Account UI: `/account` (multi mode only; 404 in single) lets a user change their
+password and view/regenerate their API token; admins additionally create/disable
+users and reset passwords. New users are provisioned (`provision_user_storage`)
+on creation.
+
+Remaining (see Plan.md): per-user **background refresh** (the refresh daemon and
+WebSub push still run as the default user), linking `/account` from the main
+settings UI, and the data migration of the existing single-user DBs into a user.
+(SSRF hardening of `/api/img` and `/thumb` has landed — see "Security posture".)
 
 ### What stays global in every mode
 

@@ -12,6 +12,18 @@ This file is the backlog and staging area for future work.
   `get_starred_archive_connection()` resolves per-user; the thumb cache stays
   global. 30 new tests; full suite green (332).
 
+- **Multi-user Phase 3 — per-user API tokens + account/admin UI**. Each user has
+  an `api_token` (auth DB) serving both protocols. Fever resolves
+  `md5(username:api_token)` → user; GReader ClientLogin verifies username+token
+  and issues a global bearer token (`greader_api_tokens`) → user. Both bind the
+  tenancy context per request (GReader via `_TenancyMiddleware` from the header
+  token; Fever in its handler), so the unchanged service data methods read the
+  right user's DBs; Fever's entry-map sync is now per-user. `_run_in_user_context`
+  re-binds the context for the mark-all-as-read background thread. New `/account`
+  page: change password, view/regenerate API token, and (admins) create/disable
+  users + reset passwords. Single mode unchanged; UI is 404 there. 43 new tests
+  (incl. GReader/Fever per-user isolation + account-UI E2E).
+
 - **Multi-user Phase 2 (core) — users table + per-user auth + request routing**.
   `LECTIO_SECURITY_MODE` (single default | multi). `services/passwords.py`
   (scrypt default / pbkdf2_sha256 / optional argon2; self-describing hashes,
@@ -40,14 +52,15 @@ Phasing:
 
 1. ~~**Tenancy resolver + per-user connection pool**~~ — DONE (see Recently
    Completed). `services/tenancy.py` + per-(thread, user) pools in main.py.
-2. ~~**Users table + per-user auth**~~ — DONE (core; see Recently Completed).
-   Remaining Phase-2 follow-ups: an account-management UI (create/disable users,
-   change password — currently only the bootstrap admin exists and provisioning
-   is programmatic), and a logged-in password-change flow.
-3. **Per-user API tokens** — Fever/GReader still share one env password and, in
-   multi mode, their background pre-sync runs as the default user (reads the
-   legacy DBs). Each user needs their own token + per-user routing for these
-   protocols. Until then, the Fever/GReader APIs are effectively single-user.
+2. ~~**Users table + per-user auth**~~ — DONE (core + account/admin UI at
+   `/account`). Remaining: link `/account` from the main settings UI; optional
+   user deletion (today: disable).
+3. ~~**Per-user API tokens**~~ — DONE for Fever + GReader (see Recently
+   Completed). Remaining: per-user **background refresh** — the refresh daemon /
+   WebSub push and Fever's `sync_feed_entries`-after-refresh still run as the
+   default user, so a non-default user's feeds are only refreshed when something
+   binds their context. Needs a per-user refresh schedule (iterate users, bind
+   each) before multi-user is fully autonomous.
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
    `url_guard.safe_get` / `safe_get_async` follow redirects manually and
    re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
