@@ -17,9 +17,11 @@ This file is the backlog and staging area for future work.
   and runs each pass (`_scheduled_refresh_tick`) under that user's tenancy
   context, reading their own cadence (`_effective_auto_refresh_minutes`) and
   refreshing their own feeds. One user's failure doesn't stop the others. Single
-  mode runs once as the default user (unchanged). 5 new tests. Still default-user
-  only (noted below): WebSub push routing, daily maintenance VACUUM/cleanup, and
-  YouTube sync.
+  mode runs once as the default user (unchanged). Daily maintenance (rule-log
+  prune, orphan cleanup, meta+starred VACUUM, email-batch flush) and the
+  per-minute email-batch flush now also run per user; thumb-cache VACUUM and
+  YouTube sync stay global (`_run_global_maintenance`). Still default-user only:
+  WebSub push routing. 7 new tests.
 
 - **Multi-user Phase 3 — per-user API tokens + account/admin UI**. Each user has
   an `api_token` (auth DB) serving both protocols. Fever resolves
@@ -71,8 +73,6 @@ Phasing:
      find which users subscribe to it (across per-user `websub_subscriptions`)
      and refresh each. Until then a push refreshes only the default user; other
      users still get the content on their next scheduled pass.
-   - **Daily maintenance** (VACUUM / orphan cleanup / log prune) and **YouTube
-     sync** — run on the default user's DBs only.
    - **Update scheduling policy** — revisit cadence/fairness across many users
      (currently each user is processed sequentially every poll tick).
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.

@@ -7612,8 +7612,22 @@ def _scheduled_refresh_tick() -> None:
 
 
 def _run_daily_maintenance() -> None:
-    """Nightly cleanup: VACUUM DBs, prune old logs, purge orphaned rows, sync YouTube."""
+    """Nightly cleanup. Per-user work (log prune, orphan cleanup, VACUUM of the
+    user's meta/starred DBs, email-batch flush) runs once per enabled user under
+    their tenancy context; global work (thumb-cache VACUUM, YouTube sync) once."""
     LOGGER.info("[maintenance] starting daily maintenance")
+    for _uid in _background_user_ids():
+        with tenancy.user_context(_uid):
+            try:
+                _daily_maintenance_for_user()
+            except Exception:
+                LOGGER.exception("[maintenance] failed for user %r", _uid)
+    _run_global_maintenance()
+    LOGGER.info("[maintenance] daily maintenance complete")
+
+
+def _daily_maintenance_for_user() -> None:
+    """Per-user nightly cleanup for the currently-bound tenancy user."""
 
     # 1. Prune rule_run_log older than 90 days.
     try:
@@ -7657,29 +7671,21 @@ def _run_daily_maintenance() -> None:
     except Exception:
         LOGGER.exception("[maintenance] orphan cleanup failed")
 
-    # 3. VACUUM all app-owned SQLite DBs.
+    # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
+    # vacuumed once in _run_global_maintenance).
     for label, path in [
-        ("meta", META_DB_PATH),
-        ("thumb", THUMB_DB_PATH),
+        ("meta", tenancy.meta_db_path()),
+        ("starred-archive", tenancy.starred_archive_db_path()),
     ]:
         try:
+            if not Path(path).exists():
+                continue
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
             LOGGER.exception("[maintenance] VACUUM %s failed", label)
-
-    # Starred archive DB (may not exist).
-    try:
-        archive_path = getattr(starred_archive_service, "db_path", None)
-        if archive_path and Path(archive_path).exists():
-            conn = sqlite3.connect(str(archive_path))
-            conn.execute("VACUUM")
-            conn.close()
-            LOGGER.info("[maintenance] VACUUM starred-archive done")
-    except Exception:
-        LOGGER.exception("[maintenance] VACUUM starred-archive failed")
 
     # 4. Flush pending email batch queues.
     try:
@@ -7688,7 +7694,24 @@ def _run_daily_maintenance() -> None:
     except Exception:
         LOGGER.exception("[maintenance] email batch flush failed")
 
-    # 5. YouTube subscription sync (if configured).
+    # 5. Record this user's last-ran timestamp.
+    with get_meta_connection() as conn:
+        set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
+
+
+def _run_global_maintenance() -> None:
+    """Nightly cleanup that is not per-user: VACUUM the shared thumb cache and
+    run the YouTube subscription sync (a single global config)."""
+    try:
+        conn = sqlite3.connect(str(THUMB_DB_PATH))
+        conn.execute("VACUUM")
+        conn.close()
+        LOGGER.info("[maintenance] VACUUM thumb done")
+    except Exception:
+        LOGGER.exception("[maintenance] VACUUM thumb failed")
+
+    # YouTube subscription sync (if configured). Global config → runs once, as
+    # the default user (writes into the YouTube folder of the default DBs).
     if get_yt_api_key() and get_yt_channel_id():
         try:
             result = _run_youtube_sync()
@@ -7702,10 +7725,6 @@ def _run_daily_maintenance() -> None:
         except Exception:
             LOGGER.exception("[maintenance] YouTube sync failed")
 
-    LOGGER.info("[maintenance] daily maintenance complete")
-    with get_meta_connection() as conn:
-        set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
-
 
 def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     """Thread that fires _run_daily_maintenance() once per day and flushes email
@@ -7713,11 +7732,17 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     last_ran_date: str | None = None
     last_batch_check_hhmm: str | None = None
     while not stop_event.wait(30):
-        # Flush email batches at their configured batch_time (once per clock minute).
+        # Flush email batches at their configured batch_time (once per clock
+        # minute), per user — email_batch_queue lives in each user's meta DB.
         now_hhmm = time.strftime("%H:%M")
         if now_hhmm != last_batch_check_hhmm:
             last_batch_check_hhmm = now_hhmm
-            _check_and_flush_batch_times()
+            for _uid in _background_user_ids():
+                with tenancy.user_context(_uid):
+                    try:
+                        _check_and_flush_batch_times()
+                    except Exception:
+                        LOGGER.exception("[maintenance] email batch flush failed for user %r", _uid)
 
         # Daily maintenance once per day at configured hour.
         maint_hour = get_maintenance_hour()

@@ -53,6 +53,38 @@ def test_scheduled_refresh_single_mode_runs_as_default(monkeypatch):
     assert seen == [tenancy.DEFAULT_USER_ID]
 
 
+def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
+    store = UserStore(tmp_path / "auth.sqlite")
+    store.create("alice", "pw")
+    store.create("bob", "pw")
+    monkeypatch.setattr(main, "MULTI_USER", True)
+    monkeypatch.setattr(main, "user_store", store)
+
+    per_user: list[str] = []
+    global_runs: list[str] = []
+    monkeypatch.setattr(main, "_daily_maintenance_for_user",
+                        lambda: per_user.append(tenancy.current_user_id()))
+    monkeypatch.setattr(main, "_run_global_maintenance",
+                        lambda: global_runs.append(tenancy.current_user_id()))
+
+    main._run_daily_maintenance()
+
+    assert set(per_user) == {"alice", "bob"}  # per-user work bound to each user
+    assert global_runs == [tenancy.DEFAULT_USER_ID]  # global work runs once, unbound
+    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+
+
+def test_daily_maintenance_single_mode(monkeypatch):
+    monkeypatch.setattr(main, "MULTI_USER", False)
+    monkeypatch.setattr(main, "user_store", None)
+    per_user: list[str] = []
+    monkeypatch.setattr(main, "_daily_maintenance_for_user",
+                        lambda: per_user.append(tenancy.current_user_id()))
+    monkeypatch.setattr(main, "_run_global_maintenance", lambda: None)
+    main._run_daily_maintenance()
+    assert per_user == [tenancy.DEFAULT_USER_ID]
+
+
 def test_one_users_failure_does_not_stop_others(monkeypatch, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
     store.create("alice", "pw")

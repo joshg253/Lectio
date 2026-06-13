@@ -113,16 +113,18 @@ password and view/regenerate their API token; admins additionally create/disable
 users and reset passwords. New users are provisioned (`provision_user_storage`)
 on creation.
 
-Per-user background refresh: the scheduled refresh loop iterates every enabled
-user (`_background_user_ids`) and runs each pass under that user's context, so
-their feeds refresh on their own cadence. Still default-user only: the WebSub
-push callback (a push carries only a feed URL and must fan out to its
-subscribers), daily maintenance (VACUUM/cleanup), and YouTube sync.
+Per-user background work: the scheduled refresh loop and the daily-maintenance
+loop both iterate every enabled user (`_background_user_ids`) and run each pass
+under that user's context — feeds refresh on each user's cadence, and per-user
+maintenance (rule-log prune, orphan cleanup, meta/starred VACUUM, email-batch
+flush) runs against each user's DBs. Work that is genuinely global runs once in
+`_run_global_maintenance` (thumb-cache VACUUM, YouTube sync — a single config).
 
-Remaining (see Plan.md): the background items above, linking `/account` from the
-main settings UI, and the data migration of the existing single-user DBs into a
-user. (SSRF hardening of `/api/img` and `/thumb` has landed — see "Security
-posture".)
+Remaining (see Plan.md): the WebSub push callback (a push carries only a feed URL
+and must fan out to its subscribers) still runs as the default user; linking
+`/account` from the main settings UI; and the data migration of the existing
+single-user DBs into a user. (SSRF hardening of `/api/img` and `/thumb` has
+landed — see "Security posture".)
 
 ### What stays global in every mode
 
