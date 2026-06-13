@@ -1657,6 +1657,7 @@
               <optgroup label="Per-entry">
                 <option value="">Auto (same as article image source)</option>
                 <option value="__per_entry_inline__">Inline — first image from feed content</option>
+                <option value="__per_entry_media_rss__">Media RSS — per-post media thumbnail</option>
               </optgroup>
               <optgroup id="feed-prop-thumb-strategies-group" label="Pin image from this entry (same URL for all posts)"></optgroup>
               <option value="__custom__">Custom URL…</option>
@@ -4246,7 +4247,7 @@
         previewUrl = document.getElementById('feed-prop-thumbnail-url')?.value?.trim() || null;
       } else if (val.startsWith('__strat__')) {
         previewUrl = val.slice(9);
-      } else if (val === '' || val === '__per_entry_inline__') {
+      } else if (val === '' || val === '__per_entry_inline__' || val === '__per_entry_media_rss__') {
         // For per-entry modes, show first strategy cache entry as a representative preview
         previewUrl = select.dataset.autoPreviewUrl || null;
       }
@@ -4300,6 +4301,8 @@
         select.value = '__disabled__';
       } else if (!currentThumbUrl && thumbStrategy === 'inline') {
         select.value = '__per_entry_inline__';
+      } else if (!currentThumbUrl && thumbStrategy === 'media_rss') {
+        select.value = '__per_entry_media_rss__';
       } else if (!currentThumbUrl) {
         select.value = '';
       } else if (currentThumbUrl === '__favicon__') {
@@ -4905,12 +4908,13 @@
       }
       // Re-enable thumbnails if they were disabled
       await saveDisplayPref(feedUrl, 'show_lead_image_as_thumb', 1);
-      if (val === '__per_entry_inline__') {
-        // Per-entry inline: clear pinned URL, set thumb_strategy=inline
-        select.dataset.thumbStrategy = 'inline';  // update immediately so doStrategyRefresh sees it
+      if (val === '__per_entry_inline__' || val === '__per_entry_media_rss__') {
+        // Per-entry strategy: clear pinned URL, set thumb_strategy
+        const strategy = val === '__per_entry_media_rss__' ? 'media_rss' : 'inline';
+        select.dataset.thumbStrategy = strategy;  // update immediately so doStrategyRefresh sees it
         await Promise.all([
           fetch('/feeds/thumbnail-url', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, thumbnail_url: '' }), credentials: 'same-origin' }),
-          fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy: 'inline' }), credentials: 'same-origin' }),
+          fetch('/feeds/thumb-strategy', { method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, strategy }), credentials: 'same-origin' }),
         ]);
         select.dataset.savedThumbUrl = '';
         return;

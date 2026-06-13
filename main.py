@@ -1772,7 +1772,7 @@ _VALID_THUMB_CROPS = frozenset({
     "cover-bottom-left", "cover-bottom", "cover-bottom-right",
     "contain", "smart",
 })
-_VALID_THUMB_STRATEGIES = frozenset({"inline"})
+_VALID_THUMB_STRATEGIES = frozenset({"inline", "media_rss"})
 
 # Caption text that is purely a date (e.g. "June 12, 2026" or "6/12/2026") — strip it.
 _DATE_ONLY_CAP_RE = re.compile(
@@ -5826,6 +5826,8 @@ def list_entries_for_feeds(
         elif _thumb_strategy == "inline":
             # Use first image from feed content HTML — bypasses the og_scrape cache
             _raw_thumb = lead_image_service.extract_inline_thumb_url(entry)
+        elif _thumb_strategy == "media_rss":
+            _raw_thumb = lead_image_service.extract_media_rss_thumb_url(entry)
         else:
             # Auto: use the same cached lead image shown in the article view.
             # Don't fall back to inline media_thumbnail/enclosure fields — that
@@ -8680,10 +8682,11 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 top = round(ey * v_frac)
                 img = img.crop((left, top, left + _THUMB_W, top + _THUMB_H))
             else:
-                # Zoom < 1.0: image smaller than frame — paste centered on black canvas.
+                # Zoom < 1.0: image smaller than frame — paste on black canvas at anchor position.
                 canvas = _PILImage.new("RGB", (_THUMB_W, _THUMB_H), (0, 0, 0))
-                paste_left = (_THUMB_W - new_w) // 2
-                paste_top = (_THUMB_H - new_h) // 2
+                h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
+                paste_left = round((_THUMB_W - new_w) * h_frac)
+                paste_top = round((_THUMB_H - new_h) * v_frac)
                 canvas.paste(img, (paste_left, paste_top))
                 img = canvas
         buf = io.BytesIO()
@@ -9108,7 +9111,7 @@ def set_folder_cadence(folder_id: int = Form(...), cadence_minutes: str = Form(.
     return JSONResponse({"ok": True, "cadence_minutes": minutes if minutes > 0 else None})
 
 
-_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "none", "webcomic", "artwork"}
+_VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "enclosure", "none", "webcomic", "artwork"}
 
 
 def _auto_tag_webcomic_feeds() -> None:

@@ -793,6 +793,41 @@ class LeadImageService:
                 return inline_image
         return None
 
+    def extract_media_rss_thumb_url(self, entry: object) -> str | None:
+        """Return a media:thumbnail or image-type media:content URL from the entry's RSS fields.
+
+        Intentionally bypasses the lead-image cache. No HTTP requests; only fields
+        already stored in the reader DB are used.
+        """
+        entry_link = str(getattr(entry, "link", "") or "")
+        try:
+            media_thumb = getattr(entry, "media_thumbnail", None)
+            if media_thumb:
+                candidates = media_thumb if isinstance(media_thumb, (list, tuple)) else [media_thumb]
+                for item in candidates:
+                    url = None
+                    if isinstance(item, dict):
+                        url = item.get("url") or item.get("href")
+                    elif isinstance(item, str):
+                        url = item
+                    if url and self._is_image_url_acceptable(url, None, None) and not self._should_bypass_cached_url(
+                        entry_link=entry_link, cached_url=url
+                    ):
+                        return url
+            media_content = getattr(entry, "media_content", None)
+            if media_content:
+                candidates = media_content if isinstance(media_content, (list, tuple)) else [media_content]
+                for item in candidates:
+                    if isinstance(item, dict):
+                        url = item.get("url")
+                        mtype = item.get("type", "")
+                        if url and (mtype.startswith("image") or self._is_image_url_acceptable(url, None, None)):
+                            if not self._should_bypass_cached_url(entry_link=entry_link, cached_url=url):
+                                return url
+        except Exception:
+            pass
+        return None
+
     def resolve_entry_lead_image_url(self, entry: object, content_html: str | None, summary: str | None) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url_str = str(getattr(entry, "feed_url", "") or "")
