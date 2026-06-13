@@ -76,9 +76,30 @@ tenancy.meta_db_for(user_id)
 Implementation status: the resolver and per-user connection pools exist
 (`services/tenancy.py`; `get_reader()` / `get_meta_connection()` /
 `get_starred_archive_connection()` in main.py resolve through it). The current
-user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`, so nothing
-sets a non-default user yet — auth wiring, a users table, per-user API tokens,
-and the data migration are the remaining phases (see Plan.md).
+user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`.
+
+`LECTIO_SECURITY_MODE` selects the posture:
+
+- **single** (default) — legacy single-user; the `LECTIO_USERNAME`/`PASSWORD`
+  env credential gates the login. The tenancy context never leaves
+  `DEFAULT_USER_ID`, so behavior is identical to before multi-user existed.
+- **multi** — accounts live in a global users table (`lectio_auth.sqlite`,
+  `services/users.py`, NOT routed through tenancy). Passwords are hashed by
+  `services/passwords.py` (scheme via `LECTIO_PASSWORD_HASH_SCHEME`: `scrypt`
+  default, `pbkdf2_sha256`, or `argon2` if `argon2-cffi` is installed; hashes are
+  self-describing and transparently re-hashed to the configured scheme on login).
+  On first startup with an empty table, an admin is seeded from
+  `LECTIO_ADMIN_USERNAME`/`LECTIO_ADMIN_PASSWORD` (default `admin`/`ChangeA$ap`,
+  with a loud warning if the default password is used). Login binds
+  `session["user_id"]`; `_TenancyMiddleware` (pure-ASGI, innermost) binds that
+  user into the tenancy context around the endpoint, so every storage access
+  routes to the user's own DBs. A username doubles as the tenancy `user_id` and a
+  path segment, so it must match the resolver's slug charset.
+
+Remaining (see Plan.md): per-user API tokens for the Fever/GReader protocols
+(they currently run as the default user — a background pre-sync thread reads the
+legacy DBs), per-user background refresh, account-management UI, SSRF hardening,
+and the data migration of the existing single-user DBs into a user.
 
 ### What stays global in every mode
 

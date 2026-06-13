@@ -43,9 +43,11 @@ from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import passwords
 from services import scraper_service
 from services import takeout_service
 from services import tenancy
+from services.users import UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
 from services.feed_refresh import FeedRefreshService
@@ -171,6 +173,9 @@ META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
 THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
 STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
+# Global account registry (NOT per-user, NOT routed through tenancy): one users
+# table for the whole instance. Only used in multi-user (security) mode.
+AUTH_DB_PATH = DATA_DIR / "lectio_auth.sqlite"
 THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
 
 # Bind the tenancy resolver. The DEFAULT_USER_ID resolves to these legacy paths,
@@ -317,7 +322,46 @@ def get_maintenance_hour() -> int | None:
 # If not set a random key is generated at startup (sessions won't survive restarts).
 AUTH_USERNAME = os.getenv("LECTIO_USERNAME", "")
 AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
-AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+
+# --- Multi-user / security mode ---
+# LECTIO_SECURITY_MODE selects the tenancy & auth posture:
+#   single - legacy single-user; the LECTIO_USERNAME/PASSWORD env credential
+#            gates access, no per-user separation. Default.
+#   multi  - multi-user with isolated per-user databases (the tenancy "isolated"
+#            mode). Accounts live in a users table; each user gets their own
+#            reader/meta/starred DBs under DATA_DIR/users/<username>/.
+# A future "shared-content" mode is documented in ARCHITECTURE.md.
+_SECURITY_MODE_RAW = os.getenv("LECTIO_SECURITY_MODE", "single").strip().lower()
+if _SECURITY_MODE_RAW not in {"single", "multi"}:
+    LOGGER.warning(
+        "LECTIO_SECURITY_MODE=%r unrecognized; using 'single'. Valid: single, multi.",
+        _SECURITY_MODE_RAW,
+    )
+    _SECURITY_MODE_RAW = "single"
+SECURITY_MODE = _SECURITY_MODE_RAW
+MULTI_USER = SECURITY_MODE == "multi"
+
+# Password hashing scheme for stored credentials (multi mode). scrypt and
+# pbkdf2_sha256 are stdlib; argon2 needs the optional argon2-cffi package.
+PASSWORD_HASH_SCHEME = os.getenv("LECTIO_PASSWORD_HASH_SCHEME", passwords.DEFAULT_SCHEME).strip().lower()
+if MULTI_USER and PASSWORD_HASH_SCHEME not in passwords.available_schemes():
+    LOGGER.warning(
+        "LECTIO_PASSWORD_HASH_SCHEME=%r not available (have: %s); using %s.",
+        PASSWORD_HASH_SCHEME, ", ".join(passwords.available_schemes()), passwords.DEFAULT_SCHEME,
+    )
+    PASSWORD_HASH_SCHEME = passwords.DEFAULT_SCHEME
+
+# Bootstrap admin account, seeded on first startup in multi mode when the users
+# table is empty. CHANGE the default password before exposing the instance.
+_DEFAULT_ADMIN_PASSWORD = "ChangeA$ap"
+BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
+BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
+
+# Auth is enabled by an env credential (single mode) OR whenever multi mode is on.
+AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD) or MULTI_USER
+
+# Global account registry; only instantiated in multi mode.
+user_store = UserStore(AUTH_DB_PATH) if MULTI_USER else None
 FEVER_API_KEY = (
     hashlib.md5(f"{AUTH_USERNAME}:{_FEVER_PASSWORD}".encode()).hexdigest()
     if _FEVER_PASSWORD and AUTH_USERNAME
@@ -411,6 +455,7 @@ async def lifespan(app: FastAPI):
     ensure_meta_schema()
     ensure_thumb_schema()
     ensure_starred_archive_schema()
+    bootstrap_admin()
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
@@ -689,6 +734,37 @@ class _AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         next_url = str(request.url)
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
+
+
+class _TenancyMiddleware:
+    """Bind the request's user into the tenancy context (multi mode only).
+
+    Pure-ASGI and registered innermost (downstream of the auth gate), so the
+    binding wraps the route handler. Sync handlers run via anyio's threadpool,
+    which copies the current contextvars into the worker thread, so a value set
+    here is visible to get_reader() / get_meta_connection() deep in the call
+    stack. In single mode this is a no-op and the context stays DEFAULT_USER_ID.
+
+    Requests without a valid authenticated session user (static assets, the
+    Fever/GReader APIs, unauthenticated hits) resolve to the default user; those
+    API protocols carry their own per-user identity in a later phase.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or not MULTI_USER:
+            return await self.app(scope, receive, send)
+        session = scope.get("session") or {}
+        uid = session.get("user_id")
+        if uid and session.get("authenticated") and tenancy.is_valid_user_id(uid):
+            token = tenancy.set_current_user(uid)
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                tenancy.reset_current_user(token)
+        return await self.app(scope, receive, send)
 
 
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
@@ -1034,6 +1110,9 @@ class _CSRFMiddleware:
 #   → _AuthMiddleware (gate on session["authenticated"]; needs scope["session"])
 #   → app
 # Therefore add Auth FIRST (innermost) and outer middlewares LAST.
+# _TenancyMiddleware is added before Auth so it is innermost of all — it binds
+# the per-user context right around the endpoint, after the auth gate has run.
+app.add_middleware(_TenancyMiddleware)
 app.add_middleware(_AuthMiddleware)
 app.add_middleware(_CSRFMiddleware)
 app.add_middleware(
@@ -1252,6 +1331,56 @@ def ensure_starred_archive_schema() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_asset_link_hash ON archived_asset_link (asset_hash)")
+
+
+def provision_user_storage(username: str) -> None:
+    """Create and schema-init a user's isolated databases.
+
+    Routes through the tenancy seam: under ``user_context`` the schema-init
+    helpers and reader open resolve to this user's own DB files. Idempotent —
+    safe to call on an already-provisioned user.
+    """
+    tenancy.ensure_user_data_dir(username)
+    with tenancy.user_context(username):
+        ensure_meta_schema()
+        ensure_starred_archive_schema()
+        # reader builds its own schema on first client(); opening provisions it.
+        with get_reader():
+            pass
+
+
+def bootstrap_admin() -> None:
+    """Seed the bootstrap admin on first startup in multi mode.
+
+    No-op outside multi mode, or once any user exists. Provisions the new admin's
+    isolated storage and warns loudly if the default password is still in use.
+    """
+    if not MULTI_USER or user_store is None:
+        return
+    if user_store.count() > 0:
+        return
+    username = BOOTSTRAP_ADMIN_USERNAME
+    if not tenancy.is_valid_user_id(username):
+        LOGGER.error(
+            "Cannot bootstrap admin: LECTIO_ADMIN_USERNAME=%r is not a valid "
+            "username (must match {A-Za-z0-9_-}, 1-64 chars).",
+            username,
+        )
+        return
+    try:
+        user_store.create(username, BOOTSTRAP_ADMIN_PASSWORD, is_admin=True, scheme=PASSWORD_HASH_SCHEME)
+        provision_user_storage(username)
+    except Exception:
+        LOGGER.exception("failed to bootstrap admin user %r", username)
+        return
+    if BOOTSTRAP_ADMIN_PASSWORD == _DEFAULT_ADMIN_PASSWORD:
+        LOGGER.warning(
+            "Bootstrapped admin %r with the DEFAULT password. Set LECTIO_ADMIN_PASSWORD "
+            "(and change the account password) before exposing this instance.",
+            username,
+        )
+    else:
+        LOGGER.info("Bootstrapped admin user %r.", username)
 
 
 def ensure_meta_schema() -> None:
@@ -7950,7 +8079,21 @@ async def login_submit(request: Request, next: str = "/"):
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
-    if AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
+    if MULTI_USER:
+        # Multi-user: authenticate against the users table; bind the session to
+        # the resolved user_id so _TenancyMiddleware routes to their DBs.
+        resolved = (
+            user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
+            if user_store is not None
+            else None
+        )
+        if resolved is not None:
+            _clear_login_failures(ip)
+            request.session.clear()  # rotate session on login (anti-fixation)
+            request.session["authenticated"] = True
+            request.session["user_id"] = resolved
+            return RedirectResponse(url=next or "/", status_code=303)
+    elif AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
         _clear_login_failures(ip)
         request.session["authenticated"] = True
         return RedirectResponse(url=next or "/", status_code=303)
