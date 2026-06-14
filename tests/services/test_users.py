@@ -6,7 +6,7 @@ import hashlib
 import pytest
 
 from services import passwords
-from services.users import UserExistsError, UserStore
+from services.users import ReservedUsernameError, UserExistsError, UserStore
 
 
 @pytest.fixture
@@ -41,6 +41,28 @@ def test_duplicate_username_rejected(store):
     store.create("alice", "pw")
     with pytest.raises(UserExistsError):
         store.create("alice", "other")
+
+
+def test_username_uniqueness_is_case_insensitive(store):
+    store.create("Alice", "pw")
+    with pytest.raises(UserExistsError):
+        store.create("alice", "other")  # differs only by case
+
+
+def test_login_and_lookup_case_insensitive(store):
+    uid = store.create("Alice", "pw")
+    assert store.get("alice")["user_id"] == uid
+    assert store.verify_login("ALICE", "pw") == uid
+
+
+def test_reserved_username_rejected(store):
+    with pytest.raises(ReservedUsernameError):
+        store.create("default", "pw")
+    with pytest.raises(ReservedUsernameError):
+        store.create("Default", "pw")  # reserved check is case-insensitive
+    uid = store.create("alice", "pw")
+    with pytest.raises(ReservedUsernameError):
+        store.rename_user(uid, "DEFAULT")
 
 
 @pytest.mark.parametrize("bad", ["../evil", "a/b", "has space", "", "x" * 65])

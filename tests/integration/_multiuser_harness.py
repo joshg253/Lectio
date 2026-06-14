@@ -240,7 +240,7 @@ def _scenario_account_ui() -> None:
                         data={"_csrf": tok, "current_password": "nope",
                               "new_password": "x", "confirm_password": "x"},
                         follow_redirects=False)
-        assert r.status_code == 303 and "error" in r.headers["location"]
+        assert r.status_code == 303 and "message" in r.headers["location"]
 
         # Regenerate own API token.
         old_token = main.user_store.get_api_token(admin_id)

@@ -147,6 +147,16 @@ counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
 purely by content (e.g. domain classification, source-HTML by URL) may stay
 global.
 
+### Integrations in multi mode
+
+The Resend **API key** is instance-shared (`get_resend_api_key` keeps its env
+fallback) — one verified domain owned at the instance level. Everything else is
+per-user: the email **From** identity (`get_resend_from`, no env fallback), the
+default recipient, contacts, profile, and Instapaper credentials. The env values
+(`LECTIO_EMAIL_FROM`, `LECTIO_EMAIL_TO`) seed only the bootstrap admin's settings
+(`_seed_admin_integrations_from_env`) and are then ignored for per-user reads, so
+one user's sender/account never becomes another's default.
+
 ### What stays global in every mode
 
 Content-addressed caches hold no per-user data and are shared across all users:

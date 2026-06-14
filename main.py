@@ -255,15 +255,21 @@ FEVER_API_KEY: str | None = None
 # --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
 _ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 _ENV_RESEND_FROM = os.getenv("LECTIO_EMAIL_FROM", "").strip()
-# LECTIO_EMAIL_TO removed — use profile email / Contacts instead
+# Seed value for the bootstrap admin's default recipient (then per-user).
+_ENV_RESEND_TO = os.getenv("LECTIO_EMAIL_TO", "").strip()
 
 
 def get_resend_api_key() -> str:
+    # Instance-shared: the Resend account/key is owned at the instance level
+    # (one verified domain), so the env value is the shared default for everyone.
     return get_runtime_setting(SETTING_RESEND_API_KEY, _ENV_RESEND_API_KEY)
 
 
 def get_resend_from() -> str:
-    return get_runtime_setting(SETTING_EMAIL_FROM, _ENV_RESEND_FROM)
+    # Per-user sending identity — no env fallback, so one user's address never
+    # becomes another's default. The env value seeds only the bootstrap admin
+    # (see _seed_admin_integrations_from_env).
+    return get_runtime_setting(SETTING_EMAIL_FROM)
 
 
 def is_email_configured() -> bool:
@@ -1505,6 +1511,20 @@ def provision_user_storage(user_id: str) -> None:
             pass
 
 
+def _seed_admin_integrations_from_env(admin_id: str) -> None:
+    """Copy env-provided per-user integration defaults into the admin's settings,
+    so a fresh multi-user instance has the admin configured (env is "used for
+    bootstrap then ignored" for these per-user values). Only seeds keys not
+    already set; the instance-shared Resend API key is NOT seeded here (it stays
+    env-read for everyone via get_resend_api_key)."""
+    seeds = [(SETTING_EMAIL_FROM, _ENV_RESEND_FROM), (EMAIL_TO_SETTING_KEY, _ENV_RESEND_TO)]
+    with tenancy.user_context(admin_id):
+        with get_meta_connection() as conn:
+            for key, val in seeds:
+                if val and not get_setting(conn, key):
+                    set_setting(conn, key, val)
+
+
 def bootstrap_admin() -> None:
     """Seed the bootstrap admin on first startup in multi mode.
 
@@ -1526,6 +1546,7 @@ def bootstrap_admin() -> None:
     try:
         admin_id = user_store.create(username, BOOTSTRAP_ADMIN_PASSWORD, is_admin=True, scheme=PASSWORD_HASH_SCHEME)
         provision_user_storage(admin_id)
+        _seed_admin_integrations_from_env(admin_id)
     except Exception:
         LOGGER.exception("failed to bootstrap admin user %r", username)
         return
@@ -8366,6 +8387,24 @@ def _is_web_admin(user_id: str | None) -> bool:
     return bool(row and row["is_admin"] and not row["disabled"])
 
 
+USERNAME_MIN_LEN, USERNAME_MAX_LEN = 4, 10
+PASSWORD_MIN_LEN, PASSWORD_MAX_LEN = 6, 36
+
+
+def _username_error(name: str) -> str | None:
+    if not (USERNAME_MIN_LEN <= len(name) <= USERNAME_MAX_LEN):
+        return f"Username must be {USERNAME_MIN_LEN}–{USERNAME_MAX_LEN} characters."
+    if not tenancy.is_valid_user_id(name):
+        return "Username may use only letters, digits, _ and -."
+    return None
+
+
+def _password_error(pw: str) -> str | None:
+    if not (PASSWORD_MIN_LEN <= len(pw) <= PASSWORD_MAX_LEN):
+        return f"Password must be {PASSWORD_MIN_LEN}–{PASSWORD_MAX_LEN} characters."
+    return None
+
+
 def _account_redirect(*, msg: str | None = None, error: str | None = None) -> RedirectResponse:
     params: dict[str, str] = {}
     if msg:
@@ -8378,6 +8417,7 @@ def _account_redirect(*, msg: str | None = None, error: str | None = None) -> Re
 
 @app.get("/account")
 def account_page(request: Request, msg: str | None = None, error: str | None = None):
+    """Admin page: user management + instance configuration. Admin-only."""
     if not MULTI_USER or user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
@@ -8387,18 +8427,35 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
     if not row:
         request.session.clear()
         return RedirectResponse(url="/login", status_code=303)
-    is_admin = bool(row["is_admin"])
+    if not row["is_admin"]:
+        # Non-admins have no admin page; their per-user settings live in Settings.
+        return RedirectResponse(url="/", status_code=303)
+
+    def _masked(v: str) -> str:
+        return "••••••••" if v else ""
+
+    resend_key = get_resend_api_key()
+    yt_key = get_yt_api_key()
+    with get_meta_connection() as conn:
+        maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
     return templates.TemplateResponse(
         request,
         "account.html",
         {
             "user_id": uid,
             "username": row["username"],
-            "is_admin": is_admin,
-            "api_token": row["api_token"],
-            "users": user_store.list_users() if is_admin else [],
+            "users": user_store.list_users(),
             "message": msg,
             "error": error,
+            # Instance configuration (admin-managed).
+            "resend_key_set": bool(resend_key),
+            "resend_key_masked": _masked(resend_key),
+            "yt_key_set": bool(yt_key),
+            "yt_key_masked": _masked(yt_key),
+            "yt_channel_id": get_yt_channel_id(),
+            "yt_folder_name": get_yt_folder_name(),
+            "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
+            "maintenance_last": maint_last,
             "static_asset_version": STATIC_ASSET_VERSION,
         },
     )
@@ -8420,11 +8477,14 @@ async def account_change_password(request: Request):
         return RedirectResponse(url="/login", status_code=303)
     # verify_login takes the (typed) username; we have the user_id from session.
     if user_store.verify_login(row["username"], current, default_scheme=PASSWORD_HASH_SCHEME) != uid:
-        return _account_redirect(error="Current password is incorrect.")
+        return RedirectResponse(url="/?message=" + quote_plus("Current password is incorrect."), status_code=303)
     if not new or new != confirm:
-        return _account_redirect(error="New password and confirmation do not match.")
+        return RedirectResponse(url="/?message=" + quote_plus("New password and confirmation do not match."), status_code=303)
+    perr = _password_error(new)
+    if perr:
+        return RedirectResponse(url="/?message=" + quote_plus(perr), status_code=303)
     user_store.set_password(uid, new, scheme=PASSWORD_HASH_SCHEME)
-    return _account_redirect(msg="Password changed.")
+    return RedirectResponse(url="/?message=" + quote_plus("Password changed."), status_code=303)
 
 
 @app.post("/account/api-token/regenerate")
@@ -8435,7 +8495,33 @@ async def account_regenerate_token(request: Request):
     if not uid:
         return RedirectResponse(url="/login", status_code=303)
     user_store.regenerate_api_token(uid)
-    return _account_redirect(msg="API token regenerated — update your RSS clients with the new token.")
+    return RedirectResponse(
+        url="/?message=" + quote_plus("API token regenerated — update your RSS clients."),
+        status_code=303,
+    )
+
+
+@app.post("/account/username")
+async def account_change_username(request: Request):
+    """Self-service username change. Identity (user_id) is unchanged, so the
+    session stays valid and data/tokens are unaffected."""
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    uid = _current_web_user(request)
+    if not uid:
+        return RedirectResponse(url="/login", status_code=303)
+    form = await request.form()
+    new_username = str(form.get("new_username") or "").strip()
+    uerr = _username_error(new_username)
+    if uerr:
+        return RedirectResponse(url="/?message=" + quote_plus(uerr), status_code=303)
+    try:
+        user_store.rename_user(uid, new_username)
+    except UserExistsError:
+        return RedirectResponse(url="/?message=" + quote_plus(f"Username {new_username!r} is taken."), status_code=303)
+    except ValueError:
+        return RedirectResponse(url="/?message=" + quote_plus("Invalid username."), status_code=303)
+    return RedirectResponse(url="/?message=" + quote_plus(f"Username changed to {new_username!r}."), status_code=303)
 
 
 @app.post("/admin/users/create")
@@ -8449,10 +8535,12 @@ async def admin_create_user(request: Request):
     username = str(form.get("username") or "").strip()
     password = str(form.get("password") or "")
     is_admin = bool(form.get("is_admin"))
-    if not tenancy.is_valid_user_id(username):
-        return _account_redirect(error="Invalid username — use 1–64 letters, digits, _ or -.")
-    if not password:
-        return _account_redirect(error="A password is required.")
+    uerr = _username_error(username)
+    if uerr:
+        return _account_redirect(error=uerr)
+    perr = _password_error(password)
+    if perr:
+        return _account_redirect(error=perr)
     try:
         new_user_id = user_store.create(username, password, is_admin=is_admin, scheme=PASSWORD_HASH_SCHEME)
         provision_user_storage(new_user_id)
@@ -8496,8 +8584,9 @@ async def admin_reset_password(request: Request):
     target = user_store.get_by_id(target_id)
     if target is None:
         return _account_redirect(error="No such user.")
-    if not new:
-        return _account_redirect(error="A new password is required.")
+    perr = _password_error(new)
+    if perr:
+        return _account_redirect(error=perr)
     user_store.set_password(target_id, new, scheme=PASSWORD_HASH_SCHEME)
     return _account_redirect(msg=f"Reset password for {target['username']!r}.")
 
@@ -8516,6 +8605,9 @@ async def admin_rename_user(request: Request):
     if target is None:
         return _account_redirect(error="No such user.")
     old_username = target["username"]
+    uerr = _username_error(new_username)
+    if uerr:
+        return _account_redirect(error=uerr)
     try:
         user_store.rename_user(target_id, new_username)
     except UserExistsError:
@@ -8888,6 +8980,12 @@ def home(
             "multi_user": MULTI_USER,
             "auth_enabled": AUTH_ENABLED,
             "current_user": _current_web_username(request),
+            "is_admin": _is_web_admin(_current_web_user(request)),
+            "current_api_token": (
+                user_store.get_api_token(_current_web_user(request))
+                if (MULTI_USER and user_store and _current_web_user(request))
+                else ""
+            ),
         },
     )
 
@@ -10387,11 +10485,25 @@ async def save_all_settings(request: Request):
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
+    # Instance-level config — only admins may change it (in multi mode). Non-admin
+    # requests silently drop these keys, even if the client sends them.
+    _ADMIN_ONLY = {
+        SETTING_RESEND_API_KEY,
+        SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
+        SETTING_MAINTENANCE_HOUR,
+    }
+    is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
+
+    # Detect a YouTube fill-in so we can kick off an immediate sync (rather than
+    # waiting for daily maintenance) when it goes from unconfigured -> configured.
+    yt_configured_before = bool(get_yt_api_key() and get_yt_channel_id())
 
     import json as _json
     with get_meta_connection() as conn:
         for key, value in body.items():
             if key not in _ALLOWED:
+                continue
+            if key in _ADMIN_ONLY and not is_admin:
                 continue
             if key == "email_contacts":
                 # Contacts are stored in the email_contacts table, not app_settings.
@@ -10423,12 +10535,22 @@ async def save_all_settings(request: Request):
             else:
                 delete_setting(conn, key)
 
+    # Newly-configured YouTube → sync now, in the configuring user's context.
+    if is_admin and not yt_configured_before and get_yt_api_key() and get_yt_channel_id():
+        threading.Thread(
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), _run_youtube_sync),
+            daemon=True, name="youtube-sync-on-config",
+        ).start()
+
     return JSONResponse({"ok": True})
 
 
 @app.post("/settings/maintenance/run-now")
-def run_maintenance_now():
-    """Trigger daily maintenance immediately (for testing / manual runs)."""
+def run_maintenance_now(request: Request):
+    """Trigger daily maintenance immediately. Admin-only in multi mode."""
+    if MULTI_USER and not _is_web_admin(_current_web_user(request)):
+        return JSONResponse({"ok": False, "error": "Admins only."}, status_code=403)
     threading.Thread(target=_run_daily_maintenance, daemon=True, name="maintenance-manual").start()
     return JSONResponse({"ok": True, "message": "Maintenance started in background."})
 

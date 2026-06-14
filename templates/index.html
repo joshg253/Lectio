@@ -125,8 +125,8 @@
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
             {% if multi_user or auth_enabled %}
             <hr class="menu-divider" />
-            {% if multi_user %}
-            <a class="menu-item" href="/account"><span class="material-symbols-rounded" aria-hidden="true">account_circle</span> Account{% if current_user %} ({{ current_user }}){% endif %}</a>
+            {% if multi_user and is_admin %}
+            <a class="menu-item" href="/account"><span class="material-symbols-rounded" aria-hidden="true">admin_panel_settings</span> Administration</a>
             {% endif %}
             {% if auth_enabled %}
             <a class="menu-item" href="/logout"><span class="material-symbols-rounded" aria-hidden="true">logout</span> Sign out</a>
@@ -1282,15 +1282,36 @@
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
           <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
-          <label class="settings-label" for="sett-maint-hour">Maintenance hour (0–23)</label>
-          <input type="number" id="sett-maint-hour" class="settings-input settings-input--short" min="0" max="23" placeholder="3" />
-          <p class="settings-hint">Runs once per day at this hour (server local time). Vacuums databases, prunes logs, and syncs YouTube subscriptions.</p>
-          <div id="sett-maint-last" class="settings-hint settings-maint-last" hidden></div>
         </div>
         <div class="settings-actions">
-          <button type="button" id="sett-maint-run-now" class="settings-secondary-btn">Run maintenance now</button>
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
         </div>
+        {% if multi_user %}
+        <h4 class="settings-section-title" style="margin-top:1rem">Username</h4>
+        <form class="settings-section" method="post" action="/account/username">
+          {{ csrf_input(request) | safe }}
+          <p class="settings-hint">Your login name{% if current_user %} (currently <code>{{ current_user }}</code>){% endif %}. Changing it doesn't affect your data or API token.</p>
+          <input type="text" name="new_username" class="settings-input" placeholder="New username" minlength="4" maxlength="10" required />
+          <div class="settings-actions"><button type="submit" class="settings-save-btn">Change username</button></div>
+        </form>
+        <h4 class="settings-section-title" style="margin-top:1rem">Password</h4>
+        <form class="settings-section" method="post" action="/account/password">
+          {{ csrf_input(request) | safe }}
+          <input type="password" name="current_password" class="settings-input" placeholder="Current password" autocomplete="current-password" required />
+          <input type="password" name="new_password" class="settings-input" placeholder="New password" autocomplete="new-password" minlength="6" maxlength="36" required />
+          <input type="password" name="confirm_password" class="settings-input" placeholder="Confirm new password" autocomplete="new-password" minlength="6" maxlength="36" required />
+          <div class="settings-actions"><button type="submit" class="settings-save-btn">Change password</button></div>
+        </form>
+        <h4 class="settings-section-title" style="margin-top:1rem">API token (Fever / GReader)</h4>
+        <div class="settings-section">
+          <p class="settings-hint">Configure RSS clients (Capy, Reeder, …) with username <code>{{ current_user }}</code> and this token as the password.</p>
+          <input type="text" class="settings-input" value="{{ current_api_token }}" readonly onclick="this.select()" aria-label="API token" />
+          <form method="post" action="/account/api-token/regenerate" onsubmit="return confirm('Regenerate token? Existing clients stop syncing until you update them.');">
+            {{ csrf_input(request) | safe }}
+            <div class="settings-actions"><button type="submit" class="settings-secondary-btn">Regenerate token</button></div>
+          </form>
+        </div>
+        {% endif %}
       </div>
 
       <!-- Contacts tab -->
@@ -1308,22 +1329,11 @@
 
       <!-- Integrations tab -->
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
-        <h4 class="settings-section-title">Resend</h4>
+        <h4 class="settings-section-title">Email</h4>
         <div class="settings-section">
-          <label class="settings-label" for="sett-resend-key">API key</label>
-          <input type="password" id="sett-resend-key" class="settings-input settings-input--secret" placeholder="re_…" autocomplete="new-password" />
           <label class="settings-label" for="sett-email-from">From address</label>
-          <input type="email" id="sett-email-from" class="settings-input" placeholder="lectio@yourdomain.com" maxlength="200" />
-        </div>
-        <h4 class="settings-section-title">YouTube</h4>
-        <div class="settings-section">
-          <label class="settings-label" for="sett-yt-key">API key</label>
-          <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
-          <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
-          <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
-          <label class="settings-label" for="sett-yt-folder">Folder name</label>
-          <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
-          <p class="settings-hint">The API key is used to fetch video durations (prepended to post titles) and sync your subscriptions during daily maintenance. Your channel's subscriptions must be set to Public on YouTube.</p>
+          <input type="email" id="sett-email-from" class="settings-input" placeholder="you@yourdomain.com" maxlength="200" />
+          <p class="settings-hint">Your sending address. Must be a verified sender on the instance's Resend account.</p>
         </div>
         <h4 class="settings-section-title">Instapaper</h4>
         <div class="settings-section">
@@ -8231,27 +8241,24 @@
         const g = id => document.getElementById(id)?.value?.trim() || '';
         let payload = {};
         if (scope === 'account') {
+          // Per-user only. Instance config (maintenance) lives on the Admin page.
           payload = {
             profile_name: g('sett-profile-name'),
             profile_email: g('sett-profile-email'),
             tz_display: g('sett-tz-display'),
-            maintenance_hour: g('sett-maint-hour'),
           };
         } else if (scope === 'profile') {
           payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };
         } else if (scope === 'app') {
-          payload = { tz_display: g('sett-tz-display'), maintenance_hour: g('sett-maint-hour') };
+          payload = { tz_display: g('sett-tz-display') };
         } else if (scope === 'contacts') {
           payload = { email_contacts: JSON.stringify(settContacts) };
         } else if (scope === 'default') {
           payload = { email_to: settDefaultAddress };
         } else if (scope === 'integrations') {
+          // Per-user only. Resend key + YouTube (instance config) are on the Admin page.
           payload = {
-            resend_api_key: g('sett-resend-key'),
             email_from: g('sett-email-from'),
-            yt_api_key: g('sett-yt-key'),
-            yt_channel_id: g('sett-yt-channel'),
-            yt_folder_name: g('sett-yt-folder'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
           };

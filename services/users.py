@@ -35,6 +35,14 @@ _DUMMY_TOKEN = secrets.token_urlsafe(24)
 
 _GREADER_TOKEN_LIFETIME = 90 * 24 * 3600
 
+# Usernames are just login handles (identity is the stable user_id), so no real
+# blacklist is needed — only reserve the tenancy sentinel to avoid confusion.
+_RESERVED_USERNAMES = {tenancy.DEFAULT_USER_ID}
+
+
+class ReservedUsernameError(ValueError):
+    """Raised when a username collides with a reserved name."""
+
 
 def _generate_user_id() -> str:
     """An opaque, immutable, path-safe account id."""
@@ -74,7 +82,12 @@ class UserStore:
             # user_id := username to keep any existing users/<username>/ dirs valid.
             if "users" in tables:
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-                if "user_id" not in cols:
+                table_sql = (conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+                ).fetchone() or [""])[0] or ""
+                # Rebuild to add user_id (pre-user_id schema) and/or case-insensitive
+                # username uniqueness (NOCASE collation).
+                if "user_id" not in cols or "NOCASE" not in table_sql.upper():
                     self._rebuild_users_table(conn)
             if "greader_api_tokens" in tables:
                 gcols = {r["name"] for r in conn.execute("PRAGMA table_info(greader_api_tokens)").fetchall()}
@@ -86,7 +99,7 @@ class UserStore:
                 """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL UNIQUE,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                     password_hash TEXT NOT NULL,
                     is_admin INTEGER NOT NULL DEFAULT 0,
                     disabled INTEGER NOT NULL DEFAULT 0,
@@ -114,7 +127,7 @@ class UserStore:
             """
             CREATE TABLE users (
                 user_id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 password_hash TEXT NOT NULL,
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 disabled INTEGER NOT NULL DEFAULT 0,
@@ -125,10 +138,13 @@ class UserStore:
         )
         for row in rows:
             d = dict(row)
+            # Preserve an existing user_id (post-user_id schema); fall back to the
+            # username only for the pre-user_id upgrade.
+            uid = d.get("user_id") or d["username"]
             conn.execute(
                 "INSERT INTO users (user_id, username, password_hash, is_admin, disabled, created_at, api_token) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (d["username"], d["username"], d["password_hash"], d.get("is_admin", 0),
+                (uid, d["username"], d["password_hash"], d.get("is_admin", 0),
                  d.get("disabled", 0), d.get("created_at", time.time()), d.get("api_token")),
             )
         conn.execute("DROP TABLE _users_old")
@@ -173,6 +189,8 @@ class UserStore:
         an invalid username/password, UserExistsError if the username is taken."""
         if not tenancy.is_valid_user_id(username):
             raise ValueError(f"invalid username (must match {{A-Za-z0-9_-}}, 1-64 chars): {username!r}")
+        if username.lower() in _RESERVED_USERNAMES:
+            raise ReservedUsernameError(username)
         if not password:
             raise ValueError("password must not be empty")
         user_id = _generate_user_id()
@@ -193,6 +211,8 @@ class UserStore:
         and tokens) is unaffected. Raises if the new name is invalid or taken."""
         if not tenancy.is_valid_user_id(new_username):
             raise ValueError(f"invalid username: {new_username!r}")
+        if new_username.lower() in _RESERVED_USERNAMES:
+            raise ReservedUsernameError(new_username)
         try:
             with self._connect() as conn:
                 cur = conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (new_username, user_id))
