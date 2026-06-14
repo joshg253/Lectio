@@ -733,6 +733,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Lectio", lifespan=lifespan)
 
 
+def _session_logged_in(request: Request) -> bool:
+    """Whether the session is fully authenticated.
+
+    In multi mode that requires a valid user_id, not just the authenticated flag —
+    otherwise a stale single-mode cookie (authenticated, no user_id) would pass the
+    gate but fail every per-user route, causing a /login redirect loop."""
+    if not request.session.get("authenticated"):
+        return False
+    if MULTI_USER:
+        uid = request.session.get("user_id")
+        return bool(uid and tenancy.is_valid_user_id(uid))
+    return True
+
+
 class _AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not AUTH_ENABLED:
@@ -740,7 +754,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
             return await call_next(request)
-        if request.session.get("authenticated"):
+        if _session_logged_in(request):
             return await call_next(request)
         next_url = str(request.url)
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
@@ -8167,7 +8181,7 @@ def entry_frame_check(url: str):
 
 @app.get("/login")
 def login_page(request: Request, next: str = "/"):
-    if not AUTH_ENABLED or request.session.get("authenticated"):
+    if not AUTH_ENABLED or _session_logged_in(request):
         return RedirectResponse(url=next or "/", status_code=303)
     return templates.TemplateResponse(
         request,

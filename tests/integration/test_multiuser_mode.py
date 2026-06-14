@@ -151,6 +151,27 @@ def test_middleware_rejects_invalid_user_id(monkeypatch):
     assert uid == tenancy.DEFAULT_USER_ID
 
 
+class _FakeReq:
+    def __init__(self, session):
+        self.session = session
+
+
+def test_session_logged_in_requires_user_id_in_multi(monkeypatch):
+    monkeypatch.setattr(main, "MULTI_USER", True)
+    # Stale single-mode cookie: authenticated but no user_id → NOT logged in
+    # (this is what caused the /login redirect loop).
+    assert main._session_logged_in(_FakeReq({"authenticated": True})) is False
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False
+    assert main._session_logged_in(_FakeReq({})) is False
+
+
+def test_session_logged_in_single_mode(monkeypatch):
+    monkeypatch.setattr(main, "MULTI_USER", False)
+    assert main._session_logged_in(_FakeReq({"authenticated": True})) is True
+    assert main._session_logged_in(_FakeReq({})) is False
+
+
 # --- in-process bootstrap / provisioning -------------------------------------
 
 
