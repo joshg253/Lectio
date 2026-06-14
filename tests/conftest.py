@@ -14,3 +14,10 @@ if str(ROOT) not in sys.path:
 _TEST_DATA_DIR = ROOT / "tmp"
 _TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
+
+# Pin the in-process suite to single mode regardless of the deployment's .env
+# (which is now multi). main._load_local_env() won't override an env var that's
+# already set, so forcing it here keeps the default test process deterministic;
+# the multi-user E2E tests spawn subprocesses with LECTIO_SECURITY_MODE=multi,
+# and the in-process multi tests monkeypatch main.MULTI_USER per-test.
+os.environ["LECTIO_SECURITY_MODE"] = "single"
