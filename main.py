@@ -395,22 +395,82 @@ manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
 updating_feeds_lock = threading.Lock()
 updating_feeds: set[str] = set()
+class _PerUserDict:
+    """Dict-like cache partitioned by the current tenancy user, so per-user cached
+    data (folder structure, unread counts, tags, settings) never bleeds across
+    users. Implements the subset of dict operations the cache sites use; each op
+    resolves the current user via tenancy.current_user_id()."""
+
+    __slots__ = ("_by_user",)
+
+    def __init__(self) -> None:
+        self._by_user: dict[str, dict] = {}
+
+    def _d(self) -> dict:
+        return self._by_user.setdefault(tenancy.current_user_id(), {})
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def __delitem__(self, k):
+        del self._d()[k]
+
+    def __contains__(self, k):
+        return k in self._d()
+
+    def __bool__(self):
+        return bool(self._d())
+
+    def __len__(self):
+        return len(self._d())
+
+    def __iter__(self):
+        return iter(self._d())
+
+    def get(self, k, default=None):
+        return self._d().get(k, default)
+
+    def pop(self, k, *a):
+        return self._d().pop(k, *a)
+
+    def setdefault(self, k, default=None):
+        return self._d().setdefault(k, default)
+
+    def update(self, *a, **kw):
+        self._d().update(*a, **kw)
+
+    def clear(self):
+        self._d().clear()
+
+    def items(self):
+        return self._d().items()
+
+    def keys(self):
+        return self._d().keys()
+
+    def values(self):
+        return self._d().values()
+
+
 feed_tag_suggestion_cache_lock = threading.Lock()
-feed_tag_suggestion_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
+feed_tag_suggestion_cache = _PerUserDict()
 _feed_tag_fetch_in_progress: set[str] = set()
 # Short in-memory TTL cache for tag counts to avoid repeatedly scanning
 # reader entries on every request. Small TTL keeps counts fresh while
 # preventing repeated expensive work during rapid navigation.
 TAG_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_TAG_COUNTS_CACHE_TTL", "300"))
 tag_counts_cache_lock = threading.Lock()
-tag_counts_cache: dict[tuple[str, ...], tuple[float, list[dict[str, int | str]]]] = {}
+tag_counts_cache = _PerUserDict()
 
 # Short in-memory TTL cache for unread counts so the UI doesn't scan the
 # entire reader DB on every load. TTL is small to stay responsive to new
 # incoming posts.
 UNREAD_COUNTS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_UNREAD_COUNTS_CACHE_TTL", "300"))
 unread_counts_cache_lock = threading.Lock()
-unread_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
+unread_counts_cache = _PerUserDict()
 # Stale-while-revalidate: when the cache is stale we serve the prior value and
 # spawn ONE background refresh. Concurrent renders never wait on the scan.
 unread_counts_compute_lock = threading.Lock()
@@ -422,14 +482,14 @@ _unread_counts_generation: int = 0
 # titles barely change between page renders.
 FEED_TITLE_MAP_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_FEED_TITLE_MAP_CACHE_TTL", "300"))
 feed_title_map_cache_lock = threading.Lock()
-feed_title_map_cache: dict[str, tuple[float, dict[str, str]]] = {}
+feed_title_map_cache = _PerUserDict()
 
 # Cache the meta-DB structure snapshot. Folders / folder_feeds change only on
 # explicit user actions (subscribe, unsubscribe, add/delete folder, move feed),
 # so we cache the read-side queries indefinitely and invalidate on mutation.
 # This collapses ~5 SQL roundtrips per home render to one dict lookup.
 _meta_structure_lock = threading.Lock()
-_meta_structure_cache: dict[str, object] = {}
+_meta_structure_cache = _PerUserDict()
 
 
 def invalidate_meta_structure_cache() -> None:
@@ -441,7 +501,7 @@ def invalidate_meta_structure_cache() -> None:
 # so a TTL is fine — we don't need exact freshness on the home page.
 PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_PROBLEMATIC_FEEDS_CACHE_TTL", "60"))
 _problematic_feeds_cache_lock = threading.Lock()
-_problematic_feeds_cache: dict[int, tuple[float, list[dict[str, object]]]] = {}
+_problematic_feeds_cache = _PerUserDict()
 
 
 def invalidate_problematic_feeds_cache() -> None:
@@ -469,10 +529,9 @@ async def lifespan(app: FastAPI):
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
-        # Pre-load settings cache so get_cached_setting works before first request.
-        global _app_settings_cache
+        # Pre-load the default user's settings cache (startup runs unbound).
         with _app_settings_cache_lock:
-            _app_settings_cache = _load_app_settings_cache(conn)
+            _app_settings_cache[tenancy.current_user_id()] = _load_app_settings_cache(conn)
     app.state.last_scheduled_refresh_started_at = time.monotonic()
 
     # Checkpoint both WAL files at startup so the first user request does not
@@ -1948,7 +2007,9 @@ def ensure_meta_schema() -> None:
         pass  # email_to seeding removed; Contacts tab manages recipients
 
 
-_app_settings_cache: dict[str, str] | None = None
+# Per-user (app_settings lives in each user's meta DB): user_id -> {key: value}.
+# A user absent from the map means "not loaded yet" (was the None sentinel).
+_app_settings_cache: dict[str, dict[str, str]] = {}
 _app_settings_cache_lock = threading.Lock()
 
 
@@ -1958,29 +2019,26 @@ def _load_app_settings_cache(conn: sqlite3.Connection) -> dict[str, str]:
 
 
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
-    """Read a setting from the in-memory cache. Loaded once on first access,
-    kept consistent through set_setting writes. Avoids ~4 SELECTs per home
-    render that, while individually fast, queue up under concurrency."""
-    global _app_settings_cache
+    """Read a setting from the current user's in-memory cache. Loaded once per
+    user on first access, kept consistent through set_setting writes."""
+    uid = tenancy.current_user_id()
     with _app_settings_cache_lock:
-        cache = _app_settings_cache
+        cache = _app_settings_cache.get(uid)
         if cache is None:
             cache = _load_app_settings_cache(conn)
-            _app_settings_cache = cache
+            _app_settings_cache[uid] = cache
         return cache.get(key)
 
 
 def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
-    """Idempotent setting write. Updates the in-memory cache and persists only
-    when the value actually changed. The hot path (home render) calls this on
-    every request to persist sort preferences; without the no-op guard each
-    page view took a meta-DB writer lock, blocking concurrent renders."""
-    global _app_settings_cache
+    """Idempotent setting write. Updates the current user's in-memory cache and
+    persists only when the value actually changed."""
+    uid = tenancy.current_user_id()
     with _app_settings_cache_lock:
-        cache = _app_settings_cache
+        cache = _app_settings_cache.get(uid)
         if cache is None:
             cache = _load_app_settings_cache(conn)
-            _app_settings_cache = cache
+            _app_settings_cache[uid] = cache
         if cache.get(key) == value:
             return
         cache[key] = value
@@ -1991,11 +2049,13 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def get_cached_setting(key: str) -> str | None:
-    """Read from in-memory cache without a DB connection. Returns None if cache unloaded."""
+    """Read the current user's cache without a DB connection. None if unloaded."""
+    uid = tenancy.current_user_id()
     with _app_settings_cache_lock:
-        if _app_settings_cache is None:
+        cache = _app_settings_cache.get(uid)
+        if cache is None:
             return None
-        return _app_settings_cache.get(key)
+        return cache.get(key)
 
 
 def get_runtime_setting(key: str, env_fallback: str = "") -> str:
@@ -2007,10 +2067,11 @@ def get_runtime_setting(key: str, env_fallback: str = "") -> str:
 
 
 def delete_setting(conn: sqlite3.Connection, key: str) -> None:
-    global _app_settings_cache
+    uid = tenancy.current_user_id()
     with _app_settings_cache_lock:
-        if _app_settings_cache is not None:
-            _app_settings_cache.pop(key, None)
+        cache = _app_settings_cache.get(uid)
+        if cache is not None:
+            cache.pop(key, None)
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
@@ -2532,7 +2593,7 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
     every cache miss, which doesn't scale past a few thousand entries. Users
     who run into double-counted feeds should unsubscribe one of the mirrors."""
     try:
-        conn = sqlite3.connect(str(READER_DB_PATH), uri=False, check_same_thread=False)
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), uri=False, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         rows = conn.execute(
             "SELECT feed, COUNT(*) FROM entries WHERE read=0 GROUP BY feed"
@@ -2581,7 +2642,7 @@ def get_unread_counts_by_feed() -> dict[str, int]:
         with unread_counts_compute_lock:
             if not unread_counts_refresh_inflight:
                 unread_counts_refresh_inflight = True
-                threading.Thread(target=_refresh_unread_counts_async, args=(current_gen,), daemon=True).start()
+                threading.Thread(target=_run_in_user_context, args=(tenancy.current_user_id(), _refresh_unread_counts_async, current_gen), daemon=True).start()
         return value.copy()
 
     # Cold cache: first arriver computes synchronously, others wait on lock.
@@ -4434,7 +4495,7 @@ def get_feed_tag_suggestions(
     return best_tags[:MAX_FEED_TAG_SUGGESTIONS]
 
 
-_has_manual_tags_cache: dict[str, tuple[float, bool]] = {}
+_has_manual_tags_cache = _PerUserDict()
 _has_manual_tags_lock = threading.Lock()
 HAS_MANUAL_TAGS_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_HAS_MANUAL_TAGS_CACHE_TTL", "60"))
 
@@ -4450,7 +4511,7 @@ def has_any_manual_tags() -> bool:
         if cached and now - cached[0] < HAS_MANUAL_TAGS_CACHE_TTL_SECONDS:
             return cached[1]
     try:
-        conn = sqlite3.connect(str(READER_DB_PATH), timeout=2.0)
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=2.0)
         try:
             row = conn.execute(
                 "SELECT 1 FROM entry_tags WHERE key LIKE ? LIMIT 1",
@@ -4493,7 +4554,7 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     sorted_feeds = sorted(feed_urls)
     placeholders = ",".join("?" * len(sorted_feeds))
     try:
-        conn = sqlite3.connect(str(READER_DB_PATH), timeout=5.0)
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
             rows = conn.execute(
                 f"SELECT key, COUNT(*) FROM entry_tags"
@@ -5902,7 +5963,7 @@ def list_entries_for_feeds(
             read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
             read_clause = read_sql.get(reader_read_filter, "")
             try:
-                _rconn = sqlite3.connect(str(READER_DB_PATH), timeout=5.0)
+                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
                 _rconn.row_factory = sqlite3.Row
                 if len(feed_urls) <= 999:
                     _feed_list = list(feed_urls)
@@ -11803,7 +11864,7 @@ def takeout_export():
     with get_meta_connection() as conn:
         opml_text = export_opml_text(conn)
         zip_bytes = takeout_service.build_takeout_zip(
-            conn, READER_DB_PATH, opml_text, app_version=STATIC_ASSET_VERSION
+            conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
         )
     date_str = datetime.now().strftime("%Y%m%d")
     return Response(
@@ -11818,7 +11879,7 @@ async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, F
     data = await takeout_file.read()
     try:
         with get_meta_connection() as conn:
-            summary = takeout_service.import_takeout_zip(conn, READER_DB_PATH, data)
+            summary = takeout_service.import_takeout_zip(conn, tenancy.reader_db_path(), data)
     except ValueError as exc:
         return RedirectResponse(
             url=f"/?message={quote_plus(str(exc))}",
@@ -11907,10 +11968,10 @@ def get_stats():
         entry_read = counts.read
         entry_unread = entry_total - entry_read
 
-    reader_db_bytes = _db_bytes(READER_DB_PATH)
-    meta_db_bytes = _db_bytes(META_DB_PATH)
+    reader_db_bytes = _db_bytes(tenancy.reader_db_path())
+    meta_db_bytes = _db_bytes(tenancy.meta_db_path())
     thumb_db_bytes = _db_bytes(THUMB_DB_PATH)
-    starred_archive_db_bytes = _db_bytes(STARRED_ARCHIVE_DB_PATH)
+    starred_archive_db_bytes = _db_bytes(tenancy.starred_archive_db_path())
     archive_stats = starred_archive_service.get_stats()
 
     thumb_count = 0

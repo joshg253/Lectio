@@ -133,6 +133,20 @@ and must fan out to its subscribers) still runs as the default user; linking
 single-user DBs into a user. (SSRF hardening of `/api/img` and `/thumb` has
 landed — see "Security posture".)
 
+### Per-user in-memory caches
+
+The module-level caches that hold per-user data (folder/feed structure, unread
+counts, tag counts, feed-title map, problematic feeds, has-manual-tags, and the
+`app_settings` cache) are partitioned by the current tenancy user via
+`_PerUserDict` (and a `user_id`-keyed dict for `_app_settings_cache`). A global
+cache here leaks one user's data into another's view (the tree/avatar render from
+cache even though per-request DB reads are correct). Likewise, any code path that
+opens a DB by the raw `READER_DB_PATH`/`META_DB_PATH` constant instead of
+`tenancy.*_db_path()` reads the default user's data — per-request paths (unread
+counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
+purely by content (e.g. domain classification, source-HTML by URL) may stay
+global.
+
 ### What stays global in every mode
 
 Content-addressed caches hold no per-user data and are shared across all users:

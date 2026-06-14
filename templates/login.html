@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sign in — Lectio</title>
+  <script>
+    // Load the user's theme so CSS variables (--accent, --surface, …) are defined;
+    // without it the buttons render transparent. Matches index.html's bootstrap.
+    window.__lectioTheme = (window.localStorage.getItem('lectio-theme') || 'dark');
+    document.write(`<link rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v={{ static_asset_version }}" />`);
+  </script>
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
 </head>
 <body class="login-page">
