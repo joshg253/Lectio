@@ -1,8 +1,8 @@
-"""Per-user routing of the background scheduled-refresh loop.
+"""Per-user routing of the background scheduled-refresh + maintenance loops.
 
-These exercise the user-enumeration + context-binding plumbing in-process by
-monkeypatching the mode flag and user store; the actual feed-fetch work
-(_scheduled_refresh_tick) is stubbed so no network or feed data is needed.
+Exercised in-process by monkeypatching the mode flag and user store; the actual
+feed-fetch / cleanup work is stubbed so no network or feed data is needed. Users
+are identified by their stable user_id.
 """
 from __future__ import annotations
 
@@ -19,19 +19,19 @@ def test_background_user_ids_single_mode(monkeypatch):
 
 def test_background_user_ids_multi_excludes_disabled(monkeypatch, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
-    store.create("alice", "pw")
-    store.create("bob", "pw")
-    store.create("carol", "pw")
-    store.set_disabled("carol", True)
+    a = store.create("alice", "pw")
+    b = store.create("bob", "pw")
+    c = store.create("carol", "pw")
+    store.set_disabled(c, True)
     monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
-    assert set(main._background_user_ids()) == {"alice", "bob"}
+    assert set(main._background_user_ids()) == {a, b}  # user_ids, carol excluded
 
 
 def test_scheduled_refresh_binds_each_user(monkeypatch, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
-    store.create("alice", "pw")
-    store.create("bob", "pw")
+    a = store.create("alice", "pw")
+    b = store.create("bob", "pw")
     monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
 
@@ -39,8 +39,7 @@ def test_scheduled_refresh_binds_each_user(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "_scheduled_refresh_tick", lambda: seen.append(tenancy.current_user_id()))
     main._run_scheduled_refresh_for_all_users()
 
-    assert set(seen) == {"alice", "bob"}
-    # Context restored to the default after the pass.
+    assert set(seen) == {a, b}
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
 
 
@@ -55,8 +54,8 @@ def test_scheduled_refresh_single_mode_runs_as_default(monkeypatch):
 
 def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
-    store.create("alice", "pw")
-    store.create("bob", "pw")
+    a = store.create("alice", "pw")
+    b = store.create("bob", "pw")
     monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
 
@@ -69,7 +68,7 @@ def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
 
     main._run_daily_maintenance()
 
-    assert set(per_user) == {"alice", "bob"}  # per-user work bound to each user
+    assert set(per_user) == {a, b}
     assert global_runs == [tenancy.DEFAULT_USER_ID]  # global work runs once, unbound
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
 
@@ -87,8 +86,8 @@ def test_daily_maintenance_single_mode(monkeypatch):
 
 def test_one_users_failure_does_not_stop_others(monkeypatch, tmp_path):
     store = UserStore(tmp_path / "auth.sqlite")
-    store.create("alice", "pw")
-    store.create("bob", "pw")
+    a = store.create("alice", "pw")
+    b = store.create("bob", "pw")
     monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
 
@@ -97,11 +96,11 @@ def test_one_users_failure_does_not_stop_others(monkeypatch, tmp_path):
     def tick():
         uid = tenancy.current_user_id()
         seen.append(uid)
-        if uid == "alice":
+        if uid == a:
             raise RuntimeError("boom")
 
     monkeypatch.setattr(main, "_scheduled_refresh_tick", tick)
-    main._run_scheduled_refresh_for_all_users()  # must not propagate
+    main._run_scheduled_refresh_for_all_users()
 
-    assert set(seen) == {"alice", "bob"}
+    assert set(seen) == {a, b}
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID

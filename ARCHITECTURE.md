@@ -84,7 +84,14 @@ user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`.
   env credential gates the login. The tenancy context never leaves
   `DEFAULT_USER_ID`, so behavior is identical to before multi-user existed.
 - **multi** — accounts live in a global users table (`lectio_auth.sqlite`,
-  `services/users.py`, NOT routed through tenancy). Passwords are hashed by
+  `services/users.py`, NOT routed through tenancy). Each account has a stable,
+  immutable **`user_id`** (an opaque slug generated at creation) and a mutable
+  **`username`**. The `user_id` is the identity everything keys on — the tenancy
+  key, the on-disk directory (`users/<user_id>/`), the session value, and the
+  foreign key for API tokens — so a username can be renamed
+  (`UserStore.rename_user`, admin UI) without moving any data. Auth lookups take a
+  typed username and return a `user_id`; the rest of the system passes `user_id`.
+  Passwords are hashed by
   `services/passwords.py` (scheme via `LECTIO_PASSWORD_HASH_SCHEME`: `scrypt`
   default, `pbkdf2_sha256`, or `argon2` if `argon2-cffi` is installed; hashes are
   self-describing and transparently re-hashed to the configured scheme on login).

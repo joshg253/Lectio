@@ -95,6 +95,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 ### Multi-user (optional)
 - **Security modes** — `LECTIO_SECURITY_MODE=single` (default) is the classic single-user setup. `multi` enables per-user accounts: each user gets isolated databases under `data/users/<username>/`, while thumbnails and image caches stay shared. Set the bootstrap admin with `LECTIO_ADMIN_USERNAME` / `LECTIO_ADMIN_PASSWORD` (created on first start), and pick a password hashing scheme with `LECTIO_PASSWORD_HASH_SCHEME` (`scrypt` default, `pbkdf2_sha256`, or `argon2` with `argon2-cffi` installed).
 - **Account page** — visit `/account` to change your password and view/regenerate your API token; admins can create/disable users and reset passwords. In multi mode each user authenticates to the GReader/Fever APIs with their own username + API token (shown on `/account`).
+- **Migrating an existing instance** — converting a single-user install to multi-user is a one-time copy of your data into the per-user layout; see [docs/multiuser-migration.md](docs/multiuser-migration.md) (`scripts/migrate_to_multiuser.py`, dry-run by default).
 
 ### Data portability
 - **Takeout / Export & Import** — ZIP archive containing feeds (OPML), rules, contacts, tags, starred entries, read history, and settings; imports non-destructively

@@ -64,10 +64,10 @@
             <td>{{ 'yes' if u.is_admin else '' }}</td>
             <td>{{ 'disabled' if u.disabled else 'active' }}</td>
             <td>
-              {% if u.username != username %}
+              {% if u.user_id != user_id %}
               <form method="post" action="/admin/users/disable" style="margin:0">
                 {{ csrf_input(request) | safe }}
-                <input type="hidden" name="username" value="{{ u.username }}" />
+                <input type="hidden" name="user_id" value="{{ u.user_id }}" />
                 <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
                 <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
               </form>
@@ -90,11 +90,22 @@
       <h2>Reset a user's password</h2>
       <form method="post" action="/admin/users/reset-password">
         {{ csrf_input(request) | safe }}
-        <select name="username">
-          {% for u in users %}<option value="{{ u.username }}">{{ u.username }}</option>{% endfor %}
+        <select name="user_id">
+          {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
         </select>
         <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
         <button type="submit">Reset password</button>
+      </form>
+
+      <h2>Rename a user</h2>
+      <p>Changes the login name only. The account's data, folders, and API tokens are keyed to a stable internal id and are unaffected.</p>
+      <form method="post" action="/admin/users/rename">
+        {{ csrf_input(request) | safe }}
+        <select name="user_id">
+          {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
+        </select>
+        <input type="text" name="new_username" placeholder="New username" required />
+        <button type="submit">Rename</button>
       </form>
     </section>
     {% endif %}

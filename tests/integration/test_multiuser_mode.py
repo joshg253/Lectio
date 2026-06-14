@@ -176,8 +176,10 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     try:
         main.bootstrap_admin()
         assert store.count() == 1
-        assert store.verify_login("bootadmin", "boot-pw") == "bootadmin"
-        assert (tmp_path / "users" / "bootadmin" / "lectio_meta.sqlite3").exists()
+        admin_id = store.get("bootadmin")["user_id"]
+        assert store.verify_login("bootadmin", "boot-pw") == admin_id
+        # Storage is provisioned under the stable user_id, not the username.
+        assert (tmp_path / "users" / admin_id / "lectio_meta.sqlite3").exists()
         # Idempotent: a second call does not create a duplicate or error.
         main.bootstrap_admin()
         assert store.count() == 1

@@ -1,5 +1,7 @@
-"""Unit tests for services/users.py (UserStore)."""
+"""Unit tests for services/users.py (UserStore) — stable user_id identity."""
 from __future__ import annotations
+
+import hashlib
 
 import pytest
 
@@ -16,19 +18,23 @@ def test_empty_store(store):
     assert store.count() == 0
     assert store.list_users() == []
     assert store.get("nobody") is None
+    assert store.get_by_id("nope") is None
 
 
-def test_create_and_get(store):
+def test_create_returns_stable_user_id(store):
     secret = "super-secret-passphrase"
-    store.create("alice", secret, is_admin=True)
+    user_id = store.create("alice", secret, is_admin=True)
+    assert user_id and user_id != "alice"  # opaque id, not the username
     assert store.count() == 1
-    row = store.get("alice")
+    row = store.get_by_id(user_id)
     assert row["username"] == "alice"
     assert row["is_admin"] == 1
     assert row["disabled"] == 0
     # Stored as a self-describing scheme hash, never the plaintext.
     assert passwords.identify(row["password_hash"]) in passwords.available_schemes()
     assert secret not in row["password_hash"]
+    # Lookups by username and by id agree.
+    assert store.get("alice")["user_id"] == user_id
 
 
 def test_duplicate_username_rejected(store):
@@ -48,132 +54,168 @@ def test_empty_password_rejected(store):
         store.create("alice", "")
 
 
-def test_verify_login(store):
-    store.create("alice", "s3cret")
-    assert store.verify_login("alice", "s3cret") == "alice"
+def test_verify_login_returns_user_id(store):
+    uid = store.create("alice", "s3cret")
+    assert store.verify_login("alice", "s3cret") == uid
     assert store.verify_login("alice", "nope") is None
-    assert store.verify_login("ghost", "whatever") is None  # unknown user
+    assert store.verify_login("ghost", "whatever") is None
 
 
 def test_disabled_user_cannot_login(store):
-    store.create("alice", "pw")
-    store.set_disabled("alice", True)
+    uid = store.create("alice", "pw")
+    store.set_disabled(uid, True)
     assert store.verify_login("alice", "pw") is None
-    store.set_disabled("alice", False)
-    assert store.verify_login("alice", "pw") == "alice"
+    store.set_disabled(uid, False)
+    assert store.verify_login("alice", "pw") == uid
 
 
 def test_set_password(store):
-    store.create("alice", "old")
-    store.set_password("alice", "new")
+    uid = store.create("alice", "old")
+    store.set_password(uid, "new")
     assert store.verify_login("alice", "old") is None
-    assert store.verify_login("alice", "new") == "alice"
+    assert store.verify_login("alice", "new") == uid
 
 
 def test_login_rehashes_to_default_scheme(store):
-    # Seed a credential under a non-default scheme, then log in requesting the
-    # default scheme — the stored hash should transparently upgrade.
-    store.create("alice", "pw", scheme="pbkdf2_sha256")
-    assert passwords.identify(store.get("alice")["password_hash"]) == "pbkdf2_sha256"
-    assert store.verify_login("alice", "pw", default_scheme="scrypt") == "alice"
-    assert passwords.identify(store.get("alice")["password_hash"]) == "scrypt"
-    # Still logs in after the upgrade.
-    assert store.verify_login("alice", "pw", default_scheme="scrypt") == "alice"
+    uid = store.create("alice", "pw", scheme="pbkdf2_sha256")
+    assert passwords.identify(store.get_by_id(uid)["password_hash"]) == "pbkdf2_sha256"
+    assert store.verify_login("alice", "pw", default_scheme="scrypt") == uid
+    assert passwords.identify(store.get_by_id(uid)["password_hash"]) == "scrypt"
 
 
 def test_persistence_across_instances(tmp_path):
     path = tmp_path / "auth.sqlite"
-    UserStore(path).create("alice", "pw")
-    # A fresh store over the same file sees the user.
-    assert UserStore(path).verify_login("alice", "pw") == "alice"
+    uid = UserStore(path).create("alice", "pw")
+    assert UserStore(path).verify_login("alice", "pw") == uid
+
+
+# --- rename (the reason for a stable user_id) -------------------------------
+
+
+def test_rename_keeps_identity_token_and_login(store):
+    uid = store.create("alice", "pw")
+    token = store.get_api_token(uid)
+    gtoken = store.issue_greader_token(uid)
+
+    store.rename_user(uid, "alice2")
+
+    assert store.get_by_id(uid)["username"] == "alice2"  # same id, new name
+    assert store.get("alice") is None
+    assert store.get("alice2")["user_id"] == uid
+    assert store.get_api_token(uid) == token            # API token unchanged
+    assert store.resolve_greader_token(gtoken) == uid   # GReader session unchanged
+    assert store.verify_login("alice2", "pw") == uid    # login by new name
+
+
+def test_rename_to_taken_name_rejected(store):
+    uid = store.create("alice", "pw")
+    store.create("bob", "pw")
+    with pytest.raises(UserExistsError):
+        store.rename_user(uid, "bob")
+
+
+def test_rename_invalid_name_rejected(store):
+    uid = store.create("alice", "pw")
+    with pytest.raises(ValueError):
+        store.rename_user(uid, "../evil")
+
+
+def test_rename_unknown_id_rejected(store):
+    with pytest.raises(ValueError):
+        store.rename_user("u_nonexistent", "whatever")
 
 
 # --- API tokens (Fever + GReader) -------------------------------------------
 
 
 def test_create_generates_api_token(store):
-    store.create("alice", "pw")
-    tok = store.get_api_token("alice")
+    uid = store.create("alice", "pw")
+    tok = store.get_api_token(uid)
     assert tok and "pw" not in tok
 
 
-def test_verify_api_token(store):
-    store.create("alice", "pw")
-    tok = store.get_api_token("alice")
-    assert store.verify_api_token("alice", tok) == "alice"
+def test_verify_api_token_returns_user_id(store):
+    uid = store.create("alice", "pw")
+    tok = store.get_api_token(uid)
+    assert store.verify_api_token("alice", tok) == uid
     assert store.verify_api_token("alice", "wrong") is None
     assert store.verify_api_token("ghost", "x") is None
 
 
 def test_disabled_user_api_token_rejected(store):
-    store.create("alice", "pw")
-    tok = store.get_api_token("alice")
-    store.set_disabled("alice", True)
+    uid = store.create("alice", "pw")
+    tok = store.get_api_token(uid)
+    store.set_disabled(uid, True)
     assert store.verify_api_token("alice", tok) is None
 
 
-def test_fever_user_for_key(store):
-    import hashlib
-
-    store.create("alice", "pw")
+def test_fever_user_for_key_returns_user_id(store):
+    uid_a = store.create("alice", "pw")
     store.create("bob", "pw")
-    tok_a = store.get_api_token("alice")
+    tok_a = store.get_api_token(uid_a)
     key_a = hashlib.md5(f"alice:{tok_a}".encode()).hexdigest()
-    assert store.fever_user_for_key(key_a) == "alice"
+    assert store.fever_user_for_key(key_a) == uid_a
     assert store.fever_user_for_key("deadbeef") is None
-    # alice's token under bob's name must not authenticate.
     assert store.fever_user_for_key(hashlib.md5(f"bob:{tok_a}".encode()).hexdigest()) is None
 
 
 def test_greader_token_issue_and_resolve(store):
-    store.create("alice", "pw")
-    token = store.issue_greader_token("alice")
-    assert store.resolve_greader_token(token) == "alice"
+    uid = store.create("alice", "pw")
+    token = store.issue_greader_token(uid)
+    assert store.resolve_greader_token(token) == uid
     assert store.resolve_greader_token("nope") is None
     assert store.resolve_greader_token("") is None
 
 
 def test_greader_token_expires(store):
-    store.create("alice", "pw")
-    token = store.issue_greader_token("alice", lifetime=-1)  # already expired
+    uid = store.create("alice", "pw")
+    token = store.issue_greader_token(uid, lifetime=-1)
     assert store.resolve_greader_token(token) is None
 
 
 def test_disabled_user_greader_token_rejected(store):
-    store.create("alice", "pw")
-    token = store.issue_greader_token("alice")
-    store.set_disabled("alice", True)
+    uid = store.create("alice", "pw")
+    token = store.issue_greader_token(uid)
+    store.set_disabled(uid, True)
     assert store.resolve_greader_token(token) is None
 
 
 def test_regenerate_api_token_revokes_old_and_greader(store):
-    store.create("alice", "pw")
-    old = store.get_api_token("alice")
-    gtoken = store.issue_greader_token("alice")
-    new = store.regenerate_api_token("alice")
+    uid = store.create("alice", "pw")
+    old = store.get_api_token(uid)
+    gtoken = store.issue_greader_token(uid)
+    new = store.regenerate_api_token(uid)
     assert new and new != old
     assert store.verify_api_token("alice", old) is None
-    assert store.verify_api_token("alice", new) == "alice"
-    # Rotating the credential drops bearer tokens minted from the old one.
+    assert store.verify_api_token("alice", new) == uid
     assert store.resolve_greader_token(gtoken) is None
 
 
 def test_regenerate_unknown_user_returns_none(store):
-    assert store.regenerate_api_token("ghost") is None
+    assert store.regenerate_api_token("u_nonexistent") is None
 
 
-def test_api_token_backfilled_on_migration(tmp_path):
-    # Simulate a pre-token users table: create the row without api_token, then
-    # reopen so ensure_schema's migration backfills one.
+def test_legacy_username_pk_schema_is_upgraded(tmp_path):
+    """A pre-user_id auth DB (username PK) is rebuilt with user_id := username so
+    existing users/<username>/ dirs stay valid."""
     import sqlite3
 
     path = tmp_path / "auth.sqlite"
-    UserStore(path)  # creates schema (with api_token)
-    with sqlite3.connect(path) as c:
-        c.execute("UPDATE users SET api_token = NULL")  # no users yet → no-op, but exercises column
-        c.execute(
-            "INSERT INTO users (username, password_hash, is_admin, disabled, created_at, api_token) "
-            "VALUES ('legacy', 'x', 0, 0, 0, NULL)"
-        )
-    store = UserStore(path)  # re-run ensure_schema → backfill
-    assert store.get_api_token("legacy")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, "
+        "is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0, "
+        "created_at REAL NOT NULL, api_token TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO users VALUES ('legacy', ?, 1, 0, 0, 'tok')",
+        (passwords.hash_password("pw", "scrypt"),),
+    )
+    conn.commit()
+    conn.close()
+
+    store = UserStore(path)  # ensure_schema upgrades
+    row = store.get("legacy")
+    assert row is not None
+    assert row["user_id"] == "legacy"  # mapped from the old PK
+    assert store.verify_login("legacy", "pw") == "legacy"

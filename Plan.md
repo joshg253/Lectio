@@ -4,6 +4,27 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Stable user_id identity (rename-safe)** — accounts now have an immutable
+  opaque `user_id` (generated at creation) separate from the mutable `username`.
+  The `user_id` is the tenancy key, the `users/<user_id>/` directory name, the
+  session value, and the API-token FK, so renaming a username moves no data.
+  `UserStore.rename_user` + admin "Rename a user" UI. Defensive upgrade for any
+  pre-user_id auth DB. All identity call sites (login, Fever/GReader, middleware,
+  account routes, background loops) pass user_id; usernames are display-only.
+
+- **Data migration tooling** — `scripts/migrate_to_multiuser.py` resolves
+  username→user_id from the auth DB and copies the legacy DBs into
+  `users/<user_id>/`. Dry-run default, reversible, integrity-checked. Workflow
+  (bootstrap-first) in `docs/multiuser-migration.md`. **Pending: run on the real
+  data** (at a real computer, app stopped, after backup).
+
+- **Deployment genericization (minimal)** — app-emitted security headers
+  (`LECTIO_SECURITY_HEADERS=1`, opt-in so they don't depend on the proxy) and a
+  configurable `LECTIO_TRUSTED_PROXIES` for X-Forwarded-* trust. Additive;
+  defaults preserve the current Traefik-fronted behavior. (Compose proxy-agnostic
+  overlay + multi-proxy docs still deferred — touch the live deploy.)
+
+
 - **Multi-user Phase 1 — tenancy seam + per-user connection pools** (`services/tenancy.py`).
   Resolver carries the current user in a contextvar (defaults to `DEFAULT_USER_ID`
   → legacy top-level paths, so single-user is byte-for-byte unchanged and needs no
@@ -85,11 +106,11 @@ Phasing:
    (b) full DNS-rebind closure needs connection IP-pinning (the validate→connect
    TOCTOU window is now small but nonzero) — deferred as lower-priority for the
    trusted-user threat model.
-5. **Data migration** — move existing single-user DBs into the per-user layout
-   (`DATA_DIR/users/{uid}/…`); keep global caches where they are. Always back up
-   first (`scripts/backup_databases.py`). Note: in multi mode the default/legacy
-   DBs are still schema-initialized at startup but not served to any logged-in
-   user until migrated.
+5. **Data migration** — DONE (tooling). `scripts/migrate_to_multiuser.py` copies
+   the legacy DBs into `DATA_DIR/users/<user_id>/` (user_id resolved from the auth
+   DB), dry-run default, reversible, integrity-checked. **Pending: run `--apply`
+   on the real data** (real computer, app stopped, after a backup; see
+   `docs/multiuser-migration.md`).
 
 ### Later
 

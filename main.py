@@ -377,6 +377,15 @@ if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
 SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 * 3600)))
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
+# Proxies trusted for X-Forwarded-* headers. "*" (default) trusts any upstream —
+# fine when the app port is only reachable via your reverse proxy. Set a
+# comma-separated allowlist (e.g. the proxy's IP) for a stricter posture.
+_TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
+# Have the app emit baseline security headers itself. Default off because a
+# reverse proxy (e.g. the bundled Traefik config) usually sets them; enable when
+# fronting Lectio with a proxy that does not (Caddy without a header block, a
+# bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
+_SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
@@ -735,6 +744,42 @@ class _AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         next_url = str(request.url)
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
+
+
+class _SecurityHeadersMiddleware:
+    """Emit baseline security response headers from the app (opt-in via
+    LECTIO_SECURITY_HEADERS=1), so they hold regardless of the reverse proxy.
+
+    Mirrors the headers the bundled Traefik config sets. Existing headers are not
+    overwritten, so a proxy that already sets them wins and there are no
+    duplicates. HSTS is only added when LECTIO_HTTPS_ONLY=1."""
+
+    def __init__(self, app, *, hsts: bool):
+        self.app = app
+        self._headers: list[tuple[bytes, bytes]] = [
+            (b"x-content-type-options", b"nosniff"),
+            (b"x-frame-options", b"DENY"),
+            (b"referrer-policy", b"no-referrer-when-downgrade"),
+        ]
+        if hsts:
+            self._headers.append(
+                (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+            )
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                present = {k.lower() for k, _ in headers}
+                for key, val in self._headers:
+                    if key not in present:
+                        headers.append((key, val))
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 class _TenancyMiddleware:
@@ -1156,9 +1201,17 @@ app.add_middleware(
 if _HTTPS_ONLY:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+    _trusted_hosts = (
+        "*" if _TRUSTED_PROXIES == "*"
+        else [h.strip() for h in _TRUSTED_PROXIES.split(",") if h.strip()]
+    )
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_hosts)
 # Drop prefetch traffic before any other middleware does work.
 app.add_middleware(_RejectPrefetchMiddleware)
+# App-emitted security headers (opt-in), outermost so they apply to every
+# response regardless of which inner middleware produced it.
+if _SECURITY_HEADERS_ENABLED:
+    app.add_middleware(_SecurityHeadersMiddleware, hsts=_HTTPS_ONLY)
 # Access log replaces uvicorn's built-in (disabled via --no-access-log) so we
 # can suppress prefetch 204/503 noise. Add LAST so it sees the final response.
 app.add_middleware(_AccessLogMiddleware)
@@ -1362,15 +1415,16 @@ def ensure_starred_archive_schema() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_asset_link_hash ON archived_asset_link (asset_hash)")
 
 
-def provision_user_storage(username: str) -> None:
-    """Create and schema-init a user's isolated databases.
+def provision_user_storage(user_id: str) -> None:
+    """Create and schema-init a user's isolated databases (keyed by stable
+    user_id).
 
     Routes through the tenancy seam: under ``user_context`` the schema-init
     helpers and reader open resolve to this user's own DB files. Idempotent —
     safe to call on an already-provisioned user.
     """
-    tenancy.ensure_user_data_dir(username)
-    with tenancy.user_context(username):
+    tenancy.ensure_user_data_dir(user_id)
+    with tenancy.user_context(user_id):
         ensure_meta_schema()
         ensure_starred_archive_schema()
         # reader builds its own schema on first client(); opening provisions it.
@@ -1397,8 +1451,8 @@ def bootstrap_admin() -> None:
         )
         return
     try:
-        user_store.create(username, BOOTSTRAP_ADMIN_PASSWORD, is_admin=True, scheme=PASSWORD_HASH_SCHEME)
-        provision_user_storage(username)
+        admin_id = user_store.create(username, BOOTSTRAP_ADMIN_PASSWORD, is_admin=True, scheme=PASSWORD_HASH_SCHEME)
+        provision_user_storage(admin_id)
     except Exception:
         LOGGER.exception("failed to bootstrap admin user %r", username)
         return
@@ -7526,7 +7580,7 @@ def _background_user_ids() -> list[str]:
     that user's databases."""
     if not MULTI_USER or user_store is None:
         return [tenancy.DEFAULT_USER_ID]
-    return [u["username"] for u in user_store.list_users() if not u["disabled"]]
+    return [u["user_id"] for u in user_store.list_users() if not u["disabled"]]
 
 
 def _effective_auto_refresh_minutes() -> int:
@@ -8221,10 +8275,19 @@ def _current_web_user(request: Request) -> str | None:
     return uid if uid and tenancy.is_valid_user_id(uid) else None
 
 
-def _is_web_admin(username: str | None) -> bool:
-    if not username or user_store is None:
+def _current_web_username(request: Request) -> str | None:
+    """Display name (mutable username) for the current session user, or None."""
+    uid = _current_web_user(request)
+    if not uid or user_store is None:
+        return None
+    row = user_store.get_by_id(uid)
+    return row["username"] if row else None
+
+
+def _is_web_admin(user_id: str | None) -> bool:
+    if not user_id or user_store is None:
         return False
-    row = user_store.get(username)
+    row = user_store.get_by_id(user_id)
     return bool(row and row["is_admin"] and not row["disabled"])
 
 
@@ -8245,7 +8308,7 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
     uid = _current_web_user(request)
     if not uid:
         return RedirectResponse(url="/login?next=/account", status_code=303)
-    row = user_store.get(uid)
+    row = user_store.get_by_id(uid)
     if not row:
         request.session.clear()
         return RedirectResponse(url="/login", status_code=303)
@@ -8254,7 +8317,8 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
         request,
         "account.html",
         {
-            "username": uid,
+            "user_id": uid,
+            "username": row["username"],
             "is_admin": is_admin,
             "api_token": row["api_token"],
             "users": user_store.list_users() if is_admin else [],
@@ -8276,7 +8340,11 @@ async def account_change_password(request: Request):
     current = str(form.get("current_password") or "")
     new = str(form.get("new_password") or "")
     confirm = str(form.get("confirm_password") or "")
-    if user_store.verify_login(uid, current, default_scheme=PASSWORD_HASH_SCHEME) is None:
+    row = user_store.get_by_id(uid)
+    if row is None:
+        return RedirectResponse(url="/login", status_code=303)
+    # verify_login takes the (typed) username; we have the user_id from session.
+    if user_store.verify_login(row["username"], current, default_scheme=PASSWORD_HASH_SCHEME) != uid:
         return _account_redirect(error="Current password is incorrect.")
     if not new or new != confirm:
         return _account_redirect(error="New password and confirmation do not match.")
@@ -8311,8 +8379,8 @@ async def admin_create_user(request: Request):
     if not password:
         return _account_redirect(error="A password is required.")
     try:
-        user_store.create(username, password, is_admin=is_admin, scheme=PASSWORD_HASH_SCHEME)
-        provision_user_storage(username)
+        new_user_id = user_store.create(username, password, is_admin=is_admin, scheme=PASSWORD_HASH_SCHEME)
+        provision_user_storage(new_user_id)
     except UserExistsError:
         return _account_redirect(error=f"User {username!r} already exists.")
     except Exception:
@@ -8329,14 +8397,15 @@ async def admin_disable_user(request: Request):
     if not _is_web_admin(admin):
         return Response(status_code=403)
     form = await request.form()
-    username = str(form.get("username") or "")
+    target_id = str(form.get("user_id") or "")
     disabled = str(form.get("disabled") or "0") == "1"
-    if username == admin and disabled:
+    if target_id == admin and disabled:
         return _account_redirect(error="You cannot disable your own account.")
-    if user_store.get(username) is None:
+    target = user_store.get_by_id(target_id)
+    if target is None:
         return _account_redirect(error="No such user.")
-    user_store.set_disabled(username, disabled)
-    return _account_redirect(msg=f"{'Disabled' if disabled else 'Enabled'} {username!r}.")
+    user_store.set_disabled(target_id, disabled)
+    return _account_redirect(msg=f"{'Disabled' if disabled else 'Enabled'} {target['username']!r}.")
 
 
 @app.post("/admin/users/reset-password")
@@ -8347,14 +8416,38 @@ async def admin_reset_password(request: Request):
     if not _is_web_admin(admin):
         return Response(status_code=403)
     form = await request.form()
-    username = str(form.get("username") or "")
+    target_id = str(form.get("user_id") or "")
     new = str(form.get("new_password") or "")
-    if user_store.get(username) is None:
+    target = user_store.get_by_id(target_id)
+    if target is None:
         return _account_redirect(error="No such user.")
     if not new:
         return _account_redirect(error="A new password is required.")
-    user_store.set_password(username, new, scheme=PASSWORD_HASH_SCHEME)
-    return _account_redirect(msg=f"Reset password for {username!r}.")
+    user_store.set_password(target_id, new, scheme=PASSWORD_HASH_SCHEME)
+    return _account_redirect(msg=f"Reset password for {target['username']!r}.")
+
+
+@app.post("/admin/users/rename")
+async def admin_rename_user(request: Request):
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    target_id = str(form.get("user_id") or "")
+    new_username = str(form.get("new_username") or "").strip()
+    target = user_store.get_by_id(target_id)
+    if target is None:
+        return _account_redirect(error="No such user.")
+    old_username = target["username"]
+    try:
+        user_store.rename_user(target_id, new_username)
+    except UserExistsError:
+        return _account_redirect(error=f"Username {new_username!r} is already taken.")
+    except ValueError:
+        return _account_redirect(error="Invalid username — use 1–64 letters, digits, _ or -.")
+    return _account_redirect(msg=f"Renamed {old_username!r} to {new_username!r} (data and tokens unchanged).")
 
 
 @app.get("/")
@@ -8719,7 +8812,7 @@ def home(
             "profile_avatar_url": profile_avatar_url,
             "multi_user": MULTI_USER,
             "auth_enabled": AUTH_ENABLED,
-            "current_user": _current_web_user(request),
+            "current_user": _current_web_username(request),
         },
     )
 
@@ -11897,12 +11990,12 @@ async def _fever_handler(request: Request) -> Response:
 
     api_key = params.get("api_key", "")
     if MULTI_USER:
-        # Per-user: resolve the api_key (md5(username:api_token)) to a user and
+        # Per-user: resolve the api_key (md5(username:api_token)) to a user_id and
         # bind the tenancy context so the dispatch reads that user's data.
-        username = user_store.fever_user_for_key(api_key) if user_store else None
-        if not username:
+        uid = user_store.fever_user_for_key(api_key) if user_store else None
+        if not uid:
             return JSONResponse({"api_version": 3, "auth": 0})
-        with tenancy.user_context(username):
+        with tenancy.user_context(uid):
             return JSONResponse(_fever_build_result(params))
     if not fever_service.check_auth(api_key):
         return JSONResponse({"api_version": 3, "auth": 0})
@@ -12032,10 +12125,10 @@ async def greader_login(request: Request) -> Response:
         if user_store is None:
             return Response("Error=ServiceUnavailable\n", status_code=503)
         local = email.split("@")[0] if "@" in email else email
-        username = user_store.verify_api_token(local, passwd)
-        if not username:
+        uid = user_store.verify_api_token(local, passwd)
+        if not uid:
             return Response("Error=BadAuthentication\n", status_code=403)
-        token = user_store.issue_greader_token(username)
+        token = user_store.issue_greader_token(uid)
         return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
     if not greader_service:
         return Response("Error=ServiceUnavailable\n", status_code=503)
@@ -12049,8 +12142,11 @@ async def greader_login(request: Request) -> Response:
 def greader_user_info(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    username = tenancy.current_user_id() if MULTI_USER else None
-    return JSONResponse(greader_service.get_user_info(username))  # type: ignore[union-attr]
+    display_name = None
+    if MULTI_USER and user_store is not None:
+        row = user_store.get_by_id(tenancy.current_user_id())
+        display_name = row["username"] if row else tenancy.current_user_id()
+    return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]
 
 
 @app.get("/greader/reader/api/0/tag/list")
