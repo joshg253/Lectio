@@ -4,8 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Account — Lectio</title>
+  <script>
+    // Load the user's theme so CSS variables (--accent, --surface, …) are defined;
+    // without it the page is unstyled and buttons render transparent.
+    window.__lectioTheme = (window.localStorage.getItem('lectio-theme') || 'dark');
+    document.write(`<link rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v={{ static_asset_version }}" />`);
+  </script>
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
   <style>
+    /* The shared style.css sets body{overflow:hidden;height:100vh} for the app
+       shell; this standalone page needs to scroll. */
+    body.account-page { height: auto; min-height: 100vh; overflow-y: auto; }
     .account-wrap { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
     .account-wrap header { display: flex; justify-content: space-between; align-items: baseline; }
     .account-section { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid var(--border, #ccc); border-radius: 8px; }
