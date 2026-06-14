@@ -97,26 +97,17 @@
     <!-- ── Instance configuration ────────────────────────────── -->
     <section class="account-section">
       <h2>Instance configuration</h2>
-      <p class="account-hint">Shared across the whole instance. The Resend API key is the one sending account; each user sets their own From address in their Settings.</p>
+      <p class="account-hint">Shared across the whole instance.</p>
 
-      <h3>Resend</h3>
+      <h3>Email (Resend)</h3>
       <label class="fld">API key
         <input type="password" id="adm-resend-key" autocomplete="new-password"
                placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
       </label>
-
-      <h3>YouTube</h3>
-      <label class="fld">API key
-        <input type="password" id="adm-yt-key" autocomplete="new-password"
-               placeholder="{{ yt_key_masked if yt_key_set else 'AIza…' }}" />
+      <label class="fld">From address
+        <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
       </label>
-      <label class="fld">Channel ID / handle
-        <input type="text" id="adm-yt-channel" value="{{ yt_channel_id }}" placeholder="@handle or UC…" />
-      </label>
-      <label class="fld">Folder name
-        <input type="text" id="adm-yt-folder" value="{{ yt_folder_name }}" placeholder="YouTube Subscriptions" />
-      </label>
-      <p class="account-hint">Filling in the API key + channel triggers an immediate subscription sync.</p>
+      <p class="account-hint">One sending account for the instance (only a verified domain can send). YouTube is configured per-user in each user's Settings.</p>
 
       <h3>Maintenance</h3>
       <label class="fld">Hour (0–23, server local time)
@@ -149,14 +140,11 @@
         // Always send text fields (so they can be edited/cleared); only send
         // secret keys when actually entered (blank = leave unchanged).
         const payload = {
-          yt_channel_id: $('adm-yt-channel')?.value.trim() || '',
-          yt_folder_name: $('adm-yt-folder')?.value.trim() || '',
+          email_from: $('adm-email-from')?.value.trim() || '',
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
         };
         const rk = $('adm-resend-key')?.value.trim();
         if (rk) payload.resend_api_key = rk;
-        const yk = $('adm-yt-key')?.value.trim();
-        if (yk) payload.yt_api_key = yk;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
       });

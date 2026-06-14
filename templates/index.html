@@ -1269,23 +1269,6 @@
             <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
           </div>
         </div>
-        <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
-        <div class="settings-section">
-          <label class="settings-label">Theme</label>
-          <div class="sett-theme-btns">
-            <button type="button" id="theme-btn-dark" class="sett-theme-btn" title="Dark mode" aria-label="Dark mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span></button>
-            <button type="button" id="theme-btn-light" class="sett-theme-btn" title="Light mode" aria-label="Light mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span></button>
-          </div>
-        </div>
-        <h4 class="settings-section-title" style="margin-top:1rem">Application</h4>
-        <div class="settings-section">
-          <label class="settings-label" for="sett-tz-display">Timezone display</label>
-          <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
-          <datalist id="sett-tz-list"></datalist>
-        </div>
-        <div class="settings-actions">
-          <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
-        </div>
         {% if multi_user %}
         <h4 class="settings-section-title" style="margin-top:1rem">Username</h4>
         <form class="settings-section" method="post" action="/account/username">
@@ -1302,6 +1285,22 @@
           <input type="password" name="confirm_password" class="settings-input" placeholder="Confirm new password" autocomplete="new-password" minlength="6" maxlength="36" required />
           <div class="settings-actions"><button type="submit" class="settings-save-btn">Change password</button></div>
         </form>
+        {% endif %}
+        <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
+        <div class="settings-section">
+          <label class="settings-label">Theme</label>
+          <div class="sett-theme-btns">
+            <button type="button" id="theme-btn-dark" class="sett-theme-btn" title="Dark mode" aria-label="Dark mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span></button>
+            <button type="button" id="theme-btn-light" class="sett-theme-btn" title="Light mode" aria-label="Light mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span></button>
+          </div>
+          <label class="settings-label" for="sett-tz-display" style="margin-top:.6rem">Timezone display</label>
+          <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
+          <datalist id="sett-tz-list"></datalist>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
+        </div>
+        {% if multi_user %}
         <h4 class="settings-section-title" style="margin-top:1rem">API token (Fever / GReader)</h4>
         <div class="settings-section">
           <p class="settings-hint">Configure RSS clients (Capy, Reeder, …) with username <code>{{ current_user }}</code> and this token as the password.</p>
@@ -1329,11 +1328,15 @@
 
       <!-- Integrations tab -->
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
-        <h4 class="settings-section-title">Email</h4>
+        <h4 class="settings-section-title">YouTube</h4>
         <div class="settings-section">
-          <label class="settings-label" for="sett-email-from">From address</label>
-          <input type="email" id="sett-email-from" class="settings-input" placeholder="you@yourdomain.com" maxlength="200" />
-          <p class="settings-hint">Your sending address. Must be a verified sender on the instance's Resend account.</p>
+          <label class="settings-label" for="sett-yt-key">API key</label>
+          <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
+          <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
+          <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
+          <label class="settings-label" for="sett-yt-folder">Folder name</label>
+          <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
+          <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
         </div>
         <h4 class="settings-section-title">Instapaper</h4>
         <div class="settings-section">
@@ -8256,9 +8259,11 @@
         } else if (scope === 'default') {
           payload = { email_to: settDefaultAddress };
         } else if (scope === 'integrations') {
-          // Per-user only. Resend key + YouTube (instance config) are on the Admin page.
+          // Per-user only. Email (Resend key + From) is instance config on the Admin page.
           payload = {
-            email_from: g('sett-email-from'),
+            yt_api_key: g('sett-yt-key'),
+            yt_channel_id: g('sett-yt-channel'),
+            yt_folder_name: g('sett-yt-folder'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
           };

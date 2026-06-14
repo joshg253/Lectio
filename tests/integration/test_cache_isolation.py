@@ -39,18 +39,18 @@ def test_per_user_dict_clear_is_scoped():
         assert c.get("k") == 1  # clearing b didn't touch a
 
 
-def test_email_from_per_user_resend_key_shared(monkeypatch):
+def test_email_and_resend_are_instance_with_env_fallback(monkeypatch):
+    # Email (Resend key + From) is instance config: both fall back to the env
+    # values for everyone, and an admin override (stored setting) wins.
     uid = tenancy.current_user_id()
     monkeypatch.setattr(main, "_ENV_RESEND_FROM", "instance@example.com")
     monkeypatch.setattr(main, "_ENV_RESEND_API_KEY", "shared-key")
     monkeypatch.setattr(main, "_app_settings_cache", {uid: {}})  # loaded, empty
-    # email_from does NOT fall back to env (per-user identity) ...
-    assert main.get_resend_from() == ""
-    # ... but the Resend API key keeps its instance-shared env fallback.
+    assert main.get_resend_from() == "instance@example.com"
     assert main.get_resend_api_key() == "shared-key"
-    # A per-user email_from is honored.
-    monkeypatch.setattr(main, "_app_settings_cache", {uid: {main.SETTING_EMAIL_FROM: "me@example.com"}})
-    assert main.get_resend_from() == "me@example.com"
+    # An override stored in settings takes precedence over the env default.
+    monkeypatch.setattr(main, "_app_settings_cache", {uid: {main.SETTING_EMAIL_FROM: "admin@example.com"}})
+    assert main.get_resend_from() == "admin@example.com"
 
 
 def test_app_settings_cache_isolated_per_user(tmp_path, monkeypatch):

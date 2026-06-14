@@ -21,11 +21,15 @@ class YouTubeDurationService:
         get_reader: Callable[[], Any],
         user_agent: str,
         cache: dict[str, tuple[int | None, str | None]] | None = None,
+        api_key_provider: Callable[[], str] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._cache = cache if cache is not None else {}
+        # Resolves the API key per call — in multi mode this returns the current
+        # user's key (with env fallback); None falls back to the env var.
+        self._api_key_provider = api_key_provider
 
     @property
     def cache(self) -> dict[str, tuple[int | None, str | None]]:
@@ -99,55 +103,33 @@ class YouTubeDurationService:
         self._upsert_duration_db(video_id, duration_seconds, duration_display)
 
     def get_video_duration(self, video_id: str) -> tuple[int | None, str | None]:
-        """Return (seconds, display) for a YouTube video id."""
-        api_key = os.getenv("YOUTUBE_API_KEY")
-        if api_key:
-            try:
-                url = (
-                    "https://www.googleapis.com/youtube/v3/videos"
-                    f"?part=contentDetails&id={video_id}&key={api_key}"
-                )
-                response = httpx.get(url, timeout=6.0)
-                response.raise_for_status()
-                data = response.json()
-                items = data.get("items") or []
-                if items:
-                    content_details = items[0].get("contentDetails", {})
-                    duration_iso = content_details.get("duration")
-                    seconds = (
-                        self._parse_iso8601_duration_to_seconds(duration_iso)
-                        if duration_iso
-                        else None
-                    )
-                    return seconds, self._format_seconds_hms(seconds)
-            except Exception:
-                pass
+        """Return (seconds, display) for a YouTube video id via the Data API.
 
+        API-only: with no API key (per-user setting / env), durations are skipped
+        entirely — we no longer scrape the watch page."""
+        api_key = (self._api_key_provider() if self._api_key_provider else "") or os.getenv("YOUTUBE_API_KEY")
+        if not api_key:
+            return None, None
         try:
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-            response = httpx.get(
-                video_url,
-                timeout=8.0,
-                headers={"User-Agent": self._user_agent},
+            url = (
+                "https://www.googleapis.com/youtube/v3/videos"
+                f"?part=contentDetails&id={video_id}&key={api_key}"
             )
+            response = httpx.get(url, timeout=6.0)
             response.raise_for_status()
-            text = response.text
-
-            length_match = re.search(r'"lengthSeconds"\s*:\s*"?(\d+)"?', text)
-            if length_match:
-                seconds = int(length_match.group(1))
-                return seconds, self._format_seconds_hms(seconds)
-
-            meta_match = re.search(
-                r'<meta\s+itemprop=["\']duration["\']\s+content=["\'](PT[0-9HMS]+)["\']',
-                text,
-            )
-            if meta_match:
-                seconds = self._parse_iso8601_duration_to_seconds(meta_match.group(1))
+            data = response.json()
+            items = data.get("items") or []
+            if items:
+                content_details = items[0].get("contentDetails", {})
+                duration_iso = content_details.get("duration")
+                seconds = (
+                    self._parse_iso8601_duration_to_seconds(duration_iso)
+                    if duration_iso
+                    else None
+                )
                 return seconds, self._format_seconds_hms(seconds)
         except Exception:
             pass
-
         return None, None
 
     def _get_duration_db(self, video_id: str) -> tuple[int | None, str | None] | None:

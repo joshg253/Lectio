@@ -266,10 +266,9 @@ def get_resend_api_key() -> str:
 
 
 def get_resend_from() -> str:
-    # Per-user sending identity — no env fallback, so one user's address never
-    # becomes another's default. The env value seeds only the bootstrap admin
-    # (see _seed_admin_integrations_from_env).
-    return get_runtime_setting(SETTING_EMAIL_FROM)
+    # Instance sending identity (admin-managed, like the Resend key): env value is
+    # the shared default for everyone; an admin override lives in their settings.
+    return get_runtime_setting(SETTING_EMAIL_FROM, _ENV_RESEND_FROM)
 
 
 def is_email_configured() -> bool:
@@ -4263,6 +4262,8 @@ youtube_duration_service = YouTubeDurationService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
     user_agent=READABILITY_USER_AGENT,
+    # Per-user API key (with env fallback) so each user's key drives durations.
+    api_key_provider=lambda: get_yt_api_key(),
 )
 
 lead_image_service = LeadImageService(
@@ -8435,7 +8436,6 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
         return "••••••••" if v else ""
 
     resend_key = get_resend_api_key()
-    yt_key = get_yt_api_key()
     with get_meta_connection() as conn:
         maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
     return templates.TemplateResponse(
@@ -8447,13 +8447,10 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
             "users": user_store.list_users(),
             "message": msg,
             "error": error,
-            # Instance configuration (admin-managed).
+            # Instance configuration (admin-managed): email (Resend) + maintenance.
             "resend_key_set": bool(resend_key),
             "resend_key_masked": _masked(resend_key),
-            "yt_key_set": bool(yt_key),
-            "yt_key_masked": _masked(yt_key),
-            "yt_channel_id": get_yt_channel_id(),
-            "yt_folder_name": get_yt_folder_name(),
+            "email_from": get_resend_from(),
             "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
             "maintenance_last": maint_last,
             "static_asset_version": STATIC_ASSET_VERSION,
@@ -10488,8 +10485,7 @@ async def save_all_settings(request: Request):
     # Instance-level config — only admins may change it (in multi mode). Non-admin
     # requests silently drop these keys, even if the client sends them.
     _ADMIN_ONLY = {
-        SETTING_RESEND_API_KEY,
-        SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
+        SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
     }
     is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
@@ -10536,7 +10532,7 @@ async def save_all_settings(request: Request):
                 delete_setting(conn, key)
 
     # Newly-configured YouTube → sync now, in the configuring user's context.
-    if is_admin and not yt_configured_before and get_yt_api_key() and get_yt_channel_id():
+    if not yt_configured_before and get_yt_api_key() and get_yt_channel_id():
         threading.Thread(
             target=_run_in_user_context,
             args=(tenancy.current_user_id(), _run_youtube_sync),
