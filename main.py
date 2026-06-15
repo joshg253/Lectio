@@ -7147,6 +7147,33 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 or (len(_norm_cap) >= 8 and _norm_etitle.endswith(_norm_cap))
             ):
                 image_title_text = None
+            else:
+                # Auto-generated banner captions restate the title plus a decorative
+                # word and/or a date (e.g. "Progress Update Banner 2026-06-06" for a
+                # post titled "Progress Update 6/06/2026"). Strip decorative words and
+                # date/number tokens; if the remainder is wholly contained in the title,
+                # the caption adds nothing. Only applied when the caption actually looked
+                # banner-like (had a decorative word or a date) to avoid dropping short
+                # but meaningful captions that merely share words with the title.
+                _DECORATIVE_CAP_WORDS = {
+                    "banner", "header", "image", "cover", "featured", "photo",
+                    "thumbnail", "logo", "graphic", "artwork", "illustration",
+                }
+                _cap_tokens = re.findall(r"[a-z0-9]+", _norm_cap)
+                _title_tokens = set(re.findall(r"[a-z0-9]+", _norm_etitle))
+                _looks_banner_like = any(t in _DECORATIVE_CAP_WORDS for t in _cap_tokens) or bool(
+                    re.search(r"\b\d{4}\b|\b\d{1,2}[/.\-]\d{1,2}\b", _norm_cap)
+                )
+                _core_tokens = [
+                    t for t in _cap_tokens
+                    if t not in _DECORATIVE_CAP_WORDS and not t.isdigit()
+                ]
+                if (
+                    _looks_banner_like
+                    and _core_tokens
+                    and all(t in _title_tokens for t in _core_tokens)
+                ):
+                    image_title_text = None
 
         # Inject image_title_text as alt attribute on the first <img> in content_html
         # and insert a caption <p> immediately after it so it appears inline under
@@ -9070,9 +9097,14 @@ def home(
     # Fire-and-forget: returns immediately; semaphore prevents concurrent pile-up.
     uncached_posts = [p for p in posts if not p.get("thumbnail_url")]
     if uncached_posts:
+        # Re-bind the request's tenancy user inside the daemon thread; a bare
+        # thread does not inherit contextvars, so backfill_entry_list would
+        # otherwise persist images to the default user's DB and the thumbnails
+        # would not stick for this user across refreshes.
+        _bf_uid = tenancy.current_user_id()
         threading.Thread(
-            target=lead_image_service.backfill_entry_list,
-            args=(uncached_posts,),
+            target=_run_in_user_context,
+            args=(_bf_uid, lead_image_service.backfill_entry_list, uncached_posts),
             daemon=True,
         ).start()
 

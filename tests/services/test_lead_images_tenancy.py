@@ -109,3 +109,33 @@ def test_queued_source_fetch_persists_under_the_requesting_user(configured):
     ]
     # ...and NOT in the default tenant's DB (the regression).
     assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []
+
+
+def test_chunk_backfill_persists_under_the_active_user(configured):
+    """The chunk-level visible-entry backfill (backfill_entry_list) must persist
+    under whatever tenancy user is active when it runs.  The home route spawns it
+    in a bare daemon thread, so the caller must re-bind the user (regression:
+    delightlylinux thumbnails not sticking across refreshes for the real user)."""
+    def get_meta_connection():
+        return _make_meta(tenancy.meta_db_path())
+
+    svc = LeadImageService(
+        get_meta_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx([]),
+        user_agent="test",
+        extract_video_id=lambda link: None,
+    )
+    svc._fetch_source_lead_image = lambda link, **kw: "https://cdn.example/hero.jpg"  # type: ignore[method-assign]
+    svc._fetch_feed_media_thumbnails = lambda feed_url: {}  # type: ignore[method-assign]
+    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]
+
+    feed, entry = "https://alice.example/feed", "e1"
+    posts = [{"feed_url": feed, "id": entry, "link": "https://alice.example/post"}]
+    with tenancy.user_context("alice"):
+        svc.backfill_entry_list(posts)
+
+    alice_rows = _rows(tenancy.meta_db_path("alice"))
+    assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [
+        (feed, entry, "https://cdn.example/hero.jpg")
+    ]
+    assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []

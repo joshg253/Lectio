@@ -397,6 +397,127 @@ def test_blogger_chrome_domain_rejected(tmp_path: Path):
     )
 
 
+def test_nav_directory_icons_rejected(tmp_path: Path):
+    """Images served from a /navigation/ asset directory are header/menu UI
+    chrome, not article images (regression: paizo.com blog scrape returning
+    the 'Account' nav icon)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    assert not service._is_image_url_acceptable(
+        "https://cdn.paizo.com/image/navigation/Personal-Account.png", None, None
+    )
+    # A path that merely contains the word "navigation" as part of a segment
+    # (not its own directory) is still a valid article image.
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/blog/ship-navigation-guide/hero.jpg", None, None
+    )
+
+
+def test_source_scan_prefers_article_image_over_nav_icon(tmp_path: Path):
+    """A nav-directory icon appearing before the article image must not win the
+    first-image position bonus (regression: paizo.com 'Account' icon)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body>"
+        '<img alt="Account" src="https://cdn.paizo.com/image/navigation/Personal-Account.png">'
+        '<img src="https://cdn.paizo.com/covers/product-cover.jpg?w=300" alt="Cover">'
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    result = service._fetch_source_lead_image("https://paizo.com/blog/find-your-path")
+
+    assert result == "https://cdn.paizo.com/covers/product-cover.jpg?w=300"
+
+
+def test_wordpress_blank_placeholder_rejected(tmp_path: Path):
+    """WordPress.com ships s0.wp.com/i/blank.jpg as the og:image for image-less
+    posts — a 200x200 white box (regression: giodicanio.com C++ article)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://s0.wp.com/i/blank.jpg?m=1383295312i", 200, 200, allow_extensionless=True
+    )
+    # A real .jpg is still fine.
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/uploads/hero.jpg", None, None
+    )
+
+
+def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
+    """The hover-text punchline on the main comic <img title="..."> must win over
+    og:description, which on SMBC is just the post title (regression: SMBC)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head>"
+        '<meta property="og:description" content="Saturday Morning Breakfast Cereal - Proof" />'
+        "</head><body>"
+        '<img title="This sort of thing is why I will likely never write fantasy." '
+        'src="https://www.smbc-comics.com/comics/1780608554-20260605.png" id="cc-comic" />'
+        "</body></html>"
+    )
+    assert service._extract_webcomic_alt_text(fake_html) == (
+        "This sort of thing is why I will likely never write fantasy."
+    )
+
+
+def test_webcomic_alt_falls_back_to_og_description(tmp_path: Path):
+    """When the comic <img> carries no title/alt, og:description is still used."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head>"
+        '<meta property="og:description" content="the secret hover joke" />'
+        "</head><body><p>no comic img here</p></body></html>"
+    )
+    assert service._extract_webcomic_alt_text(fake_html) == "the secret hover joke"
+
+
+def test_advertisement_images_rejected(tmp_path: Path):
+    """Ad images flag themselves via filename or alt text (regression: SE Radio
+    'banner ad' image leaking into feed-content and source lead images)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    # URL ad-token (".../Cert-ad1.png", "/ads/...") rejected.
+    assert not service._is_image_url_acceptable(
+        "https://se-radio.net/wp-content/uploads/2026/04/2026-Software-Pro-Cert-ad1.png",
+        320, 100,
+    )
+    assert not service._is_image_url_acceptable(
+        "https://cdn.example.com/ads/leaderboard.png", None, None
+    )
+    # Words containing the "ad" substring are not ads.
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/wp-content/uploads/2026/hero.jpg", None, None
+    )
+    # alt-flagged ad rejected by the feed-content inline extractor.
+    banner_html = (
+        '<img src="https://example.com/promo/spring.png" width="320" height="100" '
+        'alt="banner ad that says subscribe now">'
+    )
+    assert service._extract_first_image_url_from_html(
+        banner_html, "https://example.com/article", allow_extensionless=True
+    ) is None
+
+
+def test_extreme_aspect_logo_rejected(tmp_path: Path):
+    """Wordmark logos with banner aspect ratios (e.g. 600x100, 200x1500) are site
+    branding, not article images (regression: SE Radio logo in source scrape)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    assert not service._is_image_url_acceptable(
+        "https://se-radio.net/wp-content/uploads/2024/01/SE-radio-logo-color-600x100-1.png",
+        None, None,
+    )
+    assert not service._is_image_url_acceptable(
+        "https://se-radio.net/wp-content/uploads/seradio-20th-site-logo-200x1500-2.png",
+        None, None,
+    )
+    # A logo-named image with a content-like aspect ratio still passes (e.g. an
+    # article about a logo, sized 1200x630).
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/articles/imdb-logo-1200x630.jpg", None, None
+    )
+
+
 def test_source_scan_skips_nav_menu_icons(tmp_path: Path):
     """Images inside nav menus/dropdowns are site chrome, not lead images
     (regression: krita.org language-picker icon)."""

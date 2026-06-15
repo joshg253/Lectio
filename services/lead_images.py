@@ -85,6 +85,10 @@ class LeadImageService:
     # Path patterns checked against parsed.path; domain patterns against parsed.netloc.
     _SITE_CHROME_PATH_PATTERNS = re.compile(
         r"/wp-content/(?:themes|plugins)/|/e107_(?:images|themes|plugins)/|hamburger|keyboard[-_]arrow"
+        # "/navigation/" — header/menu UI icons served from a nav asset directory
+        # (e.g. paizo.com/image/navigation/Personal-Account.png). These are the
+        # first <img> on the page and would otherwise win the first-image bonus.
+        r"|/navigation/"
         r"|/social/(?:facebook|twitter|instagram|linkedin|youtube|pinterest|reddit|tiktok|discord|digg|tumblr|whatsapp|rss|email|telegram|snapchat|twitterx|bluesky)\."
         # "/social-media/social-*" — per-platform sharing cards (e.g. krita's social-youtube.png)
         r"|/social-media/social-"
@@ -122,11 +126,28 @@ class LeadImageService:
         re.IGNORECASE | re.DOTALL,
     )
     _PLACEHOLDER_URL_PATTERNS = re.compile(
-        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.gif|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
+        # "blank.<ext>" covers the WordPress.com placeholder (s0.wp.com/i/blank.jpg)
+        # that ships as the og:image on image-less posts — a 200x200 white box.
+        r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(
         r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|piwik|matomo|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image)",
+        re.IGNORECASE,
+    )
+    # Advertisement images embedded in feed content / article bodies. Matched
+    # against the URL path: an "ads" directory, or an "-ad"/"_ad" filename token
+    # followed by a digit or separator (e.g. .../Software-Pro-Cert-ad1.png).
+    # Boundaries avoid false positives in words like "uploads", "download", "lead".
+    _AD_URL_PATTERNS = re.compile(
+        r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert)",
+        re.IGNORECASE,
+    )
+    # Advertisement images flagged by their alt/title text (e.g. SE Radio's
+    # "banner ad that says ..."). Kept tight to avoid rejecting article images
+    # that merely discuss advertising.
+    _AD_ALT_PATTERNS = re.compile(
+        r"(?:\bbanner ad\b|\bad banner\b|\badvertisement\b)",
         re.IGNORECASE,
     )
     _AVATAR_HINT_PATTERNS = re.compile(
@@ -1199,6 +1220,11 @@ class LeadImageService:
             # decorative dividers or CSS-sized banners, not article images.
             if attrs.get("height", "").strip().endswith("%"):
                 continue
+            # Skip images whose alt/title text flags them as advertisements
+            # (e.g. SE Radio's "banner ad that says ...").
+            _alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}"
+            if _alt_title.strip() and self._AD_ALT_PATTERNS.search(_alt_title):
+                continue
             for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
                 if not image_url or image_url.startswith("data:"):
                     continue
@@ -1360,6 +1386,9 @@ class LeadImageService:
         # in an article about IMDB piracy); site chrome logos typically have no
         # explicit dimensions or carry them in the URL instead.
         alt_title = f"{attrs.get('alt', '')} {attrs.get('title', '')}".strip()
+        # Advertisement banners flag themselves in alt/title text — never article content.
+        if alt_title and self._AD_ALT_PATTERNS.search(alt_title):
+            return False
         if alt_title and self._LOGO_URL_PATTERNS.search(alt_title):
             _has_qualifying_dims = (
                 width_attr is not None and width_attr >= self._LEAD_IMAGE_MIN_WIDTH
@@ -1676,13 +1705,21 @@ class LeadImageService:
             # publisher-sized content images are valid even when "logo" appears in the name.
             _lp_path = image_url.split("?")[0]
             _lp_has_large_dims = False
-            # NxN pattern (e.g. "750x476")
+            # NxN pattern (e.g. "750x476"). Extreme aspect ratios (wider than 4:1
+            # or taller than 1:4) are wordmark/banner logos, not article content —
+            # e.g. SE Radio's "logo-color-600x100" (6:1) or "site-logo-200x1500"
+            # (1:7.5).  Require both a large dimension and a content-like ratio.
             for _m in self._URL_DIMENSION_RE.finditer(_lp_path):
                 try:
-                    if int(_m.group(1)) >= self._LEAD_IMAGE_MIN_WIDTH and int(_m.group(2)) >= self._LEAD_IMAGE_MIN_HEIGHT:
+                    _lpw, _lph = int(_m.group(1)), int(_m.group(2))
+                    if (
+                        _lpw >= self._LEAD_IMAGE_MIN_WIDTH
+                        and _lph >= self._LEAD_IMAGE_MIN_HEIGHT
+                        and 0.25 <= _lpw / _lph <= 4.0
+                    ):
                         _lp_has_large_dims = True
                         break
-                except ValueError:
+                except (ValueError, ZeroDivisionError):
                     pass
             # Width-only hint (e.g. "1000w") — WordPress responsive-image naming
             if not _lp_has_large_dims:
@@ -1714,6 +1751,10 @@ class LeadImageService:
             if not _lp_has_large_dims:
                 return False
         if self._PLACEHOLDER_URL_PATTERNS.search(image_url):
+            return False
+        # Advertisement images (e.g. .../Cert-ad1.png) are never article content.
+        # Checked against the path so query strings can't introduce false matches.
+        if self._AD_URL_PATTERNS.search(parsed.path):
             return False
 
         path = parsed.path.lower()
@@ -2024,12 +2065,31 @@ class LeadImageService:
         """Return the webcomic hover/secret text from a source page, or None.
 
         Looks first for the `comic-alt-text` balloon used by the WordPress
-        Webcomic plugin, then falls back to the og:description meta tag.
+        Webcomic plugin, then the title/alt attribute on the main comic <img>
+        (e.g. SMBC's <img id="cc-comic" title="...">), then falls back to the
+        og:description meta tag.
         """
         m = self._WEBCOMIC_ALT_TEXT_RE.search(html_text)
         if m:
             text = re.sub(r"<[^>]+>", " ", m.group(1))
             text = html.unescape(text).strip()
+            if text:
+                return text
+        # The hover-text punchline often lives in the title= (or alt=) attribute of
+        # the main comic <img> itself, identified by a known webcomic id/class.
+        for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            tag = tag_match.group(0)
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                k = attr_match.group(1).strip().lower()
+                v = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                if k and v:
+                    attrs[k] = v
+            img_id = (attrs.get("id") or "").strip()
+            img_class = (attrs.get("class") or "").strip()
+            if not (self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id) or self._WEBCOMIC_IMG_CLASS_RE.search(img_class)):
+                continue
+            text = (attrs.get("title") or attrs.get("alt") or "").strip()
             if text:
                 return text
         m = self._OG_DESCRIPTION_RE.search(html_text)
