@@ -17,13 +17,15 @@ class YouTubeDurationService:
     def __init__(
         self,
         *,
-        get_meta_connection: Callable[[], sqlite3.Connection],
+        get_durations_connection: Callable[[], sqlite3.Connection],
         get_reader: Callable[[], Any],
         user_agent: str,
         cache: dict[str, tuple[int | None, str | None]] | None = None,
         api_key_provider: Callable[[], str] | None = None,
     ) -> None:
-        self._get_meta_connection = get_meta_connection
+        # The duration cache (video_id -> length) is a GLOBAL store shared across
+        # users, since a video's length is a fact, not per-user data.
+        self._get_durations_connection = get_durations_connection
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._cache = cache if cache is not None else {}
@@ -36,7 +38,7 @@ class YouTubeDurationService:
         return self._cache
 
     def warm_cache_from_db(self) -> None:
-        with self._get_meta_connection() as conn:
+        with self._get_durations_connection() as conn:
             rows = conn.execute(
                 "SELECT video_id, duration_seconds, duration_display FROM youtube_video_duration"
             ).fetchall()
@@ -107,7 +109,9 @@ class YouTubeDurationService:
 
         API-only: with no API key (per-user setting / env), durations are skipped
         entirely — we no longer scrape the watch page."""
-        api_key = (self._api_key_provider() if self._api_key_provider else "") or os.getenv("YOUTUBE_API_KEY")
+        # Provider resolves the per-user key (with single-mode env fallback baked
+        # in); only fall back to env directly when no provider was wired.
+        api_key = self._api_key_provider() if self._api_key_provider else os.getenv("YOUTUBE_API_KEY")
         if not api_key:
             return None, None
         try:
@@ -133,7 +137,7 @@ class YouTubeDurationService:
         return None, None
 
     def _get_duration_db(self, video_id: str) -> tuple[int | None, str | None] | None:
-        with self._get_meta_connection() as conn:
+        with self._get_durations_connection() as conn:
             row = conn.execute(
                 "SELECT duration_seconds, duration_display FROM youtube_video_duration WHERE video_id = ?",
                 (video_id,),
@@ -149,7 +153,7 @@ class YouTubeDurationService:
         duration_seconds: int | None,
         duration_display: str | None,
     ) -> None:
-        with self._get_meta_connection() as conn:
+        with self._get_durations_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO youtube_video_duration (video_id, duration_seconds, duration_display, fetched_at)

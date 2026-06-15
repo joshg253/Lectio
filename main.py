@@ -173,6 +173,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
 THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
+# Global, content-addressed (video_id -> duration): a fact about the video, not
+# per-user, so it's shared — a user without a YouTube key still gets durations
+# another user's key already fetched. Like the thumb cache, NOT routed through tenancy.
+YT_DURATION_DB_PATH = DATA_DIR / "lectio_yt_durations.sqlite"
 STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
 # Global account registry (NOT per-user, NOT routed through tenancy): one users
 # table for the whole instance. Only used in multi-user (security) mode.
@@ -297,16 +301,24 @@ if _yt_sync_hour_raw:
         pass
 
 
+# YouTube is per-user (each user's own key for durations + own channel for sub
+# sync). In multi mode the env YOUTUBE_* vars seed only the bootstrap admin and
+# are NOT a read-time fallback, so one user's key never leaks to another. In
+# single mode (one implicit user) env remains the config source.
+def _env_yt_fallback(env_val: str) -> str:
+    return "" if MULTI_USER else env_val
+
+
 def get_yt_api_key() -> str:
-    return get_runtime_setting(SETTING_YT_API_KEY, _ENV_YT_API_KEY)
+    return get_runtime_setting(SETTING_YT_API_KEY, _env_yt_fallback(_ENV_YT_API_KEY))
 
 
 def get_yt_channel_id() -> str:
-    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _ENV_YT_CHANNEL_ID)
+    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _env_yt_fallback(_ENV_YT_CHANNEL_ID))
 
 
 def get_yt_folder_name() -> str:
-    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _ENV_YT_FOLDER_NAME) or "YouTube Subscriptions"
+    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _env_yt_fallback(_ENV_YT_FOLDER_NAME)) or "YouTube Subscriptions"
 
 
 def get_maintenance_hour() -> int | None:
@@ -529,6 +541,7 @@ async def lifespan(app: FastAPI):
     _attach_pending_access_filter()
     ensure_meta_schema()
     ensure_thumb_schema()
+    ensure_yt_duration_schema()
     ensure_starred_archive_schema()
     bootstrap_admin()
     with get_meta_connection() as conn:
@@ -1436,6 +1449,29 @@ def ensure_thumb_schema() -> None:
         )
 
 
+def get_yt_duration_connection() -> sqlite3.Connection:
+    """Connection to the global (shared) YouTube-duration cache."""
+    conn = sqlite3.connect(str(YT_DURATION_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_yt_duration_schema() -> None:
+    with get_yt_duration_connection() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_video_duration (
+                video_id TEXT PRIMARY KEY,
+                duration_seconds INTEGER,
+                duration_display TEXT,
+                fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+
 def get_starred_archive_connection() -> sqlite3.Connection:
     # Per-user DB (resolved via tenancy); returns a fresh connection per call.
     conn = sqlite3.connect(str(tenancy.starred_archive_db_path()))
@@ -1537,7 +1573,14 @@ def _seed_admin_integrations_from_env(admin_id: str) -> None:
     bootstrap then ignored" for these per-user values). Only seeds keys not
     already set; the instance-shared Resend API key is NOT seeded here (it stays
     env-read for everyone via get_resend_api_key)."""
-    seeds = [(SETTING_EMAIL_FROM, _ENV_RESEND_FROM), (EMAIL_TO_SETTING_KEY, _ENV_RESEND_TO)]
+    seeds = [
+        (SETTING_EMAIL_FROM, _ENV_RESEND_FROM),
+        (EMAIL_TO_SETTING_KEY, _ENV_RESEND_TO),
+        # YouTube is per-user; the env vars seed the first (admin) user only.
+        (SETTING_YT_API_KEY, _ENV_YT_API_KEY),
+        (SETTING_YT_CHANNEL_ID, _ENV_YT_CHANNEL_ID),
+        (SETTING_YT_FOLDER_NAME, _ENV_YT_FOLDER_NAME),
+    ]
     with tenancy.user_context(admin_id):
         with get_meta_connection() as conn:
             for key, val in seeds:
@@ -4280,7 +4323,7 @@ def get_reader():
 
 
 youtube_duration_service = YouTubeDurationService(
-    get_meta_connection=get_meta_connection,
+    get_durations_connection=get_yt_duration_connection,
     get_reader=get_reader,
     user_agent=READABILITY_USER_AGENT,
     # Per-user API key (with env fallback) so each user's key drives durations.
@@ -7883,36 +7926,33 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] email batch flush failed")
 
-    # 5. Record this user's last-ran timestamp.
-    with get_meta_connection() as conn:
-        set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
-
-
-def _run_global_maintenance() -> None:
-    """Nightly cleanup that is not per-user: VACUUM the shared thumb cache and
-    run the YouTube subscription sync (a single global config)."""
-    try:
-        conn = sqlite3.connect(str(THUMB_DB_PATH))
-        conn.execute("VACUUM")
-        conn.close()
-        LOGGER.info("[maintenance] VACUUM thumb done")
-    except Exception:
-        LOGGER.exception("[maintenance] VACUUM thumb failed")
-
-    # YouTube subscription sync (if configured). Global config → runs once, as
-    # the default user (writes into the YouTube folder of the default DBs).
+    # 5. YouTube subscription sync — per-user (this user's own key + channel).
     if get_yt_api_key() and get_yt_channel_id():
         try:
             result = _run_youtube_sync()
             if result.get("error"):
                 LOGGER.error("[maintenance] YouTube sync error: %s", result["error"])
             else:
-                LOGGER.info(
-                    "[maintenance] YouTube sync complete: +%d -%d total=%d",
-                    result["added"], result["removed"], result["total"],
-                )
+                LOGGER.info("[maintenance] YouTube sync: +%d -%d total=%d",
+                            result["added"], result["removed"], result["total"])
         except Exception:
             LOGGER.exception("[maintenance] YouTube sync failed")
+
+    # 6. Record this user's last-ran timestamp.
+    with get_meta_connection() as conn:
+        set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
+
+
+def _run_global_maintenance() -> None:
+    """Nightly cleanup that is not per-user: VACUUM the shared (global) caches."""
+    for label, path in (("thumb", THUMB_DB_PATH), ("yt-durations", YT_DURATION_DB_PATH)):
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.execute("VACUUM")
+            conn.close()
+            LOGGER.info("[maintenance] VACUUM %s done", label)
+        except Exception:
+            LOGGER.exception("[maintenance] VACUUM %s failed", label)
 
 
 def _daily_maintenance_loop(stop_event: threading.Event) -> None:

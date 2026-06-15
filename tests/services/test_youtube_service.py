@@ -53,7 +53,7 @@ def test_extract_video_id_variants(tmp_path: Path):
         return _make_db_conn(db_path)
 
     service = YouTubeDurationService(
-        get_meta_connection=get_meta_connection,
+        get_durations_connection=get_meta_connection,
         get_reader=lambda: _ReaderCtx(_FakeReader([])),
         user_agent="LectioTest/1.0",
     )
@@ -76,7 +76,7 @@ def test_get_cached_duration_falls_back_to_db(tmp_path: Path):
         )
 
     service = YouTubeDurationService(
-        get_meta_connection=get_meta_connection,
+        get_durations_connection=get_meta_connection,
         get_reader=lambda: _ReaderCtx(_FakeReader([])),
         user_agent="LectioTest/1.0",
         cache={},
@@ -95,7 +95,7 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
         return _make_db_conn(db_path)
 
     service = YouTubeDurationService(
-        get_meta_connection=get_meta_connection,
+        get_durations_connection=get_meta_connection,
         get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
         user_agent="LectioTest/1.0",
     )
