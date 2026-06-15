@@ -4550,8 +4550,8 @@ def get_feed_tag_suggestions(
         if not already_fetching:
             def _fetch_tags(url: str = feed_url) -> None:
                 try:
-                    with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-                        response = client.get(url)
+                    with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                        response = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
                     response.raise_for_status()
                     parsed = feedparser.parse(response.content)
                     candidates: list[dict[str, object]] = []
@@ -5350,25 +5350,95 @@ def _transform_kg_audio_cards(content_html: str) -> str:
     return "".join(result)
 
 
+# Allowlist HTML sanitizer for fetched article/source HTML rendered with `| safe`.
+# Regex sanitizing is unsafe (e.g. unquoted `onerror=`, `href="javascript:"` and
+# countless encoding tricks slip through), so we parse and rebuild instead.
+_SANITIZE_ALLOWED_TAGS = frozenset({
+    "a", "abbr", "address", "article", "aside", "b", "blockquote", "br", "caption",
+    "cite", "code", "col", "colgroup", "dd", "del", "details", "dfn", "div", "dl",
+    "dt", "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "hr", "i", "img", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p",
+    "picture", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub",
+    "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
+    "u", "ul", "var", "wbr", "audio", "video", "source",
+})
+# Dangerous tags whose entire subtree is dropped. Anything else not in the allow
+# list is unwrapped (its text/children kept) rather than deleted.
+_SANITIZE_DROP_TAGS = frozenset({
+    "script", "style", "iframe", "object", "embed", "form", "link", "meta", "base",
+    "noscript", "template", "svg", "math", "applet", "frame", "frameset", "title",
+    "button", "input", "select", "textarea", "option",
+})
+_SANITIZE_ALLOWED_ATTRS = {
+    "a": frozenset({"href", "title"}),
+    "img": frozenset({"src", "srcset", "alt", "title", "loading"}),
+    "source": frozenset({"src", "srcset", "type", "media"}),
+    "video": frozenset({"src", "controls", "poster", "preload"}),
+    "audio": frozenset({"src", "controls", "preload"}),
+    "td": frozenset({"colspan", "rowspan"}),
+    "th": frozenset({"colspan", "rowspan", "scope"}),
+    "col": frozenset({"span"}),
+    "colgroup": frozenset({"span"}),
+    "time": frozenset({"datetime"}),
+}
+_SANITIZE_URL_ATTRS = frozenset({"href", "src", "poster"})
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
+
+
+def _is_safe_attr_url(attr: str, value: str) -> bool:
+    """Reject javascript:/vbscript:/data: (and control-char-obfuscated variants);
+    allow relative URLs and http(s) (plus mailto/tel for href)."""
+    if not value or not value.strip():
+        return False
+    stripped = _CONTROL_CHARS_RE.sub("", value).lower()
+    if stripped.startswith(("javascript:", "vbscript:", "data:")):
+        return False
+    try:
+        scheme = urlparse(value).scheme.lower()
+    except ValueError:
+        return False
+    if scheme == "":
+        return True  # relative URL
+    if attr == "href":
+        return scheme in ("http", "https", "mailto", "tel")
+    return scheme in ("http", "https")
+
+
+def _sanitize_html_allowlist(content: str) -> str:
+    if not content:
+        return content
+    from bs4 import BeautifulSoup, Comment
+
+    soup = BeautifulSoup(content, "html.parser")
+    for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        comment.extract()
+    for tag in soup.find_all(True):
+        name = (tag.name or "").lower()
+        if name in _SANITIZE_DROP_TAGS:
+            tag.decompose()
+            continue
+        if name not in _SANITIZE_ALLOWED_TAGS:
+            tag.unwrap()  # keep inner text/children, drop the unknown wrapper
+            continue
+        allowed = _SANITIZE_ALLOWED_ATTRS.get(name, frozenset())
+        for attr_name in list(tag.attrs):
+            la = attr_name.lower()
+            if la.startswith("on") or la == "style" or la not in allowed:
+                del tag.attrs[attr_name]
+                continue
+            if la in _SANITIZE_URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
+                del tag.attrs[attr_name]
+    return str(soup)
+
+
 def sanitize_readability_html(content: str) -> str:
-    # Remove active content and potentially dangerous tags from extracted article HTML.
-    cleaned = re.sub(r"<\s*(script|style|iframe|object|embed|form)[^>]*>.*?<\s*/\s*\1\s*>", "", content, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"\son[a-zA-Z]+\s*=\s*(['\"]).*?\1", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"\sjavascript:\s*", "", cleaned, flags=re.IGNORECASE)
-    # Strip sizing attrs/styles from img tags so CSS fully controls image dimensions.
-    cleaned = re.sub(r"(<img\b[^>]*?)\s+(?:width|height)\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+)", r"\1", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(<img\b[^>]*?)\s+(?:width|height)\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+)", r"\1", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(<img\b[^>]*?)\s+style\s*=\s*(?:\"[^\"]*\"|'[^']*')", r"\1", cleaned, flags=re.IGNORECASE)
-    return cleaned
+    """Sanitize Readability-extracted article HTML (rendered with `| safe`)."""
+    return _sanitize_html_allowlist(content)
 
 
 def sanitize_source_html(content: str) -> str:
-    # Keep article/page structure, but remove active scriptable content.
-    cleaned = re.sub(r"<\s*(script|iframe|object|embed|form|meta)[^>]*>.*?<\s*/\s*\1\s*>", "", content, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"<\s*(script|iframe|object|embed|form|meta)\b[^>]*?/?>", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\son[a-zA-Z]+\s*=\s*(['\"]).*?\1", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"\sjavascript:\s*", "", cleaned, flags=re.IGNORECASE)
-    return cleaned
+    """Sanitize proxied source-page HTML (rendered with `| safe`)."""
+    return _sanitize_html_allowlist(content)
 
 
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
@@ -5486,8 +5556,8 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
 
     try:
-        with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            response = client.get(source_url)
+        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
         response.raise_for_status()
     except Exception as exc:
         escaped_url = html.escape(source_url)
@@ -5669,7 +5739,9 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         return {"blocked": True, "reason": "unsupported-url-scheme"}
 
     try:
-        with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        if not url_guard.is_safe_outbound_url(source_url):
+            raise url_guard.UnsafeURLError(source_url)
+        with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             with client.stream("GET", source_url) as response:
                 blocked, reason = is_probably_frame_blocked(response.headers)
                 final_url = str(response.url)
@@ -5899,8 +5971,8 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
 
     try:
-        with httpx.Client(follow_redirects=True, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            response = client.get(source_url)
+        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
         response.raise_for_status()
         raw_html = response.text
         doc = Document(raw_html)
@@ -7579,10 +7651,28 @@ def normalize_feed_url(feed_url: str) -> str:
     return feed_url
 
 
+def _is_subscribable_feed_url(url: str) -> bool:
+    """True only for http(s) feed URLs supplied by users.
+
+    The ``reader`` library natively fetches ``file://`` (used internally for
+    scraped feeds), so an unrestricted user-supplied URL — via Add Feed, a
+    discovered ``<link>``, or an OPML ``xmlUrl`` — could read arbitrary local
+    files (``file:///etc/passwd``, another tenant's DB, ``.env``) on refresh.
+    Restrict user-facing subscription to http/https; internal scraped feeds add
+    their ``file://`` URLs through ``reader.add_feed`` directly, not here.
+    """
+    try:
+        return urlparse(url).scheme in ("http", "https")
+    except ValueError:
+        return False
+
+
 def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     feed_url = feed_url.strip()
     if not feed_url:
         raise ValueError("Feed URL is required.")
+    if not _is_subscribable_feed_url(feed_url):
+        raise ValueError("Only http:// and https:// feed URLs can be added.")
 
     # Normalize YouTube-like links into canonical channel feed URLs when possible.
     try:
@@ -8198,6 +8288,11 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
                     if feed_url in feeds_with_folder:
                         # Already assigned to a folder, skip
                         return
+                    if not _is_subscribable_feed_url(feed_url):
+                        # Reject non-http(s) schemes (e.g. file://) — reader would
+                        # otherwise read local files when refreshing the feed.
+                        LOGGER.warning("OPML import: skipping non-http(s) entry %r", feed_url)
+                        return
                     try:
                         reader.add_feed(feed_url, exist_ok=True)
                     except InvalidFeedURLError:
@@ -8471,6 +8566,20 @@ def _clear_login_failures(ip: str) -> None:
         _login_failures.pop(ip, None)
 
 
+def _safe_next(next_url: str | None) -> str:
+    """Return ``next_url`` only if it is a safe same-origin path, else ``/``.
+
+    Prevents post-login open redirects: rejects off-site absolute URLs and the
+    protocol-relative (``//evil.com``) / backslash (``/\\evil.com``) forms that
+    browsers normalise to an external authority.
+    """
+    if not next_url or not next_url.startswith("/"):
+        return "/"
+    if next_url.startswith("//") or next_url.startswith("/\\"):
+        return "/"
+    return next_url
+
+
 @app.post("/login")
 async def login_submit(request: Request, next: str = "/"):
     now = time.time()
@@ -8503,11 +8612,11 @@ async def login_submit(request: Request, next: str = "/"):
             request.session.clear()  # rotate session on login (anti-fixation)
             request.session["authenticated"] = True
             request.session["user_id"] = resolved
-            return RedirectResponse(url=next or "/", status_code=303)
+            return RedirectResponse(url=_safe_next(next), status_code=303)
     elif AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
         _clear_login_failures(ip)
         request.session["authenticated"] = True
-        return RedirectResponse(url=next or "/", status_code=303)
+        return RedirectResponse(url=_safe_next(next), status_code=303)
     _record_login_failure(ip, now)
     return templates.TemplateResponse(
         request,

@@ -59,7 +59,7 @@ def _mock_response(url: str, ct: str, text: str = "", status: int = 200) -> Magi
 
 class TestDiscoverFeedUrls:
     def test_url_already_a_feed(self):
-        with patch("httpx.get", return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml")):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/feed.xml", "application/rss+xml")):
             result = discover_feed_urls("https://example.com/feed.xml")
         assert result == ["https://example.com/feed.xml"]
 
@@ -69,7 +69,7 @@ class TestDiscoverFeedUrls:
             '<link rel="alternate" type="application/rss+xml" href="/feed.xml" title="RSS" />'
             '</head></html>'
         )
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
@@ -77,13 +77,13 @@ class TestDiscoverFeedUrls:
         html = (
             '<link type="application/atom+xml" rel="alternate" href="https://feeds.example.com/atom" />'
         )
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://feeds.example.com/atom"]
 
     def test_html_page_relative_href_resolved(self):
         html = '<link rel="alternate" type="application/rss+xml" href="../rss.xml" />'
-        with patch("httpx.get", return_value=_mock_response("https://example.com/blog/", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/blog/", "text/html", html)):
             result = discover_feed_urls("https://example.com/blog/")
         assert result == ["https://example.com/rss.xml"]
 
@@ -99,18 +99,18 @@ class TestDiscoverFeedUrls:
             not_found.is_success = False
             return not_found
 
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            with patch("httpx.head", side_effect=fake_head):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed"]
 
     def test_network_error_returns_empty(self):
-        with patch("httpx.get", side_effect=Exception("network down")):
+        with patch("services.feed_discovery._guarded_get", side_effect=Exception("network down")):
             result = discover_feed_urls("https://example.com/")
         assert result == []
 
     def test_non_success_response_returns_empty(self):
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", status=404)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", status=404)):
             result = discover_feed_urls("https://example.com/")
         assert result == []
 
@@ -119,8 +119,8 @@ class TestDiscoverFeedUrls:
         no_match = MagicMock()
         no_match.is_success = False
 
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            with patch("httpx.head", return_value=no_match):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", return_value=no_match):
                 result = discover_feed_urls("https://example.com/")
         assert result == []
 
@@ -129,7 +129,7 @@ class TestDiscoverFeedUrls:
             '<link rel="alternate" type="application/rss+xml" href="/feed.xml" />'
             '<link rel="alternate" type="application/atom+xml" href="/feed.xml" />'
         )
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
@@ -139,7 +139,7 @@ class TestDiscoverFeedUrls:
             '<link rel="alternate" type="application/atom+xml" href="/atom.xml" />'
             '<link rel="alternate" type="application/rss+xml" href="/rss.xml" />'
         )
-        with patch("httpx.get", return_value=_mock_response("https://example.com/", "text/html", html)):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
             result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/atom.xml", "https://example.com/rss.xml"]
 
@@ -156,8 +156,8 @@ class TestDiscoverFeedUrls:
             not_found.is_success = False
             return not_found
 
-        with patch("httpx.get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
-            with patch("httpx.head", side_effect=fake_head):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/blog")
         assert result == ["https://example.com/blog/feed/"]
 
@@ -175,7 +175,7 @@ class TestDiscoverFeedUrls:
             not_found.is_success = False
             return not_found
 
-        with patch("httpx.get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
-            with patch("httpx.head", side_effect=fake_head):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/blog", "text/html", html)):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/blog")
         assert result == [feed_url]

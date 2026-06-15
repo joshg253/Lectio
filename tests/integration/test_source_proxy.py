@@ -11,11 +11,21 @@ import main
 # Helpers / mock httpx
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _allow_outbound(monkeypatch):
+    """The source proxy now routes through url_guard.safe_get; stub the SSRF
+    check so these transformation tests don't depend on real DNS."""
+    monkeypatch.setattr(main.url_guard, "is_safe_outbound_url", lambda _url: True)
+
+
 class _MockHTTPXResponse:
     def __init__(self, text: str, status_code: int = 200, url: str = "https://example.com/page"):
         self.text = text
         self.status_code = status_code
         self.url = httpx.URL(url)
+        self.is_redirect = False
+        self.headers = {}
+        self.content = text.encode()
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -35,7 +45,7 @@ def _make_mock_client(response: _MockHTTPXResponse):
             return self
         def __exit__(self, *_):
             pass
-        def get(self, url):
+        def get(self, url, **_kwargs):
             return response
     return _Client
 
