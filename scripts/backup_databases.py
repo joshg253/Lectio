@@ -1,21 +1,27 @@
-"""Online SQLite backup for Lectio's two databases.
+"""Online SQLite backup for Lectio's databases (single- and multi-user aware).
 
 Uses `VACUUM INTO` so backups are consistent even while the app is running
 (WAL/-shm files don't need to be copied — `VACUUM INTO` produces a single
 self-contained DB file at the destination).
 
+What it backs up:
+  - the global auth DB (`lectio_auth.sqlite`) — the user registry (multi mode),
+  - every user's databases under `data/users/<user_id>/`,
+  - the legacy top-level DBs (single-user / pre-migration) when present and
+    non-empty (the post-migration empty stubs are skipped).
+
+Regenerable caches (thumbnails, YouTube durations, reader FTS `.search`) are NOT
+backed up.
+
 Usage:
-    uv run scripts/backup_databases.py [--dest <dir>] [--keep <N>]
+    LECTIO_DATA_DIR=/data uv run scripts/backup_databases.py [--dest <dir>] [--keep <N>]
 
-  --dest   Backup directory. Defaults to ./backups (relative to project root).
-  --keep   Keep the N most recent backup pairs; older ones are deleted.
-           Defaults to 7.
+  --dest   Backup directory. Defaults to $LECTIO_DATA_DIR/backups.
+  --keep   Keep the N most recent backups per source DB; older ones are deleted.
 
-Schedule with cron / Task Scheduler / systemd timer for periodic backups.
-
-Restoring: replace `lectio_reader.sqlite`, `lectio_meta.sqlite3`, and
-`lectio_starred_archive.sqlite` in the project root with the backup files
-(rename them back to those filenames). Stop the app before swapping the files.
+Restoring: stop the app, then copy a backup file back to its source path
+(e.g. backups/users-<uid>-lectio_meta.<stamp>.sqlite3 →
+data/users/<uid>/lectio_meta.sqlite3), renaming it to the original filename.
 """
 
 from __future__ import annotations
@@ -29,33 +35,57 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(ROOT))).resolve()
-DEFAULT_DBS = (
-    DATA_DIR / "lectio_reader.sqlite",
-    DATA_DIR / "lectio_meta.sqlite3",
-    # Starred archive holds offline copies of starred entries (HTML + assets).
-    # Source-of-truth content if origins go down — must be backed up.
-    DATA_DIR / "lectio_starred_archive.sqlite",
-)
 DEFAULT_DEST = DATA_DIR / "backups"
 
+# Per-user / single-user DB filenames worth backing up (source-of-truth data).
+_USER_DBS = ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite")
 
-def backup_one(src: Path, dest_dir: Path, stamp: str) -> Path | None:
-    if not src.exists():
-        print(f"skip: {src.name} (not found)", file=sys.stderr)
-        return None
-    dest = dest_dir / f"{src.stem}.{stamp}{src.suffix}"
+
+def discover_sources(data_dir: Path, multi_mode: bool | None = None) -> list[tuple[Path, str]]:
+    """Return [(src_path, dest_stem)] for every DB worth backing up. dest_stem is
+    unique per source so multiple users' identically-named files don't collide.
+
+    In multi mode the top-level DBs are empty default-user stubs (real data lives
+    under users/<id>/), so they're skipped; in single mode they hold the data."""
+    if multi_mode is None:
+        multi_mode = os.getenv("LECTIO_SECURITY_MODE", "single").strip().lower() == "multi"
+
+    items: list[tuple[Path, str]] = []
+
+    auth = data_dir / "lectio_auth.sqlite"
+    if auth.exists():
+        items.append((auth, "lectio_auth"))
+
+    users_dir = data_dir / "users"
+    if users_dir.is_dir():
+        for udir in sorted(p for p in users_dir.iterdir() if p.is_dir()):
+            for fn in _USER_DBS:
+                p = udir / fn
+                if p.exists():
+                    items.append((p, f"users-{udir.name}-{Path(fn).stem}"))
+
+    if not multi_mode:
+        for fn in _USER_DBS:
+            p = data_dir / fn
+            if p.exists():
+                items.append((p, Path(fn).stem))
+
+    return items
+
+
+def backup_one(src: Path, dest_stem: str, dest_dir: Path, stamp: str) -> Path | None:
+    dest = dest_dir / f"{dest_stem}.{stamp}{src.suffix}"
     conn = sqlite3.connect(str(src))
     try:
-        # VACUUM INTO produces a single consistent file regardless of WAL state.
         conn.execute("VACUUM INTO ?", (str(dest),))
     finally:
         conn.close()
-    print(f"backed up: {src.name} -> {dest.name} ({dest.stat().st_size:,} bytes)")
+    print(f"backed up: {src} -> {dest.name} ({dest.stat().st_size:,} bytes)")
     return dest
 
 
-def prune_old(dest_dir: Path, db_stems: list[str], keep: int) -> None:
-    for stem in db_stems:
+def prune_old(dest_dir: Path, stems: list[str], keep: int) -> None:
+    for stem in stems:
         files = sorted(dest_dir.glob(f"{stem}.*"), reverse=True)
         for old in files[keep:]:
             try:
@@ -68,26 +98,29 @@ def prune_old(dest_dir: Path, db_stems: list[str], keep: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backup Lectio databases via VACUUM INTO.")
     parser.add_argument("--dest", default=str(DEFAULT_DEST), help="Backup directory.")
-    parser.add_argument("--keep", type=int, default=7, help="Keep N most recent backup pairs.")
+    parser.add_argument("--keep", type=int, default=7, help="Keep N most recent backups per DB.")
     args = parser.parse_args()
 
     dest_dir = Path(args.dest)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    written: list[Path] = []
-    for db in DEFAULT_DBS:
-        result = backup_one(db, dest_dir, stamp)
-        if result:
-            written.append(result)
-
-    if not written:
+    sources = discover_sources(DATA_DIR)
+    if not sources:
         print("nothing to back up.", file=sys.stderr)
         return 1
 
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ok = True
+    for src, stem in sources:
+        try:
+            backup_one(src, stem, dest_dir, stamp)
+        except Exception as exc:
+            print(f"FAILED: {src}: {exc}", file=sys.stderr)
+            ok = False
+
     if args.keep > 0:
-        prune_old(dest_dir, [d.stem for d in DEFAULT_DBS], args.keep)
-    return 0
+        prune_old(dest_dir, [stem for _src, stem in sources], args.keep)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

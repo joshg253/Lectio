@@ -1,7 +1,4 @@
-"""Tests for scripts/backup_databases.py.
-
-Uses VACUUM INTO via the helper directly (avoids requiring real Lectio DB
-files in the project root)."""
+"""Tests for scripts/backup_databases.py (multi-user aware)."""
 
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ from scripts import backup_databases
 
 
 def _make_real_sqlite_db(path: Path, marker_value: str) -> None:
-    """Create a small real SQLite DB so VACUUM INTO has something to copy."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     try:
         conn.execute("CREATE TABLE marker (value TEXT)")
@@ -25,48 +22,54 @@ def _make_real_sqlite_db(path: Path, marker_value: str) -> None:
 def test_backup_one_writes_consistent_copy(tmp_path: Path):
     src = tmp_path / "test.sqlite"
     _make_real_sqlite_db(src, "hello-backup")
-
     dest_dir = tmp_path / "backups"
     dest_dir.mkdir()
-    result = backup_databases.backup_one(src, dest_dir, "20260504-120000")
 
-    assert result is not None
-    assert result.exists()
+    result = backup_databases.backup_one(src, "test", dest_dir, "20260504-120000")
+
+    assert result is not None and result.exists()
     assert "20260504-120000" in result.name
-    # Backup must be a valid SQLite file containing the same row
     conn = sqlite3.connect(str(result))
     try:
-        row = conn.execute("SELECT value FROM marker").fetchone()
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "hello-backup"
     finally:
         conn.close()
-    assert row[0] == "hello-backup"
 
 
-def test_backup_one_skips_missing_source(tmp_path: Path, capsys):
-    missing = tmp_path / "does-not-exist.sqlite"
-    dest_dir = tmp_path / "backups"
-    dest_dir.mkdir()
+def test_discover_sources_multiuser_skips_legacy(tmp_path: Path):
+    _make_real_sqlite_db(tmp_path / "lectio_auth.sqlite", "auth")
+    for fn in ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite"):
+        _make_real_sqlite_db(tmp_path / "users" / "u_a" / fn, "a")
+    _make_real_sqlite_db(tmp_path / "users" / "u_b" / "lectio_meta.sqlite3", "b")
+    _make_real_sqlite_db(tmp_path / "lectio_reader.sqlite", "stub")  # default-user stub
 
-    result = backup_databases.backup_one(missing, dest_dir, "20260504-120000")
-    assert result is None
-    err = capsys.readouterr().err
-    assert "skip" in err and "does-not-exist.sqlite" in err
+    stems = sorted(stem for _p, stem in backup_databases.discover_sources(tmp_path, multi_mode=True))
+    assert "lectio_auth" in stems
+    assert "users-u_a-lectio_reader" in stems
+    assert "users-u_a-lectio_meta" in stems
+    assert "users-u_a-lectio_starred_archive" in stems
+    assert "users-u_b-lectio_meta" in stems
+    assert "lectio_reader" not in stems  # legacy top-level skipped in multi mode
+
+
+def test_discover_sources_single_mode_includes_legacy(tmp_path: Path):
+    for fn in ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite"):
+        _make_real_sqlite_db(tmp_path / fn, "x")
+    stems = sorted(stem for _p, stem in backup_databases.discover_sources(tmp_path, multi_mode=False))
+    assert stems == ["lectio_meta", "lectio_reader", "lectio_starred_archive"]
 
 
 def test_prune_old_keeps_n_most_recent(tmp_path: Path):
     dest_dir = tmp_path / "backups"
     dest_dir.mkdir()
     stem = "lectio_meta"
-    # Create 5 stamped backup files with sortable suffixes
-    timestamps = ["20260101-000000", "20260102-000000", "20260103-000000", "20260104-000000", "20260105-000000"]
-    for ts in timestamps:
+    for ts in ["20260101-000000", "20260102-000000", "20260103-000000",
+               "20260104-000000", "20260105-000000"]:
         (dest_dir / f"{stem}.{ts}.sqlite3").write_bytes(b"\x00" * 16)
 
     backup_databases.prune_old(dest_dir, [stem], keep=2)
 
-    remaining = sorted(p.name for p in dest_dir.iterdir())
-    # The two most recent (highest timestamp) should remain
-    assert remaining == [
+    assert sorted(p.name for p in dest_dir.iterdir()) == [
         f"{stem}.20260104-000000.sqlite3",
         f"{stem}.20260105-000000.sqlite3",
     ]
