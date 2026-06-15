@@ -10164,7 +10164,13 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
                     lead_image_service._do_backfill_entry_list(posts)
             except Exception:
                 pass
-        threading.Thread(target=_refetch, args=(feed_url,), daemon=True).start()
+        # Capture the request's tenancy user; a raw daemon thread does not
+        # inherit contextvars and would otherwise re-fetch as the default user,
+        # writing to the wrong DB and leaving this user's cache empty.
+        _uid = tenancy.current_user_id()
+        threading.Thread(
+            target=_run_in_user_context, args=(_uid, _refetch, feed_url), daemon=True
+        ).start()
     return JSONResponse({"ok": True, "strategy": strategy})
 
 
@@ -10266,7 +10272,12 @@ def set_feed_thumb_strategy_route(
                 lead_image_service._do_backfill_entry_list(posts)
             except Exception:
                 pass
-        threading.Thread(target=_backfill, args=(feed_url,), daemon=True).start()
+        # Re-bind the request's tenancy user inside the daemon thread; otherwise
+        # the backfill runs as the default user and writes to the wrong DB.
+        _uid = tenancy.current_user_id()
+        threading.Thread(
+            target=_run_in_user_context, args=(_uid, _backfill, feed_url), daemon=True
+        ).start()
     return JSONResponse({"ok": True})
 
 
