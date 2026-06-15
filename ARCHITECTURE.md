@@ -127,14 +127,24 @@ Per-user background work: the scheduled refresh loop and the daily-maintenance
 loop both iterate every enabled user (`_background_user_ids`) and run each pass
 under that user's context — feeds refresh on each user's cadence, and per-user
 maintenance (rule-log prune, orphan cleanup, meta/starred VACUUM, email-batch
-flush) runs against each user's DBs. Work that is genuinely global runs once in
+flush) runs against each user's DBs. The startup tasks follow the same rule:
+the scraped-feed sync, auto-taggers, guid-churn dedup, and the YouTube /
+lead-image / starred-archive / read-history backfills all run once per enabled
+user via `_for_each_background_user` — a bare daemon thread inherits no
+contextvar, so running them unwrapped would resolve to `DEFAULT_USER_ID` and
+write the legacy top-level DBs instead of each user's. The starred-archive
+worker (`StarredArchiveService`) is one long-lived global thread; each poll cycle
+it scans every background user's archive DB under that user's context (injected
+`background_user_ids`), so a single worker drains all users' queues without
+binding itself to the default tenant. Work that is genuinely global runs once in
 `_run_global_maintenance` (thumb-cache VACUUM, YouTube sync — a single config).
 
 Remaining (see Plan.md): the WebSub push callback (a push carries only a feed URL
 and must fan out to its subscribers) still runs as the default user; linking
 `/account` from the main settings UI; and the data migration of the existing
 single-user DBs into a user. (SSRF hardening of `/api/img` and `/thumb` has
-landed — see "Security posture".)
+landed — see "Security posture". The WebSub discover-on-subscribe spawned when a
+feed is added now re-binds the requesting user via `_run_in_user_context`.)
 
 ### Per-user in-memory caches
 

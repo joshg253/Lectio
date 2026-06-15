@@ -88,6 +88,15 @@ Phasing:
    `/account`, linked from the main menu in multi mode). Remaining: optional
    user deletion (today: disable).
 3. ~~**Per-user API tokens**~~ + ~~**per-user scheduled refresh**~~ — DONE.
+   ~~**Startup backfills + starred-archive worker as default user**~~ — DONE.
+   The startup tasks (scraped-feed sync, auto-taggers, guid-churn dedup, and the
+   YouTube / lead-image / starred-archive / read-history backfills) now run once
+   per enabled user via `_for_each_background_user`; the long-lived
+   starred-archive worker scans every user's archive DB under its own context
+   (injected `background_user_ids`); and the discover-on-subscribe thread spawned
+   when a feed is added re-binds the requesting user. Previously these ran as
+   `DEFAULT_USER_ID` and wrote the legacy top-level DBs. New tests in
+   `tests/services/test_starred_archive_tenancy.py`.
    Remaining background work still running as the default user only (lower
    priority; scheduled refresh covers the feeds within the cadence window):
    - **WebSub push callback** — a push carries only a topic (feed URL); needs to

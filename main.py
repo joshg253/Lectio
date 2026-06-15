@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Sequence, cast
+from typing import Annotated, Callable, Sequence, cast
 from urllib.parse import parse_qs, quote, quote_plus, urlencode, urlparse
 
 import feedparser
@@ -606,26 +606,35 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception:
             LOGGER.exception("[scraper] startup scraped-feed sync failed")
-    threading.Thread(target=_sync_scraped_feeds, daemon=True, name="sync-scraped-feeds").start()
+    threading.Thread(
+        target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
+        daemon=True,
+        name="sync-scraped-feeds",
+    ).start()
 
-    # Artwork tagger runs first so webcomic tagger won't clobber ArtStation feeds
-    # that live in folders whose name also contains "comic".
-    _auto_tag_artwork_feeds()
-    # Auto-tag feeds in "comic*" folders with strategy='webcomic'.
-    _auto_tag_webcomic_feeds()
-    # GitHub release feeds get og_scrape + no list thumbnail.
-    _auto_tag_github_release_feeds()
+    # Auto-taggers and the dedup cleanup write per-user tag/strategy state, so
+    # run them once per background user (each under its own tenancy context).
+    def _startup_auto_tag_and_dedup() -> None:
+        # Artwork tagger runs first so webcomic tagger won't clobber ArtStation
+        # feeds that live in folders whose name also contains "comic".
+        _auto_tag_artwork_feeds()
+        # Auto-tag feeds in "comic*" folders with strategy='webcomic'.
+        _auto_tag_webcomic_feeds()
+        # GitHub release feeds get og_scrape + no list thumbnail.
+        _auto_tag_github_release_feeds()
 
-    # Retroactive dedup: suppress duplicate unread entries (same slug or title+date)
-    # that accumulated before _suppress_guid_churn could catch them.
-    try:
-        with get_reader() as reader:
-            with get_meta_connection() as conn:
-                cleaned = _cleanup_intra_feed_slug_dupes(reader, conn)
-        if cleaned:
-            LOGGER.info("[guid-churn-cleanup] suppressed %d pre-existing duplicate entries", cleaned)
-    except Exception:
-        LOGGER.exception("[guid-churn-cleanup] startup cleanup failed")
+        # Retroactive dedup: suppress duplicate unread entries (same slug or
+        # title+date) that accumulated before _suppress_guid_churn could catch them.
+        try:
+            with get_reader() as reader:
+                with get_meta_connection() as conn:
+                    cleaned = _cleanup_intra_feed_slug_dupes(reader, conn)
+            if cleaned:
+                LOGGER.info("[guid-churn-cleanup] suppressed %d pre-existing duplicate entries", cleaned)
+        except Exception:
+            LOGGER.exception("[guid-churn-cleanup] startup cleanup failed")
+
+    _for_each_background_user("auto-tag/dedup", _startup_auto_tag_and_dedup)
 
     # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
     # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
@@ -659,7 +668,10 @@ async def lifespan(app: FastAPI):
             youtube_duration_service.fetch_and_store_durations_for_feed(str(row["feed_url"]))
 
     if not backfill_disabled:
-        threading.Thread(target=_backfill, daemon=True).start()
+        threading.Thread(
+            target=lambda: _for_each_background_user("youtube-duration backfill", _backfill),
+            daemon=True,
+        ).start()
 
     # Backfill lead images for all feeds whose entries haven't been checked yet.
     # `force_retry_negative=False` keeps this incremental: only feeds that have
@@ -673,7 +685,10 @@ async def lifespan(app: FastAPI):
             lead_image_service.fetch_and_store_lead_images_for_feed(str(row["feed_url"]), force_retry_negative=False)
 
     if not backfill_disabled:
-        threading.Thread(target=_backfill_lead_images, daemon=True).start()
+        threading.Thread(
+            target=lambda: _for_each_background_user("lead-image backfill", _backfill_lead_images),
+            daemon=True,
+        ).start()
 
     # Start the starred archive worker, then backfill pending rows for any
     # saved entries that don't yet have a complete archive (covers the
@@ -688,7 +703,7 @@ async def lifespan(app: FastAPI):
         starred_archive_service.backfill_metadata_for_complete_rows()
 
     threading.Thread(
-        target=_archive_backfill_task,
+        target=lambda: _for_each_background_user("starred-archive backfill", _archive_backfill_task),
         daemon=True,
         name="starred-archive-backfill",
     ).start()
@@ -736,7 +751,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             LOGGER.exception("[read_history] backfill error")
 
-    threading.Thread(target=_backfill_read_history, daemon=True, name="read-history-backfill").start()
+    threading.Thread(
+        target=lambda: _for_each_background_user("read-history backfill", _backfill_read_history),
+        daemon=True,
+        name="read-history-backfill",
+    ).start()
 
     # Daily Maintenance loop — runs once per day at the configured maintenance hour.
     maint_stop_event = threading.Event()
@@ -4345,6 +4364,9 @@ starred_archive_service = StarredArchiveService(
     get_reader=get_reader,
     user_agent=READABILITY_USER_AGENT,
     sanitize_readability_html=lambda html_text: sanitize_readability_html(html_text),
+    # Lazy: _background_user_ids is defined later in this module; the worker
+    # only calls this at runtime, so the name resolves by then.
+    background_user_ids=lambda: _background_user_ids(),
 )
 
 
@@ -7555,9 +7577,12 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         )
     invalidate_meta_structure_cache()
     if websub_service:
+        # websub_subscriptions lives in the per-user meta DB; the bare thread
+        # would lose the request's tenancy context, so capture it and re-bind.
+        _uid = tenancy.current_user_id()
         threading.Thread(
-            target=websub_service._discover_and_subscribe,
-            args=(feed_url,),
+            target=_run_in_user_context,
+            args=(_uid, websub_service._discover_and_subscribe, feed_url),
             daemon=True,
         ).start()
 
@@ -7764,6 +7789,23 @@ def _background_user_ids() -> list[str]:
     if not MULTI_USER or user_store is None:
         return [tenancy.DEFAULT_USER_ID]
     return [u["user_id"] for u in user_store.list_users() if not u["disabled"]]
+
+
+def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
+    """Run ``fn()`` once per background user, each under its own tenancy context.
+
+    Startup backfills, syncs and one-off cleanups touch per-user DBs through the
+    context-bound ``get_reader()`` / ``get_meta_connection()`` helpers. Run bare,
+    they resolve to :data:`tenancy.DEFAULT_USER_ID` and write the legacy
+    top-level DBs — wrong once multi-user is live. Wrapping the call here binds
+    each enabled user in turn (single mode still runs exactly once, for the
+    default user). One user's failure is logged and does not abort the rest."""
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                fn()
+            except Exception:
+                LOGGER.exception("[startup] %s failed for user %r", label, uid)
 
 
 def _effective_auto_refresh_minutes() -> int:

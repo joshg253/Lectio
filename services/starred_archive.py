@@ -35,6 +35,7 @@ import httpx
 from PIL import Image as _PILImage
 from readability import Document
 
+from services import tenancy
 from services.url_guard import is_safe_outbound_url
 
 LOGGER = logging.getLogger(__name__)
@@ -62,12 +63,22 @@ class StarredArchiveService:
         get_reader: Callable[[], Any],
         user_agent: str,
         sanitize_readability_html: Callable[[str], str],
+        background_user_ids: Callable[[], list[str]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._sanitize_readability_html = sanitize_readability_html
+        # Which users the worker should scan each cycle. The archive DB is
+        # resolved per-user through the context-bound get_archive_connection,
+        # so the worker must bind each user in turn — a single global thread
+        # with no context would only ever touch the default tenant's DB and
+        # never archive other users' starred entries. Defaults to the single
+        # default user when not injected (single-user mode and tests).
+        self._background_user_ids = background_user_ids or (
+            lambda: [tenancy.DEFAULT_USER_ID]
+        )
         self._stop_event = threading.Event()
         self._worker_thread: threading.Thread | None = None
         # Wakes the worker when a new entry is enqueued, instead of waiting
@@ -524,9 +535,15 @@ class StarredArchiveService:
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
-            processed = self._process_one_pending() or self._process_one_pending_removal()
+            processed = False
+            for uid in self._background_user_ids():
+                if self._stop_event.is_set():
+                    break
+                with tenancy.user_context(uid):
+                    if self._process_one_pending() or self._process_one_pending_removal():
+                        processed = True
             if processed:
-                # Stay hot — likely more queued.
+                # Stay hot — likely more queued (for this or another user).
                 continue
             interval = ARCHIVE_WORKER_POLL_INTERVAL_S
             self._wake_event.wait(timeout=interval)
