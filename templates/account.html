@@ -41,13 +41,15 @@
     <section class="account-section">
       <h2>Users</h2>
       <table class="account-users">
-        <thead><tr><th>User</th><th>Admin</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>User</th><th>Admin</th><th>Last active</th><th>Feeds</th><th>DB size</th><th>Actions</th></tr></thead>
         <tbody>
         {% for u in users %}
           <tr>
-            <td>{{ u.username }}</td>
+            <td>{{ u.username }}{% if u.disabled %} <em>(disabled)</em>{% endif %}</td>
             <td>{{ 'yes' if u.is_admin else '' }}</td>
-            <td>{{ 'disabled' if u.disabled else 'active' }}</td>
+            <td>{{ u.last_active }}</td>
+            <td>{{ u.feed_count }}</td>
+            <td>{{ u.db_human }}</td>
             <td>
               {% if u.user_id != user_id %}
               <form method="post" action="/admin/users/disable" style="margin:0">

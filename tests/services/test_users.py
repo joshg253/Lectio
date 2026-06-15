@@ -55,6 +55,16 @@ def test_login_and_lookup_case_insensitive(store):
     assert store.verify_login("ALICE", "pw") == uid
 
 
+def test_touch_last_seen(store):
+    import time as _t
+
+    uid = store.create("alice", "pw")
+    assert store.list_users()[0]["last_seen_at"] is None
+    now = _t.time()
+    store.touch_last_seen(uid, now)
+    assert abs(store.list_users()[0]["last_seen_at"] - now) < 1.0
+
+
 def test_reserved_username_rejected(store):
     with pytest.raises(ReservedUsernameError):
         store.create("default", "pw")

@@ -860,6 +860,26 @@ class _SecurityHeadersMiddleware:
         await self.app(scope, receive, send_wrapper)
 
 
+_LAST_SEEN_THROTTLE_SECONDS = 300
+_last_seen_touch: dict[str, float] = {}
+_last_seen_touch_lock = threading.Lock()
+
+
+def _touch_user_last_seen(uid: str) -> None:
+    """Record per-user activity time, throttled (this runs on every request)."""
+    if user_store is None:
+        return
+    now = time.time()
+    with _last_seen_touch_lock:
+        if now - _last_seen_touch.get(uid, 0.0) < _LAST_SEEN_THROTTLE_SECONDS:
+            return
+        _last_seen_touch[uid] = now
+    try:
+        user_store.touch_last_seen(uid, now)
+    except Exception:
+        LOGGER.debug("touch_last_seen failed", exc_info=True)
+
+
 class _TenancyMiddleware:
     """Bind the request's user into the tenancy context (multi mode only).
 
@@ -911,6 +931,7 @@ class _TenancyMiddleware:
             if sid and session.get("authenticated") and tenancy.is_valid_user_id(sid):
                 uid = sid
         if uid and tenancy.is_valid_user_id(uid):
+            _touch_user_last_seen(uid)
             token = tenancy.set_current_user(uid)
             try:
                 return await self.app(scope, receive, send)
@@ -8412,18 +8433,78 @@ def _account_redirect(*, msg: str | None = None, error: str | None = None) -> Re
         params["msg"] = msg
     if error:
         params["error"] = error
-    url = "/account" + ("?" + urlencode(params) if params else "")
+    url = "/administration" + ("?" + urlencode(params) if params else "")
     return RedirectResponse(url=url, status_code=303)
 
 
-@app.get("/account")
+def _human_bytes(n: float) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    f = float(n)
+    i = 0
+    while f >= 1024 and i < len(units) - 1:
+        f /= 1024
+        i += 1
+    return f"{f:.0f} {units[i]}" if i == 0 else f"{f:.1f} {units[i]}"
+
+
+def _dir_bytes(*paths: Path) -> int:
+    """Total bytes for a set of DB files including their -wal/-shm/.search sidecars."""
+    total = 0
+    for p in paths:
+        for f in p.parent.glob(p.name + "*"):
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _format_last_active(ts: float | None) -> str:
+    if not ts:
+        return "never"
+    try:
+        return format_datetime_for_ui(datetime.fromtimestamp(float(ts), tz=timezone.utc))
+    except Exception:
+        return "—"
+
+
+def _admin_user_rows() -> list[dict]:
+    """User list for the Administration page, enriched with per-user stats
+    (feed count, personal DB size, last-active). Each user's stats are read under
+    its own tenancy context."""
+    rows: list[dict] = []
+    for u in user_store.list_users():  # type: ignore[union-attr]
+        uid = u["user_id"]
+        feeds = 0
+        db_bytes = 0
+        try:
+            with tenancy.user_context(uid):
+                with get_meta_connection() as c:
+                    feeds = int(c.execute("SELECT COUNT(DISTINCT feed_url) FROM folder_feeds").fetchone()[0])
+            db_bytes = _dir_bytes(
+                tenancy.reader_db_path(uid),
+                tenancy.meta_db_path(uid),
+                tenancy.starred_archive_db_path(uid),
+            )
+        except Exception:
+            LOGGER.debug("admin stats failed for %r", uid, exc_info=True)
+        rows.append({
+            **u,
+            "feed_count": feeds,
+            "db_human": _human_bytes(db_bytes),
+            "last_active": _format_last_active(u.get("last_seen_at")),
+        })
+    return rows
+
+
+@app.get("/administration")
 def account_page(request: Request, msg: str | None = None, error: str | None = None):
     """Admin page: user management + instance configuration. Admin-only."""
     if not MULTI_USER or user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
-        return RedirectResponse(url="/login?next=/account", status_code=303)
+        return RedirectResponse(url="/login?next=/administration", status_code=303)
     row = user_store.get_by_id(uid)
     if not row:
         request.session.clear()
@@ -8444,7 +8525,7 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
         {
             "user_id": uid,
             "username": row["username"],
-            "users": user_store.list_users(),
+            "users": _admin_user_rows(),
             "message": msg,
             "error": error,
             # Instance configuration (admin-managed): email (Resend) + maintenance.

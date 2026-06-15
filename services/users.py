@@ -89,6 +89,10 @@ class UserStore:
                 # username uniqueness (NOCASE collation).
                 if "user_id" not in cols or "NOCASE" not in table_sql.upper():
                     self._rebuild_users_table(conn)
+                    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+                # Activity tracking (added after the initial multi-user release).
+                if "last_seen_at" not in cols:
+                    conn.execute("ALTER TABLE users ADD COLUMN last_seen_at REAL")
             if "greader_api_tokens" in tables:
                 gcols = {r["name"] for r in conn.execute("PRAGMA table_info(greader_api_tokens)").fetchall()}
                 if "user_id" not in gcols:
@@ -104,7 +108,8 @@ class UserStore:
                     is_admin INTEGER NOT NULL DEFAULT 0,
                     disabled INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL,
-                    api_token TEXT
+                    api_token TEXT,
+                    last_seen_at REAL
                 )
                 """
             )
@@ -177,9 +182,15 @@ class UserStore:
     def list_users(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT user_id, username, is_admin, disabled, created_at FROM users ORDER BY username"
+                "SELECT user_id, username, is_admin, disabled, created_at, last_seen_at "
+                "FROM users ORDER BY username"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def touch_last_seen(self, user_id: str, ts: float) -> None:
+        """Record activity time. Callers throttle this (it runs per request)."""
+        with self._connect() as conn:
+            conn.execute("UPDATE users SET last_seen_at = ? WHERE user_id = ?", (ts, user_id))
 
     # --- mutations --------------------------------------------------------
 

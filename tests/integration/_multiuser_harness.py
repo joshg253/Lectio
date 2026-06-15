@@ -88,7 +88,7 @@ def _scenario_single() -> None:
         # Still the default user after an authenticated single-mode request.
         assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
         # Account/admin UI is multi-mode only → 404 in single mode (even authed).
-        assert client.get("/account", follow_redirects=False).status_code == 404
+        assert client.get("/administration", follow_redirects=False).status_code == 404
 
 
 def _add_folder(user_id: str, folder_name: str) -> None:
@@ -188,7 +188,7 @@ def _scenario_account_ui() -> None:
 
     with TestClient(main.app) as client:
         # Unauthenticated → redirected to login by the auth gate.
-        assert client.get("/account", follow_redirects=False).status_code == 303
+        assert client.get("/administration", follow_redirects=False).status_code == 303
 
         assert client.post("/login", data={"username": admin, "password": admin_pw},
                            follow_redirects=False).status_code == 303
@@ -197,9 +197,9 @@ def _scenario_account_ui() -> None:
         # The main UI exposes an Account link in multi mode.
         home = client.get("/")
         assert home.status_code == 200
-        assert "/account" in home.text
+        assert "/administration" in home.text
 
-        r = client.get("/account")
+        r = client.get("/administration")
         assert r.status_code == 200
         assert admin in r.text
         assert "Create user" in r.text  # admin section present
@@ -216,7 +216,7 @@ def _scenario_account_ui() -> None:
         assert (tenancy.user_data_dir(carol_id) / "lectio_meta.sqlite3").exists()
 
         # Admin renames carol → data dir (keyed by user_id) is unchanged.
-        tok = _csrf_token(client.get("/account").text)
+        tok = _csrf_token(client.get("/administration").text)
         r = client.post("/admin/users/rename",
                         data={"_csrf": tok, "user_id": carol_id, "new_username": "caroline"},
                         follow_redirects=False)
@@ -225,7 +225,7 @@ def _scenario_account_ui() -> None:
         assert (tenancy.user_data_dir(carol_id) / "lectio_meta.sqlite3").exists()
 
         # Change own password.
-        tok = _csrf_token(client.get("/account").text)
+        tok = _csrf_token(client.get("/administration").text)
         r = client.post("/account/password",
                         data={"_csrf": tok, "current_password": admin_pw,
                               "new_password": "newadminpw", "confirm_password": "newadminpw"},
@@ -235,7 +235,7 @@ def _scenario_account_ui() -> None:
                                             default_scheme=main.PASSWORD_HASH_SCHEME) == admin_id
 
         # Wrong current password is rejected (redirect carries an error).
-        tok = _csrf_token(client.get("/account").text)
+        tok = _csrf_token(client.get("/administration").text)
         r = client.post("/account/password",
                         data={"_csrf": tok, "current_password": "nope",
                               "new_password": "x", "confirm_password": "x"},
@@ -244,7 +244,7 @@ def _scenario_account_ui() -> None:
 
         # Regenerate own API token.
         old_token = main.user_store.get_api_token(admin_id)
-        tok = _csrf_token(client.get("/account").text)
+        tok = _csrf_token(client.get("/administration").text)
         r = client.post("/account/api-token/regenerate", data={"_csrf": tok}, follow_redirects=False)
         assert r.status_code == 303
         assert main.user_store.get_api_token(admin_id) != old_token
@@ -253,7 +253,7 @@ def _scenario_account_ui() -> None:
         # carol was renamed to caroline above; the password is unchanged.
         assert client.post("/login", data={"username": "caroline", "password": "carol-pw"},
                            follow_redirects=False).status_code == 303
-        r = client.get("/account")
+        r = client.get("/administration")
         assert r.status_code == 200
         assert "Create user" not in r.text  # admin section hidden
         tok = _csrf_token(r.text)
