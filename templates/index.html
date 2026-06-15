@@ -476,6 +476,8 @@
           data-post-read="{{ 1 if post.read else 0 }}"
           data-post-saved="{{ 1 if post.saved else 0 }}"
           data-post-link="{{ post.link or '' }}"
+          data-post-title="{{ post.title or '' }}"
+          data-post-folder-id="{{ feed_to_folder.get(post.feed_url, selected_folder_id) }}"
           data-thumb-crop="{{ post.thumb_crop or 'cover' }}"
           data-thumb-strategy="{{ post.thumb_strategy or '' }}"
           data-smart-ms="{{ post.smart_min_scale or '' }}"
@@ -1114,6 +1116,7 @@
     <button type="button" id="ctx-post-mark-above-read" class="context-menu-item">Read above</button>
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
+    <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
 
@@ -2907,6 +2910,7 @@
     const postMarkAboveReadButton = document.getElementById('ctx-post-mark-above-read');
     const postMarkBelowReadButton = document.getElementById('ctx-post-mark-below-read');
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
+    const postAutomationButton = document.getElementById('ctx-post-automation');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -3013,6 +3017,8 @@
     let contextPostEntryId = null;
     let contextPostRead = false;
     let contextPostLink = '';
+    let contextPostTitle = '';
+    let contextPostFolderId = null;
     let actionModalSubmitHandler = null;
     let sourceViewActive = false;
     let sourceLoadTimeoutId = null;
@@ -5235,11 +5241,14 @@
           contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
           contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
+          contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
+          contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
           if (postMarkReadButton) {
             postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
           }
           setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+          setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -5555,11 +5564,14 @@
             contextPostEntryId = postItem.getAttribute('data-post-entry-id');
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
+            contextPostTitle = postItem.getAttribute('data-post-title') || '';
+            contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
             if (postMarkReadButton) {
               postMarkReadButton.textContent = contextPostRead ? 'Mark as unread' : 'Mark as read';
             }
             setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
             setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
+            setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -6223,6 +6235,23 @@
       if (!copied) {
         window.alert('Could not copy URL to clipboard.');
       }
+    });
+
+    postAutomationButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const folderId = contextPostFolderId;
+      const title = contextPostTitle;
+      hideAllContextMenus();
+      if (!feedUrl) return;
+      window.openHighlightsModal?.({
+        scope: 'feed',
+        scope_id: feedUrl,
+        folder_id: folderId,
+        keyword: title || '',
+        search_in: 'title',
+      });
     });
 
     postClearImgCacheButton?.addEventListener('click', async (event) => {
@@ -7905,6 +7934,10 @@
           else { populateFeeds(folderSel.value); }
         }
         syncTypeControls();
+        // syncTypeControls() re-runs populateFeeds(), which resets the feed
+        // <select>; re-apply the prefilled feed scope so an explicitly chosen
+        // feed (e.g. from a post/feed right-click → Automation) stays selected.
+        if (prefill.scope === 'feed' && !feedSel.disabled) feedSel.value = prefill.scope_id || '';
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
@@ -7998,6 +8031,7 @@
         window.openSettingsModal?.('automation');
         if (prefill) window._hlMakeAddDraft?.(prefill);
       }
+      window.openHighlightsModal = openHighlightsModal;
 
       highlightsButton?.addEventListener('click', (event) => {
         event.preventDefault();
