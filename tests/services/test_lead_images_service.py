@@ -52,6 +52,13 @@ class _FakeReader:
     def get_entries(self, feed: str):
         return list(self._entries)
 
+    def get_entry(self, resource_id):
+        feed_url, entry_id = resource_id
+        for entry in self._entries:
+            if entry.feed_url == feed_url and entry.id == entry_id:
+                return entry
+        raise KeyError(resource_id)
+
 
 def _make_conn(db_path: Path):
     conn = sqlite3.connect(str(db_path))
@@ -731,3 +738,60 @@ def test_bbcode_img_converted_before_extraction(tmp_path: Path):
     thumb = service.extract_inline_thumb_url(entry)
 
     assert thumb == "https://staticdelivery.nexusmods.com/mods/img.jpg"
+
+
+def test_strip_related_post_blocks_removes_sibling_thumbnails(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = (
+        '<article><img src="https://site.example/post/hero.jpg"></article>'
+        '<div class="related-content--wrapper"><div class="related-content">'
+        '<img src="https://site.example/other-a/cover.jpg">'
+        '<img src="https://site.example/other-b/cover.png">'
+        "</div></div>"
+    )
+
+    stripped = service._strip_related_post_blocks(html)
+
+    assert "post/hero.jpg" in stripped
+    assert "other-a/cover.jpg" not in stripped
+    assert "other-b/cover.png" not in stripped
+
+
+def test_source_image_ignores_related_posts_section(tmp_path: Path):
+    # A post with no og:image and no hero of its own must not borrow a sibling
+    # post's thumbnail from the "related posts" widget.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = (
+        "<main></main>"
+        '<section class="related-posts">'
+        '<img src="https://site.example/other/cover.jpg" width="800" height="450">'
+        "</section>"
+    )
+
+    url = service._extract_preferred_source_image_url(
+        html, "https://site.example/post/", "https://site.example/post/"
+    )
+
+    assert url is None
+
+
+def test_inline_from_reader_falls_back_to_feed_content_image(tmp_path: Path):
+    # ArtStation-style: the page is a JS SPA with no og:image, but the feed
+    # embeds the image inline, so the chunk-backfill fallback should find it.
+    entry = _FakeEntry(
+        feed_url="https://www.artstation.com/artist.rss",
+        entry_id="https://www.artstation.com/artwork/abc",
+        link="https://www.artstation.com/artwork/abc",
+        content_html=(
+            '<p><a href="https://cdn.artstation.com/p/large/art.jpg">'
+            '<img src="https://cdn.artstation.com/p/large/art.jpg" /></a></p>'
+        ),
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    result = service._inline_from_reader(
+        "https://www.artstation.com/artist.rss",
+        "https://www.artstation.com/artwork/abc",
+    )
+
+    assert result == "https://cdn.artstation.com/p/large/art.jpg"

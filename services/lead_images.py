@@ -169,6 +169,16 @@ class LeadImageService:
         r'|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)',
         re.IGNORECASE,
     )
+    # Related/recent/more-posts containers whose thumbnails belong to OTHER posts.
+    # The per-image site-chrome check only looks ~500 chars back, so images deep
+    # in a long related list escape it; stripping the whole container is reliable.
+    _RELATED_BLOCK_OPEN_RE = re.compile(
+        r'<(div|section|aside|nav|ul)\b[^>]*\bclass=["\'][^"\']*'
+        r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
+        r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav)'
+        r'[^"\']*["\'][^>]*>',
+        re.IGNORECASE,
+    )
     # Allow Blogger/Google CDN URLs where the extension is followed by a size
     # param like =s1600 rather than appearing at the end of the path.
     _IMAGE_PATH_SUFFIX_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|avif|bmp)(?:[=?#]|$)", re.IGNORECASE)
@@ -288,6 +298,37 @@ class LeadImageService:
             result.append(html[pos:])
             html = "".join(result)
         return html
+
+    def _strip_related_post_blocks(self, html: str) -> str:
+        """Remove related/recent/more-posts containers from source-page HTML.
+
+        Static-site blogs (Hugo, etc.) often render a "related content" list of
+        OTHER posts' thumbnails. With no og:image on the page, lead-image scoring
+        would otherwise pick one of those, showing a different post's image. We
+        drop the whole balanced container so only the article's own images score.
+        """
+        result: list[str] = []
+        pos = 0
+        for match in self._RELATED_BLOCK_OPEN_RE.finditer(html):
+            start = match.start()
+            if start < pos:
+                continue
+            tag_name = match.group(1).lower()
+            result.append(html[pos:start])
+            tag_re = re.compile(r'<(/?)' + tag_name + r'\b[^>]*>', re.IGNORECASE)
+            depth = 0
+            end = start
+            for dm in tag_re.finditer(html, start):
+                if dm.group(1):
+                    depth -= 1
+                    if depth == 0:
+                        end = dm.end()
+                        break
+                else:
+                    depth += 1
+            pos = end if end > start else match.end()
+        result.append(html[pos:])
+        return "".join(result)
 
     def _is_feed_none_strategy(self, feed_url: str) -> bool:
         """Return True if this feed is manually locked to strategy='none' (no lead images)."""
@@ -1174,10 +1215,36 @@ class LeadImageService:
 
                 is_wc = strategy == "webcomic" or self._is_feed_webcomic(feed_url)
                 image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                if not image_url:
+                    # Source page yielded nothing — e.g. a JS-only art portfolio
+                    # (ArtStation) with no og:image, or a feed whose strategy was
+                    # mis-detected. Fall back to the entry's own inline feed-content
+                    # image instead of caching a blank thumbnail.
+                    image_url = self._inline_from_reader(feed_url, entry_id)
                 if image_url:
                     self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
                 self.store_entry_lead_image(feed_url, entry_id, image_url)
                 time.sleep(0.15)
+
+    def _inline_from_reader(self, feed_url: str, entry_id: str) -> str | None:
+        """Best-effort inline lead image from an entry's stored feed content.
+
+        Fallback for the chunk backfill when source-page scraping yields nothing:
+        some feeds (art portfolios like ArtStation) embed the image directly in
+        the feed but live on JS-only pages with no og:image, so the source fetch
+        returns None even though the feed itself carries a perfectly good image.
+        """
+        try:
+            with self._get_reader() as reader:
+                entry = reader.get_entry((feed_url, entry_id))
+        except Exception:
+            return None
+        if entry is None:
+            return None
+        try:
+            return self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        except Exception:
+            return None
 
     def _extract_tag_key(self, tag_record: object) -> str | None:
         if isinstance(tag_record, tuple):
@@ -1476,6 +1543,9 @@ class LeadImageService:
 
     def _extract_preferred_source_image_data(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> tuple[str | None, str | None]:
         """Like _extract_preferred_source_image_url but also returns the winning img's alt text."""
+        # Drop related/recent-post containers so a sibling post's thumbnail can't
+        # win when the article itself has no og:image or hero image of its own.
+        html_text = self._strip_related_post_blocks(html_text)
         best_url: str | None = None
         best_alt: str | None = None
         best_score = -1

@@ -5389,6 +5389,66 @@ textarea.hl-draft-pattern {
   color: var(--ink);
   width: 100%;
 }
+.settings-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.settings-row-controls .settings-input { flex: 1 1 4rem; width: auto; min-width: 0; }
+.settings-row-controls .settings-save-btn,
+.settings-row-controls .settings-secondary-btn,
+.settings-row-controls .settings-icon-btn { flex: 0 0 auto; }
+.settings-current {
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+  color: var(--ink);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.settings-token {
+  flex: 0 1 auto;
+  white-space: normal;
+  word-break: break-all;
+}
+.settings-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1;
+}
+.settings-icon-btn:hover { background: var(--hover-bg); }
+.settings-icon-btn .material-symbols-rounded { font-size: 1.1rem; }
+.settings-label-sub { font-weight: 400; opacity: 0.75; font-size: 0.78rem; }
+/* Fixed label column so every field column lines up across all account rows. */
+#settings-tab-account .settings-section { grid-template-columns: 6rem 1fr; }
+#settings-tab-account .settings-section > .settings-label { white-space: normal; }
+/* Account rows with a trailing action column (label | field(s) | action).
+   The fixed outer columns make every field column end at the same x — both
+   for the indented rows beside the avatar and the full-width rows below. */
+#settings-tab-account .settings-section--row { grid-template-columns: 6rem 1fr 5.5rem; padding: 0.3rem 0; }
+.settings-section--row > .settings-save-btn { justify-self: center; align-self: center; }
+/* Indent a row's hint under the field column rather than the label. */
+.settings-section--row > .settings-hint { grid-column: 2 / -1; }
+/* Extra breathing room before a section (Password, API token). */
+.settings-section--spaced { margin-top: 0.85rem; }
+/* API token: stack the hint above the token + action glyphs in the field column. */
+.settings-token-col { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.settings-token-col .settings-hint { grid-column: auto; margin: 0; }
+/* Name/Email have no action; keep them in the label+field columns so their
+   fields still end at the col2/col3 boundary (aligned with the rows below). */
+.sett-profile-row > .settings-label { grid-column: 1; }
+.sett-profile-row > .settings-input { grid-column: 2; }
+/* Avatar on the left, indenting the Name/Email/Username rows beside it. */
+.sett-account-head { display: flex; align-items: center; gap: 0.85rem; padding: 0.25rem 0 0; }
+.sett-account-head-rows { flex: 1; min-width: 0; }
+.sett-account-head .sett-avatar-img { width: 96px; height: 96px; flex-shrink: 0; }
 .settings-input--short { max-width: 5rem; }
 .settings-input--secret { letter-spacing: 0.05em; }
 .settings-section-title {
@@ -5460,7 +5520,6 @@ textarea.hl-draft-pattern {
 .settings-secondary-btn:hover { background: var(--hover-bg); }
 .settings-checkbox-label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.88rem; cursor: pointer; }
 .sett-avatar-row { display: flex; justify-content: center; padding: 0.75rem 0 0.5rem; }
-.sett-profile-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.25rem 0 0; }
 .sett-avatar-img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); background: var(--hover-bg); flex-shrink: 0; }
 .sett-theme-btns { display: flex; gap: 0.3rem; }
 .sett-theme-btn { display: flex; align-items: center; padding: 0.25rem 0.45rem; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }

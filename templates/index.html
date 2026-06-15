@@ -1263,30 +1263,48 @@
 
       <!-- Account tab (profile + appearance + app settings) -->
       <div id="settings-tab-account" class="settings-tab-panel">
-        <div class="sett-profile-row">
+        <div class="sett-account-head">
           <img id="sett-avatar-img" class="sett-avatar-img" src="https://www.gravatar.com/avatar/?d=identicon&s=128" alt="Avatar" />
-          <div class="settings-section" style="flex:1">
-            <label class="settings-label" for="sett-profile-name">Name</label>
-            <input type="text" id="sett-profile-name" class="settings-input" placeholder="Your name" maxlength="200" />
-            <label class="settings-label" for="sett-profile-email">Email</label>
-            <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
+          <div class="sett-account-head-rows">
+            <div class="settings-section settings-section--row sett-profile-row">
+              <label class="settings-label" for="sett-profile-name">Name</label>
+              <input type="text" id="sett-profile-name" class="settings-input" placeholder="Your name" maxlength="200" />
+              <label class="settings-label" for="sett-profile-email">Email</label>
+              <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
+            </div>
+            {% if multi_user %}
+            <form class="settings-section settings-section--row" method="post" action="/account/username">
+              {{ csrf_input(request) | safe }}
+              <label class="settings-label" for="sett-new-username">Username</label>
+              <input type="text" id="sett-new-username" name="new_username" class="settings-input" value="{{ current_user }}" minlength="4" maxlength="10" required />
+              <button type="submit" class="settings-save-btn">Change</button>
+              <p class="settings-hint">Changing your login name doesn't affect your data or API token.</p>
+            </form>
+            {% endif %}
           </div>
         </div>
         {% if multi_user %}
-        <h4 class="settings-section-title" style="margin-top:1rem">Username</h4>
-        <form class="settings-section" method="post" action="/account/username">
+        <form class="settings-section settings-section--row settings-section--spaced" method="post" action="/account/password">
           {{ csrf_input(request) | safe }}
-          <p class="settings-hint">Your login name{% if current_user %} (currently <code>{{ current_user }}</code>){% endif %}. Changing it doesn't affect your data or API token.</p>
-          <input type="text" name="new_username" class="settings-input" placeholder="New username" minlength="4" maxlength="10" required />
-          <div class="settings-actions"><button type="submit" class="settings-save-btn">Change username</button></div>
+          <label class="settings-label" for="sett-current-password">Password</label>
+          <div class="settings-row-controls">
+            <input type="password" id="sett-current-password" name="current_password" class="settings-input" placeholder="Current" autocomplete="current-password" required />
+            <input type="password" name="new_password" class="settings-input" placeholder="New" autocomplete="new-password" minlength="6" maxlength="36" required />
+            <input type="password" name="confirm_password" class="settings-input" placeholder="Confirm new" autocomplete="new-password" minlength="6" maxlength="36" required />
+          </div>
+          <button type="submit" class="settings-save-btn">Change</button>
         </form>
-        <h4 class="settings-section-title" style="margin-top:1rem">Password</h4>
-        <form class="settings-section" method="post" action="/account/password">
+        <form class="settings-section settings-section--row settings-section--spaced" method="post" action="/account/api-token/regenerate" onsubmit="return confirm('Regenerate token? Existing clients stop syncing until you update them.');">
           {{ csrf_input(request) | safe }}
-          <input type="password" name="current_password" class="settings-input" placeholder="Current password" autocomplete="current-password" required />
-          <input type="password" name="new_password" class="settings-input" placeholder="New password" autocomplete="new-password" minlength="6" maxlength="36" required />
-          <input type="password" name="confirm_password" class="settings-input" placeholder="Confirm new password" autocomplete="new-password" minlength="6" maxlength="36" required />
-          <div class="settings-actions"><button type="submit" class="settings-save-btn">Change password</button></div>
+          <label class="settings-label" for="sett-api-token">API token <span class="settings-label-sub">(Fever / GReader)</span></label>
+          <div class="settings-token-col">
+            <p class="settings-hint">Configure RSS clients (Capy, Reeder, …) with username <code>{{ current_user }}</code> and this token as the password.</p>
+            <div class="settings-row-controls">
+              <span id="sett-api-token" class="settings-current settings-token" title="Your API token">{{ current_api_token }}</span>
+              <button type="button" id="sett-api-token-copy" class="settings-icon-btn" title="Copy token" aria-label="Copy token"><span class="material-symbols-rounded" aria-hidden="true">content_copy</span></button>
+              <button type="submit" class="settings-icon-btn" title="Regenerate token" aria-label="Regenerate token"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></button>
+            </div>
+          </div>
         </form>
         {% endif %}
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
@@ -1296,24 +1314,13 @@
             <button type="button" id="theme-btn-dark" class="sett-theme-btn" title="Dark mode" aria-label="Dark mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span></button>
             <button type="button" id="theme-btn-light" class="sett-theme-btn" title="Light mode" aria-label="Light mode" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span></button>
           </div>
-          <label class="settings-label" for="sett-tz-display" style="margin-top:.6rem">Timezone display</label>
-          <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="e.g. America/Los_Angeles (leave blank for server default)" autocomplete="off" />
+          <label class="settings-label" for="sett-tz-display">Timezone display</label>
+          <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="Server default" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
         </div>
-        {% if multi_user %}
-        <h4 class="settings-section-title" style="margin-top:1rem">API token (Fever / GReader)</h4>
-        <div class="settings-section">
-          <p class="settings-hint">Configure RSS clients (Capy, Reeder, …) with username <code>{{ current_user }}</code> and this token as the password.</p>
-          <input type="text" class="settings-input" value="{{ current_api_token }}" readonly onclick="this.select()" aria-label="API token" />
-          <form method="post" action="/account/api-token/regenerate" onsubmit="return confirm('Regenerate token? Existing clients stop syncing until you update them.');">
-            {{ csrf_input(request) | safe }}
-            <div class="settings-actions"><button type="submit" class="settings-secondary-btn">Regenerate token</button></div>
-          </form>
-        </div>
-        {% endif %}
       </div>
 
       <!-- Contacts tab -->
@@ -8165,7 +8172,13 @@
         const v = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
         v('sett-profile-name', d.profile_name);
         v('sett-profile-email', d.profile_email);
-        v('sett-tz-display', d.tz_display);
+        // Show the explicit tz if set; otherwise leave blank and show the
+        // server default greyed (placeholder) so the user sees what's in effect.
+        const tzEl = document.getElementById('sett-tz-display');
+        if (tzEl) {
+          tzEl.value = d.tz_display || '';
+          tzEl.placeholder = d.tz_default ? `${d.tz_default} (server default)` : 'Server default';
+        }
         v('sett-maint-hour', d.maintenance_hour);
         const maintLast = document.getElementById('sett-maint-last');
         if (maintLast) {
@@ -8342,6 +8355,13 @@
 
       document.getElementById('menu-settings-btn')?.addEventListener('click', () => openSettingsModal('account'));
       document.getElementById('menu-profile-btn')?.addEventListener('click', () => openSettingsModal('account'));
+
+      document.getElementById('sett-api-token-copy')?.addEventListener('click', async () => {
+        const tokenEl = document.getElementById('sett-api-token');
+        const token = (tokenEl?.value ?? tokenEl?.textContent ?? '').trim();
+        const ok = await copyTextToClipboard(token);
+        showToastMessage(ok ? 'API token copied.' : 'Could not copy token.');
+      });
     }
 
     // ── Highlight engine (applies <mark> to post titles) ────────────────────

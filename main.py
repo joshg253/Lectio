@@ -571,7 +571,12 @@ async def lifespan(app: FastAPI):
     youtube_duration_service.warm_cache_from_db()
 
     # Warm lead image cache from DB so thumbnails are available on first render.
-    lead_image_service.warm_cache_from_db()
+    # Must run per-user: lead images live in each tenant's own meta DB, and the
+    # render path (get_cached_entry_thumbnail) only consults the in-memory cache
+    # with no per-user DB fallback. Warming bare resolves to the default tenant,
+    # leaving every other user's thumbnails blank until the rate-limited
+    # background backfill catches up after each restart.
+    _for_each_background_user("lead-image cache warm", lead_image_service.warm_cache_from_db)
 
     # Ensure existing scraped file:// feeds have their entries imported into the
     # reader DB. Feeds may be in backoff from stale "no retriever" errors that
@@ -6279,20 +6284,25 @@ def list_entries_for_feeds(
             _raw_thumb = str(_feed_thumb_setting)  # pinned URL override
         elif _feed_thumb_setting == "__favicon__":
             _raw_thumb = None
-        elif _thumb_strategy == "inline":
-            # Use first image from feed content HTML — bypasses the og_scrape cache
-            _raw_thumb = lead_image_service.extract_inline_thumb_url(entry)
-        elif _thumb_strategy == "media_rss":
-            _raw_thumb = lead_image_service.extract_media_rss_thumb_url(entry)
         else:
-            # Auto: use the same cached lead image shown in the article view.
-            # Don't fall back to inline media_thumbnail/enclosure fields — that
-            # shows the wrong image for og_scrape-strategy feeds.
-            _raw_thumb = lead_image_service.get_cached_entry_thumbnail(
-                feed_url_str,
-                str(getattr(entry, "id", "") or ""),
-                str(getattr(entry, "link", "") or ""),
-            )
+            if _thumb_strategy == "inline":
+                # Use first image from feed content HTML — bypasses the og_scrape cache
+                _raw_thumb = lead_image_service.extract_inline_thumb_url(entry)
+            elif _thumb_strategy == "media_rss":
+                _raw_thumb = lead_image_service.extract_media_rss_thumb_url(entry)
+            else:
+                _raw_thumb = None
+            if not _raw_thumb:
+                # Strategy-specific extraction found nothing — e.g. a feed whose
+                # thumb_strategy was auto-detected as media_rss/inline but whose
+                # reader Entry carries no usable media field. Fall back to the
+                # cached lead image (same one shown in the article view) instead
+                # of rendering a blank thumbnail.
+                _raw_thumb = lead_image_service.get_cached_entry_thumbnail(
+                    feed_url_str,
+                    str(getattr(entry, "id", "") or ""),
+                    str(getattr(entry, "link", "") or ""),
+                )
         _thumb = _raw_thumb if _show_thumb else None
         _feed_thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _feed_thumb_crop not in _VALID_THUMB_CROPS:
@@ -10678,6 +10688,7 @@ def get_all_settings():
         "profile_name": profile_name,
         "profile_email": profile_email,
         "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
+        "tz_default": os.environ.get("TZ") or "UTC",
         "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
         "maintenance_last_ran_at": maint_last,
         "yt_api_key_set": bool(yt_api_key),
