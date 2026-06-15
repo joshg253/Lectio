@@ -7452,6 +7452,23 @@ def normalize_feed_url(feed_url: str) -> str:
             feed_url = parsed._replace(path=path).geturl()
     except Exception:
         pass
+
+    # Case-normalize scheme + host only. Per RFC 3986 the scheme and host are
+    # case-insensitive, but the path and query ARE case-sensitive (e.g. YouTube
+    # channel IDs, signed/base64 tokens, Reddit /user/Name), so they're left
+    # untouched. Userinfo (rare in feeds) is also case-sensitive — preserved.
+    try:
+        parsed = urlparse(feed_url)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            userinfo, hostport = netloc.rsplit("@", 1)
+            new_netloc = userinfo + "@" + hostport.lower()
+        else:
+            new_netloc = netloc.lower()
+        if parsed.scheme != parsed.scheme.lower() or netloc != new_netloc:
+            feed_url = parsed._replace(scheme=parsed.scheme.lower(), netloc=new_netloc).geturl()
+    except Exception:
+        pass
     return feed_url
 
 

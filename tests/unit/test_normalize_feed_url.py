@@ -74,3 +74,17 @@ def test_reddit_old_domain_rewritten(raw, expected):
 def test_www_reddit_unchanged():
     url = "https://www.reddit.com/r/buildapcsales/.rss"
     assert normalize_feed_url(url) == url
+
+
+@pytest.mark.parametrize("raw,expected", [
+    # Scheme + host lowercased; path + query preserved (case-sensitive).
+    ("HTTPS://Example.COM/Feed/Path?Q=AbC", "https://example.com/Feed/Path?Q=AbC"),
+    ("http://Www.YouTube.com/feeds/videos.xml?channel_id=UCAbCdef",
+     "http://www.youtube.com/feeds/videos.xml?channel_id=UCAbCdef"),
+    # Userinfo is case-sensitive — preserved; host lowered.
+    ("https://user:PassWord@Feeds.Example.COM/RSS", "https://user:PassWord@feeds.example.com/RSS"),
+    # Already-normalized host is unchanged.
+    ("https://example.com/feed.xml", "https://example.com/feed.xml"),
+])
+def test_scheme_host_lowercased_path_preserved(raw, expected):
+    assert normalize_feed_url(raw) == expected
