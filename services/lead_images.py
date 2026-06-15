@@ -154,6 +154,13 @@ class LeadImageService:
         r"(?:avatar|author(?:-image)?\b|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
         re.IGNORECASE,
     )
+    # Code-forge avatar URLs are a single user segment + .png on the forge host
+    # (e.g. github.com/octocat.png, gitea.com/delvh.png) — profile pictures, not
+    # article images. Repo/asset paths have more segments and don't match.
+    _FORGE_AVATAR_HOSTS = frozenset({
+        "github.com", "www.github.com", "gitea.com", "gitlab.com", "codeberg.org",
+    })
+    _FORGE_AVATAR_PATH_RE = re.compile(r"^/[^/]+\.png$", re.IGNORECASE)
     # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
     # Used by _extract_preferred_source_image_data to skip headshot images.
     _AUTHOR_CONTEXT_RE = re.compile(
@@ -784,14 +791,14 @@ class LeadImageService:
             # rather than being satisfied with an inferior feed thumbnail.
             if (
                 inline_image
-                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
+                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True, source_url=base_url)
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
             ):
                 return inline_image
             linked_image = self._extract_linked_image_url_from_html(html_candidate, base_url)
             if (
                 linked_image
-                and self._is_image_url_acceptable(linked_image, None, None)
+                and self._is_image_url_acceptable(linked_image, None, None, source_url=base_url)
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=linked_image)
             ):
                 return linked_image
@@ -1298,7 +1305,7 @@ class LeadImageService:
                 resolved = urljoin(base_url, image_url)
                 if source_url and not self._is_source_image_tag_acceptable(attrs, resolved):
                     continue
-                if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=allow_extensionless):
+                if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=allow_extensionless, source_url=base_url):
                     return resolved
         return None
 
@@ -1585,7 +1592,7 @@ class LeadImageService:
                 resolved = urljoin(base_url, image_url)
                 if not self._is_source_image_tag_acceptable(attrs, resolved):
                     continue
-                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True):
+                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
                     continue
                 # SVG files are icons/logos/diagrams — not photographic article lead images.
                 # They slip through allow_extensionless=True because .svg is not a raster format.
@@ -1748,15 +1755,30 @@ class LeadImageService:
                 continue
         return False
 
-    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False) -> bool:
+    def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None) -> bool:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
+        # An image hosted under the post's own URL directory is the post's own
+        # asset, not site chrome — so a content hero named "…-logo.png" (e.g. a
+        # product logo that IS the article image) must not be dropped by the
+        # logo filter. Site logos live at the site root or on a shared CDN, not
+        # under a specific post path, so this stays narrow.
+        if source_url and not skip_logo_patterns:
+            try:
+                _su = urlparse(source_url)
+                _su_dir = _su.path if _su.path.endswith("/") else _su.path.rsplit("/", 1)[0] + "/"
+                if _su.netloc == parsed.netloc and len(_su_dir) > 1 and parsed.path.startswith(_su_dir):
+                    skip_logo_patterns = True
+            except ValueError:
+                pass
         if (self._TRACKER_URL_PATTERNS.search(parsed.netloc)
                 or self._TRACKER_URL_PATTERNS.search(parsed.path)
                 or self._TRACKER_URL_PATTERNS.search(image_url)):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
+            return False
+        if parsed.netloc.lower() in self._FORGE_AVATAR_HOSTS and self._FORGE_AVATAR_PATH_RE.match(parsed.path or ""):
             return False
         if self._SITE_CHROME_PATH_PATTERNS.search(parsed.path):
             return False

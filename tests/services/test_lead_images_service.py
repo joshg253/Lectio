@@ -795,3 +795,31 @@ def test_inline_from_reader_falls_back_to_feed_content_image(tmp_path: Path):
     )
 
     assert result == "https://cdn.artstation.com/p/large/art.jpg"
+
+
+def test_logo_named_image_accepted_when_post_local(tmp_path: Path):
+    """A content hero named '…-logo.png' hosted under the post's own path must
+    not be dropped by the logo filter (e.g. andreagrandi's mcp-wire-logo.png)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    post = "https://www.andreagrandi.it/posts/announcing-mcp-wire-0-3-0/"
+    img = post + "mcp-wire-logo.png"
+    # Without post context the logo filter rejects it; with it, it's accepted.
+    assert service._is_image_url_acceptable(img, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(img, None, None, allow_extensionless=True, source_url=post) is True
+
+
+def test_site_logo_still_rejected_when_not_post_local(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    post = "https://example.com/posts/some-article/"
+    site_logo = "https://example.com/assets/site-logo.png"  # not under the post path
+    assert service._is_image_url_acceptable(site_logo, None, None, source_url=post) is False
+
+
+def test_forge_avatar_urls_rejected(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._is_image_url_acceptable("https://gitea.com/delvh.png", None, None) is False
+    assert service._is_image_url_acceptable("https://github.com/octocat.png", None, None) is False
+    # Repo/asset paths (more than one segment) are NOT avatars.
+    assert service._is_image_url_acceptable(
+        "https://github.com/owner/repo/raw/main/hero.png", None, None
+    ) is True
