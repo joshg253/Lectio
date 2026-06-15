@@ -94,9 +94,13 @@ Phasing:
    per enabled user via `_for_each_background_user`; the long-lived
    starred-archive worker scans every user's archive DB under its own context
    (injected `background_user_ids`); and the discover-on-subscribe thread spawned
-   when a feed is added re-binds the requesting user. Previously these ran as
+   when a feed is added re-binds the requesting user. `LeadImageService`'s
+   render-path source-image / alt-text fetch threads (`queue_source_fetch`,
+   `queue_source_html_fetch`) likewise capture and re-bind the requesting user
+   instead of persisting to the default tenant. Previously these ran as
    `DEFAULT_USER_ID` and wrote the legacy top-level DBs. New tests in
-   `tests/services/test_starred_archive_tenancy.py`.
+   `tests/services/test_starred_archive_tenancy.py` and
+   `tests/services/test_lead_images_tenancy.py`.
    Remaining background work still running as the default user only (lower
    priority; scheduled refresh covers the feeds within the cadence window):
    - **WebSub push callback** — a push carries only a topic (feed URL); needs to

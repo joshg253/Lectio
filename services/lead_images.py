@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 import feedparser
 import httpx
 
+from services import tenancy
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
@@ -2314,15 +2315,20 @@ class LeadImageService:
         event = threading.Event()
         self._source_fetch_events[key] = event
         is_wc = self._is_feed_webcomic(feed_url)
+        # store_entry_lead_image writes through the context-bound meta connection;
+        # this bare thread won't inherit the request's tenancy user, so capture it
+        # and re-bind inside _bg or the image lands in the default tenant's DB.
+        uid = tenancy.current_user_id()
 
         def _bg() -> None:
             try:
-                image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
-                self.store_entry_lead_image(feed_url, entry_id, image_url)
-                # HTML is now in _source_html_cache from the lead-image fetch.
-                # Extract and persist alt text while we have it — no second HTTP fetch.
-                if image_url:
-                    self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
+                with tenancy.user_context(uid):
+                    image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
+                    self.store_entry_lead_image(feed_url, entry_id, image_url)
+                    # HTML is now in _source_html_cache from the lead-image fetch.
+                    # Extract and persist alt text while we have it — no second HTTP fetch.
+                    if image_url:
+                        self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
             except Exception:
                 pass
             finally:
@@ -2368,22 +2374,27 @@ class LeadImageService:
         self._source_fetch_in_progress.add(html_key)
         event = threading.Event()
         self._source_html_fetch_events[entry_link] = event
+        # store_entry_image_alt writes through the context-bound meta connection;
+        # capture the request's tenancy user so this bare thread re-binds it
+        # rather than persisting alt text to the default tenant's DB.
+        uid = tenancy.current_user_id()
 
         def _bg() -> None:
             try:
-                result = self._fetch_page_html(entry_link)
-                if result:
-                    source_html, final_url, _ = result
-                    self._source_html_cache[entry_link] = (final_url, source_html)
-                    self._source_html_cache.move_to_end(entry_link)
-                    if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
-                        self._source_html_cache.popitem(last=False)
-                    if feed_url and entry_id and lead_image_url:
-                        alt, title = self.fetch_entry_image_caption(
-                            entry_link, lead_image_url=lead_image_url,
-                            is_webcomic=self._is_feed_webcomic(feed_url),
-                        )
-                        self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
+                with tenancy.user_context(uid):
+                    result = self._fetch_page_html(entry_link)
+                    if result:
+                        source_html, final_url, _ = result
+                        self._source_html_cache[entry_link] = (final_url, source_html)
+                        self._source_html_cache.move_to_end(entry_link)
+                        if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
+                            self._source_html_cache.popitem(last=False)
+                        if feed_url and entry_id and lead_image_url:
+                            alt, title = self.fetch_entry_image_caption(
+                                entry_link, lead_image_url=lead_image_url,
+                                is_webcomic=self._is_feed_webcomic(feed_url),
+                            )
+                            self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
             except Exception:
                 pass
             finally:

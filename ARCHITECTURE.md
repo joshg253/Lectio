@@ -116,7 +116,12 @@ request (GReader mark-all-as-read; the per-entry mark-read writes fired off the
 entry pane and the async read toggle) must re-bind the captured user via
 `_run_in_user_context`, since threads don't inherit contextvars — otherwise the
 write lands in `DEFAULT_USER_ID`'s DB and the entry keeps showing as unread for
-the actual user.
+the actual user. The same applies inside the service layer: `LeadImageService`'s
+`queue_source_fetch` / `queue_source_html_fetch` resolve a lead image (or its
+alt/caption) in a daemon thread off the render path and persist it via the
+context-bound meta connection, so they capture `tenancy.current_user_id()` and
+re-wrap the worker in `tenancy.user_context` — otherwise a user browsing their
+feed silently writes lead images into the default tenant's `entry_lead_images`.
 
 Account UI: `/account` (multi mode only; 404 in single) lets a user change their
 password and view/regenerate their API token; admins additionally create/disable
