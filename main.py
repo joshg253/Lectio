@@ -7310,6 +7310,11 @@ def entry_pane(
         _title = str(selected_entry.get("title") or "")
         _link = str(selected_entry.get("link") or "")
         _feed_title = str(selected_entry.get("feed_title") or "")
+        # Capture the current user now: the daemon thread below does not inherit
+        # this request's contextvars, so without re-binding it would mark the
+        # entry read in the default (legacy) user's DB and the post would keep
+        # showing as unread for the actual user.
+        _uid = tenancy.current_user_id()
 
         def _bg_mark_read() -> None:
             try:
@@ -7330,7 +7335,7 @@ def entry_pane(
                 _unread_counts_generation += 1
                 unread_counts_cache.clear()
 
-        threading.Thread(target=_bg_mark_read, daemon=True).start()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
     # so it lands in the feed's actual containing folder.
@@ -11438,6 +11443,10 @@ def mark_entry_read(
 
         _fu, _eid, _read, _do_hist = feed_url, entry_id, bool(read), include_history
         _hist_args = (_title, _link, _feed_title)
+        # Capture the current user: the daemon thread below does not inherit this
+        # request's contextvars, so without re-binding the (un)read write would
+        # land in the default (legacy) user's DB instead of the actual user's.
+        _uid = tenancy.current_user_id()
 
         def _bg_toggle() -> None:
             try:
@@ -11465,7 +11474,7 @@ def mark_entry_read(
                 _unread_counts_generation += 1
                 unread_counts_cache.clear()
 
-        threading.Thread(target=_bg_toggle, daemon=True).start()
+        threading.Thread(target=_run_in_user_context, args=(_uid, _bg_toggle), daemon=True).start()
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "read": bool(read)})
 
     # Synchronous (full-page redirect) path — wait for writes before redirecting

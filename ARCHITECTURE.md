@@ -112,8 +112,11 @@ the context is bound). GReader binds context in `_TenancyMiddleware` from the
 header/query token (no body read); Fever binds in its handler (api_key is in the
 body). The protocol services' data methods are user-independent and reused
 as-is; Fever's entry-map sync is tracked per user. Background work spawned by a
-request (GReader mark-all-as-read) re-binds the captured user via
-`_run_in_user_context`, since threads don't inherit contextvars.
+request (GReader mark-all-as-read; the per-entry mark-read writes fired off the
+entry pane and the async read toggle) must re-bind the captured user via
+`_run_in_user_context`, since threads don't inherit contextvars — otherwise the
+write lands in `DEFAULT_USER_ID`'s DB and the entry keeps showing as unread for
+the actual user.
 
 Account UI: `/account` (multi mode only; 404 in single) lets a user change their
 password and view/regenerate their API token; admins additionally create/disable

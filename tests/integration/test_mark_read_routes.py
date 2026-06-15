@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
+from services import tenancy
 
 
 # ---------------------------------------------------------------------------
@@ -185,3 +186,71 @@ def test_older_than_mark_read_async_returns_json(monkeypatch):
     assert body["ok"] is True
     assert body["max_age_days"] == 7
     assert "marked" in body
+
+
+# ---------------------------------------------------------------------------
+# /entries/read — async toggle must run its background write under the
+# request's user, not the default (legacy) user.
+#
+# Regression: the async path fired the (un)read write in a bare daemon thread,
+# which does not inherit the request's tenancy contextvar. In multi-user mode
+# the write landed in the default user's DB, so a post marked read kept showing
+# as unread for the actual user.
+# ---------------------------------------------------------------------------
+
+class _FakeThread:
+    """Captures Thread(target=..., args=...) without ever running it."""
+
+    last = None
+
+    def __init__(self, target=None, args=(), daemon=None, **_kwargs):
+        self.target = target
+        self.args = args
+        _FakeThread.last = self
+
+    def start(self):
+        # Intentionally a no-op: we assert on how the thread was wired up, not
+        # on the background work running.
+        pass
+
+
+def test_entries_read_async_binds_request_user_to_bg_thread(monkeypatch):
+    app = FastAPI()
+    app.post("/entries/read")(main.mark_entry_read)
+    monkeypatch.setattr(tenancy, "current_user_id", lambda: "u_request_user")
+    monkeypatch.setattr(main.tenancy, "current_user_id", lambda: "u_request_user")
+    monkeypatch.setattr(main.threading, "Thread", _FakeThread)
+
+    _FakeThread.last = None
+    with TestClient(app) as client:
+        r = client.post(
+            "/entries/read",
+            data={
+                "folder_id": "1",
+                "feed_url": "https://example.com/feed.xml",
+                "entry_id": "e1",
+                "read": "1",
+            },
+            headers={"X-Requested-With": "lectio-post-read-toggle"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    captured = _FakeThread.last
+    assert captured is not None
+    # The bug was a bare `target=_bg_toggle, args=()`; the fix routes through
+    # _run_in_user_context with the captured user as the first arg.
+    assert captured.target is main._run_in_user_context
+    assert captured.args[0] == "u_request_user"
+
+
+def test_run_in_user_context_binds_user_inside_worker():
+    """The helper must actually bind the user for the duration of the call —
+    a bare thread would observe the default user instead."""
+    seen = []
+    main._run_in_user_context(
+        "u_worker", lambda: seen.append(tenancy.current_user_id())
+    )
+    assert seen == ["u_worker"]
+    # And it restores the prior binding afterward.
+    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
