@@ -15,8 +15,8 @@ This file is the backlog and staging area for future work.
 - **Data migration tooling** — `scripts/migrate_to_multiuser.py` resolves
   username→user_id from the auth DB and copies the legacy DBs into
   `users/<user_id>/`. Dry-run default, reversible, integrity-checked. Workflow
-  (bootstrap-first) in `docs/multiuser-migration.md`. **Pending: run on the real
-  data** (at a real computer, app stopped, after backup).
+  (bootstrap-first) in `docs/multiuser-migration.md`. **Applied on the real data
+  — multi-user live since 2026-06-14** (admin `joshg253`).
 
 - **Deployment genericization (minimal)** — app-emitted security headers
   (`LECTIO_SECURITY_HEADERS=1`, opt-in so they don't depend on the proxy) and a
@@ -119,11 +119,10 @@ Phasing:
    (b) full DNS-rebind closure needs connection IP-pinning (the validate→connect
    TOCTOU window is now small but nonzero) — deferred as lower-priority for the
    trusted-user threat model.
-5. **Data migration** — DONE (tooling). `scripts/migrate_to_multiuser.py` copies
-   the legacy DBs into `DATA_DIR/users/<user_id>/` (user_id resolved from the auth
-   DB), dry-run default, reversible, integrity-checked. **Pending: run `--apply`
-   on the real data** (real computer, app stopped, after a backup; see
-   `docs/multiuser-migration.md`).
+5. ~~**Data migration**~~ — DONE. `scripts/migrate_to_multiuser.py` copies the
+   legacy DBs into `DATA_DIR/users/<user_id>/` (user_id resolved from the auth
+   DB), dry-run default, reversible, integrity-checked. `--apply` run on the real
+   data; **multi-user live since 2026-06-14** (see `docs/multiuser-migration.md`).
 
 ### Later
 
