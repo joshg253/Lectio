@@ -6,6 +6,30 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from services import url_guard
+
+
+def _guarded_get(url: str, *, timeout: float) -> httpx.Response:
+    """SSRF-safe GET: validates the initial URL and every redirect hop.
+
+    Raises url_guard.UnsafeURLError for private/loopback/link-local targets.
+    """
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
+        return url_guard.safe_get(client, url, headers=_HEADERS)
+
+
+def _guarded_head(url: str, *, timeout: float) -> httpx.Response | None:
+    """SSRF-safe HEAD probe. Returns None if the URL is unsafe.
+
+    Redirects are not followed (follow_redirects=False) so a probe can't be
+    bounced to an internal address after the pre-check; a feed that only answers
+    after a redirect simply isn't auto-detected via HEAD.
+    """
+    if not url_guard.is_safe_outbound_url(url):
+        return None
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
+        return client.head(url)
+
 _LINK_RE = re.compile(r"<link\b([^>]*?)(?:/>|>)", re.IGNORECASE | re.DOTALL)
 _ATTR_RE = re.compile(
     r'([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'
@@ -75,7 +99,9 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
       message: str (human-readable, empty on success)
     """
     try:
-        resp = httpx.get(url, timeout=timeout, follow_redirects=True, headers=_HEADERS)
+        resp = _guarded_get(url, timeout=timeout)
+    except url_guard.UnsafeURLError:
+        return {"status": "blocked", "feeds": [], "message": "That address is not allowed (private/loopback target)."}
     except httpx.TimeoutException:
         return {"status": "error", "feeds": [], "message": "Connection timed out."}
     except Exception as exc:
@@ -138,8 +164,8 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for suffix in _COMMON_FEED_PATHS:
             probe = origin + prefix + suffix
             try:
-                head = httpx.head(probe, timeout=3.0, follow_redirects=True, headers=_HEADERS)
-                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                head = _guarded_head(probe, timeout=3.0)
+                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
             except Exception:
                 continue
@@ -152,8 +178,8 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for qp in _FEED_QUERY_PARAMS:
             probe = f"{base_page}?{qp}"
             try:
-                head = httpx.head(probe, timeout=3.0, follow_redirects=True, headers=_HEADERS)
-                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                head = _guarded_head(probe, timeout=3.0)
+                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if not any(f["url"] == resolved for f in qp_feeds):
                         qp_feeds.append({"url": resolved, "title": None})
@@ -179,7 +205,7 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
     Returns [] on network failure or when nothing is found.
     """
     try:
-        resp = httpx.get(url, timeout=timeout, follow_redirects=True, headers=_HEADERS)
+        resp = _guarded_get(url, timeout=timeout)
     except Exception:
         return []
 
@@ -216,8 +242,8 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for suffix in _COMMON_FEED_PATHS:
             probe_candidate = origin + prefix + suffix
             try:
-                head = httpx.head(probe_candidate, timeout=3.0, follow_redirects=True, headers=_HEADERS)
-                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                head = _guarded_head(probe_candidate, timeout=3.0)
+                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
                         candidates.append(resolved)
@@ -231,8 +257,8 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for qp in _FEED_QUERY_PARAMS:
             probe_candidate = f"{base_page}?{qp}"
             try:
-                head = httpx.head(probe_candidate, timeout=3.0, follow_redirects=True, headers=_HEADERS)
-                if head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                head = _guarded_head(probe_candidate, timeout=3.0)
+                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
                         candidates.append(resolved)

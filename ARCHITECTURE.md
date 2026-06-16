@@ -207,11 +207,28 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   largest code surface, but the resolver localizes it to the storage seam.
 - **SSRF hardening** — `url_guard.safe_get` / `safe_get_async` follow redirects
   manually and re-validate every hop against private/loopback/link-local space.
-  `/api/img` (auth-exempt) and `/thumb` use them with `follow_redirects=False`,
-  closing the redirect-to-internal bypass. Still open: service-layer fetches
-  (lead-image / scraper / source-proxy) that pass `follow_redirects=True` should
-  adopt the same helpers; and full DNS-rebind closure needs connection IP-pinning
-  (the validate→connect window is now small but nonzero).
+  Now applied to all reachable user/feed-controlled fetches: `/api/img`, `/thumb`,
+  feed discovery (`_guarded_get` / `_guarded_head`, which also pre-validate HEAD
+  probes), and the source-proxy / readability / feed-tag fetches in main.py — all
+  with `follow_redirects=False`, closing the redirect-to-internal bypass. Still
+  open: background lead-image plugin / WebSub / scraper fetches and the `reader`
+  library's own feed refresh (a subscribed `http://10.x` host is still fetched);
+  and full DNS-rebind closure needs connection IP-pinning (the validate→connect
+  window is small but nonzero).
+- **Subscription scheme allowlist** — user-supplied feed URLs (Add Feed, OPML
+  import, discovered `<link>` candidates) are restricted to http/https via
+  `_is_subscribable_feed_url`. `reader` natively fetches `file://`, so without
+  this an `xmlUrl="file:///…"` could read local files (other tenants' DBs, `.env`)
+  on refresh. Internal scraped feeds still register their `file://` URLs through
+  `reader.add_feed` directly, bypassing the user-facing guard.
+- **HTML sanitization** — proxied source-page and Readability HTML (rendered with
+  `| safe`) is sanitized by `_sanitize_html_allowlist`, a BeautifulSoup
+  tag/attribute allowlist that drops scriptable tags, all `on*` handlers, `style`,
+  and `javascript:`/`vbscript:`/`data:` URLs (incl. control-char-obfuscated). It
+  replaced regex sanitizers that let unquoted handlers and `href="javascript:"`
+  through. Feed-entry content relies on feedparser's upstream sanitization.
+- **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
+  (same-origin paths only) before redirecting.
 
 Deferred behind hooks: per-user rate-limits/quotas on refresh, scraping, and
 thumb generation (not needed for a handful of trusted users).
