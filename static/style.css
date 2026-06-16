@@ -2894,6 +2894,22 @@ button:hover, .button-link:hover {
   height: auto;
 }
 
+/* Inline emoji glyphs embedded in post bodies: WordPress wp-smiley (s.w.org),
+   IP.Board ipsEmoji, and twemoji's "emoji" class. The source sites size these
+   to ~1em via their own CSS; without it the general .entry-content img rule
+   above renders them as full-size 72×72 block images (e.g. Vintage Story's 🙃).
+   Constrain to text height and keep them inline so they read as emoji. */
+.entry-content img.wp-smiley,
+.entry-content img.emoji,
+.entry-content img.ipsEmoji {
+  display: inline-block;
+  width: auto;
+  height: 1.2em !important;
+  max-height: 1.2em;
+  margin: 0 0.05em;
+  vertical-align: -0.2em;
+}
+
 .entry-content iframe {
   max-width: 100%;
 }

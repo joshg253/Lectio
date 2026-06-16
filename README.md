@@ -47,6 +47,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Web view proxy** — fetches source pages server-side when sites block embedding; detects Cloudflare/paywall pages
 - **Search** within the current scope
 - **YouTube duration prefix** — `[H:MM:SS]` shown in post list and title for YouTube feeds
+- **Inline rendering fixups** — emoji glyphs embedded as images (WordPress wp-smiley, IP.Board/twemoji) are sized to match the surrounding text instead of rendering as full-size images; body images load with `referrerpolicy="no-referrer"` so hotlink-protected hosts (which swap a placeholder image when the referer is foreign) serve the real image, and known hotlink hosts are routed through the built-in image proxy so even a previously cached placeholder is bypassed
 - **Rachel by the Bay** support.
 
 ### Lead images
@@ -60,6 +61,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - GitHub release feeds (`github.com/*/releases.atom`) auto-assigned **og_scrape** strategy (GitHub generates a unique social-preview card per release) with list thumbnails suppressed
 - ArtStation feed URLs normalized to `www.artstation.com/username.rss` at add time (avoids TLS hostname issues with underscore usernames)
 - **Thumbnail fallbacks** — when source-page scraping finds no image (e.g. a JS-only portfolio page), the entry's own inline feed image is used instead of a blank; a feed pinned to Media RSS / Feed-content that extracts nothing falls back to the cached lead image; and "related posts" widgets are stripped before scraping so a post with no image of its own never borrows a sibling post's thumbnail
+- **Junk-image rejection** — social share-button sprites (AddToAny/AddThis "Share"), analytics tracking pixels (statcounter "Web Analytics"), and inline emoji glyphs (WordPress wp-smiley, twemoji) are never chosen as a post's lead image, so image-less posts don't show a stray button/grey-pixel thumbnail with a bogus "Share" / "Web Analytics" caption
 
 ### Automation
 - **Highlight** — keyword/regex rules color-highlight matching titles and article body text

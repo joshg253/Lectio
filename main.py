@@ -232,6 +232,20 @@ READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
 # In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
 # Values: True = same-site/same-origin (proxy needed), False = no restriction.
 _CORP_DOMAIN_CACHE: dict[str, bool] = {}
+
+# Hosts that serve a "this image was hotlinked" placeholder when the request
+# carries a foreign Referer (or no same-origin signal). referrerpolicy="no-referrer"
+# defeats this for *fresh* image loads, but a browser that cached the placeholder
+# under the (unchanged) image URL keeps serving it. Routing these hosts' images
+# through the /api/img proxy gives the browser a new same-origin URL it hasn't
+# cached, and the server fetch carries no Referer — so the real image loads and
+# stays correct. Add a registrable domain (matches it and any subdomain).
+_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset({"nanolx.org"})
+
+
+def _is_hotlink_img_host(netloc: str) -> bool:
+    host = (netloc or "").split("@")[-1].split(":")[0].lower()
+    return any(host == h or host.endswith("." + h) for h in _HOTLINK_IMG_HOSTS)
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
@@ -5495,6 +5509,63 @@ def normalize_proxy_lazy_media(content: str) -> str:
     return re.sub(r"<(?:img|source)\b[^>]*>", _normalize_tag, content, flags=re.IGNORECASE)
 
 
+def add_no_referrer_to_images(content: str) -> str:
+    """Add referrerpolicy="no-referrer" to inline <img> tags that lack it.
+
+    Some sites (e.g. nanolx.org) serve a hotlink-protection placeholder image
+    when the Referer header points at a foreign origin. The reader loads body
+    images directly, so the browser sends the Lectio page URL as Referer and the
+    real image is swapped for the placeholder. Suppressing the referer makes the
+    request look like a direct hit, so hotlink-protected images load — and it
+    avoids leaking the reader URL to image hosts.
+    """
+    if "<img" not in content.lower():
+        return content
+    return re.sub(
+        r"<img\b(?![^>]*\breferrerpolicy\s*=)([^>]*?)(/?)>",
+        r'<img\1 referrerpolicy="no-referrer"\2>',
+        content,
+        flags=re.IGNORECASE,
+    )
+
+
+def proxy_hotlink_images(content: str) -> str:
+    """Rewrite <img> src/srcset for hotlink-protected hosts to the /api/img proxy.
+
+    referrerpolicy="no-referrer" fixes fresh loads, but a browser that already
+    cached the host's "image was hotlinked" placeholder (under the unchanged
+    image URL, with no Vary header) keeps serving it. Pointing src at
+    /api/img?u=<url> is a new same-origin URL the browser hasn't cached, and the
+    server-side fetch carries no Referer — so the real image loads. srcset is
+    dropped for these images so the proxied src is the one used.
+    """
+    if "<img" not in content.lower():
+        return content
+
+    def _rewrite(m: re.Match) -> str:
+        tag = m.group(0)
+        src_m = re.search(r'\bsrc\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27)', tag, re.IGNORECASE)
+        if not src_m:
+            return tag
+        src = html.unescape((src_m.group(1) or src_m.group(2) or "").strip())
+        if not src or src.startswith("data:"):
+            return tag
+        if not _is_hotlink_img_host(urlparse(src).netloc):
+            return tag
+        proxied = f"/api/img?u={quote(src, safe='')}"
+        tag = tag[: src_m.start()] + f'src="{proxied}"' + tag[src_m.end():]
+        # Drop srcset/data-* so the browser uses the proxied src, not a direct URL.
+        tag = re.sub(
+            r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*(?:"[^"]*"|\x27[^\x27]*\x27)',
+            "",
+            tag,
+            flags=re.IGNORECASE,
+        )
+        return tag
+
+    return re.sub(r"<img\b[^>]*>", _rewrite, content, flags=re.IGNORECASE)
+
+
 feed_refresh_service = FeedRefreshService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
@@ -6630,6 +6701,10 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     if not image_url:
         return None
     domain = urlparse(image_url).netloc
+    # Hotlink-protected hosts: proxy unconditionally (the placeholder is served
+    # with HTTP 200, so there's nothing to detect — the host is known-bad).
+    if _is_hotlink_img_host(domain):
+        return f"/api/img?u={quote(image_url)}"
     if domain not in _CORP_DOMAIN_CACHE:
         # Optimistically return the direct URL and check CORP in the background.
         # First render may show a broken image for CORP-gated domains; subsequent
@@ -7210,7 +7285,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         _TRIVIAL_ALT_TEXTS = frozenset({"responsive image", "image", "photo", "picture",
                                          "img", "thumbnail", "banner", "featured image",
                                          "previous", "next", "first", "last", "random",
-                                         "prev", "newer", "older"})
+                                         "prev", "newer", "older",
+                                         # Social share-button and analytics-pixel alt text
+                                         # (AddToAny "Share", statcounter "Web Analytics") —
+                                         # never a real photo caption.
+                                         "share", "web analytics", "analytics"})
         if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
             image_title_text = None
 
@@ -7318,6 +7397,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
+
+        # Suppress the Referer on inline body images so hotlink-protected hosts
+        # serve the real image instead of a placeholder, and route known
+        # hotlink hosts (e.g. nanolx.org) through the /api/img proxy so a
+        # browser-cached placeholder under the original URL is bypassed. Skip
+        # locally-served starred assets (same-origin, no hotlink concern).
+        if isinstance(content_html, str) and content_html and not is_saved:
+            content_html = proxy_hotlink_images(content_html)
+            content_html = add_no_referrer_to_images(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None
