@@ -823,3 +823,31 @@ def test_forge_avatar_urls_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(
         "https://github.com/owner/repo/raw/main/hero.png", None, None
     ) is True
+
+
+def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkeypatch):
+    """An og_scrape-manual feed stores the inline image, then falls through to the
+    source fetch. A transient source miss must NOT clobber the good inline image
+    with None (the delightlylinux brand-new-post intermittency)."""
+    db_path = tmp_path / "meta.sqlite"
+    feed = "https://blog.example.com/feed"
+    inline_img = "https://blog.example.com/post/cover.jpg?w=300"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="p-og",
+        link="https://blog.example.com/post/",
+        content_html=f'<p><img src="{inline_img}"></p>',
+    )
+    service = _build_service(db_path, [entry])
+    service.store_feed_strategy(feed, "og_scrape", manual=True)
+    # Source page transiently yields nothing.
+    monkeypatch.setattr(service, "_fetch_source_lead_image", lambda *a, **k: None)
+
+    service.fetch_and_store_lead_images_for_feed(feed, force_retry_negative=True)
+
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("p-og",)
+        ).fetchone()
+    assert row is not None
+    assert row["image_url"] == inline_img, "transient source miss clobbered the inline image"

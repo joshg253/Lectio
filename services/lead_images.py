@@ -1122,7 +1122,15 @@ class LeadImageService:
             if image_url:
                 _found_og_scrape = True
                 self._maybe_store_alt_from_cache(feed_url_str, entry_id_str, entry_link, image_url, is_webcomic=is_wc)
-            self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
+                self.store_entry_lead_image(feed_url_str, entry_id_str, image_url)
+            elif not inline:
+                # Source found nothing and there was no inline image — record the
+                # negative result. But when we fell through here from an og_scrape
+                # manual feed that DID have an inline image (stored above), a
+                # transient source miss must NOT overwrite that good image with
+                # None — otherwise brand-new posts (whose og:image isn't generated
+                # yet at first fetch) lose their thumbnail until the 4h retry.
+                self.store_entry_lead_image(feed_url_str, entry_id_str, None)
             time.sleep(0.15)
 
         # Store detected strategy based on what actually worked this cycle.
