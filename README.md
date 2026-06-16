@@ -1,5 +1,7 @@
 # Lectio
 
+[![CI](https://github.com/joshg253/Lectio/actions/workflows/ci.yml/badge.svg)](https://github.com/joshg253/Lectio/actions/workflows/ci.yml)
+
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
 Lectio is a self-hosted, local-first RSS reader with a focus on fast reading triage. It runs as a single-user server behind a TLS proxy and is designed to be deployed on a personal VPS.
@@ -84,7 +86,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - Exponential backoff per feed and per domain on errors; 410 Gone permanently disables a feed
 - HTML-response detection — surfaces "returned an HTML page instead of a feed" as a health error
 - **GUID-churn suppression** — entries that reappear with a new GUID but the same URL slug, or the same title + date (within 7 days), are automatically marked read after refresh; a startup cleanup pass also retroactively deduplicates within each feed and across feeds that syndicate the same post
-- Feed User-Agent: `Lectio/0.1 (+https://github.com/joshb253/Lectio)`
+- Feed User-Agent: `Lectio/0.1 (+https://github.com/joshg253/Lectio)`
 - WAL-mode SQLite for all databases
 
 ### Real-time updates
@@ -131,6 +133,13 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Frontend**: Vanilla JS, Jinja2 templates, no build step
 - **Database**: SQLite (WAL mode) × 3
 - **Deployment**: Docker + docker-compose, Traefik reverse proxy
+
+---
+
+## Development
+
+- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `uv run pytest`.
+- **CI** — GitHub Actions runs the suite on Python 3.14 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies are installed from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.
 
 ---
 
