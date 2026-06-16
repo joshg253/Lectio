@@ -4,67 +4,6 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
-- **Stable user_id identity (rename-safe)** — accounts now have an immutable
-  opaque `user_id` (generated at creation) separate from the mutable `username`.
-  The `user_id` is the tenancy key, the `users/<user_id>/` directory name, the
-  session value, and the API-token FK, so renaming a username moves no data.
-  `UserStore.rename_user` + admin "Rename a user" UI. Defensive upgrade for any
-  pre-user_id auth DB. All identity call sites (login, Fever/GReader, middleware,
-  account routes, background loops) pass user_id; usernames are display-only.
-
-- **Data migration tooling** — `scripts/migrate_to_multiuser.py` resolves
-  username→user_id from the auth DB and copies the legacy DBs into
-  `users/<user_id>/`. Dry-run default, reversible, integrity-checked. Workflow
-  (bootstrap-first) in `docs/multiuser-migration.md`. **Applied on the real data
-  — multi-user live since 2026-06-14** (admin `joshg253`).
-
-- **Deployment genericization (minimal)** — app-emitted security headers
-  (`LECTIO_SECURITY_HEADERS=1`, opt-in so they don't depend on the proxy) and a
-  configurable `LECTIO_TRUSTED_PROXIES` for X-Forwarded-* trust. Additive;
-  defaults preserve the current Traefik-fronted behavior. (Compose proxy-agnostic
-  overlay + multi-proxy docs still deferred — touch the live deploy.)
-
-
-- **Multi-user Phase 1 — tenancy seam + per-user connection pools** (`services/tenancy.py`).
-  Resolver carries the current user in a contextvar (defaults to `DEFAULT_USER_ID`
-  → legacy top-level paths, so single-user is byte-for-byte unchanged and needs no
-  migration). `get_reader()` and `get_meta_connection()` are now per-(thread, user)
-  pools keyed via the resolver; `get_reader()` is LRU-bounded.
-  `get_starred_archive_connection()` resolves per-user; the thumb cache stays
-  global. 30 new tests; full suite green (332).
-
-- **Multi-user Phase 3b — per-user scheduled refresh**. The background
-  `scheduled_refresh_loop` now iterates every enabled user (`_background_user_ids`)
-  and runs each pass (`_scheduled_refresh_tick`) under that user's tenancy
-  context, reading their own cadence (`_effective_auto_refresh_minutes`) and
-  refreshing their own feeds. One user's failure doesn't stop the others. Single
-  mode runs once as the default user (unchanged). Daily maintenance (rule-log
-  prune, orphan cleanup, meta+starred VACUUM, email-batch flush) and the
-  per-minute email-batch flush now also run per user; thumb-cache VACUUM and
-  YouTube sync stay global (`_run_global_maintenance`). Still default-user only:
-  WebSub push routing. 7 new tests.
-
-- **Multi-user Phase 3 — per-user API tokens + account/admin UI**. Each user has
-  an `api_token` (auth DB) serving both protocols. Fever resolves
-  `md5(username:api_token)` → user; GReader ClientLogin verifies username+token
-  and issues a global bearer token (`greader_api_tokens`) → user. Both bind the
-  tenancy context per request (GReader via `_TenancyMiddleware` from the header
-  token; Fever in its handler), so the unchanged service data methods read the
-  right user's DBs; Fever's entry-map sync is now per-user. `_run_in_user_context`
-  re-binds the context for the mark-all-as-read background thread. New `/account`
-  page: change password, view/regenerate API token, and (admins) create/disable
-  users + reset passwords. Single mode unchanged; UI is 404 there. 43 new tests
-  (incl. GReader/Fever per-user isolation + account-UI E2E).
-
-- **Multi-user Phase 2 (core) — users table + per-user auth + request routing**.
-  `LECTIO_SECURITY_MODE` (single default | multi). `services/passwords.py`
-  (scrypt default / pbkdf2_sha256 / optional argon2; self-describing hashes,
-  rehash-on-login). `services/users.py` `UserStore` on global `lectio_auth.sqlite`.
-  Bootstrap admin seeded from `LECTIO_ADMIN_USERNAME`/`LECTIO_ADMIN_PASSWORD`
-  (defaults admin/ChangeA$ap). `_TenancyMiddleware` binds `session["user_id"]`
-  into the tenancy context per request. Single mode is byte-for-byte unchanged.
-  33 new tests (incl. subprocess E2E for both modes); full suite green (365).
-
 ## Up next
 
 ### Multi-user — tenancy seam + isolated mode
