@@ -460,6 +460,75 @@ def test_wordpress_blank_placeholder_rejected(tmp_path: Path):
     )
 
 
+def test_statcounter_pixel_rejected(tmp_path: Path):
+    """c.statcounter.com tracking pixels (alt='Web Analytics') must never be a
+    lead image — they ship as a 1x1 GIF that scales to a grey thumbnail
+    (regression: andreinc.net image-less post)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://c.statcounter.com/7153286/0/b3053c1d/1/", None, None, allow_extensionless=True
+    )
+    # skip_logo_patterns=True is used at the render cache-gate; the tracker check
+    # still fires there, so a stale cached statcounter URL is dropped on display.
+    assert not service._is_image_url_acceptable(
+        "https://c.statcounter.com/7153286/0/b3053c1d/1/",
+        None,
+        None,
+        allow_extensionless=True,
+        skip_logo_patterns=True,
+    )
+
+
+def test_addtoany_share_button_rejected(tmp_path: Path):
+    """AddToAny/AddThis share-button sprites (alt='Share') are social widgets,
+    not article images (regression: nuonsoft.com 'Share' caption)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://static.addtoany.com/buttons/share_save_171_16.png", None, None
+    )
+
+
+def test_emoji_sprite_rejected_as_lead_image(tmp_path: Path):
+    """WordPress wp-smiley (s.w.org) and twemoji CDN glyphs are inline emoji, not
+    a post's lead image (regression: nuonsoft ➡, Vintage Story 🙃). They remain
+    inline at render — only lead-image selection rejects them."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://s.w.org/images/core/emoji/17.0.2/72x72/27a1.png", None, None
+    )
+    assert not service._is_image_url_acceptable(
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f643.png",
+        None,
+        None,
+    )
+    # A normal article image on an unrelated CDN is unaffected.
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/uploads/hero.jpg", None, None
+    )
+
+
+def test_source_scan_skips_share_button(tmp_path: Path):
+    """A page whose only body images are a share button and an emoji yields no
+    lead image (and no bogus 'Share' alt) — regression: nuonsoft.com."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head></head><body><p>Text.</p>"
+        '<img alt="➡" class="wp-smiley" '
+        'src="https://s.w.org/images/core/emoji/17.0.2/72x72/27a1.png">'
+        '<a href="https://www.addtoany.com/share">'
+        '<img alt="Share" src="https://static.addtoany.com/buttons/share_save_171_16.png"></a>'
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    url, alt = service._extract_preferred_source_image_data(
+        fake_html, "https://www.nuonsoft.com/blog/x/", "https://www.nuonsoft.com/blog/x/"
+    )
+
+    assert url is None
+    assert alt is None
+
+
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
     """The hover-text punchline on the main comic <img title="..."> must win over
     og:description, which on SMBC is just the post title (regression: SMBC)."""
