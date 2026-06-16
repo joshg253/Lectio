@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR cancels the previous in-flight run for that ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python 3.14)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          # Reuse the cache only when the lockfile is unchanged.
+          cache-dependency-glob: uv.lock
+
+      # Installs the interpreter pinned by .python-version / requires-python.
+      - name: Sync dependencies (locked)
+        run: uv sync --frozen
+
+      - name: Run test suite
+        run: uv run --frozen pytest -q
