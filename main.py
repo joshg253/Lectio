@@ -5495,6 +5495,24 @@ def normalize_proxy_lazy_media(content: str) -> str:
     return re.sub(r"<(?:img|source)\b[^>]*>", _normalize_tag, content, flags=re.IGNORECASE)
 
 
+def add_no_referrer_to_images(content: str) -> str:
+    """Add referrerpolicy="no-referrer" to inline <img> tags that lack it.
+
+    Some sites (e.g. nanolx.org) serve a hotlink-protection placeholder image
+    when the Referer header points at a foreign origin. The reader loads body
+    images directly, so the browser sends the Lectio page URL as Referer and the
+    real image is swapped for the placeholder. Suppressing the referer makes the
+    request look like a direct hit, so hotlink-protected images load — and it
+    avoids leaking the reader URL to image hosts.
+    """
+    return re.sub(
+        r"<img\b(?![^>]*\breferrerpolicy\s*=)([^>]*?)(/?)>",
+        r'<img\1 referrerpolicy="no-referrer"\2>',
+        content,
+        flags=re.IGNORECASE,
+    )
+
+
 feed_refresh_service = FeedRefreshService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
@@ -7210,7 +7228,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         _TRIVIAL_ALT_TEXTS = frozenset({"responsive image", "image", "photo", "picture",
                                          "img", "thumbnail", "banner", "featured image",
                                          "previous", "next", "first", "last", "random",
-                                         "prev", "newer", "older"})
+                                         "prev", "newer", "older",
+                                         # Social share-button and analytics-pixel alt text
+                                         # (AddToAny "Share", statcounter "Web Analytics") —
+                                         # never a real photo caption.
+                                         "share", "web analytics", "analytics"})
         if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
             image_title_text = None
 
@@ -7318,6 +7340,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
+
+        # Suppress the Referer on inline body images so hotlink-protected hosts
+        # (e.g. nanolx.org) serve the real image instead of a placeholder. Skip
+        # locally-served starred assets (same-origin, no hotlink concern).
+        if isinstance(content_html, str) and content_html and not is_saved:
+            content_html = add_no_referrer_to_images(content_html)
 
         if not _show_lead_in_article:
             lead_image_url = None
