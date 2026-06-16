@@ -47,7 +47,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Web view proxy** — fetches source pages server-side when sites block embedding; detects Cloudflare/paywall pages
 - **Search** within the current scope
 - **YouTube duration prefix** — `[H:MM:SS]` shown in post list and title for YouTube feeds
-- **Inline rendering fixups** — emoji glyphs embedded as images (WordPress wp-smiley, IP.Board/twemoji) are sized to match the surrounding text instead of rendering as full-size images; body images load with `referrerpolicy="no-referrer"` so hotlink-protected hosts (which swap a placeholder image when the referer is foreign) serve the real image
+- **Inline rendering fixups** — emoji glyphs embedded as images (WordPress wp-smiley, IP.Board/twemoji) are sized to match the surrounding text instead of rendering as full-size images; body images load with `referrerpolicy="no-referrer"` so hotlink-protected hosts (which swap a placeholder image when the referer is foreign) serve the real image, and known hotlink hosts are routed through the built-in image proxy so even a previously cached placeholder is bypassed
 - **Rachel by the Bay** support.
 
 ### Lead images
