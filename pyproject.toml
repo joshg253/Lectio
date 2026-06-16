@@ -29,6 +29,9 @@ dev = [
     "ty",
     "uv",
     "uvicorn[standard]>=0.44.0",
+    # starlette's TestClient prefers httpx2; without it the suite emits a
+    # StarletteDeprecationWarning. Test-only — production code still uses httpx.
+    "httpx2",
 ]
 
 [tool.ruff]
