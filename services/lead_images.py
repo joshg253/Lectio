@@ -1834,7 +1834,9 @@ class LeadImageService:
                 or self._TRACKER_URL_PATTERNS.search(parsed.path)
                 or self._TRACKER_URL_PATTERNS.search(image_url)):
             return False
-        if self._EMOJI_URL_PATTERNS.search(image_url):
+        # Match host+path only (not the query string) so a non-emoji asset with
+        # e.g. "?ref=twemoji" in its query isn't mistaken for an emoji sprite.
+        if self._EMOJI_URL_PATTERNS.search(parsed.netloc + parsed.path):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False

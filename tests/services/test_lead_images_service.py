@@ -501,6 +501,20 @@ def test_emoji_sprite_rejected_as_lead_image(tmp_path: Path):
         None,
         None,
     )
+    # Rejected even under non-default flags (the emoji check sits before the
+    # skip_logo_patterns logic, so it must hold regardless).
+    assert not service._is_image_url_acceptable(
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f643.png",
+        None,
+        None,
+        skip_logo_patterns=True,
+        allow_extensionless=True,
+    )
+    # A non-emoji asset that merely carries "twemoji" in its query string is NOT
+    # rejected (host+path match only).
+    assert service._is_image_url_acceptable(
+        "https://cdn.example.com/uploads/hero.jpg?ref=twemoji", None, None
+    )
     # A normal article image on an unrelated CDN is unaffected.
     assert service._is_image_url_acceptable(
         "https://cdn.example.com/uploads/hero.jpg", None, None

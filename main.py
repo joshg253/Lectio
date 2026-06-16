@@ -5519,6 +5519,8 @@ def add_no_referrer_to_images(content: str) -> str:
     request look like a direct hit, so hotlink-protected images load — and it
     avoids leaking the reader URL to image hosts.
     """
+    if "<img" not in content.lower():
+        return content
     return re.sub(
         r"<img\b(?![^>]*\breferrerpolicy\s*=)([^>]*?)(/?)>",
         r'<img\1 referrerpolicy="no-referrer"\2>',
@@ -5537,6 +5539,8 @@ def proxy_hotlink_images(content: str) -> str:
     server-side fetch carries no Referer — so the real image loads. srcset is
     dropped for these images so the proxied src is the one used.
     """
+    if "<img" not in content.lower():
+        return content
 
     def _rewrite(m: re.Match) -> str:
         tag = m.group(0)
