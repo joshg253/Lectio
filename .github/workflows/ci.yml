@@ -30,4 +30,6 @@ jobs:
         run: uv sync --frozen
 
       - name: Run test suite
-        run: uv run --frozen pytest -q
+        # -W error::DeprecationWarning fails the build on any deprecation so they
+        # surface immediately instead of accumulating silently.
+        run: uv run --frozen pytest -q -W error::DeprecationWarning
