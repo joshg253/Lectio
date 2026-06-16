@@ -76,6 +76,16 @@ def _make_conn(db_path: Path):
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feed_lead_image_strategy (
+            feed_url TEXT PRIMARY KEY,
+            strategy TEXT NOT NULL,
+            detected_at REAL,
+            manual INTEGER DEFAULT 0
+        )
+        """
+    )
     return conn
 
 
@@ -540,6 +550,69 @@ def test_source_scan_skips_nav_menu_icons(tmp_path: Path):
     service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
 
     assert service._fetch_source_lead_image("https://krita.org/en/posts/release/") is None
+
+
+def test_webcomic_panel_wins_over_generic_og_image(tmp_path: Path):
+    """ComicControl sites set a single generic site banner as og:image on every
+    page with a sane 1200x630 aspect ratio. The main comic panel (id="cc-comic")
+    must still win for webcomic feeds (regression: everblue-comic.com)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    fake_html = (
+        "<html><head>"
+        '<meta property="og:image" content="https://www.everblue-comic.com/files/og-image.jpg"/>'
+        '<meta property="og:image:width" content="1200"/>'
+        '<meta property="og:image:height" content="630"/>'
+        "</head><body>"
+        '<img title="At last." '
+        'src="https://www.everblue-comic.com/comics/1781177826-Vol1-Ch4-Page-143-144-339.jpg" '
+        'id="cc-comic" />'
+        "</body></html>"
+    )
+    service._fetch_page_html = lambda url, **kw: (fake_html, url, False)
+
+    # Without webcomic mode the curated og:image banner wins (existing behaviour).
+    assert (
+        service._fetch_source_lead_image("https://www.everblue-comic.com/comic/x")
+        == "https://www.everblue-comic.com/files/og-image.jpg"
+    )
+    # In webcomic mode the comic panel wins over the generic banner.
+    assert (
+        service._fetch_source_lead_image("https://www.everblue-comic.com/comic/x", is_webcomic=True)
+        == "https://www.everblue-comic.com/comics/1781177826-Vol1-Ch4-Page-143-144-339.jpg"
+    )
+
+
+def test_backfill_webcomic_prefers_source_panel_over_enclosure(tmp_path: Path):
+    """Webcomic feeds carry a small /comicsthumbs/ enclosure but the source page
+    has the full-resolution panel + hover text. Backfill must fall through the
+    enclosure to the source fetch (regression: everblue-comic.com)."""
+    feed_url = "https://www.everblue-comic.com/comic/rss/"
+    entry = _FakeEntry(
+        feed_url=feed_url,
+        entry_id="https://www.everblue-comic.com/comic/p",
+        link="https://www.everblue-comic.com/comic/p",
+    )
+    # RSS enclosure is the small thumbnail variant.
+    entry.enclosures = (
+        {"href": "https://www.everblue-comic.com/comicsthumbs/x-thumb.jpg", "type": "image/jpeg"},
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+    service.store_feed_strategy(feed_url, "webcomic", manual=True)
+
+    full_panel = "https://www.everblue-comic.com/comics/x-full.jpg"
+    calls: list[str] = []
+    service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel
+    # Webcomic feeds must NOT fetch the feed XML for media thumbs.
+    service._fetch_feed_media_thumbnails = lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("webcomic must skip _fetch_feed_media_thumbnails")
+    )
+
+    service.fetch_and_store_lead_images_for_feed(feed_url, force_retry_negative=True)
+
+    # The full-resolution source panel wins over the enclosure thumbnail,
+    # and is_webcomic=True is propagated to the source fetch.
+    assert service._cache[(feed_url, entry.id)] == full_panel
+    assert calls and calls[0][1].get("is_webcomic") is True
 
 
 def test_source_scan_skips_widget_images_but_keeps_article_image(tmp_path: Path):

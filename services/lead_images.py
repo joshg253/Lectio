@@ -1076,7 +1076,10 @@ class LeadImageService:
                 # For feeds manually locked to og_scrape, the source page is the
                 # authoritative image source — fall through even when an inline
                 # image exists (e.g. album cover) so we can find the real hero image.
-                if not (strategy == "og_scrape" and manual):
+                # Webcomic feeds behave the same way: the inline enclosure is only a
+                # small thumbnail (e.g. /comicsthumbs/) with no hover text, while the
+                # source page carries the full-resolution comic panel and its alt/title.
+                if not ((strategy == "og_scrape" and manual) or strategy == "webcomic"):
                     continue
 
             entry_link = str(getattr(entry, "link", "") or "")
@@ -1085,20 +1088,24 @@ class LeadImageService:
 
             # Check feed-level media thumbnails (e.g. NYT's media:thumbnail) before
             # doing a source-page fetch.  These are unavailable on reader Entry objects
-            # but are present in the raw RSS XML.
-            if feed_media_thumbs is None:
-                feed_media_thumbs = self._fetch_feed_media_thumbnails(feed_url)
-                # Piggyback strategy detection: if the feedparser parse returned any
-                # media thumbnails we know this is a media_rss feed.
-                if need_redetect and feed_media_thumbs:
-                    strategy = "media_rss"
-                    need_redetect = False
-            feed_thumb = feed_media_thumbs.get(entry_link)
-            if feed_thumb:
-                _found_media_rss = True
-                self.store_entry_lead_image(feed_url_str, entry_id_str, feed_thumb)
-                time.sleep(0.05)
-                continue
+            # but are present in the raw RSS XML.  Webcomic feeds skip this entirely:
+            # their RSS enclosure is the same small /comicsthumbs/ image, so we must
+            # reach the source-page fetch below to get the full-resolution panel and
+            # hover text — fetching the feed XML here would just be a wasted request.
+            if strategy != "webcomic":
+                if feed_media_thumbs is None:
+                    feed_media_thumbs = self._fetch_feed_media_thumbnails(feed_url)
+                    # Piggyback strategy detection: if the feedparser parse returned any
+                    # media thumbnails we know this is a media_rss feed.
+                    if need_redetect and feed_media_thumbs:
+                        strategy = "media_rss"
+                        need_redetect = False
+                feed_thumb = feed_media_thumbs.get(entry_link)
+                if feed_thumb:
+                    _found_media_rss = True
+                    self.store_entry_lead_image(feed_url_str, entry_id_str, feed_thumb)
+                    time.sleep(0.05)
+                    continue
 
             if self._plugin_should_skip_source_lookup(entry_link=entry_link):
                 self.store_entry_lead_image(feed_url_str, entry_id_str, None)
@@ -1551,6 +1558,36 @@ class LeadImageService:
         score += self._plugin_source_score_adjustment(source_url=source_url, attrs=attrs, resolved_url=resolved_url)
 
         return score
+
+    def _extract_webcomic_panel_image(self, html_text: str, base_url: str, source_url: str) -> str | None:
+        """Return the main comic-panel image for a webcomic source page, or None.
+
+        Scans for an <img> whose id/class marks it as the comic panel (e.g.
+        ComicControl's id="cc-comic", SMBC's, etc.). This is the webcomic's lead
+        image and must outrank og:image, which on many webcomic CMSes is a single
+        generic site banner repeated on every page.
+        """
+        for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            tag = tag_match.group(0)
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag):
+                key = attr_match.group(1).strip().lower()
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                if key and value:
+                    attrs[key] = value
+            img_id = (attrs.get("id") or "").strip()
+            img_class = (attrs.get("class") or "").strip()
+            if not (self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id) or self._WEBCOMIC_IMG_CLASS_RE.search(img_class)):
+                continue
+            for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
+                if not image_url or image_url.startswith("data:"):
+                    continue
+                resolved = urljoin(base_url, image_url)
+                if urlparse(resolved).path.lower().endswith(".svg"):
+                    continue
+                if self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
+                    return resolved
+        return None
 
     def _extract_preferred_source_image_url(self, html_text: str, base_url: str, source_url: str, is_webcomic: bool = False) -> str | None:
         url, _ = self._extract_preferred_source_image_data(html_text, base_url, source_url, is_webcomic=is_webcomic)
@@ -2354,6 +2391,16 @@ class LeadImageService:
         self._source_html_cache.move_to_end(entry_link)
         if len(self._source_html_cache) > self._SOURCE_HTML_CACHE_MAX:
             self._source_html_cache.popitem(last=False)
+
+        # Webcomic feeds: the main comic panel (e.g. ComicControl's id="cc-comic")
+        # is the lead image, and it takes priority over og:image. Many webcomic
+        # CMSes set a single generic site banner as og:image on every page; with a
+        # sane aspect ratio that banner would win the og:image early-return below
+        # and the actual comic would never be considered. Resolve the panel first.
+        if is_webcomic:
+            panel_image = self._extract_webcomic_panel_image(source_html, final_url, entry_link)
+            if panel_image:
+                return panel_image
 
         # og:image is explicitly curated by the publisher for this article.
         og_width, og_height = self._extract_og_image_dimensions(source_html)
