@@ -63,6 +63,38 @@ Phasing:
    DB), dry-run default, reversible, integrity-checked. `--apply` run on the real
    data; **multi-user live since 2026-06-14** (see `docs/multiuser-migration.md`).
 
+### Feed Properties — fetch history & automations
+
+- **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
+  feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
+  errors/backoff). Surfaces why a feed is stale or flagged problematic.
+- **Automations-applied view** — show which automations (auto-taggers, dedup,
+  strip rules, lead-image strategy overrides) have been applied to the feed, so
+  the user can see what Lectio is doing to a feed's content without reading code.
+
+### Podcast feeds — missing embedded audio
+
+- Some podcast feeds render without the inline `<audio>` player. The injector
+  (`_find_entry_audio_url` + the audio-player block in the entry route) only
+  fires for entries with an audio enclosure it recognizes; investigate feeds
+  whose audio lives in a non-standard enclosure/`media:content` shape or only in
+  the entry link, and broaden detection.
+
+### Feed rendering — plain-text & paywalled feeds (low priority)
+
+- **Bare-text feeds with literal URLs** (e.g. orpheus.network news): content is
+  empty and the summary is plain text with bare `https://…` URLs and
+  double-escaped `&lt;br&gt;`. The summary renders in a `<pre>` (template
+  `_entry_pane.html`), so URLs stay unclickable and the escaped breaks show as
+  literal text. The content_html pipeline already linkifies bare URLs and
+  normalizes `&lt;br&gt;`, but only runs when content_html exists. Consider
+  routing an HTML-ish/URL-bearing summary through the same pipeline instead of
+  the raw `<pre>` — scope carefully so genuinely plain text feeds are unaffected.
+- **Paywalled teaser feeds** (e.g. selfh.st): the feed ships only a "subscribe to
+  read the full-text RSS" stub; the full article is gated behind membership.
+  Readability/source-scrape can't bypass the paywall, so there's no clean fix
+  without the user's subscription. Documented as a known limitation.
+
 ### Later
 
 - **Shared-content tenancy mode** — one global feed/entry store + per-user

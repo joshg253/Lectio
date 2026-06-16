@@ -132,7 +132,20 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _TRACKER_URL_PATTERNS = re.compile(
-        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|piwik|matomo|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image)",
+        # statcounter — c.statcounter.com tracking pixels carry alt="Web Analytics"
+        # and ship as a 1x1 transparent GIF, which scales up to a grey thumbnail when
+        # mistaken for a lead image on an image-less post.
+        # addtoany/addthis/sharethis — social share-button widget sprites (e.g.
+        # static.addtoany.com/buttons/share_save_171_16.png, alt="Share"); never article content.
+        r"(?:scorecardresearch|doubleclick|googletagmanager|google-analytics|adservice|adsystem|pixel|beacon|analytics|statcounter|piwik|matomo|paypalobjects|paypal\.com|jetpack\.com/redirect|share[-_]image|addtoany|addthis|sharethis)",
+        re.IGNORECASE,
+    )
+    # Emoji image sprites embedded inline in post bodies (WordPress wp-smiley served
+    # from s.w.org, and IP.Board/twemoji from the twemoji CDN). They are meaningful
+    # inline (and sized to ~1em by CSS at render) but must never be picked as a post's
+    # lead image / thumbnail — they're decorative glyphs, not article content.
+    _EMOJI_URL_PATTERNS = re.compile(
+        r"(?:s\.w\.org/images/core/emoji/|/twemoji[/@]|gh/twitter/twemoji)",
         re.IGNORECASE,
     )
     # Advertisement images embedded in feed content / article bodies. Matched
@@ -1820,6 +1833,10 @@ class LeadImageService:
         if (self._TRACKER_URL_PATTERNS.search(parsed.netloc)
                 or self._TRACKER_URL_PATTERNS.search(parsed.path)
                 or self._TRACKER_URL_PATTERNS.search(image_url)):
+            return False
+        # Match host+path only (not the query string) so a non-emoji asset with
+        # e.g. "?ref=twemoji" in its query isn't mistaken for an emoji sprite.
+        if self._EMOJI_URL_PATTERNS.search(parsed.netloc + parsed.path):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
