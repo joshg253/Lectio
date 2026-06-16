@@ -34,3 +34,9 @@ jobs:
         # -W error::DeprecationWarning fails the build on any deprecation so they
         # surface immediately instead of accumulating silently.
         run: uv run --frozen pytest -q -W error::DeprecationWarning
+
+      - name: Audit dependencies
+        # `uv audit` (OSV-backed) is still a preview feature, so keep it
+        # informational — don't gate merges on it until it stabilizes.
+        continue-on-error: true
+        run: uv audit --preview-features audit --frozen
