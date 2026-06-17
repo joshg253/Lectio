@@ -1590,6 +1590,7 @@
           <dt>Read</dt><dd id="stat-entry-read">—</dd>
           <dt>Saved</dt><dd id="stat-archive-summary">—</dd>
           <dt>Thumb cache</dt><dd id="stat-thumb-summary">—</dd>
+          <dt>Image cache</dt><dd id="stat-img-cache-summary">—</dd>
           <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
           <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
           {% if youtube_sync_last_at %}
@@ -2295,7 +2296,7 @@
     }
 
     async function loadStatsData() {
-      const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-archive-summary', 'stat-thumb-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
+      const statIds = ['stat-feed-count', 'stat-folder-count', 'stat-entry-total', 'stat-entry-unread', 'stat-entry-read', 'stat-archive-summary', 'stat-thumb-summary', 'stat-img-cache-summary', 'stat-reader-db-size', 'stat-meta-db-size'];
       for (const id of statIds) {
         const el = document.getElementById(id);
         if (el) el.textContent = '…';
@@ -2320,6 +2321,8 @@
         document.getElementById('stat-archive-summary').textContent = archiveSummary;
         const thumbCount = (data.thumb_count || 0).toLocaleString();
         document.getElementById('stat-thumb-summary').textContent = `${thumbCount} (${formatBytes(data.thumb_db_bytes || 0)})`;
+        const imgCacheCount = (data.img_cache_count || 0).toLocaleString();
+        document.getElementById('stat-img-cache-summary').textContent = `${imgCacheCount} (${formatBytes(data.img_cache_db_bytes || 0)})`;
         document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
         document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
       } catch (_e) {

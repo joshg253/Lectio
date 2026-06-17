@@ -4,6 +4,12 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **`/api/img` server-side cache** — the image proxy now caches fetched bytes in
+  a global content-addressed store (`lectio_img_cache.sqlite`), downscaling to
+  `LECTIO_IMG_CACHE_MAX_DIM` and evicting on a last-accessed TTL
+  (`LECTIO_IMG_CACHE_DAYS`, 0 = unlimited) in daily maintenance. Tunable via env
+  + Administration page; size surfaced in `/stats`.
+
 ## Up next
 
 ### Multi-user — tenancy seam + isolated mode

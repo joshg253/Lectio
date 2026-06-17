@@ -185,7 +185,17 @@ one user's sender/account never becomes another's default.
 Content-addressed caches hold no per-user data and are shared across all users:
 
 - **`thumb_cache`** — keyed by `sha256(url|W|H|crop)`.
-- **`/api/img` proxy cache** — keyed by source URL.
+- **`img_cache`** (`lectio_img_cache.sqlite`) — the `/api/img` proxy cache, keyed
+  by `sha256(source_url)`, storing the (optionally downscaled) original bytes +
+  content-type + `created_at`/`last_accessed`/`size`. On a miss, the proxy does the
+  SSRF-guarded fetch, downscales to `LECTIO_IMG_CACHE_MAX_DIM` (longest side,
+  never upscaling; animated/SVG/unknown formats are stored byte-for-byte), then
+  stores and serves. Eviction is a **last-accessed TTL** run in daily global
+  maintenance (`_evict_img_cache`): entries not served within
+  `LECTIO_IMG_CACHE_DAYS` are dropped (0 = keep forever). Both tunables fall back
+  to env but admins can override them in the Administration page. Caching the
+  bytes server-side also lets images behind short-lived signed URLs (e.g.
+  `wixmp.com`) survive token expiry.
 - **`entry_lead_images` / `feed_strategy_cache`** — derived from public pages,
   keyed by feed + entry.
 

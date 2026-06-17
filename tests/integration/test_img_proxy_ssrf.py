@@ -8,10 +8,20 @@ stubbed so the test does no network or DNS I/O.
 from __future__ import annotations
 
 import httpx
+import pytest
 from starlette.testclient import TestClient
 
 import main
 from services import url_guard
+
+
+@pytest.fixture(autouse=True)
+def _clear_img_cache():
+    """/api/img now caches by URL hash; clear it so each test exercises a miss."""
+    main.ensure_img_cache_schema()
+    with main.get_img_cache_connection() as conn:
+        conn.execute("DELETE FROM img_cache")
+    yield
 
 
 def _client() -> TestClient:
