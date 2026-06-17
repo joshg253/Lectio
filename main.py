@@ -5045,6 +5045,94 @@ def get_feed_title_map() -> dict[str, str]:
     return titles
 
 
+_AUTOMATION_TYPE_LABELS = {
+    "highlight": "Highlight",
+    "mark_as_read": "Auto mark read",
+    "deduplicate": "Deduplicate",
+    "email_article": "Email article",
+}
+_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed"}
+
+
+def _automation_rule_detail(rule: dict) -> str:
+    """A short human description of what a rule does, per rule type."""
+    rule_type = str(rule.get("type", ""))
+    search_in = str(rule.get("search_in") or "title")
+    if rule_type == "highlight":
+        return f"{rule.get('color') or 'yellow'} · matches {search_in}"
+    if rule_type == "mark_as_read":
+        return f"matches {search_in}"
+    if rule_type == "deduplicate":
+        method = str(rule.get("keyword") or "slug")
+        window = int(rule.get("dedup_window_hours") or 24)
+        return f"{method} match · {window}h window"
+    if rule_type == "email_article":
+        to = str(rule.get("email_to") or "").strip()
+        return f"to {to}" if to else "email"
+    return ""
+
+
+def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict:
+    """Automations that act on this feed: configured rules in scope + recent runs.
+
+    Rules come from the highlight_keywords table (which holds every rule type, not
+    just highlights); a rule applies to this feed when its scope is global, this
+    feed directly, or a folder the feed belongs to. Recent runs come from
+    rule_run_log_entries, the per-entry record of what automation actually fired
+    on this feed's entries — so the user can see what Lectio is doing without
+    reading code."""
+    folder_id_set = {int(f) for f in folder_ids}
+    rules: list[dict] = []
+    for rule in get_highlight_keywords(conn):
+        scope = str(rule.get("scope", ""))
+        scope_id = str(rule.get("scope_id") or "")
+        if scope == "global":
+            applies = True
+        elif scope == "feed":
+            applies = scope_id == feed_url
+        elif scope == "folder":
+            applies = scope_id.isdigit() and int(scope_id) in folder_id_set
+        else:
+            applies = False
+        if not applies:
+            continue
+        rule_type = str(rule.get("type", ""))
+        rules.append({
+            "type": rule_type,
+            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+            "scope_label": _AUTOMATION_SCOPE_LABELS.get(scope, scope),
+            "keyword": str(rule.get("keyword") or ""),
+            "enabled": bool(rule.get("enabled")),
+            "detail": _automation_rule_detail(rule),
+        })
+
+    recent_runs: list[dict] = []
+    run_rows = conn.execute(
+        "SELECT l.run_at AS run_at, l.rule_type AS rule_type, l.keyword AS keyword,"
+        " l.trigger AS trigger, COUNT(e.entry_id) AS affected"
+        " FROM rule_run_log l JOIN rule_run_log_entries e ON e.log_id = l.id"
+        " WHERE e.feed_url = ?"
+        " GROUP BY l.id ORDER BY l.run_at DESC LIMIT 15",
+        (feed_url,),
+    ).fetchall()
+    for r in run_rows:
+        run_at_raw = r["run_at"]
+        try:
+            run_at = format_datetime_for_ui(datetime.fromisoformat(str(run_at_raw)))
+        except Exception:
+            run_at = str(run_at_raw or "")
+        rule_type = str(r["rule_type"] or "")
+        recent_runs.append({
+            "run_at": run_at,
+            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+            "keyword": str(r["keyword"] or ""),
+            "trigger": str(r["trigger"] or ""),
+            "affected": int(r["affected"] or 0),
+        })
+
+    return {"rules": rules, "recent_runs": recent_runs}
+
+
 def get_feed_properties(feed_url: str) -> dict:
     with get_reader() as reader:
         feed_obj = reader.get_feed(feed_url, None)
@@ -5169,6 +5257,9 @@ def get_feed_properties(feed_url: str) -> dict:
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
+            "automations": collect_feed_automations(
+                _pc, feed_url, [int(r["folder_id"]) for r in _folder_id_rows]
+            ),
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
