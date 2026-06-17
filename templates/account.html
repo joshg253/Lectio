@@ -117,6 +117,15 @@
       </label>
       {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
 
+      <h3>Image cache</h3>
+      <label class="fld">Retention (days, 0 = keep forever)
+        <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
+      </label>
+      <label class="fld">Max dimension (longest side, px; 0 = store originals)
+        <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
+      </label>
+      <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
+
       <div style="display:flex; gap:.5rem; margin-top:.75rem">
         <button type="button" id="adm-save">Save configuration</button>
         <button type="button" id="adm-run-maint">Run maintenance now</button>
@@ -144,6 +153,8 @@
         const payload = {
           email_from: $('adm-email-from')?.value.trim() || '',
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
+          img_cache_days: $('adm-img-cache-days')?.value.trim() || '',
+          img_cache_max_dim: $('adm-img-cache-max-dim')?.value.trim() || '',
         };
         const rk = $('adm-resend-key')?.value.trim();
         if (rk) payload.resend_api_key = rk;
