@@ -174,6 +174,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
 THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
+# Global, content-addressed (source-URL hash -> original image bytes) cache for the
+# /api/img proxy. Like the thumb cache, it holds no per-user data and is NOT routed
+# through tenancy. See ensure_img_cache_schema / api_img_proxy.
+IMG_CACHE_DB_PATH = DATA_DIR / "lectio_img_cache.sqlite"
 # Global, content-addressed (video_id -> duration): a fact about the video, not
 # per-user, so it's shared — a user without a YouTube key still gets durations
 # another user's key already fetched. Like the thumb cache, NOT routed through tenancy.
@@ -231,6 +235,8 @@ PROFILE_NAME_SETTING_KEY = "profile_name"
 PROFILE_EMAIL_SETTING_KEY = "profile_email"
 SETTING_TZ_DISPLAY = "tz_display"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
+SETTING_IMG_CACHE_DAYS = "img_cache_days"
+SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
 SETTING_YT_API_KEY = "yt_api_key"
 SETTING_YT_CHANNEL_ID = "yt_channel_id"
 SETTING_YT_FOLDER_NAME = "yt_folder_name"
@@ -288,6 +294,21 @@ def _static_asset_version() -> str:
 
 STATIC_ASSET_VERSION = os.getenv("LECTIO_ASSET_VERSION") or _static_asset_version()
 REFRESH_DEBUG_ENABLED = os.getenv("LECTIO_REFRESH_DEBUG", "0") == "1"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+# /api/img proxy cache tuning (instance-level; admins can override in the
+# Administration page, which takes precedence over these env fallbacks).
+#   LECTIO_IMG_CACHE_DAYS    last-accessed TTL in days; 0 = keep forever (default 90)
+#   LECTIO_IMG_CACHE_MAX_DIM longest-side px to downscale stored images to (default 3840)
+_ENV_IMG_CACHE_DAYS = _env_int("LECTIO_IMG_CACHE_DAYS", 90)
+_ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 # Public base URL of this instance (e.g. https://lectio.example.com).
 # Required for WebSub: hubs need a reachable callback URL.  Leave blank to disable WebSub.
@@ -532,6 +553,33 @@ def get_maintenance_hour() -> int | None:
             pass
     return _ENV_MAINTENANCE_HOUR
 
+
+def get_img_cache_days() -> int:
+    """Last-accessed TTL (days) for the /api/img cache. 0 = keep forever.
+    DB override (admin-managed) takes precedence over the env fallback."""
+    val = get_runtime_setting(SETTING_IMG_CACHE_DAYS, "")
+    if val:
+        try:
+            d = int(val)
+            if d >= 0:
+                return d
+        except ValueError:
+            pass
+    return _ENV_IMG_CACHE_DAYS
+
+
+def get_img_cache_max_dim() -> int:
+    """Longest-side px to downscale cached images to. 0 = store originals as-is."""
+    val = get_runtime_setting(SETTING_IMG_CACHE_MAX_DIM, "")
+    if val:
+        try:
+            d = int(val)
+            if d >= 0:
+                return d
+        except ValueError:
+            pass
+    return _ENV_IMG_CACHE_MAX_DIM
+
 # --- Auth config ---
 # Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
 # If either is absent, auth is disabled (safe for local-only use).
@@ -749,6 +797,7 @@ async def lifespan(app: FastAPI):
     _attach_pending_access_filter()
     ensure_meta_schema()
     ensure_thumb_schema()
+    ensure_img_cache_schema()
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
     bootstrap_admin()
@@ -1679,6 +1728,37 @@ def ensure_thumb_schema() -> None:
                 created_at REAL NOT NULL
             )
             """
+        )
+
+
+def get_img_cache_connection() -> sqlite3.Connection:
+    """Connection to the global (shared) /api/img proxy cache."""
+    conn = sqlite3.connect(str(IMG_CACHE_DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_img_cache_schema() -> None:
+    with get_img_cache_connection() as conn:
+        # WAL for concurrent readers; cached bytes are regeneratable so
+        # synchronous=NORMAL is the right durability/throughput tradeoff.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS img_cache (
+                cache_key TEXT PRIMARY KEY,
+                content_type TEXT NOT NULL,
+                body BLOB NOT NULL,
+                size INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                last_accessed REAL NOT NULL
+            )
+            """
+        )
+        # Eviction scans by last_accessed; index keeps the daily sweep cheap.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_img_cache_last_accessed ON img_cache(last_accessed)"
         )
 
 
@@ -8449,9 +8529,31 @@ def _daily_maintenance_for_user() -> None:
         set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
 
 
+def _evict_img_cache() -> None:
+    """Drop /api/img cache entries not served within the configured TTL. The TTL
+    is on last_accessed (not created_at), so actively-browsed images stay cached
+    and only stale/long-unread ones age out. 0 days = keep forever (no eviction)."""
+    days = get_img_cache_days()
+    if days <= 0:
+        return
+    cutoff = time.time() - days * 86400
+    try:
+        with get_img_cache_connection() as conn:
+            cur = conn.execute("DELETE FROM img_cache WHERE last_accessed < ?", (cutoff,))
+            LOGGER.info("[maintenance] img cache: evicted %d entries older than %d days", cur.rowcount, days)
+    except Exception:
+        LOGGER.exception("[maintenance] img cache eviction failed")
+
+
 def _run_global_maintenance() -> None:
-    """Nightly cleanup that is not per-user: VACUUM the shared (global) caches."""
-    for label, path in (("thumb", THUMB_DB_PATH), ("yt-durations", YT_DURATION_DB_PATH)):
+    """Nightly cleanup that is not per-user: evict stale /api/img cache entries,
+    then VACUUM the shared (global) caches."""
+    _evict_img_cache()
+    for label, path in (
+        ("thumb", THUMB_DB_PATH),
+        ("img-cache", IMG_CACHE_DB_PATH),
+        ("yt-durations", YT_DURATION_DB_PATH),
+    ):
         try:
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
@@ -9116,6 +9218,8 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
             "email_from": get_resend_from(),
             "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
             "maintenance_last": maint_last,
+            "img_cache_days": get_img_cache_days(),
+            "img_cache_max_dim": get_img_cache_max_dim(),
             "static_asset_version": STATIC_ASSET_VERSION,
         },
     )
@@ -11350,6 +11454,7 @@ async def save_all_settings(request: Request):
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
@@ -11362,6 +11467,7 @@ async def save_all_settings(request: Request):
     _ADMIN_ONLY = {
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
+        SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
     }
     is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
 
@@ -12904,9 +13010,111 @@ def api_unread_counts() -> JSONResponse:
     return JSONResponse(counts)
 
 
+# Formats we re-encode when downscaling /api/img cache entries. Anything else
+# (SVG, animated GIF/APNG, unknown) is stored byte-for-byte so we never flatten
+# an animation or corrupt a vector image.
+_IMG_DOWNSCALE_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
+
+# Default freshness hint for cache hits (the upstream Cache-Control is gone by then).
+_IMG_CACHE_CONTROL = "public, max-age=86400"
+
+# Safety caps for proxied/cached images — the bytes are untrusted remote input.
+#  - Byte cap: an oversized response is served through but NOT decoded or cached,
+#    so a single huge image can't bloat the cache DB or be re-encoded in memory.
+#  - Pixel cap: img.resize() materializes the *full source* bitmap (a 12000x8000
+#    image is ~275 MB of RGB), so we skip downscaling above this and store the
+#    original bytes instead — the browser decodes them, not our worker. This
+#    closes a decompression-bomb / memory-DoS vector that Pillow's default
+#    MAX_IMAGE_PIXELS (only trips at ~2x ~89 Mpx) leaves open.
+_IMG_CACHE_MAX_BYTES = 16 * 1024 * 1024   # 16 MB
+_IMG_MAX_DECODE_PIXELS = 40_000_000       # 40 megapixels
+
+
+def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]:
+    """Downscale so the longest side is <= max_dim, preserving aspect ratio and
+    never upscaling. Returns (bytes, content_type). The content_type is None when
+    the original bytes are returned unchanged (animated/vector/unknown formats,
+    already-small images, max_dim<=0, or any failure) so the caller keeps the
+    upstream content-type."""
+    if max_dim <= 0:
+        return raw, None
+    try:
+        img = _PILImage.open(io.BytesIO(raw))
+        fmt = (img.format or "").upper()
+        # Don't touch animations (would flatten) or formats we don't re-encode.
+        if fmt not in _IMG_DOWNSCALE_FORMATS or getattr(img, "is_animated", False):
+            return raw, None
+        w, h = img.size
+        if max(w, h) <= max_dim:
+            return raw, None  # already small enough; never upscale
+        if w * h > _IMG_MAX_DECODE_PIXELS:
+            # Too large to resize safely (resize loads the whole source bitmap);
+            # store the original bytes rather than materialize it in the worker.
+            return raw, None
+        scale = max_dim / max(w, h)
+        new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        buf = io.BytesIO()
+        if fmt == "JPEG":
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="JPEG", quality=90, optimize=True)
+            return buf.getvalue(), "image/jpeg"
+        if fmt == "PNG":
+            # P/1-bit modes resize poorly; promote to RGBA to keep transparency.
+            if img.mode in ("P", "1"):
+                img = img.convert("RGBA")
+            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="PNG", optimize=True)
+            return buf.getvalue(), "image/png"
+        # WEBP
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        img.resize(new_size, _PILImage.LANCZOS).save(buf, format="WEBP", quality=90, method=4)
+        return buf.getvalue(), "image/webp"
+    except Exception:
+        return raw, None
+
+
+def _img_cache_get(cache_key: str) -> tuple[bytes, str] | None:
+    """Return (body, content_type) for a cache hit and bump last_accessed (the
+    last-accessed TTL is what keeps actively-browsed images alive). None on miss."""
+    try:
+        with get_img_cache_connection() as conn:
+            row = conn.execute(
+                "SELECT body, content_type FROM img_cache WHERE cache_key = ?", (cache_key,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE img_cache SET last_accessed = ? WHERE cache_key = ?",
+                (time.time(), cache_key),
+            )
+            return bytes(row["body"]), row["content_type"]
+    except Exception:
+        # Non-fatal (we fall back to a fetch), but log so a failing cache backend
+        # — DB corruption, permissions, schema drift — isn't silently invisible.
+        LOGGER.warning("[img-cache] read failed for %s; treating as miss", cache_key, exc_info=True)
+        return None
+
+
+def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
+    now = time.time()
+    try:
+        with get_img_cache_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO img_cache
+                    (cache_key, content_type, body, size, created_at, last_accessed)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (cache_key, content_type, body, len(body), now, now),
+            )
+    except Exception:
+        LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
+
+
 @app.get("/api/img")
 async def api_img_proxy(u: str) -> Response:
-    """Server-side image proxy.
+    """Server-side image proxy with a content-addressed cache.
 
     Fetches external images on behalf of the browser so that
     Cross-Origin-Resource-Policy restrictions (same-site / same-origin) set by
@@ -12914,9 +13122,20 @@ async def api_img_proxy(u: str) -> Response:
     Only http:// and https:// URLs are accepted. SSRF is prevented by
     url_guard.safe_get_async, which validates the initial URL and every redirect
     hop against private / loopback / link-local IP space.
+
+    On a cache miss the fetched bytes are optionally downscaled (longest side ->
+    LECTIO_IMG_CACHE_MAX_DIM) and stored in the global img_cache, keyed by a hash
+    of the source URL. Entries are evicted by last-accessed TTL in daily
+    maintenance (see _run_global_maintenance), so this also makes hotlink images
+    behind short-lived signed URLs (e.g. wixmp) survive token expiry.
     """
     if urlparse(u).scheme not in ("http", "https"):
         return Response(status_code=400)
+    cache_key = hashlib.sha256(u.encode("utf-8")).hexdigest()
+    cached = _img_cache_get(cache_key)
+    if cached is not None:
+        body, content_type = cached
+        return Response(content=body, media_type=content_type, headers={"Cache-Control": _IMG_CACHE_CONTROL})
     try:
         # follow_redirects=False so safe_get_async controls (and re-validates)
         # each hop instead of httpx silently bouncing to an internal address.
@@ -12931,9 +13150,18 @@ async def api_img_proxy(u: str) -> Response:
     content_type = resp.headers.get("content-type", "")
     if not content_type.startswith("image/"):
         return Response(status_code=422)
-    cache_ctrl = resp.headers.get("cache-control", "public, max-age=86400")
+    body = resp.content
+    cache_ctrl = resp.headers.get("cache-control", _IMG_CACHE_CONTROL)
+    if len(body) > _IMG_CACHE_MAX_BYTES:
+        # Too large to cache/re-encode; pass the original through untouched so it
+        # still displays, but don't decode or store it.
+        return Response(content=body, media_type=content_type, headers={"Cache-Control": cache_ctrl})
+    downscaled, new_ct = _maybe_downscale_image(body, get_img_cache_max_dim())
+    if new_ct is not None:
+        body, content_type = downscaled, new_ct
+    _img_cache_store(cache_key, body, content_type)
     return Response(
-        content=resp.content,
+        content=body,
         media_type=content_type,
         headers={"Cache-Control": cache_ctrl},
     )
@@ -12977,6 +13205,7 @@ def get_stats():
     reader_db_bytes = _db_bytes(tenancy.reader_db_path())
     meta_db_bytes = _db_bytes(tenancy.meta_db_path())
     thumb_db_bytes = _db_bytes(THUMB_DB_PATH)
+    img_cache_db_bytes = _db_bytes(IMG_CACHE_DB_PATH)
     starred_archive_db_bytes = _db_bytes(tenancy.starred_archive_db_path())
     archive_stats = starred_archive_service.get_stats()
 
@@ -12985,6 +13214,14 @@ def get_stats():
         with get_thumb_connection() as conn:
             row = conn.execute("SELECT COUNT(*) AS c FROM thumb_cache").fetchone()
             thumb_count = int(row["c"]) if row else 0
+    except Exception:
+        pass
+
+    img_cache_count = 0
+    try:
+        with get_img_cache_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM img_cache").fetchone()
+            img_cache_count = int(row["c"]) if row else 0
     except Exception:
         pass
 
@@ -13000,6 +13237,8 @@ def get_stats():
             "meta_db_bytes": meta_db_bytes,
             "thumb_db_bytes": thumb_db_bytes,
             "thumb_count": thumb_count,
+            "img_cache_db_bytes": img_cache_db_bytes,
+            "img_cache_count": img_cache_count,
             "starred_archive_db_bytes": starred_archive_db_bytes,
             "starred_archive_complete": archive_stats["complete"],
             "starred_archive_pending": archive_stats["pending"],
