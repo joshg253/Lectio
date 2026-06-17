@@ -83,14 +83,18 @@ Phasing:
 Phase 1 (public galleries via OAuth2 **client-credentials**, rendered to `file://`
 feeds) and Phase 2 (the **authorization_code** flow: per-user connect/disconnect,
 token refresh, watch-list → feeds sync (add-only), and push-galleries → DA watch
-list) are both **done**. Remaining:
-- **Auto watch-list sync** on a schedule (currently manual via the Settings
-  button) — fold into daily maintenance like the YouTube sync, for connected users.
-- **Mature deviations** — the user token unlocks full-resolution mature content;
-  confirm the gallery fetch passes the user token (not just the app token) for
-  connected users so `!NSFW`-folder images aren't withheld/blurred.
-- **wixmp hotlink images** — if DeviantArt's `wixmp.com` image URLs 403 on
-  hotlink, add `wixmp.com` to the `/api/img` proxy allowlist.
+list) are both **done**. Follow-ups all resolved:
+- ~~**Auto watch-list sync**~~ — DONE. `sync_deviantart_watchlist` now runs in
+  `_daily_maintenance_for_user` for connected users (gated on a user token),
+  alongside the YouTube sync; still available on demand from the Settings button.
+  Test: `tests/integration/test_deviantart_maintenance_sync.py`.
+- ~~**Mature deviations**~~ — already correct. Every connected refresh path
+  (watch-list sync, watch feed, scheduled + manual `refresh_all_deviantart_feeds`)
+  passes `get_deviantart_user_token()` into `fetch_gallery`/`fetch_watch_feed`,
+  and both always send `mature_content=true`. The only token-less caller is the
+  not-connected standalone-gallery fallback, which has no user token by design.
+- ~~**wixmp hotlink images**~~ — already handled. `wixmp.com` is in
+  `_HOTLINK_IMG_HOSTS`, so its `<img>` URLs route through the `/api/img` proxy.
 
 ### Podcast feeds — missing embedded audio
 
