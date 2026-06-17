@@ -511,6 +511,26 @@ class LeadImageService:
         except Exception:
             pass
 
+    def _load_cached_url_from_db(self, feed_url: str, entry_id: str) -> str | None:
+        """Read one stored lead-image URL from the DB and warm the in-memory cache.
+
+        Caches the result (including an explicit "no row found" miss) so repeat
+        lookups stay in memory. A DB *error* is NOT cached: caching None on a
+        transient failure would turn it into a permanent negative entry for the
+        life of the process, hiding a valid stored image until restart.
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                row = conn.execute(
+                    "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone()
+        except Exception:
+            return None
+        url = row["image_url"] if row else None
+        self._cache[(feed_url, entry_id)] = url
+        return url
+
     def store_entry_lead_image(self, feed_url: str, entry_id: str, image_url: str | None) -> None:
         """Persist a discovered (or absent) lead image to DB and in-memory cache."""
         fetched_at = time.time()
@@ -647,7 +667,14 @@ class LeadImageService:
             return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" if video_id else None
         if feed_url and self._is_feed_none_strategy(feed_url):
             return None
-        cached = self._cache.get((feed_url, entry_id))
+        key = (feed_url, entry_id)
+        if key in self._cache:
+            cached = self._cache[key]
+        else:
+            # Read-through: the in-memory cache is seeded once at startup under the
+            # default tenancy, so a restart (or a different user) leaves it cold.
+            # Fall back to the per-user DB so stored lead images survive restarts.
+            cached = self._load_cached_url_from_db(feed_url, entry_id)
         if not cached:
             return None
         if self._should_bypass_cached_url(entry_link=entry_link, cached_url=cached):
@@ -1817,6 +1844,13 @@ class LeadImageService:
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
+        # DeviantArt's image CDN (wixmp) serves authoritative deviation images via
+        # long auto-generated filenames/UUIDs that trip the junk/avatar/ad heuristics
+        # with false positives (e.g. "…profile…" in a title, "ad87" in a UUID). We
+        # only ever pass it API-provided content images, so trust the host.
+        _nl = parsed.netloc.lower()
+        if _nl == "wixmp.com" or _nl.endswith(".wixmp.com"):
+            return True
         # An image hosted under the post's own URL directory is the post's own
         # asset, not site chrome — so a content hero named "…-logo.png" (e.g. a
         # product logo that IS the article image) must not be dropped by the

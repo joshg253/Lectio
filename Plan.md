@@ -72,6 +72,20 @@ Phasing:
   strip rules, lead-image strategy overrides) have been applied to the feed, so
   the user can see what Lectio is doing to a feed's content without reading code.
 
+### DeviantArt — remaining follow-ups
+
+Phase 1 (public galleries via OAuth2 **client-credentials**, rendered to `file://`
+feeds) and Phase 2 (the **authorization_code** flow: per-user connect/disconnect,
+token refresh, watch-list → feeds sync (add-only), and push-galleries → DA watch
+list) are both **done**. Remaining:
+- **Auto watch-list sync** on a schedule (currently manual via the Settings
+  button) — fold into daily maintenance like the YouTube sync, for connected users.
+- **Mature deviations** — the user token unlocks full-resolution mature content;
+  confirm the gallery fetch passes the user token (not just the app token) for
+  connected users so `!NSFW`-folder images aren't withheld/blurred.
+- **wixmp hotlink images** — if DeviantArt's `wixmp.com` image URLs 403 on
+  hotlink, add `wixmp.com` to the `/api/img` proxy allowlist.
+
 ### Podcast feeds — missing embedded audio
 
 - Some podcast feeds render without the inline `<audio>` player. The injector
@@ -94,6 +108,23 @@ Phasing:
   read the full-text RSS" stub; the full article is gated behind membership.
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
   without the user's subscription. Documented as a known limitation.
+
+### Bugs to investigate
+
+- **Tags don't show their articles** — clicking a tag isn't surfacing the tagged
+  articles in the list. Check the tag-filter query path (selected_tag →
+  list_entries_for_feeds) and the tag link wiring in the sidebar.
+- **YouTube video playback fails in the entry pane** — the inline player no longer
+  plays. Check the embed/iframe injection for YouTube entries and any CSP/referrer
+  or nocookie-domain changes.
+
+### Ideas
+
+- **Inline SVG as thumbnail/lead image** — some feeds ship an inline `<svg>` (or a
+  `data:image/svg+xml` / `.svg` URL) as the post art. Support rendering inline SVG
+  code as the thumbnail image (analogue to raster thumbs) — sanitize the SVG,
+  size/crop it like other thumbs, and decide caching (SVG is text, not a wixmp-style
+  binary). Scope safely (no scripts in SVG).
 
 ### Later
 
