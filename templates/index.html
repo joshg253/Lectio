@@ -1348,6 +1348,23 @@
           <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
           <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
         </div>
+        <h4 class="settings-section-title">DeviantArt</h4>
+        <div class="settings-section">
+          <label class="settings-label" for="sett-da-id">Client ID</label>
+          <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
+          <label class="settings-label" for="sett-da-secret">Client Secret</label>
+          <input type="password" id="sett-da-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          <label class="settings-label" for="sett-da-folder">Watch-feed folder</label>
+          <input type="text" id="sett-da-folder" class="settings-input" placeholder="DeviantArt" maxlength="200" autocomplete="off" />
+          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
+          <div class="settings-da-account" style="margin-top:0.5rem">
+            <span id="sett-da-status" class="settings-inline-status"></span>
+            <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect">Connect DeviantArt account</a>
+            <button type="button" id="sett-da-watchfeed" class="settings-inline-btn" hidden>Add Watch feed</button>
+            <button type="button" id="sett-da-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+            <span id="sett-da-action-status" class="settings-inline-status"></span>
+          </div>
+        </div>
         <h4 class="settings-section-title">Instapaper</h4>
         <div class="settings-section">
           <label class="settings-label" for="sett-ip-user">Username</label>
@@ -1375,22 +1392,54 @@
         <div class="feeds-tab-panel" data-feeds-panel="folders">
           {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
           {% if child_rows %}
+          {% set cadence_options = [(0, 'Global'), (1, '1 min'), (2, '2 min'), (5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '1 hr'), (120, '2 hr'), (360, '6 hr'), (720, '12 hr'), (1440, '1 day')] %}
+          <div class="feeds-folder-search">
+            <span class="material-symbols-rounded feeds-folder-search-icon" aria-hidden="true">search</span>
+            <input type="search" id="feeds-folder-search-input" class="feeds-folder-search-input" placeholder="Filter folders and feeds…" autocomplete="off" aria-label="Filter folders and feeds" />
+          </div>
           <table class="settings-folders-table">
-            <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th></th><th></th></tr></thead>
+            <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th></tr></thead>
             <tbody>
             {% for row in child_rows %}
             {% set failing = folder_failing_counts.get(row.id, 0) %}
-            <tr class="settings-folder-row">
-              <td class="settings-folder-name">{{ row.name }}</td>
-              <td class="settings-folder-feeds">{{ row.feed_count }}</td>
-              <td class="settings-folder-status">
+            {% set folder_feeds = settings_feeds_by_folder.get(row.id, []) %}
+            {% set cad = row.cadence_minutes or 0 %}
+            <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
+              <td class="settings-folder-name">
+                <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+                {{ row.name }}
                 {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
-                {% if row.cadence_minutes %}<span class="settings-folder-cadence" title="Custom refresh: every {{ row.cadence_minutes }} min">{{ row.cadence_minutes }}m</span>{% endif %}
+              </td>
+              <td class="settings-folder-feeds">{{ row.feed_count }}</td>
+              <td class="settings-folder-refresh">
+                <select class="settings-folder-cadence-select feed-prop-strategy-select" data-folder-id="{{ row.id }}" data-prev-value="{{ cad }}" title="Refresh frequency for this folder" aria-label="Refresh frequency for {{ row.name }}">
+                  {% for value, label in cadence_options %}
+                  <option value="{{ value }}"{% if value == cad %} selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
               </td>
               <td class="settings-folder-actions">
-                <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
+                <button type="button" class="settings-folder-props-btn" data-folder-automation-id="{{ row.id }}" title="Folder automation" aria-label="Folder automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
+                <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
               </td>
             </tr>
+            {% for feed in folder_feeds %}
+            <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" hidden>
+              <td class="settings-feed-name" colspan="3">
+                <button type="button" class="settings-feed-name-text settings-feed-name-btn" data-feed-properties-url="{{ feed.url }}"{% if feed.has_error %} data-feed-error="1"{% endif %} title="{{ feed.url }}">{{ feed.title }}</button>
+                {% if feed.has_error %}<span class="settings-folder-error-badge" title="Feed is failing">!</span>{% endif %}
+                {% if feed.disabled %}<span class="settings-feed-disabled-tag">disabled</span>{% endif %}
+              </td>
+              <td class="settings-folder-actions">
+                <button type="button" class="settings-folder-props-btn" data-feed-automation-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Feed automation" aria-label="Feed automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
+                {% if feed.disabled %}
+                <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-enable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Enable feed" aria-label="Enable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility</span></button>
+                {% else %}
+                <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-disable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Disable feed" aria-label="Disable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility_off</span></button>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
             {% endfor %}
             </tbody>
           </table>
@@ -8203,6 +8252,23 @@
         v('sett-yt-folder', d.yt_folder_name);
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
+        v('sett-da-id', d.deviantart_client_id);
+        secretField('sett-da-secret', d.deviantart_client_secret_set, d.deviantart_client_secret_masked);
+        v('sett-da-folder', d.deviantart_folder_name);
+        // DeviantArt account connection status + action buttons.
+        const daConnected = !!d.deviantart_connected;
+        const daStatus = document.getElementById('sett-da-status');
+        if (daStatus) daStatus.textContent = daConnected
+          ? `Connected as ${d.deviantart_username || 'DeviantArt'}.`
+          : 'Not connected.';
+        const daConnect = document.getElementById('sett-da-connect');
+        if (daConnect) daConnect.hidden = daConnected;
+        ['sett-da-watchfeed', 'sett-da-disconnect'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.hidden = !daConnected;
+        });
+        const daActionStatus = document.getElementById('sett-da-action-status');
+        if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
         settContacts = d.contacts || [];
         settDefaultAddress = d.email_to_default || '';
         settRenderContacts();
@@ -8313,6 +8379,9 @@
             yt_folder_name: g('sett-yt-folder'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
+            deviantart_client_id: g('sett-da-id'),
+            deviantart_client_secret: g('sett-da-secret'),
+            deviantart_folder_name: g('sett-da-folder'),
           };
         }
         try {
@@ -8344,6 +8413,43 @@
       // Contacts tab save is triggered by the Contacts save button
       document.getElementById('settings-tab-contacts')?.addEventListener('click', e => {
         if (e.target.closest('[data-settings-save="contacts"]')) settSave('contacts');
+      });
+
+      // DeviantArt: verify saved credentials by requesting an app token.
+      document.getElementById('sett-da-verify')?.addEventListener('click', async () => {
+        const status = document.getElementById('sett-da-verify-status');
+        if (status) status.textContent = 'Checking…';
+        try {
+          const resp = await fetch('/settings/deviantart/verify', { method: 'POST', credentials: 'same-origin' });
+          const d = await resp.json();
+          if (status) status.textContent = d.message || (d.ok ? 'OK' : 'Failed');
+        } catch (err) {
+          if (status) status.textContent = `Error: ${err.message || err}`;
+        }
+      });
+
+      const _daAction = async (endpoint, busyText, fmt) => {
+        const status = document.getElementById('sett-da-action-status');
+        if (status) status.textContent = busyText;
+        try {
+          const resp = await fetch(endpoint, { method: 'POST', credentials: 'same-origin' });
+          const d = await resp.json();
+          if (status) status.textContent = d.error ? `Error: ${d.error}` : fmt(d);
+        } catch (err) {
+          if (status) status.textContent = `Error: ${err.message || err}`;
+        }
+      };
+      document.getElementById('sett-da-watchfeed')?.addEventListener('click', () =>
+        _daAction('/deviantart/add-watch-feed', 'Adding…', d => d.message || 'Added.'));
+      document.getElementById('sett-da-sync')?.addEventListener('click', () =>
+        _daAction('/deviantart/sync-watchlist', 'Starting…',
+          () => 'Sync started in the background — this can take several minutes. Reopen Settings or refresh to see progress; new feeds appear in the DeviantArt folder as they load.'));
+      document.getElementById('sett-da-push')?.addEventListener('click', () =>
+        _daAction('/deviantart/push-watchlist', 'Pushing…',
+          d => `Watched ${d.watched}/${d.total} artists on DeviantArt${d.errors ? ` (${d.errors} failed)` : ''}.`));
+      document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
+        await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
       });
 
       document.getElementById('sett-maint-run-now')?.addEventListener('click', async () => {
@@ -8521,6 +8627,9 @@
         const json = await resp.json();
         if (!json.ok) throw new Error(json.error || 'save failed');
         if (status) status.textContent = '';
+        // Keep the inline Feeds-tab cadence dropdown in sync.
+        const inlineSel = document.querySelector(`.settings-folder-cadence-select[data-folder-id="${folderId}"]`);
+        if (inlineSel) { inlineSel.value = sel.value; inlineSel.dataset.prevValue = sel.value; }
       } catch (err) {
         if (status) status.textContent = `Error: ${err.message}`;
       }
@@ -8535,8 +8644,110 @@
       _folderPropCloseOnClick = false;
     });
 
+    // Feeds tab: keep the Deactivated tab's count badge in sync.
+    function bumpDeactivatedBadge(delta) {
+      const btn = document.querySelector('#settings-tab-feeds [data-feeds-view="deactivated"]');
+      if (!btn) return;
+      let badge = btn.querySelector('.feeds-tab-count');
+      const next = (badge ? parseInt(badge.textContent, 10) || 0 : 0) + delta;
+      if (next <= 0) { if (badge) badge.remove(); return; }
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'feeds-tab-count';
+        btn.appendChild(document.createTextNode(' '));
+        btn.appendChild(badge);
+      }
+      badge.textContent = String(next);
+    }
+
+    // Feeds tab: disable/enable a feed in place (row stays, greyed when disabled).
+    function toggleFeedDisabled(btn, url, folderId, disable) {
+      if (!url) return;
+      const row = btn.closest('.settings-feed-row');
+      btn.disabled = true;
+      const endpoint = disable ? '/feeds/disable' : '/feeds/enable';
+      const body = new URLSearchParams({ folder_id: folderId || '', feed_url: url });
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'lectio-feeds-tree', 'Content-Type': 'application/x-www-form-urlencoded' },
+        credentials: 'same-origin',
+        body: body.toString(),
+      })
+        .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); })
+        .then(() => {
+          btn.disabled = false;
+          if (row) {
+            row.classList.toggle('settings-feed-row--disabled', disable);
+            const nameCell = row.querySelector('.settings-feed-name');
+            let tag = row.querySelector('.settings-feed-disabled-tag');
+            if (disable && !tag && nameCell) {
+              tag = document.createElement('span');
+              tag.className = 'settings-feed-disabled-tag';
+              tag.textContent = 'disabled';
+              nameCell.appendChild(tag);
+            } else if (!disable && tag) {
+              tag.remove();
+            }
+          }
+          const icon = btn.querySelector('.material-symbols-rounded');
+          if (disable) {
+            btn.removeAttribute('data-feed-disable-url');
+            btn.dataset.feedEnableUrl = url;
+            btn.title = 'Enable feed';
+            btn.setAttribute('aria-label', 'Enable feed');
+            if (icon) icon.textContent = 'visibility';
+          } else {
+            btn.removeAttribute('data-feed-enable-url');
+            btn.dataset.feedDisableUrl = url;
+            btn.title = 'Disable feed';
+            btn.setAttribute('aria-label', 'Disable feed');
+            if (icon) icon.textContent = 'visibility_off';
+          }
+          bumpDeactivatedBadge(disable ? 1 : -1);
+          showToastMessage(disable ? 'Feed disabled.' : 'Feed enabled.');
+        })
+        .catch(err => {
+          btn.disabled = false;
+          showToastMessage(`${disable ? 'Disable' : 'Enable'} failed: ${err.message || err}`);
+        });
+    }
+
     // Feeds tab: folder properties buttons + Fix URL Titles button.
     document.getElementById('settings-tab-feeds')?.addEventListener('click', (e) => {
+      const toggleBtn = e.target.closest('[data-folder-toggle]');
+      if (toggleBtn) {
+        const fid = toggleBtn.dataset.folderToggle;
+        const expanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+        toggleBtn.setAttribute('aria-expanded', String(!expanded));
+        toggleBtn.title = expanded ? 'Show feeds' : 'Hide feeds';
+        document.querySelectorAll(`#settings-tab-feeds [data-folder-feeds="${CSS.escape(fid)}"]`).forEach(tr => { tr.hidden = expanded; });
+        return;
+      }
+
+      const folderAutoBtn = e.target.closest('[data-folder-automation-id]');
+      if (folderAutoBtn) { window.openHighlightsModal?.({ scope: 'folder', scope_id: folderAutoBtn.dataset.folderAutomationId }); return; }
+
+      const feedPropsBtn = e.target.closest('[data-feed-properties-url]');
+      if (feedPropsBtn) { openFeedPropertiesModal(feedPropsBtn.dataset.feedPropertiesUrl); return; }
+
+      const feedAutoBtn = e.target.closest('[data-feed-automation-url]');
+      if (feedAutoBtn) { window.openHighlightsModal?.({ scope: 'feed', scope_id: feedAutoBtn.dataset.feedAutomationUrl, folder_id: feedAutoBtn.dataset.folderId }); return; }
+
+      const feedDisableBtn = e.target.closest('[data-feed-disable-url]');
+      if (feedDisableBtn) {
+        const url = feedDisableBtn.dataset.feedDisableUrl;
+        const folderId = feedDisableBtn.dataset.folderId;
+        if (!url) return;
+        toggleFeedDisabled(feedDisableBtn, url, folderId, true);
+        return;
+      }
+
+      const feedEnableBtn = e.target.closest('[data-feed-enable-url]');
+      if (feedEnableBtn) {
+        toggleFeedDisabled(feedEnableBtn, feedEnableBtn.dataset.feedEnableUrl, feedEnableBtn.dataset.folderId, false);
+        return;
+      }
+
       const folderBtn = e.target.closest('[data-settings-folder-id]');
       if (folderBtn) { openFolderPropertiesModal(Number(folderBtn.dataset.settingsFolderId)); return; }
 
@@ -8563,6 +8774,83 @@
         return;
       }
     });
+
+    // Feeds tab: inline per-folder refresh cadence dropdowns.
+    document.getElementById('settings-tab-feeds')?.addEventListener('change', async (e) => {
+      const sel = e.target.closest('.settings-folder-cadence-select');
+      if (!sel) return;
+      const folderId = sel.dataset.folderId;
+      if (!folderId) return;
+      sel.disabled = true;
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, cadence_minutes: sel.value });
+        const resp = await fetch('/folders/cadence', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        sel.dataset.prevValue = sel.value;
+        // Keep the folder-properties modal cadence select in sync if it's showing this folder.
+        const modalSel = document.getElementById('folder-prop-cadence');
+        if (modalSel && modalSel.dataset.folderId === String(folderId)) modalSel.value = sel.value;
+        showToastMessage('Refresh frequency updated.');
+      } catch (err) {
+        showToastMessage(`Error: ${err.message || err}`);
+        if (sel.dataset.prevValue !== undefined) sel.value = sel.dataset.prevValue;
+      } finally {
+        sel.disabled = false;
+      }
+    });
+
+    // Feeds tab: live filter for the Folders list (folders + their feeds).
+    const folderSearchInput = document.getElementById('feeds-folder-search-input');
+    if (folderSearchInput) {
+      let _folderSearchTimer = null;
+      const applyFolderFilter = () => {
+        const q = folderSearchInput.value.trim().toLowerCase();
+        const table = document.querySelector('#settings-tab-feeds [data-feeds-panel="folders"] .settings-folders-table');
+        if (!table) return;
+        let anyVisible = false;
+        table.querySelectorAll('.settings-folder-row').forEach(folderRow => {
+          const fid = folderRow.dataset.folderRow;
+          const feedRows = table.querySelectorAll(`.settings-feed-row[data-folder-feeds="${CSS.escape(fid)}"]`);
+          const toggle = folderRow.querySelector('[data-folder-toggle]');
+          if (!q) {
+            folderRow.hidden = false;
+            feedRows.forEach(fr => { fr.hidden = true; });
+            if (toggle) toggle.setAttribute('aria-expanded', 'false');
+            anyVisible = true;
+            return;
+          }
+          // Match feed names only; show a folder solely when one of its feeds matches.
+          let anyFeedMatch = false;
+          feedRows.forEach(fr => {
+            const t = fr.querySelector('.settings-feed-name-text');
+            const feedMatch = !!t && t.textContent.toLowerCase().includes(q);
+            fr.hidden = !feedMatch;
+            if (feedMatch) anyFeedMatch = true;
+          });
+          folderRow.hidden = !anyFeedMatch;
+          if (anyFeedMatch) anyVisible = true;
+          if (toggle) toggle.setAttribute('aria-expanded', String(anyFeedMatch));
+        });
+        const panel = table.parentElement;
+        let empty = panel.querySelector('.feeds-folder-search-empty');
+        if (q && !anyVisible) {
+          if (!empty) {
+            empty = document.createElement('p');
+            empty.className = 'muted feeds-folder-search-empty';
+            panel.appendChild(empty);
+          }
+          empty.textContent = `No feeds match “${folderSearchInput.value.trim()}”.`;
+          empty.hidden = false;
+        } else if (empty) {
+          empty.hidden = true;
+        }
+      };
+      folderSearchInput.addEventListener('input', () => {
+        if (_folderSearchTimer) clearTimeout(_folderSearchTimer);
+        _folderSearchTimer = setTimeout(applyFolderFilter, 200);
+      });
+    }
 
     // Feeds tab: view switching (Folders / Failing / Deactivated / Duplicates).
     const feedsTab = document.getElementById('settings-tab-feeds');

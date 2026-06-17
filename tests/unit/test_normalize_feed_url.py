@@ -76,6 +76,23 @@ def test_www_reddit_unchanged():
     assert normalize_feed_url(url) == url
 
 
+@pytest.mark.parametrize("raw, expected", [
+    # Tapastic rebranded to Tapas; same /rss/series/<id> path.
+    ("https://tapastic.com/rss/series/626", "https://tapas.io/rss/series/626"),
+    ("http://tapastic.com/rss/series/4879", "http://tapas.io/rss/series/4879"),
+    ("https://www.tapastic.com/rss/series/19863", "https://tapas.io/rss/series/19863"),
+    # Host case-normalized before alias lookup.
+    ("https://Tapastic.com/rss/series/626", "https://tapas.io/rss/series/626"),
+])
+def test_tapastic_domain_rewritten(raw, expected):
+    assert normalize_feed_url(raw) == expected
+
+
+def test_tapas_io_unchanged():
+    url = "https://tapas.io/rss/series/626"
+    assert normalize_feed_url(url) == url
+
+
 @pytest.mark.parametrize("raw,expected", [
     # Scheme + host lowercased; path + query preserved (case-sensitive).
     ("HTTPS://Example.COM/Feed/Path?Q=AbC", "https://example.com/Feed/Path?Q=AbC"),
