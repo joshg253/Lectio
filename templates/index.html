@@ -1626,6 +1626,7 @@
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
         <button type="button" class="hl-tab-btn hl-tab-btn--active" data-feed-prop-tab="info" role="tab" aria-selected="true">Info</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="tuning" role="tab" aria-selected="false">Tuning</button>
+        <button type="button" class="hl-tab-btn" data-feed-prop-tab="automations" role="tab" aria-selected="false">Automations</button>
       </div>
       <div id="feed-prop-tab-info" class="feed-prop-tab-panel">
         <dl class="feed-properties-grid">
@@ -1797,6 +1798,16 @@
           <button type="button" id="feed-prop-flush-batch-btn" class="feed-prop-refresh-btn">Flush email batch queue</button>
           <span id="feed-prop-flush-batch-status" class="feed-prop-strategy-hint"></span>
         </div>
+      </div>
+      <div id="feed-prop-tab-automations" class="feed-prop-tab-panel" hidden>
+        <h4 class="feed-prop-section-title">Rules in effect</h4>
+        <p class="feed-prop-strategy-hint">Automations that act on this feed because they're scoped to it, its folder, or all feeds. Manage rules in Settings → Rules.</p>
+        <p id="feed-prop-automations-rules-empty" class="feed-prop-strat-empty muted" hidden>No rules apply to this feed.</p>
+        <ul id="feed-prop-automations-rules" class="feed-prop-automations-list"></ul>
+
+        <h4 class="feed-prop-section-title">Recent activity</h4>
+        <p id="feed-prop-automations-runs-empty" class="feed-prop-strat-empty muted" hidden>No automation has run on this feed yet.</p>
+        <ul id="feed-prop-automations-runs" class="feed-prop-automations-list"></ul>
       </div>
     </div>
   </div>
@@ -3037,6 +3048,7 @@
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
     const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
+    const feedPropTabAutomations = document.getElementById('feed-prop-tab-automations');
     const feedPropYtSection = document.getElementById('feed-prop-yt-section');
     const feedPropImgSection = document.getElementById('feed-prop-img-section');
     const feedPropDevSection = document.getElementById('feed-prop-dev-section');
@@ -3052,6 +3064,7 @@
         });
         if (feedPropTabInfo) feedPropTabInfo.hidden = tab !== 'info';
         if (feedPropTabTuning) feedPropTabTuning.hidden = tab !== 'tuning';
+        if (feedPropTabAutomations) feedPropTabAutomations.hidden = tab !== 'automations';
       });
     });
     let entryArticle = document.querySelector('.entry');
@@ -4019,6 +4032,7 @@
       });
       if (feedPropTabInfo) feedPropTabInfo.hidden = false;
       if (feedPropTabTuning) feedPropTabTuning.hidden = true;
+      if (feedPropTabAutomations) feedPropTabAutomations.hidden = true;
       feedPropertiesModal.removeAttribute('hidden');
 
       try {
@@ -4095,6 +4109,8 @@
         if (feedPropYtSection) feedPropYtSection.hidden = !isYoutubeFeed;
         if (feedPropImgSection) feedPropImgSection.hidden = isYoutubeFeed;
         if (feedPropDevSection) feedPropDevSection.hidden = !isDevFeed;
+
+        renderFeedAutomations(data.automations);
 
         if (feedPropHideShorts) {
           feedPropHideShorts.checked = !!data.hide_shorts;
@@ -4414,6 +4430,83 @@
                || (cacheRows || [])[0];
       if (feedPropCaptionAltPreview)   feedPropCaptionAltPreview.textContent   = row?.image_alt   || '';
       if (feedPropCaptionTitlePreview) feedPropCaptionTitlePreview.textContent = row?.image_title || '';
+    }
+
+    function renderFeedAutomations(automations) {
+      const rulesList = document.getElementById('feed-prop-automations-rules');
+      const rulesEmpty = document.getElementById('feed-prop-automations-rules-empty');
+      const runsList = document.getElementById('feed-prop-automations-runs');
+      const runsEmpty = document.getElementById('feed-prop-automations-runs-empty');
+      const rules = (automations && automations.rules) || [];
+      const runs = (automations && automations.recent_runs) || [];
+
+      if (rulesList) {
+        rulesList.replaceChildren();
+        rules.forEach(rule => {
+          const li = document.createElement('li');
+          li.className = 'feed-prop-automation-item' + (rule.enabled ? '' : ' feed-prop-automation-item--off');
+          const head = document.createElement('span');
+          head.className = 'feed-prop-automation-head';
+          const label = document.createElement('strong');
+          label.textContent = rule.type_label || 'Rule';
+          head.appendChild(label);
+          if (rule.keyword) {
+            const kw = document.createElement('code');
+            kw.className = 'feed-prop-automation-keyword';
+            kw.textContent = rule.keyword;
+            head.appendChild(kw);
+          }
+          const scope = document.createElement('span');
+          scope.className = 'feed-prop-automation-scope';
+          scope.textContent = rule.scope_label || '';
+          head.appendChild(scope);
+          if (!rule.enabled) {
+            const off = document.createElement('span');
+            off.className = 'feed-prop-automation-off';
+            off.textContent = 'disabled';
+            head.appendChild(off);
+          }
+          li.appendChild(head);
+          if (rule.detail) {
+            const detail = document.createElement('span');
+            detail.className = 'feed-prop-automation-detail muted';
+            detail.textContent = rule.detail;
+            li.appendChild(detail);
+          }
+          rulesList.appendChild(li);
+        });
+      }
+      if (rulesEmpty) rulesEmpty.hidden = rules.length > 0;
+
+      if (runsList) {
+        runsList.replaceChildren();
+        runs.forEach(run => {
+          const li = document.createElement('li');
+          li.className = 'feed-prop-automation-item';
+          const head = document.createElement('span');
+          head.className = 'feed-prop-automation-head';
+          const label = document.createElement('strong');
+          label.textContent = run.type_label || 'Rule';
+          head.appendChild(label);
+          if (run.keyword) {
+            const kw = document.createElement('code');
+            kw.className = 'feed-prop-automation-keyword';
+            kw.textContent = run.keyword;
+            head.appendChild(kw);
+          }
+          const count = document.createElement('span');
+          count.className = 'feed-prop-automation-scope';
+          count.textContent = `${run.affected} ${run.affected === 1 ? 'entry' : 'entries'}`;
+          head.appendChild(count);
+          li.appendChild(head);
+          const detail = document.createElement('span');
+          detail.className = 'feed-prop-automation-detail muted';
+          detail.textContent = (run.run_at || '') + (run.trigger ? ` · ${run.trigger}` : '');
+          li.appendChild(detail);
+          runsList.appendChild(li);
+        });
+      }
+      if (runsEmpty) runsEmpty.hidden = runs.length > 0;
     }
 
     function renderStrategyGrid(cacheRows) {

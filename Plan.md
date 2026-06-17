@@ -74,9 +74,11 @@ Phasing:
 - **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
   feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
   errors/backoff). Surfaces why a feed is stale or flagged problematic.
-- **Automations-applied view** — show which automations (auto-taggers, dedup,
-  strip rules, lead-image strategy overrides) have been applied to the feed, so
-  the user can see what Lectio is doing to a feed's content without reading code.
+- ~~**Automations-applied view**~~ — DONE. Feed Properties → **Automations** tab
+  shows the rules in effect for a feed (global / its folder / feed-scoped, from
+  `highlight_keywords`) plus recent runs that touched its entries (from
+  `rule_run_log_entries`). `collect_feed_automations` in main.py; tests in
+  `tests/integration/test_feed_automations.py`.
 
 ### DeviantArt — remaining follow-ups
 
@@ -148,6 +150,14 @@ list) are both **done**. Remaining:
 
 ## Backburner
 
+- **feed_strategy_cache migration ordering (latent)** — in `ensure_meta_schema`,
+  the `ALTER TABLE feed_strategy_cache ADD COLUMN image_alt/image_title`
+  statements run *before* the table's `CREATE TABLE IF NOT EXISTS`, so on a
+  brand-new meta DB the ALTERs hit "no such table" (swallowed) and the base
+  CREATE then makes the table without those columns — `get_feed_properties`
+  would `OperationalError: no such column: image_alt`. Existing DBs were
+  migrated before the reorder so they're fine; fix by moving the CREATE ahead of
+  the ALTERs (or folding the columns into the base CREATE).
 - **Deployment genericization (minimal, after multi-user phases)** — the app is
   already proxy-agnostic; the coupling is in packaging. Decided scope: make the
   base `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels),
