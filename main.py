@@ -209,7 +209,7 @@ def _da_seed_lead_image(feed_url: str, entry_id: str, image_url: str) -> None:
         if not lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, ""):
             lead_image_service.store_entry_lead_image(feed_url, entry_id, image_url)
     except Exception:
-        pass
+        LOGGER.exception("[deviantart] failed to seed lead image for %s", entry_id)
 
 
 deviantart_service.set_lead_image_sink(_da_seed_lead_image)
@@ -383,7 +383,12 @@ def get_deviantart_user_token() -> str:
     with get_meta_connection() as conn:
         access = get_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN) or ""
         refresh = get_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN) or ""
-        expires_at = float(get_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT) or 0)
+        try:
+            expires_at = float(get_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT) or 0)
+        except (TypeError, ValueError):
+            # A corrupt/manually-edited value must not break every token read;
+            # treat it as expired so we fall through to a forced refresh.
+            expires_at = 0.0
     if not access:
         return ""
     if time.time() < expires_at - 60:
@@ -423,12 +428,12 @@ def _apply_deviantart_image_strategy(conn: sqlite3.Connection, file_url: str) ->
     try:
         lead_image_service.store_feed_strategy(file_url, "inline", manual=True)
     except Exception:
-        pass
+        LOGGER.exception("[deviantart] failed to pin inline strategy for %s", file_url)
     try:
         conn.execute("INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING", (file_url,))
         conn.execute("UPDATE feed_display_prefs SET thumb_strategy = 'inline' WHERE feed_url = ?", (file_url,))
     except Exception:
-        pass
+        LOGGER.exception("[deviantart] failed to set inline thumb_strategy for %s", file_url)
 
 
 def sync_deviantart_watchlist() -> dict:

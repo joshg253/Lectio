@@ -514,19 +514,20 @@ class LeadImageService:
     def _load_cached_url_from_db(self, feed_url: str, entry_id: str) -> str | None:
         """Read one stored lead-image URL from the DB and warm the in-memory cache.
 
-        Caches the result (including a None/miss) so repeat lookups stay in memory.
+        Caches the result (including an explicit "no row found" miss) so repeat
+        lookups stay in memory. A DB *error* is NOT cached: caching None on a
+        transient failure would turn it into a permanent negative entry for the
+        life of the process, hiding a valid stored image until restart.
         """
-        url: str | None = None
         try:
             with self._get_meta_connection() as conn:
                 row = conn.execute(
                     "SELECT image_url FROM entry_lead_images WHERE feed_url = ? AND entry_id = ?",
                     (feed_url, entry_id),
                 ).fetchone()
-            if row:
-                url = row["image_url"]
         except Exception:
-            url = None
+            return None
+        url = row["image_url"] if row else None
         self._cache[(feed_url, entry_id)] = url
         return url
 

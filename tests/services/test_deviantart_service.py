@@ -208,6 +208,150 @@ def test_whoami_returns_username():
         assert da.whoami("TOKEN") == "me"
 
 
+# --- rate-limit handling (_request / DeviantArtRateLimited) ---
+
+def test_request_raises_rate_limited_after_max_retries(monkeypatch):
+    monkeypatch.setattr(da.time, "sleep", lambda *a, **k: None)  # no real backoff
+    client = _mock_client([(429, {})] * da._MAX_RETRIES)
+    with patch("httpx.Client", return_value=client) as mk:
+        with pytest.raises(da.DeviantArtRateLimited):
+            da._request("GET", "https://api/x", headers={})
+    assert client.request.call_count == da._MAX_RETRIES
+    assert mk.call_count == 1  # one client reused across all retries, not per-attempt
+
+
+def test_request_returns_after_429_then_success(monkeypatch):
+    monkeypatch.setattr(da.time, "sleep", lambda *a, **k: None)
+    client = _mock_client([(429, {}), (200, {"ok": True})])
+    with patch("httpx.Client", return_value=client) as mk:
+        resp = da._request("GET", "https://api/x", headers={})
+    assert resp.status_code == 200
+    assert client.request.call_count == 2
+    assert mk.call_count == 1
+
+
+def _da_conn_with_feeds(feed_ids):
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE deviantart_feeds (id TEXT PRIMARY KEY, username TEXT,"
+        " feed_title TEXT, created_at TEXT, last_synced_at TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE deviantart_entries (id TEXT PRIMARY KEY, deviantart_feed_id TEXT,"
+        " deviationid TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT,"
+        " UNIQUE(deviantart_feed_id, deviationid))"
+    )
+    for fid in feed_ids:
+        conn.execute("INSERT INTO deviantart_feeds VALUES (?, 'u', 't', 'now', NULL)", (fid,))
+    return conn
+
+
+def test_refresh_all_stops_on_rate_limit(monkeypatch):
+    """A 429 mid-batch must halt the cycle (not raise, not churn the remaining feeds)."""
+    conn = _da_conn_with_feeds(["f0", "f1", "f2"])
+    calls = {"n": 0}
+
+    def _boom(*a, **k):
+        calls["n"] += 1
+        raise da.DeviantArtRateLimited("limit")
+
+    monkeypatch.setattr(da, "refresh_deviantart_feed_by_id", _boom)
+    da.refresh_all_deviantart_feeds(conn, "cid", "sec", access_token="T")  # must not raise
+    assert calls["n"] == 1  # stopped after the first feed hit the limit
+
+
+# --- _upsert_entries lead-image seeding ---
+
+def test_upsert_entries_seeds_lead_image_sink():
+    conn = _da_conn_with_feeds(["FID"])
+    sink_calls = []
+    da.set_lead_image_sink(lambda *a: sink_calls.append(a))
+    try:
+        devs = [{"deviationid": "D1", "url": "https://da/p1", "title": "t1",
+                 "published_time": "1700000000", "content": {"src": "https://img/1.jpg"}}]
+        added = da._upsert_entries(conn, "FID", devs)
+    finally:
+        da.set_lead_image_sink(None)
+    assert added == 1
+    assert sink_calls == [(da.feed_file_url("FID"), "D1", "https://img/1.jpg")]
+
+
+def test_upsert_entries_no_sink_when_no_image():
+    conn = _da_conn_with_feeds(["FID"])
+    sink_calls = []
+    da.set_lead_image_sink(lambda *a: sink_calls.append(a))
+    try:
+        devs = [{"deviationid": "D2", "url": "https://da/p2", "title": "t2",
+                 "published_time": "1700000000"}]  # no content/thumbs -> empty image_src
+        added = da._upsert_entries(conn, "FID", devs)
+    finally:
+        da.set_lead_image_sink(None)
+    assert added == 1
+    assert sink_calls == []
+
+
+# --- _post_token: public vs confidential client ---
+
+def _token_client(responses):
+    """Like _mock_client but every response reports a JSON content-type, which
+    _post_token requires before reading the body."""
+    calls = {"i": 0}
+
+    def _resp(status, payload):
+        r = MagicMock()
+        r.status_code = status
+        r.json.return_value = payload
+        r.text = str(payload)
+        r.headers = {"content-type": "application/json"}
+        return r
+
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.__exit__.return_value = False
+
+    def _next(*a, **k):
+        idx = calls["i"]
+        calls["i"] += 1
+        return _resp(*responses[idx])
+
+    client.post.side_effect = _next
+    return client
+
+
+def test_post_token_sends_secret_first_for_confidential():
+    client = _token_client([(200, {"access_token": "A", "refresh_token": "R"})])
+    with patch("httpx.Client", return_value=client):
+        data = da._post_token({"grant_type": "refresh_token", "client_id": "c"}, "SECRET", "refresh")
+    assert data["access_token"] == "A"
+    assert client.post.call_count == 1
+    assert client.post.call_args_list[0].kwargs["data"].get("client_secret") == "SECRET"
+
+
+def test_post_token_falls_back_to_public_client_without_secret():
+    client = _token_client([(401, {"error": "invalid_client"}), (200, {"access_token": "A"})])
+    with patch("httpx.Client", return_value=client):
+        data = da._post_token({"grant_type": "refresh_token", "client_id": "c"}, "SECRET", "refresh")
+    assert data["access_token"] == "A"
+    assert client.post.call_count == 2
+    assert "client_secret" not in client.post.call_args_list[1].kwargs["data"]
+
+
+def test_post_token_raises_when_all_attempts_fail():
+    client = _token_client([(401, {"error": "invalid_client"}), (400, {"error": "bad_grant"})])
+    with patch("httpx.Client", return_value=client):
+        with pytest.raises(RuntimeError):
+            da._post_token({"grant_type": "refresh_token", "client_id": "c"}, "SECRET", "refresh")
+
+
+def test_refresh_access_token_returns_new_tokens():
+    client = _token_client([(200, {"access_token": "NEW", "refresh_token": "R2", "expires_in": 3600})])
+    with patch("httpx.Client", return_value=client):
+        data = da.refresh_access_token("cid", "sec", "oldrefresh")
+    assert data["access_token"] == "NEW" and data["refresh_token"] == "R2"
+
+
 def _call_with_json_ct(fn, *args):
     """Run an httpx-using fn where responses report JSON content-type."""
     import httpx  # noqa

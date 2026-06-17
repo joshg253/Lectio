@@ -1407,7 +1407,7 @@
             <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
               <td class="settings-folder-name">
                 <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
-                {{ row.name }}
+                <span class="settings-folder-name-text">{{ row.name }}</span>
                 {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
@@ -8441,12 +8441,6 @@
       };
       document.getElementById('sett-da-watchfeed')?.addEventListener('click', () =>
         _daAction('/deviantart/add-watch-feed', 'Adding…', d => d.message || 'Added.'));
-      document.getElementById('sett-da-sync')?.addEventListener('click', () =>
-        _daAction('/deviantart/sync-watchlist', 'Starting…',
-          () => 'Sync started in the background — this can take several minutes. Reopen Settings or refresh to see progress; new feeds appear in the DeviantArt folder as they load.'));
-      document.getElementById('sett-da-push')?.addEventListener('click', () =>
-        _daAction('/deviantart/push-watchlist', 'Pushing…',
-          d => `Watched ${d.watched}/${d.total} artists on DeviantArt${d.errors ? ` (${d.errors} failed)` : ''}.`));
       document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
@@ -8820,16 +8814,21 @@
             anyVisible = true;
             return;
           }
-          // Match feed names only; show a folder solely when one of its feeds matches.
+          // Match on folder name OR feed names (per the "Filter folders and
+          // feeds…" copy). A folder-name match reveals the folder with all its
+          // feeds; otherwise show only the feeds that match.
+          const nameEl = folderRow.querySelector('.settings-folder-name-text');
+          const folderMatch = !!nameEl && nameEl.textContent.toLowerCase().includes(q);
           let anyFeedMatch = false;
           feedRows.forEach(fr => {
             const t = fr.querySelector('.settings-feed-name-text');
-            const feedMatch = !!t && t.textContent.toLowerCase().includes(q);
+            const feedMatch = folderMatch || (!!t && t.textContent.toLowerCase().includes(q));
             fr.hidden = !feedMatch;
             if (feedMatch) anyFeedMatch = true;
           });
-          folderRow.hidden = !anyFeedMatch;
-          if (anyFeedMatch) anyVisible = true;
+          const showFolder = folderMatch || anyFeedMatch;
+          folderRow.hidden = !showFolder;
+          if (showFolder) anyVisible = true;
           if (toggle) toggle.setAttribute('aria-expanded', String(anyFeedMatch));
         });
         const panel = table.parentElement;
@@ -8840,7 +8839,7 @@
             empty.className = 'muted feeds-folder-search-empty';
             panel.appendChild(empty);
           }
-          empty.textContent = `No feeds match “${folderSearchInput.value.trim()}”.`;
+          empty.textContent = `No folders or feeds match “${folderSearchInput.value.trim()}”.`;
           empty.hidden = false;
         } else if (empty) {
           empty.hidden = true;
