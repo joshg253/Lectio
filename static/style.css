@@ -4318,6 +4318,38 @@ mark.highlight-mark {
 .highlight-mark-orange { background: #ffd0a0; color: #3a1a00; }
 
 /* ── Settings > Feeds > Folders table ───────────────────────────────────── */
+.feeds-folder-search {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 0 0.6rem;
+  padding: 0.4rem 0;
+  background: var(--elevated-bg);
+}
+.feeds-folder-search-icon {
+  position: absolute;
+  left: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 18px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.feeds-folder-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem 0.4rem 2rem;
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--input-bg, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.feeds-folder-search-input:focus {
+  outline: none;
+  border-color: var(--accent, #4a90d9);
+}
+.feeds-folder-search-empty { padding: 0.5rem 0; }
 .settings-folders-table {
   width: 100%;
   border-collapse: collapse;
@@ -4346,7 +4378,57 @@ mark.highlight-mark {
   width: 3rem;
 }
 .settings-folder-status { width: 5rem; text-align: right; }
-.settings-folder-actions { width: 2rem; text-align: right; padding-right: 0.25rem; }
+.settings-folder-actions { width: 3.75rem; text-align: right; white-space: nowrap; padding-right: 0.25rem; }
+.settings-folder-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  margin-right: 0.2rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  line-height: 1;
+}
+.settings-folder-toggle:hover:not(:disabled) { color: var(--ink); }
+.settings-folder-toggle:disabled { opacity: 0.25; cursor: default; }
+.settings-folder-toggle .material-symbols-rounded { font-size: 18px; transition: transform 0.12s ease; }
+.settings-folder-toggle[aria-expanded="true"] .material-symbols-rounded { transform: rotate(90deg); }
+.settings-folder-refresh { width: 6.5rem; }
+.settings-folder-cadence-select { font-size: 0.78rem; padding: 0.12rem 0.25rem; width: 100%; }
+.settings-feed-row td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  background: var(--hover-bg, rgba(0, 0, 0, 0.02));
+}
+.settings-feed-name { padding-left: 2.3rem !important; }
+.settings-feed-name-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.settings-feed-name-btn:hover { text-decoration: underline; }
+.settings-feed-name-text[data-feed-error] { color: var(--danger, #c0392b); }
+.settings-feed-row--disabled .settings-feed-name-text { color: var(--muted); font-style: italic; }
+.settings-feed-row--disabled .settings-folder-props-btn:not(.settings-feed-toggle-btn) { opacity: 0.5; }
+.settings-feed-disabled-tag {
+  margin-left: 0.4rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 0.4em;
+  vertical-align: middle;
+}
 .settings-folder-error-badge {
   display: inline-block;
   background: var(--danger, #c0392b);
@@ -5505,6 +5587,25 @@ textarea.hl-draft-pattern {
   line-height: 1.4;
 }
 .settings-maint-last { font-style: italic; }
+.settings-inline-btn {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+}
+.settings-inline-btn:hover { background: var(--hover-bg); }
+.settings-inline-status { font-size: 0.72rem; color: var(--muted); margin-left: 0.3rem; }
+.settings-da-account {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.settings-hint code { word-break: break-all; }
 .settings-actions {
   display: flex;
   gap: 0.5rem;
