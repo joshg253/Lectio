@@ -13018,6 +13018,17 @@ _IMG_DOWNSCALE_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
 # Default freshness hint for cache hits (the upstream Cache-Control is gone by then).
 _IMG_CACHE_CONTROL = "public, max-age=86400"
 
+# Safety caps for proxied/cached images — the bytes are untrusted remote input.
+#  - Byte cap: an oversized response is served through but NOT decoded or cached,
+#    so a single huge image can't bloat the cache DB or be re-encoded in memory.
+#  - Pixel cap: img.resize() materializes the *full source* bitmap (a 12000x8000
+#    image is ~275 MB of RGB), so we skip downscaling above this and store the
+#    original bytes instead — the browser decodes them, not our worker. This
+#    closes a decompression-bomb / memory-DoS vector that Pillow's default
+#    MAX_IMAGE_PIXELS (only trips at ~2x ~89 Mpx) leaves open.
+_IMG_CACHE_MAX_BYTES = 16 * 1024 * 1024   # 16 MB
+_IMG_MAX_DECODE_PIXELS = 40_000_000       # 40 megapixels
+
 
 def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]:
     """Downscale so the longest side is <= max_dim, preserving aspect ratio and
@@ -13036,6 +13047,10 @@ def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]
         w, h = img.size
         if max(w, h) <= max_dim:
             return raw, None  # already small enough; never upscale
+        if w * h > _IMG_MAX_DECODE_PIXELS:
+            # Too large to resize safely (resize loads the whole source bitmap);
+            # store the original bytes rather than materialize it in the worker.
+            return raw, None
         scale = max_dim / max(w, h)
         new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
         buf = io.BytesIO()
@@ -13075,6 +13090,9 @@ def _img_cache_get(cache_key: str) -> tuple[bytes, str] | None:
             )
             return bytes(row["body"]), row["content_type"]
     except Exception:
+        # Non-fatal (we fall back to a fetch), but log so a failing cache backend
+        # — DB corruption, permissions, schema drift — isn't silently invisible.
+        LOGGER.warning("[img-cache] read failed for %s; treating as miss", cache_key, exc_info=True)
         return None
 
 
@@ -13091,7 +13109,7 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
                 (cache_key, content_type, body, len(body), now, now),
             )
     except Exception:
-        pass
+        LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
 
 
 @app.get("/api/img")
@@ -13133,11 +13151,15 @@ async def api_img_proxy(u: str) -> Response:
     if not content_type.startswith("image/"):
         return Response(status_code=422)
     body = resp.content
+    cache_ctrl = resp.headers.get("cache-control", _IMG_CACHE_CONTROL)
+    if len(body) > _IMG_CACHE_MAX_BYTES:
+        # Too large to cache/re-encode; pass the original through untouched so it
+        # still displays, but don't decode or store it.
+        return Response(content=body, media_type=content_type, headers={"Cache-Control": cache_ctrl})
     downscaled, new_ct = _maybe_downscale_image(body, get_img_cache_max_dim())
     if new_ct is not None:
         body, content_type = downscaled, new_ct
     _img_cache_store(cache_key, body, content_type)
-    cache_ctrl = resp.headers.get("cache-control", _IMG_CACHE_CONTROL)
     return Response(
         content=body,
         media_type=content_type,

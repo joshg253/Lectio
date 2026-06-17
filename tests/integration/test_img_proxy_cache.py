@@ -89,6 +89,31 @@ def test_max_dim_zero_stores_original(monkeypatch):
     assert r.content == raw  # byte-for-byte; no re-encode
 
 
+def test_oversized_pixels_not_downscaled(monkeypatch):
+    # Source bitmap exceeds the decode-pixel cap → stored as-is, never resized
+    # (guards against materializing a huge/decompression-bomb image in the worker).
+    monkeypatch.setattr(main, "_IMG_MAX_DECODE_PIXELS", 100)  # 50x50 = 2500 > 100
+    monkeypatch.setattr(main, "get_img_cache_max_dim", lambda: 10)  # would normally downscale
+    raw = _png_bytes(50, 50)
+    _stub_fetch(monkeypatch, raw)
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://pub.test/huge-px.png"})
+    assert r.status_code == 200
+    assert r.content == raw  # original served, not downscaled to 10px
+
+
+def test_oversized_body_passed_through_not_cached(monkeypatch):
+    # Body larger than the byte cap is served but neither decoded nor cached.
+    monkeypatch.setattr(main, "_IMG_CACHE_MAX_BYTES", 10)
+    raw = _png_bytes(50, 50)  # comfortably more than 10 bytes
+    calls = _stub_fetch(monkeypatch, raw)
+    with _client() as client:
+        r1 = client.get("/api/img", params={"u": "https://pub.test/big-body.png"})
+        r2 = client.get("/api/img", params={"u": "https://pub.test/big-body.png"})
+    assert r1.status_code == 200 and r1.content == raw
+    assert calls["n"] == 2  # not cached → upstream fetched again on the 2nd request
+
+
 def test_animated_gif_not_flattened(monkeypatch):
     buf = io.BytesIO()
     frames = [Image.new("P", (4000, 4000), c) for c in (1, 2, 3)]
