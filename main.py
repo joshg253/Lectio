@@ -259,6 +259,10 @@ SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
 CHUNK_SIZE = 10
+# feed_fetch_history retention (pruned in daily maintenance): keep at most this
+# many rows per feed, and drop anything older than the age cap regardless.
+FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
+FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
 # In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
 # Values: True = same-site/same-origin (proxy needed), False = no restriction.
@@ -2122,6 +2126,27 @@ def ensure_meta_schema() -> None:
                 PRIMARY KEY (feed_url, strategy)
             )
             """
+        )
+        # Per-refresh fetch history — one row per non-skipped refresh attempt, so
+        # Feed Properties can show why a feed is stale or flagged problematic.
+        # Bounded by a per-feed cap + age prune in daily maintenance.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_fetch_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT NOT NULL,
+                fetched_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                http_status INTEGER,
+                new_entries INTEGER,
+                duration_ms INTEGER,
+                error TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS feed_fetch_history_by_feed"
+            " ON feed_fetch_history (feed_url, fetched_at DESC)"
         )
         conn.execute(
             """
@@ -5045,6 +5070,32 @@ def get_feed_title_map() -> dict[str, str]:
     return titles
 
 
+def get_feed_fetch_history(conn, feed_url: str, limit: int = 30) -> list[dict]:
+    """Recent per-refresh fetch attempts for a feed, newest first, for the
+    Feed Properties → History tab."""
+    rows = conn.execute(
+        "SELECT fetched_at, status, http_status, new_entries, duration_ms, error"
+        " FROM feed_fetch_history WHERE feed_url = ? ORDER BY fetched_at DESC LIMIT ?",
+        (feed_url, limit),
+    ).fetchall()
+    history: list[dict] = []
+    for r in rows:
+        raw_at = r["fetched_at"]
+        try:
+            fetched_at = format_datetime_for_ui(datetime.fromtimestamp(float(raw_at), tz=timezone.utc)) if raw_at else None
+        except Exception:
+            fetched_at = None
+        history.append({
+            "fetched_at": fetched_at,
+            "status": str(r["status"] or ""),
+            "http_status": r["http_status"],
+            "new_entries": r["new_entries"],
+            "duration_ms": r["duration_ms"],
+            "error": r["error"],
+        })
+    return history
+
+
 def get_feed_properties(feed_url: str) -> dict:
     with get_reader() as reader:
         feed_obj = reader.get_feed(feed_url, None)
@@ -5169,6 +5220,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
+            "fetch_history": get_feed_fetch_history(_pc, feed_url),
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
@@ -8461,6 +8513,32 @@ def _daily_maintenance_for_user() -> None:
                 LOGGER.info("[maintenance] pruned %d old rule run log entries", len(old_ids))
     except Exception:
         LOGGER.exception("[maintenance] rule log prune failed")
+
+    # 1b. Bound feed_fetch_history: keep the most recent FEED_FETCH_HISTORY_KEEP
+    # rows per feed and drop anything older than the age cap, so the diagnostic
+    # log can't grow without limit on busy installs.
+    try:
+        cutoff = time.time() - FEED_FETCH_HISTORY_MAX_AGE_DAYS * 86400
+        with get_meta_connection() as conn:
+            cur = conn.execute(
+                """
+                DELETE FROM feed_fetch_history WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (
+                            PARTITION BY feed_url ORDER BY fetched_at DESC
+                        ) AS rn FROM feed_fetch_history
+                    ) WHERE rn > ?
+                )
+                """,
+                (FEED_FETCH_HISTORY_KEEP,),
+            )
+            pruned = cur.rowcount
+            cur = conn.execute("DELETE FROM feed_fetch_history WHERE fetched_at < ?", (cutoff,))
+            pruned += cur.rowcount
+            if pruned:
+                LOGGER.info("[maintenance] pruned %d feed fetch-history rows", pruned)
+    except Exception:
+        LOGGER.exception("[maintenance] fetch-history prune failed")
 
     # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
     try:

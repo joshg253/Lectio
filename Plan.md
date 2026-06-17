@@ -71,9 +71,13 @@ Phasing:
 
 ### Feed Properties — fetch history & automations
 
-- **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
-  feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
-  errors/backoff). Surfaces why a feed is stale or flagged problematic.
+- ~~**Fetch-history tab**~~ — DONE. New `feed_fetch_history` table logs one row
+  per non-skipped refresh attempt (status, HTTP status, new-entry count,
+  duration, error) from `FeedRefreshService`; `get_feed_fetch_history` feeds the
+  Feed Properties → **History** tab (All / New entries / Errors filters).
+  Retention bounded in daily maintenance (`LECTIO_FETCH_HISTORY_KEEP` per feed,
+  `LECTIO_FETCH_HISTORY_MAX_AGE_DAYS` age cap). Tests:
+  `tests/integration/test_fetch_history.py`.
 - **Automations-applied view** — show which automations (auto-taggers, dedup,
   strip rules, lead-image strategy overrides) have been applied to the feed, so
   the user can see what Lectio is doing to a feed's content without reading code.
