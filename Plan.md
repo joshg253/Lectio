@@ -4,6 +4,11 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Tag filter fixed** — clicking a manual tag now surfaces every tagged entry,
+  not just those inside the newest-N fetch window. The tag is pushed into
+  reader's native `tags=` argument (SQL-side match across the whole library)
+  instead of being post-filtered over the truncated page window, which had
+  hidden tagged entries older than that window.
 - **`/api/img` server-side cache** — the image proxy now caches fetched bytes in
   a global content-addressed store (`lectio_img_cache.sqlite`), downscaling to
   `LECTIO_IMG_CACHE_MAX_DIM` and evicting on a last-accessed TTL
@@ -117,9 +122,6 @@ list) are both **done**. Remaining:
 
 ### Bugs to investigate
 
-- **Tags don't show their articles** — clicking a tag isn't surfacing the tagged
-  articles in the list. Check the tag-filter query path (selected_tag →
-  list_entries_for_feeds) and the tag link wiring in the sidebar.
 - **YouTube video playback fails in the entry pane** — the inline player no longer
   plays. Check the embed/iframe injection for YouTube entries and any CSP/referrer
   or nocookie-domain changes.
