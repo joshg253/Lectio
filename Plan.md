@@ -4,6 +4,11 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Inline YouTube player fixed** — the embed set `enablejsapi=1` without an
+  `origin=` parameter, which YouTube now refuses to play. Nothing in the app
+  drives the IFrame JS API, so the embed now uses YouTube's canonical markup
+  (`youtube-nocookie.com` host, `referrerpolicy`, no `enablejsapi`) via a single
+  `_youtube_embed_html` helper shared by both injection sites.
 - **`/api/img` server-side cache** — the image proxy now caches fetched bytes in
   a global content-addressed store (`lectio_img_cache.sqlite`), downscaling to
   `LECTIO_IMG_CACHE_MAX_DIM` and evicting on a last-accessed TTL
@@ -120,9 +125,6 @@ list) are both **done**. Remaining:
 - **Tags don't show their articles** — clicking a tag isn't surfacing the tagged
   articles in the list. Check the tag-filter query path (selected_tag →
   list_entries_for_feeds) and the tag link wiring in the sidebar.
-- **YouTube video playback fails in the entry pane** — the inline player no longer
-  plays. Check the embed/iframe injection for YouTube entries and any CSP/referrer
-  or nocookie-domain changes.
 
 ### Ideas
 
