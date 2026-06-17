@@ -5628,16 +5628,41 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+_AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
+
+
+def _url_has_audio_ext(url: str) -> bool:
+    """True if the URL's path ends in a known audio extension.
+
+    Matches on the path only, so a tracking/auth query string (e.g.
+    ``…/ep1.mp3?token=abc``) — common on podcast CDNs — doesn't defeat the
+    extension check the way a naive endswith on the whole URL would.
+    """
+    if not url:
+        return False
+    return urlparse(url).path.lower().endswith(_AUDIO_EXTS)
+
+
 def _find_entry_audio_url(entry) -> str | None:
-    """Return the first audio enclosure URL from an entry object, or None."""
+    """Return a usable audio URL for an entry, or None.
+
+    Checks, in order: audio enclosures (by MIME type, or an audio extension on
+    the URL path so query strings and untyped/oddly-typed enclosures still
+    match), then the entry link when it points straight at an audio file (some
+    podcast feeds carry no enclosure and set the link to the media URL).
+
+    Note: audio that lives only in ``<media:content>`` is not recoverable here —
+    the reader library keeps standard ``<enclosure>`` elements but drops
+    media:content, so it never reaches this entry object.
+    """
     for enc in (getattr(entry, "enclosures", None) or []):
         enc_url = getattr(enc, "href", None) or getattr(enc, "url", None) or ""
         enc_type = (getattr(enc, "type", None) or "").lower()
-        if enc_url and (
-            enc_type.startswith("audio/")
-            or any(enc_url.lower().endswith(ext) for ext in (".mp3", ".m4a", ".ogg", ".opus", ".wav"))
-        ):
+        if enc_url and (enc_type.startswith("audio/") or _url_has_audio_ext(enc_url)):
             return enc_url
+    link = getattr(entry, "link", None) or ""
+    if _url_has_audio_ext(link):
+        return link
     return None
 
 

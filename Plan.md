@@ -94,11 +94,16 @@ list) are both **done**. Remaining:
 
 ### Podcast feeds — missing embedded audio
 
-- Some podcast feeds render without the inline `<audio>` player. The injector
-  (`_find_entry_audio_url` + the audio-player block in the entry route) only
-  fires for entries with an audio enclosure it recognizes; investigate feeds
-  whose audio lives in a non-standard enclosure/`media:content` shape or only in
-  the entry link, and broaden detection.
+- ~~Broaden inline-audio detection~~ — DONE. `_find_entry_audio_url` now matches
+  enclosures by audio extension on the URL *path* (so `?token=` query strings and
+  untyped/oddly-typed enclosures still match), covers more extensions
+  (`.m4b/.aac/.oga/.flac`), and falls back to the entry link when it points
+  straight at an audio file. Test: `tests/unit/test_audio_detection.py`.
+- **Remaining (media:content):** audio that lives only in `<media:content>` still
+  isn't detected — the `reader` library keeps standard `<enclosure>` elements but
+  drops media:content, so it never reaches the entry object. Supporting it would
+  need re-parsing the raw feed (or a reader-layer change); deferred as a separate,
+  larger effort.
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 
