@@ -7037,6 +7037,27 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     return image_url
 
 
+def _youtube_embed_html(video_id: str) -> str:
+    """Inline YouTube player markup for a video id.
+
+    Matches YouTube's current canonical embed: the privacy-enhanced
+    ``youtube-nocookie.com`` host and ``referrerpolicy`` rather than the JS API.
+    We deliberately omit ``enablejsapi=1`` — nothing in the app drives the IFrame
+    JS API, and YouTube refuses playback when it is set without a matching
+    ``origin=`` parameter, which silently broke the inline player. Ampersands are
+    HTML-escaped because the result is injected into content_html (rendered with
+    ``| safe``)."""
+    src = f"https://www.youtube-nocookie.com/embed/{video_id}?rel=0"
+    return (
+        '<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
+        f'<iframe width="100%" height="315" src="{src}" title="YouTube video player" '
+        'frameborder="0" allowfullscreen loading="lazy" '
+        'referrerpolicy="strict-origin-when-cross-origin" '
+        'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
+        "></iframe></div>"
+    )
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7121,15 +7142,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 vid = youtube_duration_service.extract_video_id(raw_url)
                 if not vid:
                     return ""
-                params = "?rel=0&modestbranding=0&controls=1&enablejsapi=1"
-                embed_src = f"https://www.youtube.com/embed/{vid}{params}"
-                return (
-                    f'<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
-                    f'<iframe width="100%" height="315" src="{embed_src}" '
-                    'frameborder="0" allowfullscreen loading="lazy" '
-                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
-                    "></iframe></div>"
-                )
+                return _youtube_embed_html(vid)
             content_html = re.sub(
                 r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
                 r'\s*<a[^>]+href=["\']'
@@ -7154,17 +7167,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             base_html = content_html if isinstance(content_html, str) and content_html.strip() else (entry.summary or "")
 
             # Only inject if not already present
-            if video_id and ("youtube.com/embed/" not in str(base_html)):
-                # Fixed player parameters: controls enabled, modest branding off, no related videos, enable JS API
-                params = "?rel=0&modestbranding=0&controls=1&enablejsapi=1"
-                embed_src = f"https://www.youtube.com/embed/{video_id}{params}"
-                embed_html = (
-                    f'<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
-                    f'<iframe width="100%" height="315" src="{embed_src}" '
-                    'frameborder="0" allowfullscreen loading="lazy" '
-                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
-                    "></iframe></div>"
-                )
+            if video_id and ("/embed/" not in str(base_html)):
+                embed_html = _youtube_embed_html(video_id)
                 # Ensure base_html is wrapped as HTML
                 if not isinstance(base_html, str):
                     base_html = ""
