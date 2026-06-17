@@ -47,10 +47,17 @@ def feed_file_url(feed_id: str) -> str:
 
 
 def scraped_feed_id_from_url(file_url: str) -> str | None:
-    """Extract the feed UUID from a file:// feed URL, or None if not a scraped feed."""
+    """Extract the feed UUID from a file:// feed URL, or None if not a scraped feed.
+
+    Dir-aware so it never matches a file URL owned by another synthetic-feed
+    source (e.g. DeviantArt) that also lives under DATA_DIR.
+    """
     if not file_url.startswith("file://"):
         return None
-    return Path(file_url[len("file://"):]).stem or None
+    p = Path(file_url[len("file://"):])
+    if p.parent != _dir():
+        return None
+    return p.stem or None
 
 
 # ---------------------------------------------------------------------------

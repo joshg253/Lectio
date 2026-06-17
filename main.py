@@ -43,6 +43,7 @@ from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import deviantart as deviantart_service
 from services import passwords
 from services import scraper_service
 from services import takeout_service
@@ -198,6 +199,20 @@ ROOT_FOLDER_NAME = "All Feeds"
 _LECTIO_FOLDER_NAME = "_Lectio"
 
 scraper_service.init(DATA_DIR)
+deviantart_service.init(DATA_DIR)
+
+
+def _da_seed_lead_image(feed_url: str, entry_id: str, image_url: str) -> None:
+    """Sink for the DeviantArt service: store the API image as the entry's lead
+    image (DB + live cache) unless one is already cached (preserve customizations)."""
+    try:
+        if not lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, ""):
+            lead_image_service.store_entry_lead_image(feed_url, entry_id, image_url)
+    except Exception:
+        pass
+
+
+deviantart_service.set_lead_image_sink(_da_seed_lead_image)
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 5
 MANUAL_REFRESH_COOLDOWN_SECONDS = 60
@@ -223,6 +238,16 @@ SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
 SETTING_INSTAPAPER_PASSWORD = "instapaper_password"
+SETTING_DEVIANTART_CLIENT_ID = "deviantart_client_id"
+SETTING_DEVIANTART_CLIENT_SECRET = "deviantart_client_secret"
+SETTING_DEVIANTART_ACCESS_TOKEN = "deviantart_access_token"
+SETTING_DEVIANTART_REFRESH_TOKEN = "deviantart_refresh_token"
+SETTING_DEVIANTART_TOKEN_EXPIRES_AT = "deviantart_token_expires_at"
+SETTING_DEVIANTART_USERNAME = "deviantart_username"
+SETTING_DEVIANTART_OAUTH_STATE = "deviantart_oauth_state"
+SETTING_DEVIANTART_OAUTH_VERIFIER = "deviantart_oauth_verifier"
+SETTING_DEVIANTART_FOLDER_NAME = "deviantart_folder_name"
+SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
 AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -240,7 +265,9 @@ _CORP_DOMAIN_CACHE: dict[str, bool] = {}
 # through the /api/img proxy gives the browser a new same-origin URL it hasn't
 # cached, and the server fetch carries no Referer — so the real image loads and
 # stays correct. Add a registrable domain (matches it and any subdomain).
-_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset({"nanolx.org"})
+# wixmp.com serves DeviantArt images behind short-lived signed (?token=) URLs;
+# proxying caches the bytes server-side so the article image survives token expiry.
+_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset({"nanolx.org", "wixmp.com"})
 
 
 def _is_hotlink_img_host(netloc: str) -> bool:
@@ -304,6 +331,9 @@ def is_instapaper_configured() -> bool:
 _ENV_YT_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 _ENV_YT_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
 _ENV_YT_FOLDER_NAME = (os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube Subscriptions")
+# DeviantArt API creds — per-user DB settings take precedence; env is single-user fallback.
+_ENV_DEVIANTART_CLIENT_ID = os.getenv("DEVIANTART_CLIENT_ID", "").strip()
+_ENV_DEVIANTART_CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "").strip()
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
 _ENV_MAINTENANCE_HOUR: int | None = None
 if _yt_sync_hour_raw:
@@ -333,6 +363,157 @@ def get_yt_channel_id() -> str:
 
 def get_yt_folder_name() -> str:
     return get_runtime_setting(SETTING_YT_FOLDER_NAME, _env_yt_fallback(_ENV_YT_FOLDER_NAME)) or "YouTube Subscriptions"
+
+
+def get_deviantart_credentials() -> tuple[str, str]:
+    """Per-user DeviantArt API credentials (client_id, client_secret).
+
+    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    """
+    cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_ID))
+    secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_SECRET))
+    return cid, secret
+
+
+def get_deviantart_user_token() -> str:
+    """Return a valid user access token for watch-list ops, refreshing if expired.
+
+    Empty string if the user hasn't connected their DeviantArt account.
+    """
+    with get_meta_connection() as conn:
+        access = get_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN) or ""
+        refresh = get_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN) or ""
+        expires_at = float(get_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT) or 0)
+    if not access:
+        return ""
+    if time.time() < expires_at - 60:
+        return access
+    if not refresh:
+        return access  # no refresh token; try the (possibly stale) access token
+    cid, secret = get_deviantart_credentials()
+    try:
+        data = deviantart_service.refresh_access_token(cid, secret, refresh)
+    except Exception as exc:  # noqa: BLE001
+        # Refresh failed (expired/rotated refresh token, or the client_secret no
+        # longer matches the app) — the session is dead; signal "reconnect needed"
+        # rather than handing back a stale token that 401s deep in a sync.
+        LOGGER.warning("[deviantart] token refresh failed; reconnect required: %s", exc)
+        return ""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+    return data["access_token"]
+
+
+def _deviantart_folder_name() -> str:
+    return get_runtime_setting(SETTING_DEVIANTART_FOLDER_NAME) or "DeviantArt"
+
+
+def _apply_deviantart_image_strategy(conn: sqlite3.Connection, file_url: str) -> None:
+    """Pin a DeviantArt feed to the 'inline' image strategy.
+
+    DA feeds embed the authoritative full-size image inline (a stable, non-expiring
+    wixmp URL), so deriving both the article lead image and the list thumbnail from
+    that content — statelessly, every render — avoids source-page scraping and the
+    lead-image cache getting clobbered to 'no image'. Locked (manual) so auto-detect
+    can't change it.
+    """
+    try:
+        lead_image_service.store_feed_strategy(file_url, "inline", manual=True)
+    except Exception:
+        pass
+    try:
+        conn.execute("INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING", (file_url,))
+        conn.execute("UPDATE feed_display_prefs SET thumb_strategy = 'inline' WHERE feed_url = ?", (file_url,))
+    except Exception:
+        pass
+
+
+def sync_deviantart_watchlist() -> dict:
+    """Add a gallery feed for every artist the user Watches (add-only).
+
+    Skips artists already subscribed (anywhere) so it won't duplicate existing
+    DeviantArt feeds. Returns a result summary dict.
+    """
+    token = get_deviantart_user_token()
+    if not token:
+        return {"added": 0, "total": 0, "error": "DeviantArt account not connected."}
+    cid, secret = get_deviantart_credentials()
+    try:
+        username = get_runtime_setting(SETTING_DEVIANTART_USERNAME) or deviantart_service.whoami(token)
+        watching = deviantart_service.list_watching(token, username)
+    except Exception as exc:  # noqa: BLE001
+        return {"added": 0, "total": 0, "error": f"Could not read your watch list: {exc}"}
+
+    folder_name = _deviantart_folder_name()
+    with get_meta_connection() as conn:
+        existing = {str(r["username"]).lower() for r in conn.execute("SELECT username FROM deviantart_feeds").fetchall()}
+        folder_id = _get_or_create_folder_by_name(conn, folder_name)
+
+    to_add = [a for a in watching if a.lower() not in existing]
+    LOGGER.info("[deviantart] watchlist sync: %d watched, %d to add into %r", len(watching), len(to_add), folder_name)
+    added = 0
+    failed = 0
+    rate_limited = False
+    for i, artist in enumerate(to_add, 1):
+        if i > 1:
+            time.sleep(0.4)  # pace requests to stay under DeviantArt's rate limit
+        try:
+            with get_meta_connection() as conn:
+                with get_reader() as reader:
+                    _fid, file_url = deviantart_service.create_deviantart_feed(conn, reader, artist, cid, secret, access_token=token, limit=24)
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (folder_id, file_url),
+                )
+            added += 1
+        except deviantart_service.DeviantArtRateLimited:
+            # Quota exhausted — stop now (the rest are re-runnable; sync is add-only
+            # and dedupes, so clicking Sync again later resumes where this left off).
+            rate_limited = True
+            LOGGER.info("[deviantart] watchlist sync paused at %d/%d (added=%d) — rate limited", i, len(to_add), added)
+            break
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            LOGGER.warning("[deviantart] watchlist add failed for %s: %s", artist, exc)
+        if i % 25 == 0:
+            LOGGER.info("[deviantart] watchlist sync progress: %d/%d (added=%d failed=%d)", i, len(to_add), added, failed)
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Syncing {i}/{len(to_add)} (added {added})")
+            invalidate_meta_structure_cache()
+            invalidate_unread_counts_cache()
+    invalidate_meta_structure_cache()
+    invalidate_unread_counts_cache()
+    remaining = len(to_add) - added - failed
+    if rate_limited:
+        final = (f"Rate limited — added {added} so far, ~{remaining} left. "
+                 "DeviantArt caps requests; click Sync again later to continue.")
+    else:
+        final = f"Done: added {added} of {len(to_add)} watched" + (f", {failed} failed" if failed else "")
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
+    return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
+            "rate_limited": rate_limited}
+
+
+def push_galleries_to_deviantart_watchlist() -> dict:
+    """Watch (on DeviantArt) every artist you have a gallery feed for. Add-only."""
+    token = get_deviantart_user_token()
+    if not token:
+        return {"watched": 0, "total": 0, "error": "DeviantArt account not connected."}
+    with get_meta_connection() as conn:
+        usernames = [str(r["username"]) for r in conn.execute("SELECT DISTINCT username FROM deviantart_feeds").fetchall()]
+    watched = 0
+    errors = 0
+    for name in usernames:
+        ok, _msg = deviantart_service.watch_user(token, name)
+        if ok:
+            watched += 1
+        else:
+            errors += 1
+    return {"watched": watched, "total": len(usernames), "errors": errors}
 
 
 def get_maintenance_hour() -> int | None:
@@ -526,6 +707,14 @@ _meta_structure_cache = _PerUserDict()
 def invalidate_meta_structure_cache() -> None:
     with _meta_structure_lock:
         _meta_structure_cache.clear()
+
+
+def invalidate_unread_counts_cache() -> None:
+    """Bump the generation + clear the cache so folder/feed unread badges recompute."""
+    global _unread_counts_generation
+    with unread_counts_cache_lock:
+        _unread_counts_generation += 1
+        unread_counts_cache.clear()
 
 
 # Cache for problematic-feeds list. Only changes when a refresh succeeds/fails,
@@ -1419,6 +1608,7 @@ class FeedInFolder:
     icon_url: str | None
     unread_count: int
     has_error: bool = False
+    disabled: bool = False
 
 
 _meta_conn_local = threading.local()
@@ -2005,6 +2195,35 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deviantart_feeds (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                feed_title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_synced_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deviantart_entries (
+                id TEXT PRIMARY KEY,
+                deviantart_feed_id TEXT NOT NULL REFERENCES deviantart_feeds(id),
+                deviationid TEXT NOT NULL,
+                title TEXT NOT NULL,
+                entry_url TEXT,
+                content TEXT,
+                published_at TEXT NOT NULL,
+                UNIQUE(deviantart_feed_id, deviationid)
+            )
+            """
+        )
+        try:
+            conn.execute("ALTER TABLE deviantart_feeds ADD COLUMN source TEXT NOT NULL DEFAULT 'gallery'")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -2509,6 +2728,16 @@ def get_root_folder_id(conn: sqlite3.Connection) -> int:
     if not row:
         raise RuntimeError("Root folder is missing.")
     return int(row["id"])
+
+
+def _get_or_create_folder_by_name(conn: sqlite3.Connection, name: str) -> int:
+    """Return the id of a top-level folder with `name`, creating it under root if absent."""
+    row = conn.execute("SELECT id FROM folders WHERE name = ? LIMIT 1", (name,)).fetchone()
+    if row:
+        return int(row["id"])
+    root_id = get_root_folder_id(conn)
+    conn.execute("INSERT INTO folders (name, parent_id) VALUES (?, ?)", (name, root_id))
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 def _get_lectio_folder_id(conn: sqlite3.Connection) -> int | None:
@@ -7673,6 +7902,10 @@ _FORMAT_SELECTOR_VALUES = frozenset({"rss", "rss2", "atom"})
 _DOMAIN_ALIASES: dict[str, str] = {
     # old.reddit.com and www.reddit.com serve identical RSS content
     "old.reddit.com": "www.reddit.com",
+    # Tapastic rebranded to Tapas; the old domain's feeds 404. Same path structure
+    # (/rss/series/<id>), so rewriting the host keeps existing subscriptions working.
+    "tapastic.com": "tapas.io",
+    "www.tapastic.com": "tapas.io",
 }
 
 
@@ -7817,9 +8050,13 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
             (feed_url,),
         ).fetchone()
     if not still_exists:
-        feed_id = scraper_service.scraped_feed_id_from_url(feed_url)
+        da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
+        feed_id = None if da_id else scraper_service.scraped_feed_id_from_url(feed_url)
         with get_reader() as reader:
-            if feed_id:
+            if da_id:
+                with get_meta_connection() as _conn:
+                    deviantart_service.delete_deviantart_feed(_conn, reader, da_id)
+            elif feed_id:
                 with get_meta_connection() as _conn:
                     scraper_service.delete_scraped_feed(_conn, reader, feed_id)
             else:
@@ -8087,6 +8324,8 @@ def _scheduled_refresh_tick() -> None:
             app.state.last_scheduled_refresh_started_at = time.monotonic()
             with get_meta_connection() as _sc:
                 scraper_service.refresh_all_scraped_feeds(_sc)
+                _da_cid, _da_secret = get_deviantart_credentials()
+                deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
 
     if not feeds_to_refresh:
         return
@@ -9219,25 +9458,31 @@ def home(
         if not pf.get("acknowledged_at")
     }
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
+    # Like feeds_by_folder but also includes disabled feeds (flagged), for the
+    # Settings → Feeds folders tree where disabled feeds show greyed out. The
+    # sidebar uses feeds_by_folder and keeps excluding them.
+    settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     # feed_url → containing_folder_id, so feed-name links in posts/entry can
     # navigate to the feed's own folder rather than the currently-viewed one.
     feed_to_folder: dict[str, int] = {}
     for row in folder_rows:
         folder_row_id = int(row["id"])
         urls = direct_feed_urls_by_folder.get(folder_row_id, [])
-        folder_feeds = [
+        all_folder_feeds = [
             FeedInFolder(
                 url=url,
                 title=feed_title_map.get(url, url),
                 icon_url=get_favicon_url(url),
                 unread_count=unread_counts_by_feed.get(url, 0),
                 has_error=url in error_feed_urls,
+                disabled=url in disabled_feed_urls,
             )
             for url in urls
-            if url not in disabled_feed_urls
         ]
-        folder_feeds.sort(key=lambda f: f.title.casefold())
-        feeds_by_folder[folder_row_id] = folder_feeds
+        # Active feeds first (alphabetical), disabled greyed at the bottom.
+        all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
+        settings_feeds_by_folder[folder_row_id] = all_folder_feeds
+        feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
         for url in urls:
             feed_to_folder[url] = folder_row_id
 
@@ -9361,6 +9606,7 @@ def home(
             "folder_failing_counts": folder_failing_counts,
             "folder_options": folder_options,
             "feeds_by_folder": feeds_by_folder,
+            "settings_feeds_by_folder": settings_feeds_by_folder,
             "feed_to_folder": feed_to_folder,
             "tag_rows": tag_rows,
             "selected_folder_id": selected_folder_id,
@@ -10101,6 +10347,46 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
     url = feed_url.strip()
     target_url = url
     auto_discovered = False
+
+    # DeviantArt: when connected, "adding" an artist just Watches them on DeviantArt
+    # — their posts arrive via the single combined Watch feed, so we don't create a
+    # per-artist local feed. (If not connected, fall back to a standalone gallery feed.)
+    da_username = deviantart_service.username_from_url(url)
+    if da_username:
+        token = get_deviantart_user_token()
+        if token:
+            try:
+                ok, detail = deviantart_service.watch_user(token, da_username)
+                msg = (f"Now watching {da_username} on DeviantArt — new posts appear in your Watch feed."
+                       if ok else f"Couldn't watch {da_username}: {detail}")
+            except deviantart_service.DeviantArtRateLimited:
+                msg = "DeviantArt rate limit — try again in a bit."
+            except Exception as exc:  # noqa: BLE001
+                msg = f"DeviantArt watch failed: {exc}"
+            return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
+        # Not connected → standalone gallery feed (best effort with app creds).
+        cid, secret = get_deviantart_credentials()
+        if not cid or not secret:
+            return RedirectResponse(
+                url=(f"/?folder_id={folder_id}"
+                     f"&message={quote_plus('Connect your DeviantArt account in Settings first.')}"),
+                status_code=303,
+            )
+        try:
+            with get_meta_connection() as conn:
+                with get_reader() as reader:
+                    _fid, file_url = deviantart_service.create_deviantart_feed(conn, reader, da_username, cid, secret)
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (folder_id, file_url),
+                )
+                _apply_deviantart_image_strategy(conn, file_url)
+            invalidate_meta_structure_cache()
+            msg = f"DeviantArt gallery added ({da_username})."
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[deviantart] add failed for %s: %s", da_username, exc)
+            msg = f"DeviantArt add failed: {exc}"
+        return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
 
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
@@ -10856,6 +11142,133 @@ def save_profile_route(name: str = Form(""), email: str = Form("")):
     return JSONResponse({"ok": True})
 
 
+@app.post("/settings/deviantart/verify")
+def verify_deviantart_credentials_route():
+    """Validate the saved DeviantArt creds by requesting an app token."""
+    cid, secret = get_deviantart_credentials()
+    ok, message = deviantart_service.verify_credentials(cid, secret)
+    return JSONResponse({"ok": ok, "message": message})
+
+
+def _deviantart_redirect_uri(request: Request) -> str:
+    """Callback URL DeviantArt redirects back to (must match the app whitelist)."""
+    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    if base:
+        return f"{base}/deviantart/callback"
+    return str(request.url_for("deviantart_callback"))
+
+
+@app.get("/deviantart/connect")
+def deviantart_connect(request: Request):
+    """Kick off the DeviantArt OAuth flow → redirect to their consent page."""
+    cid, secret = get_deviantart_credentials()
+    if not cid or not secret:
+        return RedirectResponse(url="/?message=" + quote_plus("Add your DeviantArt API keys in Settings first."), status_code=303)
+    state = secrets.token_urlsafe(24)
+    verifier, challenge = deviantart_service.generate_pkce_pair()
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_OAUTH_STATE, state)
+        set_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER, verifier)
+    url = deviantart_service.authorize_url(cid, _deviantart_redirect_uri(request), state, challenge)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/deviantart/callback")
+def deviantart_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    """OAuth redirect target: exchange the code for tokens and store them."""
+    if error:
+        return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt authorization failed: {error}"), status_code=303)
+    with get_meta_connection() as conn:
+        expected = get_setting(conn, SETTING_DEVIANTART_OAUTH_STATE) or ""
+        verifier = get_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER) or ""
+    if not code or not state or state != expected:
+        return RedirectResponse(url="/?message=" + quote_plus("DeviantArt authorization failed (bad state)."), status_code=303)
+    cid, secret = get_deviantart_credentials()
+    try:
+        data = deviantart_service.exchange_code(cid, secret, code, _deviantart_redirect_uri(request), verifier)
+        token = data["access_token"]
+        username = deviantart_service.whoami(token)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connect failed: {exc}"), status_code=303)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN, token)
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+        set_setting(conn, SETTING_DEVIANTART_USERNAME, username)
+        delete_setting(conn, SETTING_DEVIANTART_OAUTH_STATE)
+        delete_setting(conn, SETTING_DEVIANTART_OAUTH_VERIFIER)
+    return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connected as {username}."), status_code=303)
+
+
+@app.post("/deviantart/disconnect")
+def deviantart_disconnect():
+    with get_meta_connection() as conn:
+        for key in (SETTING_DEVIANTART_ACCESS_TOKEN, SETTING_DEVIANTART_REFRESH_TOKEN,
+                    SETTING_DEVIANTART_TOKEN_EXPIRES_AT, SETTING_DEVIANTART_USERNAME):
+            delete_setting(conn, key)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/deviantart/sync-watchlist")
+def deviantart_sync_watchlist_route():
+    """Start the watch-list → feeds sync in the background (it can take minutes)."""
+    uid = tenancy.current_user_id()
+
+    def _job():
+        try:
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Starting…")
+            # sync_deviantart_watchlist sets its own final status (done / rate-limited).
+            result = sync_deviantart_watchlist()
+            if result.get("error"):
+                with get_meta_connection() as conn:
+                    set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
+        except Exception:
+            LOGGER.exception("[deviantart] background watchlist sync failed")
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Sync failed — see logs.")
+
+    threading.Thread(target=_run_in_user_context, args=(uid, _job), daemon=True).start()
+    return JSONResponse({"started": True})
+
+
+@app.post("/deviantart/push-watchlist")
+def deviantart_push_watchlist_route():
+    result = push_galleries_to_deviantart_watchlist()
+    return JSONResponse(result)
+
+
+@app.post("/deviantart/add-watch-feed")
+def deviantart_add_watch_feed_route():
+    """Add the single combined 'deviations from everyone you Watch' feed."""
+    token = get_deviantart_user_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "DeviantArt account not connected."}, status_code=400)
+    with get_meta_connection() as conn:
+        existing = conn.execute("SELECT id FROM deviantart_feeds WHERE source = 'watch' LIMIT 1").fetchone()
+        if existing:
+            file_url = deviantart_service.feed_file_url(str(existing["id"]))
+            folder_id = _get_or_create_folder_by_name(conn, _deviantart_folder_name())
+            conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, file_url))
+            invalidate_meta_structure_cache()
+            return JSONResponse({"ok": True, "message": "Watch feed already exists."})
+    try:
+        with get_meta_connection() as conn:
+            folder_id = _get_or_create_folder_by_name(conn, _deviantart_folder_name())
+            with get_reader() as reader:
+                _fid, file_url = deviantart_service.create_watch_feed(conn, reader, token)
+            conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (folder_id, file_url))
+            _apply_deviantart_image_strategy(conn, file_url)
+        invalidate_meta_structure_cache()
+        invalidate_unread_counts_cache()
+        return JSONResponse({"ok": True, "message": "Added your DeviantArt Watch feed."})
+    except deviantart_service.DeviantArtRateLimited:
+        return JSONResponse({"ok": False, "error": "DeviantArt rate limit — try again in a bit."}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @app.get("/settings/all")
 def get_all_settings():
     """Return all user-configurable settings. Sensitive values are masked if set."""
@@ -10880,6 +11293,7 @@ def get_all_settings():
     yt_api_key = get_yt_api_key()
     resend_key = get_resend_api_key()
     instapaper_pw = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
+    da_cid, da_secret = get_deviantart_credentials()
 
     return JSONResponse({
         "profile_name": profile_name,
@@ -10898,9 +11312,26 @@ def get_all_settings():
         "instapaper_username": get_runtime_setting(SETTING_INSTAPAPER_USERNAME),
         "instapaper_password_set": bool(instapaper_pw),
         "instapaper_password_masked": _masked(instapaper_pw),
+        "deviantart_client_id": da_cid,
+        "deviantart_client_secret_set": bool(da_secret),
+        "deviantart_client_secret_masked": _masked(da_secret),
+        "deviantart_connected": bool(get_runtime_setting(SETTING_DEVIANTART_ACCESS_TOKEN)),
+        "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
+        "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
+        "deviantart_folder_name": _deviantart_folder_name(),
         "contacts": contacts,
         "email_to_default": email_to_default,
     })
+
+
+def _keep_existing_sensitive(key: str, str_val: str, sensitive: set[str]) -> bool:
+    """True if a sensitive-field save should be ignored (leave the stored value).
+
+    Masked secret fields reload blank in the UI, so saving the form with the
+    field untouched sends "" (or the masked "••" placeholder). Treat both as
+    "leave unchanged" so a routine re-save never silently wipes a stored secret.
+    """
+    return key in sensitive and (not str_val or str_val.startswith("••"))
 
 
 @app.post("/settings/all")
@@ -10909,13 +11340,16 @@ async def save_all_settings(request: Request):
     import json as _json
     body = await request.json()
 
-    _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD}
+    _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
+                  SETTING_DEVIANTART_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
+        SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
+        SETTING_DEVIANTART_FOLDER_NAME,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
@@ -10959,8 +11393,7 @@ async def save_all_settings(request: Request):
                     )
                 continue
             str_val = str(value).strip() if value is not None else ""
-            # Don't overwrite a real secret with the masked placeholder
-            if key in _SENSITIVE and str_val.startswith("••"):
+            if _keep_existing_sensitive(key, str_val, _SENSITIVE):
                 continue
             if str_val:
                 set_setting(conn, key, str_val)
@@ -11107,14 +11540,22 @@ def move_feed(
 
 
 @app.post("/feeds/disable")
-def disable_feed_route(folder_id: int = Form(...), feed_url: str = Form(...)):
+def disable_feed_route(request: Request, folder_id: int = Form(...), feed_url: str = Form(...)):
     disable_feed(feed_url)
+    # AJAX caller (e.g. the Feeds settings tree) wants JSON so it can update the
+    # DOM in place instead of navigating away and closing the settings modal.
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
     return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
 
 
 @app.post("/feeds/enable")
-def enable_feed_route(folder_id: int | None = Form(default=None), feed_url: str = Form(...)):
+def enable_feed_route(request: Request, folder_id: int | None = Form(default=None), feed_url: str = Form(...)):
     enable_feed(feed_url)
+    requested_with = request.headers.get("x-requested-with", "").lower()
+    if "lectio" in requested_with or requested_with == "xmlhttprequest":
+        return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
     dest = f"/?folder_id={folder_id}" if folder_id else "/"
     return RedirectResponse(url=dest, status_code=303)
 
@@ -11563,6 +12004,8 @@ def refresh(
         )
     with get_meta_connection() as conn:
         scraper_service.refresh_all_scraped_feeds(conn)
+        _da_cid, _da_secret = get_deviantart_credentials()
+        deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
     feed_refresh_service.update_feeds(feed_urls)
     _run_automation_after_refresh(feed_urls)
     return RedirectResponse(

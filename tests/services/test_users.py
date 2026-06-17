@@ -161,9 +161,12 @@ def test_rename_unknown_id_rejected(store):
 
 
 def test_create_generates_api_token(store):
-    uid = store.create("alice", "pw")
+    # Use a distinctive password so "not embedded in token" is a meaningful,
+    # non-flaky check — a 2-char password can appear in a random token by chance.
+    pw = "correct-horse-battery-staple"
+    uid = store.create("alice", pw)
     tok = store.get_api_token(uid)
-    assert tok and "pw" not in tok
+    assert tok and tok != pw and pw not in tok
 
 
 def test_verify_api_token_returns_user_id(store):
