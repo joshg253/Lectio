@@ -62,15 +62,17 @@ def _request(method: str, url: str, *, headers: dict, params: dict | None = None
     """HTTP request with short backoff on 429; raises DeviantArtRateLimited if the
     quota stays exhausted (so bulk callers can stop fast instead of churning)."""
     delay = _RETRY_BASE_DELAY
-    for attempt in range(_MAX_RETRIES):
-        with httpx.Client(timeout=timeout, headers=headers) as client:
+    # One client for the whole call: retries reuse the connection pool instead of
+    # paying TCP/TLS setup again on every 429 backoff.
+    with httpx.Client(timeout=timeout, headers=headers) as client:
+        for attempt in range(_MAX_RETRIES):
             resp = client.request(method, url, params=params, data=data)
-        if resp.status_code != 429:
-            return resp
-        if attempt < _MAX_RETRIES - 1:
-            LOGGER.info("[deviantart] 429 rate-limited; backing off %.0fs", delay)
-            time.sleep(delay)
-            delay *= 2
+            if resp.status_code != 429:
+                return resp
+            if attempt < _MAX_RETRIES - 1:
+                LOGGER.info("[deviantart] 429 rate-limited; backing off %.0fs", delay)
+                time.sleep(delay)
+                delay *= 2
     raise DeviantArtRateLimited("DeviantArt per-user request limit reached")
 
 # Cache of client_id -> (access_token, expires_at_epoch). Tokens are app-scoped,
@@ -365,7 +367,9 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, deviations: list[dic
             try:
                 _lead_image_sink(file_url, e["id"], e["image_src"])
             except Exception:
-                pass
+                # Seeding the thumbnail is best-effort; log so a persistent sink
+                # failure is visible rather than silently leaving posts blank.
+                LOGGER.exception("[deviantart] lead-image seed failed for %s", e["id"])
     return added
 
 
