@@ -13500,7 +13500,7 @@ def websub_verify(
     """Hub challenge-response verification (step 2 of subscribe handshake)."""
     if not websub_service or not feed or hub_mode != "subscribe" or not hub_challenge:
         return Response(status_code=404)
-    challenge = websub_service.handle_verification(feed, hub_topic, hub_challenge, hub_lease_seconds)
+    challenge = _websub_verify_fanout(feed, hub_topic, hub_challenge, hub_lease_seconds)
     if challenge is None:
         return Response(status_code=404)
     return Response(content=challenge, media_type="text/plain")
@@ -13513,13 +13513,13 @@ async def websub_push(request: Request, feed: str = Query(default="")):
         return Response(status_code=400)
     body = await request.body()
     sig = request.headers.get("x-hub-signature-256") or request.headers.get("x-hub-signature", "")
-    if not websub_service.verify_push_signature(feed, body, sig):
-        return Response(status_code=403)
-    # Trigger an immediate feed refresh in the background so the push is processed
-    # through the normal refresh pipeline (dedup, automation, lead images, etc.).
+    # Fan out across every subscribing user in the background (signature is
+    # verified per-user inside), so the push refreshes each subscriber's own
+    # reader through the normal pipeline (dedup, automation, lead images). The
+    # hub only needs a prompt 2xx ack, so don't block on the work.
     threading.Thread(
-        target=feed_refresh_service.update_feeds,
-        args=([feed],),
+        target=_process_websub_push,
+        args=(feed, body, sig),
         daemon=True,
     ).start()
     return Response(status_code=204)
@@ -13638,6 +13638,60 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
     there or the work runs as the default user. No-op rebinding in single mode."""
     with tenancy.user_context(uid):
         fn(*args, **kwargs)
+
+
+def _websub_verify_fanout(feed: str, hub_topic: str, challenge: str, lease: int | None) -> str | None:
+    """Confirm a WebSub subscription handshake for whichever user(s) initiated it.
+
+    The callback URL carries only the topic, so the hub's verification GET can't
+    name a user. Subscriptions live in per-user meta DBs, so try each background
+    user under its own context; any user with a matching pending subscription
+    gets verified. Returns the challenge to echo if at least one matched."""
+    confirmed = None
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                if websub_service.handle_verification(feed, hub_topic, challenge, lease) is not None:
+                    confirmed = challenge
+            except Exception:
+                LOGGER.exception("[websub] verification failed for user %r", uid)
+    return confirmed
+
+
+def _process_websub_push(feed: str, body: bytes, sig: str) -> None:
+    """Fan a WebSub push out to every user subscribed to the topic.
+
+    The shared callback means a push can match subscriptions in several per-user
+    DBs, each with its own secret. Confirm the push is authentic against any
+    subscriber's secret (a forged push matches none), then refresh every
+    subscriber under its own tenancy context so the content lands in that user's
+    reader DB."""
+    subscribers: list[str] = []
+    authentic = False
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                if not websub_service.has_verified_subscription(feed):
+                    continue
+                subscribers.append(uid)
+                if not authentic and websub_service.verify_push_signature(feed, body, sig):
+                    authentic = True
+            except Exception:
+                LOGGER.exception("[websub] push pre-check failed for user %r", uid)
+    if not subscribers:
+        return
+    if not authentic:
+        LOGGER.warning(
+            "[websub] push for %s failed signature against all %d subscriber(s); ignoring",
+            feed, len(subscribers),
+        )
+        return
+    for uid in subscribers:
+        with tenancy.user_context(uid):
+            try:
+                feed_refresh_service.update_feeds([feed])
+            except Exception:
+                LOGGER.exception("[websub] push refresh failed for user %r", uid)
 
 
 def _greader_token(request: Request) -> str:
