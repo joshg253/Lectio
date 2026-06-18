@@ -4612,6 +4612,7 @@ mark.highlight-mark {
 }
 .settings-folder-props-btn:hover { color: var(--ink); background: var(--hover-bg); }
 .settings-folder-props-btn .material-symbols-rounded { font-size: 17px; }
+.settings-feed-unsub-btn:hover { color: var(--danger, #c0392b); }
 
 /* ── Settings > Feeds > Duplicates inline panel ──────────────────────────── */
 .feeds-dedup-controls {

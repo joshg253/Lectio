@@ -1441,6 +1441,7 @@
                 {% else %}
                 <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-disable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Disable feed" aria-label="Disable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility_off</span></button>
                 {% endif %}
+                <button type="button" class="settings-folder-props-btn settings-feed-unsub-btn" data-settings-feed-unsubscribe data-feed-url="{{ feed.url }}" data-feed-title="{{ feed.title }}" data-folder-id="{{ row.id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
               </td>
             </tr>
             {% endfor %}
@@ -9342,6 +9343,52 @@
           .catch((err) => {
             if (li) li.style.opacity = '';
             unsubTrigger.disabled = false;
+            window.alert(`Unsubscribe failed: ${err}`);
+          });
+      }
+
+      // Settings → Feeds → Folders: trashcan on each feed row unsubscribes that
+      // feed from its folder (reusing the same /feeds/unsubscribe AJAX path).
+      const settingsUnsub = event.target.closest('[data-settings-feed-unsubscribe]');
+      if (settingsUnsub) {
+        event.preventDefault();
+        const url = settingsUnsub.getAttribute('data-feed-url');
+        const folderId = settingsUnsub.getAttribute('data-folder-id');
+        const title = settingsUnsub.getAttribute('data-feed-title') || url;
+        if (!url || !folderId) return;
+        if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.\n\n${url}`)) return;
+
+        const tr = settingsUnsub.closest('.settings-feed-row');
+        if (tr) tr.style.opacity = '0.4';
+        settingsUnsub.disabled = true;
+
+        const body = new URLSearchParams();
+        body.set('folder_id', folderId);
+        body.set('feed_url', url);
+        fetch('/feeds/unsubscribe', {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'lectio-settings-feeds',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          credentials: 'same-origin',
+          body: body.toString(),
+        })
+          .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (tr && tr.parentNode) tr.parentNode.removeChild(tr);
+            // Mirror the Feed Properties unsub: drop the feed from the sidebar
+            // tree and any problematic-feeds panels so the UI stays consistent.
+            document.querySelectorAll(
+              `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(url)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
+            ).forEach(link => link.closest('.tree-feed-item')?.remove());
+            document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(url)}"]`)
+              .forEach(el => el.remove());
+            showToastMessage(`Unsubscribed from "${title}".`);
+          })
+          .catch((err) => {
+            if (tr) tr.style.opacity = '';
+            settingsUnsub.disabled = false;
             window.alert(`Unsubscribe failed: ${err}`);
           });
       }
