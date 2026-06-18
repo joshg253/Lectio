@@ -75,19 +75,7 @@ Phasing:
    `DEFAULT_USER_ID` and wrote the legacy top-level DBs. New tests in
    `tests/services/test_starred_archive_tenancy.py` and
    `tests/services/test_lead_images_tenancy.py`.
-   Remaining background work still running as the default user only (lower
-   priority; scheduled refresh covers the feeds within the cadence window):
-   - **WebSub push callback** — a push carries only a topic (feed URL); needs to
-     find which users subscribe to it (across per-user `websub_subscriptions`)
-     and refresh each. Until then a push refreshes only the default user; other
-     users still get the content on their next scheduled pass.
-   - ~~**Update scheduling policy**~~ — addressed for the current scale. Users
-     are still refreshed sequentially within a tick (every user every tick, which
-     is fine at 1–3 users), but `_rotate_for_fairness` now rotates the per-tick
-     start user round-robin so there's no fixed first-mover bias and a slow/hung
-     user delays a different set of downstream users each pass. Deeper fairness at
-     real scale (per-user concurrency, fetch budgets) stays deferred behind this
-     seam. Test: `tests/integration/test_scheduled_refresh_fairness.py`.
+   Background work that used to run as the default user only — now resolved:
    - ~~**WebSub push callback**~~ — DONE. The shared callback carries only the
      topic, so both the verification GET and the content push now fan out across
      `_background_user_ids()`: verification confirms whichever user has a pending
@@ -95,8 +83,13 @@ Phasing:
      authenticity against any one user's secret) under that user's context. Previously
      both ran as the empty default tenant, so no real user's WebSub worked.
      Tests: `tests/integration/test_websub_fanout.py`.
-   - **Update scheduling policy** — revisit cadence/fairness across many users
-     (currently each user is processed sequentially every poll tick).
+   - ~~**Update scheduling policy**~~ — addressed for the current scale. Users
+     are still refreshed sequentially within a tick (every user every tick, which
+     is fine at 1–3 users), but `_rotate_for_fairness` now rotates the per-tick
+     start user round-robin so there's no fixed first-mover bias and a slow/hung
+     user delays a different set of downstream users each pass. Deeper fairness at
+     real scale (per-user concurrency, fetch budgets) stays deferred behind this
+     seam. Test: `tests/integration/test_scheduled_refresh_fairness.py`.
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
    `url_guard.safe_get` / `safe_get_async` follow redirects manually and
    re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
@@ -121,12 +114,6 @@ Phasing:
   Retention bounded in daily maintenance (`LECTIO_FETCH_HISTORY_KEEP` per feed,
   `LECTIO_FETCH_HISTORY_MAX_AGE_DAYS` age cap). Tests:
   `tests/integration/test_fetch_history.py`.
-- **Automations-applied view** — show which automations (auto-taggers, dedup,
-  strip rules, lead-image strategy overrides) have been applied to the feed, so
-  the user can see what Lectio is doing to a feed's content without reading code.
-- **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
-  feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
-  errors/backoff). Surfaces why a feed is stale or flagged problematic.
 - ~~**Automations-applied view**~~ — DONE. Feed Properties → **Automations** tab
   shows the rules in effect for a feed (global / its folder / feed-scoped, from
   `highlight_keywords`) plus recent runs that touched its entries (from
@@ -178,15 +165,6 @@ list) are both **done**. Follow-ups all resolved:
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
   without the user's subscription. Documented as a known limitation.
 
-### Bugs to investigate
-
-- **Tags don't show their articles** — clicking a tag isn't surfacing the tagged
-  articles in the list. Check the tag-filter query path (selected_tag →
-  list_entries_for_feeds) and the tag link wiring in the sidebar.
-- **YouTube video playback fails in the entry pane** — the inline player no longer
-  plays. Check the embed/iframe injection for YouTube entries and any CSP/referrer
-  or nocookie-domain changes.
-
 ### Ideas
 
 - **Inline SVG as thumbnail/lead image** — some feeds ship an inline `<svg>` (or a
@@ -211,14 +189,6 @@ list) are both **done**. Follow-ups all resolved:
 
 ## Backburner
 
-- **feed_strategy_cache migration ordering (latent)** — in `ensure_meta_schema`,
-  the `ALTER TABLE feed_strategy_cache ADD COLUMN image_alt/image_title`
-  statements run *before* the table's `CREATE TABLE IF NOT EXISTS`, so on a
-  brand-new meta DB the ALTERs hit "no such table" (swallowed) and the base
-  CREATE then makes the table without those columns — `get_feed_properties`
-  would `OperationalError: no such column: image_alt`. Existing DBs were
-  migrated before the reorder so they're fine; fix by moving the CREATE ahead of
-  the ALTERs (or folding the columns into the base CREATE).
 - **Deployment genericization (minimal, after multi-user phases)** — the app is
   already proxy-agnostic; the coupling is in packaging. Decided scope: make the
   base `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels),
