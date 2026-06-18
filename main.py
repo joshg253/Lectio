@@ -8639,7 +8639,24 @@ def _daily_maintenance_for_user() -> None:
         except Exception:
             LOGGER.exception("[maintenance] YouTube sync failed")
 
-    # 6. Record this user's last-ran timestamp.
+    # 6. DeviantArt watch-list → gallery feeds sync — per-user, only when the
+    # account is connected. Mirrors the YouTube sync above so the watch list no
+    # longer needs the manual Settings button. sync_deviantart_watchlist is
+    # add-only and self-throttles against DeviantArt's rate limit.
+    if get_deviantart_user_token():
+        try:
+            result = sync_deviantart_watchlist()
+            rate_suffix = " (rate limited)" if result.get("rate_limited") else ""
+            if result.get("error"):
+                LOGGER.error("[maintenance] DeviantArt watch-list sync error%s: %s",
+                             rate_suffix, result["error"])
+            else:
+                LOGGER.info("[maintenance] DeviantArt watch-list sync: +%d watched=%d%s",
+                            result.get("added", 0), result.get("total", 0), rate_suffix)
+        except Exception:
+            LOGGER.exception("[maintenance] DeviantArt watch-list sync failed")
+
+    # 7. Record this user's last-ran timestamp.
     with get_meta_connection() as conn:
         set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
 
