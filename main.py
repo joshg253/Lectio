@@ -8426,6 +8426,76 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         ).start()
 
 
+def purge_orphaned_feed(
+    reader,
+    conn: sqlite3.Connection,
+    feed_url: str,
+    *,
+    archive_pending: bool = True,
+    rescue_to: str | None = None,
+) -> None:
+    """Delete a feed that has already been confirmed orphaned (no folder_feeds rows).
+
+    Must be called AFTER the caller has removed all folder_feeds rows and
+    confirmed the feed is no longer referenced.  Does NOT call
+    ``invalidate_meta_structure_cache`` — the caller is responsible.
+
+    Steps (in order):
+    1. Force-archive any pending saved/starred entries so they don't become
+       content-less archive shells after the reader-side data disappears.
+       Skipped when *archive_pending* is False (e.g. dedup/upgrade where entries
+       survive under the kept/canonical feed).
+    2. Rescue unread entries into the kept feed when *rescue_to* is given (dedup
+       and format-upgrade paths only).
+    3. Delete the feed via the appropriate path:
+       - DeviantArt rendered feed → deviantart_service.delete_deviantart_feed
+       - Scraped (file://) feed   → scraper_service.delete_scraped_feed
+       - Plain feed               → reader.delete_feed
+    4. Unsubscribe from the WebSub hub (best-effort; guard for disabled websub).
+
+    Parameters
+    ----------
+    reader:
+        An already-open reader instance (from ``get_reader()``).
+    conn:
+        An already-open meta-DB connection (from ``get_meta_connection()``).
+    feed_url:
+        The URL of the feed to remove.
+    archive_pending:
+        When True (default), force-flush any pending starred-archive captures
+        for this feed before deletion.
+    rescue_to:
+        When set, mark read entries in *rescue_to* as unread when the removed
+        feed had them unread (slug-matched).  Used by dedup/upgrade paths.
+    """
+    # Step 1 — force-archive pending saves.
+    if archive_pending:
+        try:
+            forced = starred_archive_service.force_archive_pending_for_feed(feed_url)
+            if forced:
+                LOGGER.info("[purge] force-archived %d pending captures for %s", forced, feed_url)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[purge] force-archive failed for %s: %s", feed_url, exc)
+
+    # Step 2 — rescue unread entries into the surviving feed.
+    if rescue_to:
+        _rescue_unread_entries(reader, feed_url, rescue_to)
+
+    # Step 3 — dispatch the delete via the appropriate path.
+    da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
+    feed_id = None if da_id else scraper_service.scraped_feed_id_from_url(feed_url)
+    if da_id:
+        deviantart_service.delete_deviantart_feed(conn, reader, da_id)
+    elif feed_id:
+        scraper_service.delete_scraped_feed(conn, reader, feed_id)
+    else:
+        reader.delete_feed(feed_url, missing_ok=True)
+
+    # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
+    if websub_service:
+        websub_service.unsubscribe(feed_url)
+
+
 def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
     """Remove a feed from a folder, and delete it from reader if it's in no other folder."""
     feed_url = feed_url.strip()
@@ -8441,20 +8511,32 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
             (feed_url,),
         ).fetchone()
     if not still_exists:
-        da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
-        feed_id = None if da_id else scraper_service.scraped_feed_id_from_url(feed_url)
         with get_reader() as reader:
-            if da_id:
-                with get_meta_connection() as _conn:
-                    deviantart_service.delete_deviantart_feed(_conn, reader, da_id)
-            elif feed_id:
-                with get_meta_connection() as _conn:
-                    scraper_service.delete_scraped_feed(_conn, reader, feed_id)
-            else:
-                reader.delete_feed(feed_url, missing_ok=True)
-        if websub_service:
-            websub_service.unsubscribe(feed_url)
+            with get_meta_connection() as conn:
+                purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
     invalidate_meta_structure_cache()
+
+
+def get_push_active_feed_urls() -> set[str]:
+    """Return the set of feed URLs with a verified, active WebSub push subscription.
+
+    Runs one query against the per-user meta DB.  Returns an empty set when
+    WebSub is disabled (``LECTIO_PUBLIC_URL`` not set) or the table is empty.
+    Only feeds with ``verified=1 AND hub_url IS NOT NULL`` are included —
+    pending/unconfirmed subscriptions are excluded.
+    """
+    if not websub_service:
+        return set()
+    try:
+        conn = get_meta_connection()
+        rows = conn.execute(
+            "SELECT feed_url FROM websub_subscriptions"
+            " WHERE verified=1 AND hub_url IS NOT NULL"
+        ).fetchall()
+        return {str(row["feed_url"]) for row in rows}
+    except Exception:
+        LOGGER.debug("[websub] could not load push-active feed URLs", exc_info=True)
+        return set()
 
 
 def _run_youtube_sync(folder_id: int | None = None) -> dict:
@@ -8588,12 +8670,13 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
     removed_feed_count = 0
     if orphaned_feed_urls:
         with get_reader() as reader:
-            for feed_url in orphaned_feed_urls:
-                try:
-                    reader.delete_feed(feed_url, missing_ok=True)
-                except Exception:
-                    continue
-                removed_feed_count += 1
+            with get_meta_connection() as conn:
+                for feed_url in orphaned_feed_urls:
+                    try:
+                        purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
+                    except Exception:
+                        continue
+                    removed_feed_count += 1
 
     invalidate_meta_structure_cache()
     return (len(descendant_ids), removed_feed_count)
@@ -10090,6 +10173,7 @@ def home(
             "feeds_by_folder": feeds_by_folder,
             "settings_feeds_by_folder": settings_feeds_by_folder,
             "feed_to_folder": feed_to_folder,
+            "push_feed_urls": get_push_active_feed_urls(),
             "tag_rows": tag_rows,
             "selected_folder_id": selected_folder_id,
             "selected_feed_url": selected_feed_url,
@@ -12190,18 +12274,9 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
-            # Feed is leaving the reader — give the archive worker a chance
-            # to finish capturing any saved entries from this feed before the
-            # reader-side data disappears. Otherwise saved-but-uncaptured
-            # entries become content-less archive shells.
-            try:
-                forced = starred_archive_service.force_archive_pending_for_feed(feed_url)
-                if forced:
-                    LOGGER.info("[unsubscribe] force-archived %d pending captures for %s", forced, feed_url)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("[unsubscribe] force-archive failed for %s: %s", feed_url, exc)
             with get_reader() as reader:
-                reader.delete_feed(feed_url, missing_ok=True)
+                with get_meta_connection() as conn:
+                    purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
@@ -12382,9 +12457,12 @@ async def deduplicate_feeds(request: Request):
             ).fetchone()
         if not still_used:
             with get_reader() as reader:
-                if rescue_unread:
-                    rescued_count += _rescue_unread_entries(reader, feed_url, keep_url)
-                reader.delete_feed(feed_url, missing_ok=True)
+                with get_meta_connection() as conn:
+                    purge_orphaned_feed(
+                        reader, conn, feed_url,
+                        archive_pending=False,
+                        rescue_to=keep_url if rescue_unread else None,
+                    )
         removed.append({"removed": feed_url, "kept": keep_url})
         LOGGER.info("[deduplicate] same-folder: removed %s from folder %d", feed_url, folder_id)
 
@@ -12401,9 +12479,12 @@ async def deduplicate_feeds(request: Request):
             ).fetchone()
         if not still_used:
             with get_reader() as reader:
-                if rescue_unread:
-                    rescued_count += _rescue_unread_entries(reader, remove, keep)
-                reader.delete_feed(remove, missing_ok=True)
+                with get_meta_connection() as conn:
+                    purge_orphaned_feed(
+                        reader, conn, remove,
+                        archive_pending=False,
+                        rescue_to=keep if rescue_unread else None,
+                    )
         # Ensure the canonical URL is in each selected folder.
         with get_reader() as reader:
             reader.add_feed(keep, exist_ok=True)
@@ -12442,7 +12523,12 @@ async def deduplicate_feeds(request: Request):
             ).fetchone()
         if not still_used:
             with get_reader() as reader:
-                reader.delete_feed(current, missing_ok=True)
+                with get_meta_connection() as conn:
+                    purge_orphaned_feed(
+                        reader, conn, current,
+                        archive_pending=False,
+                        rescue_to=upgrade_to,
+                    )
         upgraded.append({"from": current, "to": upgrade_to})
         LOGGER.info("[deduplicate] upgraded %s → %s", current, upgrade_to)
 
