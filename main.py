@@ -5640,7 +5640,9 @@ def _url_has_audio_ext(url: str) -> bool:
     """
     if not url:
         return False
-    return urlparse(url).path.lower().endswith(_AUDIO_EXTS)
+    # Trim surrounding whitespace some feeds leave around URLs, which would
+    # otherwise land in the parsed path and defeat the extension check.
+    return urlparse(url.strip()).path.lower().endswith(_AUDIO_EXTS)
 
 
 def _find_entry_audio_url(entry) -> str | None:
