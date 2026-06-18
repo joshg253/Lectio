@@ -4,6 +4,14 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Article lead image honors inline/media_rss strategy** — feeds pinned to the
+  `inline` strategy (e.g. DeviantArt galleries) could show a list thumbnail but
+  no article image: the list thumb bypasses the lead-image cache, but the article
+  view always used the cache-consulting `extract_entry_thumbnail_url`, which
+  returns a stale negative ("no image") entry without scanning content.
+  `_derive_article_lead_image` now routes by feed strategy (inline → inline
+  extractor, media_rss → media extractor) so the article matches the list. Test:
+  `tests/unit/test_article_lead_image_strategy.py`.
 - **feed_strategy_cache / feed_display_prefs fresh-DB migration fix** — the
   `image_alt`/`image_title` and `caption_source` columns were added by ALTERs
   that ran before their table's `CREATE`, so a brand-new meta DB never got them

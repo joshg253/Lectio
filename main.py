@@ -7218,6 +7218,23 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     return image_url
 
 
+def _derive_article_lead_image(entry) -> str | None:
+    """Pick the article lead image, honoring an inline / media_rss feed strategy.
+
+    Those strategies derive the image straight from the entry's own content or
+    RSS fields and deliberately bypass the lead-image cache — the same extractors
+    the post-list thumbnail uses. The article view previously always called the
+    cache-consulting ``extract_entry_thumbnail_url``, so a stale negative cache
+    entry (image resolved as "none" before the feed was pinned to inline, e.g. a
+    DeviantArt gallery) made the article show no image while the list still
+    showed the inline thumbnail. Routing by strategy keeps the two consistent."""
+    feed_url = str(getattr(entry, "feed_url", "") or "")
+    strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
+    if strategy == "inline":
+        return lead_image_service.extract_inline_thumb_url(entry)
+    if strategy == "media_rss":
+        return lead_image_service.extract_media_rss_thumb_url(entry)
+    return lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
 _PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
@@ -7449,7 +7466,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
         _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
 
-        lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        lead_image_url = _derive_article_lead_image(entry)
         # Discard avatar/portrait images (author headshots, profile pics) that
         # some feeds embed as the first image; prefer no image over a face.
         # Check path only — CDN domains like "googleusercontent.com" contain
