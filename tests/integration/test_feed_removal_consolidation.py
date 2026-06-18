@@ -126,6 +126,28 @@ class TestPurgeOrphanedFeed:
                 main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False, rescue_to=FEED2)
         rescue_mock.assert_called_once_with(reader, FEED, FEED2)
 
+    def test_rescue_to_returns_rescued_count(self, env, monkeypatch):
+        """purge returns the count from _rescue_unread_entries so dedup can total it."""
+        _add_feed_to_folder(FEED, _root_folder_id())
+        _add_feed_to_folder(FEED2, _root_folder_id())
+        monkeypatch.setattr(main, "_rescue_unread_entries", MagicMock(return_value=4))
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        monkeypatch.setattr(main, "websub_service", None)
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                rescued = main.purge_orphaned_feed(reader, conn, FEED, archive_pending=False, rescue_to=FEED2)
+        assert rescued == 4
+
+    def test_no_rescue_returns_zero(self, env, monkeypatch):
+        """Without rescue_to, purge rescues nothing and returns 0."""
+        _add_feed_to_folder(FEED, _root_folder_id())
+        monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
+        monkeypatch.setattr(main, "websub_service", None)
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                rescued = main.purge_orphaned_feed(reader, conn, FEED, archive_pending=True)
+        assert rescued == 0
+
     def test_websub_none_does_not_raise(self, env, monkeypatch):
         _add_feed_to_folder(FEED, _root_folder_id())
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
@@ -180,12 +202,8 @@ class TestUnsubscribeRoute:
         ws_mock = MagicMock()
         monkeypatch.setattr(main, "websub_service", ws_mock)
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
-        main.unsubscribe_feed.__wrapped__ if hasattr(main.unsubscribe_feed, "__wrapped__") else None
-        # Call the underlying function directly (bypass FastAPI routing).
-        from starlette.testclient import TestClient
-        from starlette.requests import Request as StarletteRequest
-        # Easier: call remove_feed_from_folder which uses the same helper.
-        # But we want to test the route logic too — use the helper directly.
+        # Simulate the route's orphan path: drop the folder_feeds row, confirm the
+        # feed is no longer referenced, then purge — same sequence the route runs.
         with main.get_meta_connection() as conn:
             conn.execute(
                 "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
