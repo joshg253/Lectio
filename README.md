@@ -102,7 +102,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - WAL-mode SQLite for all databases
 
 ### Real-time updates
-- **WebSub (PubSubHubbub)** — feeds that advertise a hub receive real-time push updates instead of waiting for the next poll; HMAC-verified, subscriptions renewed automatically. Requires `LECTIO_PUBLIC_URL` in `.env`.
+- **WebSub (PubSubHubbub)** — feeds that advertise a hub receive real-time push updates instead of waiting for the next poll; HMAC-verified, subscriptions renewed automatically. Requires `LECTIO_PUBLIC_URL` in `.env`. Feeds with a confirmed active push subscription show a small ⚡ glyph next to their name in the sidebar and in Settings → Feeds, so you can tell at a glance which feeds deliver instantly. Unsubscribing a feed also sends the hub a proper unsubscription request so the subscription is cleaned up immediately rather than waiting for it to expire.
 
 ### API compatibility
 - **GReader API** — Google Reader-compatible API at `/greader`; works with Capy, Readrops, Aggregator, Read You, and other Android/desktop clients. Authenticate with your Lectio username and `LECTIO_FEVER_PASSWORD` (single mode) or your per-user API token from `/account` (multi mode).
