@@ -102,14 +102,13 @@ list) are both **done**. Remaining:
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 
-- **Bare-text feeds with literal URLs** (e.g. orpheus.network news): content is
-  empty and the summary is plain text with bare `https://…` URLs and
-  double-escaped `&lt;br&gt;`. The summary renders in a `<pre>` (template
-  `_entry_pane.html`), so URLs stay unclickable and the escaped breaks show as
-  literal text. The content_html pipeline already linkifies bare URLs and
-  normalizes `&lt;br&gt;`, but only runs when content_html exists. Consider
-  routing an HTML-ish/URL-bearing summary through the same pipeline instead of
-  the raw `<pre>` — scope carefully so genuinely plain text feeds are unaffected.
+- ~~**Bare-text feeds with literal URLs**~~ (e.g. orpheus.network news) — DONE.
+  `_promote_plaintext_summary` upgrades a summary that carries bare `https://…`
+  URLs or `<br>` / double-escaped `&lt;br&gt;` breaks into content_html
+  (breaks normalized to real `<br>`, URLs linkified, then the existing
+  `<br>`→paragraph pipeline runs on it). Genuinely plain prose returns None and
+  keeps the `<pre>` fallback so its whitespace layout is preserved. Test:
+  `tests/unit/test_plaintext_summary.py`.
 - **Paywalled teaser feeds** (e.g. selfh.st): the feed ships only a "subscribe to
   read the full-text RSS" stub; the full article is gated behind membership.
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
