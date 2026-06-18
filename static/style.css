@@ -3905,6 +3905,8 @@ body[data-keyboard-open="1"] .action-modal-panel {
   opacity: 0.8;
 }
 .feed-prop-history-error {
+  font-size: 0.8rem;
+}
 .feed-prop-automations-list {
   list-style: none;
   margin: 0.25rem 0 0.75rem;

@@ -165,6 +165,19 @@ list) are both **done**. Follow-ups all resolved:
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
   without the user's subscription. Documented as a known limitation.
 
+### Tag management — remove / delete tags
+
+Manual tagging is currently **add-only**. The article-pane tag editor submits in
+append mode (`append_mode=1` in `_entry_pane.html`), merging typed tags with the
+existing set, and the displayed `#tags` are filter links with no remove control.
+There is no tag-management screen, so a tag only leaves the sidebar once it's
+gone from every post. The `/entries/tags` route already supports replace
+(`append_mode=0`, which deletes any omitted tag) — the UI just never uses it.
+- **Per-post remove** — an `×` on each tag chip in the article pane that removes
+  that one tag from the post (submit the reduced set via `append_mode=0`).
+- **Delete everywhere** — a bulk action to strip a tag from every post that has
+  it; the sidebar entry disappears once its count hits zero.
+
 ### Ideas
 
 - **Inline SVG as thumbnail/lead image** — some feeds ship an inline `<svg>` (or a
