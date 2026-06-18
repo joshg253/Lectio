@@ -2107,7 +2107,8 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT PRIMARY KEY,
                 show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
                 show_lead_image_as_thumb INTEGER NOT NULL DEFAULT 1,
-                show_image_caption INTEGER NOT NULL DEFAULT -1
+                show_image_caption INTEGER NOT NULL DEFAULT -1,
+                caption_source TEXT
             )
             """
         )
@@ -2119,6 +2120,8 @@ def ensure_meta_schema() -> None:
                 image_url TEXT,
                 fetched_at REAL NOT NULL,
                 error TEXT,
+                image_alt TEXT,
+                image_title TEXT,
                 PRIMARY KEY (feed_url, strategy)
             )
             """
@@ -8556,12 +8559,15 @@ def _run_daily_maintenance() -> None:
 def _daily_maintenance_for_user() -> None:
     """Per-user nightly cleanup for the currently-bound tenancy user."""
 
-    # 1. Prune rule_run_log older than 90 days.
+    # 1. Prune rule_run_log older than 90 days. run_at is stored as a naive
+    # ISO-8601 string (datetime.now().isoformat()), so compare against an ISO
+    # cutoff — comparing the TEXT column to an int epoch never matched, and the
+    # column was misnamed ran_at, so this prune silently never ran.
     try:
-        cutoff = int(time.time()) - 90 * 86400
+        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         with get_meta_connection() as conn:
             old_ids = [r[0] for r in conn.execute(
-                "SELECT id FROM rule_run_log WHERE ran_at < ?", (cutoff,)
+                "SELECT id FROM rule_run_log WHERE run_at < ?", (cutoff,)
             ).fetchall()]
             if old_ids:
                 placeholders = ",".join("?" * len(old_ids))
