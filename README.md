@@ -85,6 +85,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Feed Properties** — health status, post counts, backoff state, per-feed image and thumbnail tuning
   - **Pause / Resume updates** — suspend automatic fetching for a feed without unsubscribing
   - **Change URL** — update a feed's URL in-place; history, images, rules, and display prefs migrate automatically
+  - **Automations tab** — shows which rules act on this feed (because they're scoped to it, its folder, or all feeds) and the recent automation runs that touched its entries, so you can see what Lectio is doing to a feed without reading the rules list
 - **Duplicate feed scan** (Manage Feeds → Duplicates) — detects feeds subscribed more than once under different URL variants: trailing-slash differences, format-selector params (`?alt=rss`), and known equivalent/renamed domains (e.g. `old.reddit.com` ↔ `www.reddit.com`, and `tapastic.com` → `tapas.io`). Renamed domains are rewritten automatically when adding or importing feeds. Same-folder duplicates are auto-removed; cross-folder duplicates let you choose which folder to keep. Optional **Rescue unread posts** (default on) marks entries in the surviving feed as unread if the removed feed had them unread, preventing posts silently lost to Deduplicate rules from disappearing permanently.
 
 ### Reliability
