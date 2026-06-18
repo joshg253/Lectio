@@ -52,7 +52,7 @@ Phasing:
      topic, so both the verification GET and the content push now fan out across
      `_background_user_ids()`: verification confirms whichever user has a pending
      subscription, and a push refreshes every subscriber (after confirming
-     authenticity against any one's secret) under that user's context. Previously
+     authenticity against any one user's secret) under that user's context. Previously
      both ran as the empty default tenant, so no real user's WebSub worked.
      Tests: `tests/integration/test_websub_fanout.py`.
    - **Update scheduling policy** — revisit cadence/fairness across many users
