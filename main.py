@@ -8433,7 +8433,7 @@ def purge_orphaned_feed(
     *,
     archive_pending: bool = True,
     rescue_to: str | None = None,
-) -> None:
+) -> int:
     """Delete a feed that has already been confirmed orphaned (no folder_feeds rows).
 
     Must be called AFTER the caller has removed all folder_feeds rows and
@@ -8467,6 +8467,12 @@ def purge_orphaned_feed(
     rescue_to:
         When set, mark read entries in *rescue_to* as unread when the removed
         feed had them unread (slug-matched).  Used by dedup/upgrade paths.
+
+    Returns
+    -------
+    int
+        The number of entries rescued into *rescue_to* (0 when *rescue_to* is
+        None).  Dedup callers accumulate this into their JSON ``rescued_count``.
     """
     # Step 1 — force-archive pending saves.
     if archive_pending:
@@ -8478,8 +8484,7 @@ def purge_orphaned_feed(
             LOGGER.warning("[purge] force-archive failed for %s: %s", feed_url, exc)
 
     # Step 2 — rescue unread entries into the surviving feed.
-    if rescue_to:
-        _rescue_unread_entries(reader, feed_url, rescue_to)
+    rescued = _rescue_unread_entries(reader, feed_url, rescue_to) if rescue_to else 0
 
     # Step 3 — dispatch the delete via the appropriate path.
     da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
@@ -8494,6 +8499,8 @@ def purge_orphaned_feed(
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
         websub_service.unsubscribe(feed_url)
+
+    return rescued
 
 
 def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
@@ -12458,7 +12465,7 @@ async def deduplicate_feeds(request: Request):
         if not still_used:
             with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    purge_orphaned_feed(
+                    rescued_count += purge_orphaned_feed(
                         reader, conn, feed_url,
                         archive_pending=False,
                         rescue_to=keep_url if rescue_unread else None,
@@ -12480,7 +12487,7 @@ async def deduplicate_feeds(request: Request):
         if not still_used:
             with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    purge_orphaned_feed(
+                    rescued_count += purge_orphaned_feed(
                         reader, conn, remove,
                         archive_pending=False,
                         rescue_to=keep if rescue_unread else None,
