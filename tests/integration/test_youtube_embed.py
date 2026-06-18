@@ -25,8 +25,18 @@ def test_embed_markup_is_playable():
     # Canonical YouTube embed: privacy host + referrerpolicy (authorizes the
     # embedding origin without the JS API).
     assert f"https://www.youtube-nocookie.com/embed/{VIDEO_ID}" in html
+    assert "?rel=0" in html
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in html
+    assert 'title="YouTube video player"' in html
     assert "allowfullscreen" in html
+
+
+def test_embed_escapes_video_id():
+    # Defense in depth: a video id is HTML-escaped before interpolation so a
+    # weakened upstream extractor can't break out of the src attribute.
+    out = main._youtube_embed_html('abc"><script>alert(1)</script>')
+    assert "<script>" not in out
+    assert 'src="https://www.youtube-nocookie.com/embed/abc&quot;' in out
 
 
 def _reset_reader_pool():
