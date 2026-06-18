@@ -9101,15 +9101,18 @@
             anyVisible = true;
             return;
           }
-          // Match on folder name OR feed names (per the "Filter folders and
-          // feeds…" copy). A folder-name match reveals the folder with all its
-          // feeds; otherwise show only the feeds that match.
+          // Match on folder name OR feed name OR feed URL (per the "Filter
+          // folders and feeds…" copy). A folder-name match reveals the folder
+          // with all its feeds; otherwise show only the feeds that match.
           const nameEl = folderRow.querySelector('.settings-folder-name-text');
           const folderMatch = !!nameEl && nameEl.textContent.toLowerCase().includes(q);
           let anyFeedMatch = false;
           feedRows.forEach(fr => {
             const t = fr.querySelector('.settings-feed-name-text');
-            const feedMatch = folderMatch || (!!t && t.textContent.toLowerCase().includes(q));
+            const url = (t && t.getAttribute('data-feed-properties-url')) || '';
+            const feedMatch = folderMatch
+              || (!!t && t.textContent.toLowerCase().includes(q))
+              || url.toLowerCase().includes(q);
             fr.hidden = !feedMatch;
             if (feedMatch) anyFeedMatch = true;
           });
