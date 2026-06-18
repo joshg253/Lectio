@@ -127,6 +127,36 @@ class FeedRefreshService:
             return f"{detail[:257]}..."
         return detail or "An unknown feed retrieval error occurred."
 
+    @staticmethod
+    def _http_status_of(exc: object) -> int | None:
+        """Pull the HTTP status off a reader update exception, if it carries one."""
+        http_info = getattr(exc, "http_info", None)
+        status = getattr(http_info, "status", None)
+        return int(status) if isinstance(status, int) else None
+
+    def _record_fetch_history(
+        self,
+        conn,
+        feed_url: str,
+        status: str,
+        *,
+        http_status: int | None = None,
+        new_entries: int | None = None,
+        duration_ms: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Append one row to the per-feed fetch history. Best-effort: history is
+        diagnostic, so a logging failure must never break the refresh itself."""
+        try:
+            conn.execute(
+                "INSERT INTO feed_fetch_history"
+                " (feed_url, fetched_at, status, http_status, new_entries, duration_ms, error)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (feed_url, time.time(), status, http_status, new_entries, duration_ms, error),
+            )
+        except Exception:
+            self._logger.debug("[refresh] fetch-history insert failed for %s", feed_url, exc_info=True)
+
     def update_feeds(self, feed_urls: Iterable[str]) -> None:
         feed_url_list = list(feed_urls)
         if self._refresh_debug_enabled:
@@ -227,8 +257,12 @@ class FeedRefreshService:
                     try:
                         if self._refresh_debug_enabled:
                             self._logger.info("[refresh] updating %d/%d: %s", idx, len(feed_url_list), feed_url)
-                        reader.update_feed(feed_url)
+                        _updated = reader.update_feed(feed_url)
                         success_count += 1
+                        # update_feed returns an UpdatedFeed (with new/modified
+                        # counts) or None when the feed was unchanged (304).
+                        _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                        _ok_duration_ms = int((time.perf_counter() - feed_started_at) * 1000)
                         if self._refresh_debug_enabled:
                             elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)
                             self._logger.info(
@@ -262,6 +296,10 @@ class FeedRefreshService:
                                     (domain,),
                                 )
                                 domain_state_map.pop(domain, None)
+                            self._record_fetch_history(
+                                conn, feed_url, "ok",
+                                new_entries=_new_entries, duration_ms=_ok_duration_ms,
+                            )
                     except Exception as exc:
                         # 410 Gone: the feed is permanently removed. Disable updates
                         # immediately instead of backing off and retrying forever.
@@ -286,6 +324,11 @@ class FeedRefreshService:
                                             last_failure_at = excluded.last_failure_at
                                         """,
                                         (feed_url, now_ts),
+                                    )
+                                    self._record_fetch_history(
+                                        conn, feed_url, "error", http_status=410,
+                                        duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                        error="410 Gone: feed has been permanently removed",
                                     )
                                 continue
                         except Exception:
@@ -351,6 +394,12 @@ class FeedRefreshService:
                                     "consecutive_failures": domain_consecutive,
                                     "next_retry_at": domain_next_retry_new,
                                 }
+                            self._record_fetch_history(
+                                conn, feed_url, "error",
+                                http_status=self._http_status_of(exc),
+                                duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                error=error_message,
+                            )
 
                         if self._refresh_debug_enabled:
                             elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)
