@@ -193,6 +193,26 @@ list) are both **done**. Follow-ups all resolved:
   icon and a noisy console 404. Investigate a fallback chain: try the site's
   own `/favicon.ico` (proxied), then a generic placeholder, instead of relying
   solely on Google. Consider caching results to avoid repeat lookups.
+- **Automated screenshot refresh** — script (Playwright or similar) to regenerate
+  the README/docs screenshots on demand. Must run against sanitized/demo data —
+  exclude private feeds (e.g. torrent trackers) so nothing sensitive lands in
+  committed images.
+- ~~**Push (WebSub) indicator**~~ — DONE. ⚡ glyph next to feed names in sidebar
+  and Settings → Feeds for feeds with a verified active WebSub subscription
+  (`verified=1 AND hub_url IS NOT NULL`). One query per page render into a `set`.
+  Disabled gracefully when `LECTIO_PUBLIC_URL` is blank. Test:
+  `tests/integration/test_feed_removal_consolidation.py`.
+
+### Code health
+
+- ~~**Duplicate / near-duplicate code deep dive**~~ — DONE. The five copy-pasted
+  feed-removal sequences (unsubscribe route, remove-from-folder, delete-folder,
+  dedup same/cross, format upgrade) collapsed into `purge_orphaned_feed`. Fixed
+  real bugs: the main unsubscribe button now sends a WebSub unsubscribe and routes
+  DA/scraped feeds through their special delete paths; delete-folder now
+  force-archives pending saves and WebSub-unsubscribes; dedup/upgrade now
+  WebSub-unsubscribe the removed URL. Test:
+  `tests/integration/test_feed_removal_consolidation.py`.
 
 ### Later
 
