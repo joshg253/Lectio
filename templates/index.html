@@ -4071,7 +4071,12 @@
       if (feedPropImgSection) feedPropImgSection.hidden = false;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
       if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
-      if (feedPropUnsubscribeBtn) feedPropUnsubscribeBtn.setAttribute('hidden', '');
+      if (feedPropUnsubscribeBtn) {
+        feedPropUnsubscribeBtn.setAttribute('hidden', '');
+        // Re-enable: the success path leaves it disabled, so without this a
+        // second open in the same page session has a dead (no-click) button.
+        feedPropUnsubscribeBtn.disabled = false;
+      }
       const activePost = document.querySelector('.post-item.active');
       const activeEntryId = (activePost?.getAttribute('data-post-feed-url') === feedUrl)
         ? (activePost?.getAttribute('data-post-entry-id') || '')
@@ -4939,6 +4944,11 @@
         // Remove from problematic-feeds panels (Failing / Acknowledged) if open
         document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(feedUrl)}"]`)
           .forEach(el => el.remove());
+        // Remove the Settings → Feeds row(s) for this feed so the change shows
+        // when the modal was opened from the settings list.
+        document.querySelectorAll(
+          `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
+        ).forEach(btn => btn.closest('.settings-feed-row')?.remove());
         showToastMessage(`Unsubscribed from "${title}".`);
         if (wasActive) {
           const params = new URLSearchParams(window.location.search);
