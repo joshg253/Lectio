@@ -2113,6 +2113,15 @@ button:hover, .button-link:hover {
   flex-shrink: 0;
 }
 
+.feed-push-badge {
+  font-size: 0.65rem;
+  opacity: 0.45;
+  line-height: 1;
+  flex-shrink: 0;
+  cursor: default;
+  user-select: none;
+}
+
 .post-title {
   flex: 1;
   font-weight: 700;

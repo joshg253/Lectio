@@ -215,6 +215,7 @@
                       <img class="feed-favicon" src="{{ feed.icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
                       {% endif %}
                       <span>{{ feed.title }}</span>
+                      {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
                     </span>
                     {% if feed.has_error %}<span class="feed-error-badge" title="Fetch errors — right-click → Properties for details">⚠</span>{% endif %}
                     {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
@@ -243,6 +244,7 @@
                     <img class="feed-favicon" src="{{ feed.icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
                     {% endif %}
                     <span>{{ feed.title }}</span>
+                    {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
                   </span>
                   {% if feed.has_error %}<span class="feed-error-badge" title="Fetch errors — right-click → Properties for details">⚠</span>{% endif %}
                   {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
@@ -1438,6 +1440,7 @@
             <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" hidden>
               <td class="settings-feed-name" colspan="3">
                 <button type="button" class="settings-feed-name-text settings-feed-name-btn" data-feed-properties-url="{{ feed.url }}"{% if feed.has_error %} data-feed-error="1"{% endif %} title="{{ feed.url }}">{{ feed.title }}</button>
+                {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
                 {% if feed.has_error %}<span class="settings-folder-error-badge" title="Feed is failing">!</span>{% endif %}
                 {% if feed.disabled %}<span class="settings-feed-disabled-tag">disabled</span>{% endif %}
               </td>
