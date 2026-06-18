@@ -268,7 +268,7 @@
               <li>
                 <a
                   class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
-                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}{{ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != 'all' else '') }}"
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}&read_filter=all&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
                   title="#{{ tag_row.name }}"
                 >
                   <span class="tag-label">#{{ tag_row.name }}</span>
@@ -3356,6 +3356,24 @@
         }
 
         const currentParams = new URL(window.location.href, window.location.origin).searchParams;
+
+        // Leaving a tag view: clicking a tag forces read_filter=all, so when the
+        // user then picks a folder/feed, restore the filter that was active
+        // before the tag (carried in resume_read_filter) — mirroring how exiting
+        // History returns to the prior filter. Drop the tag from the target.
+        if (currentParams.get('tag')) {
+          const resume = currentParams.get('resume_read_filter') || 'unread';
+          targetUrl.searchParams.set('read_filter', resume);
+          targetUrl.searchParams.set('resume_read_filter', resume);
+          for (const key of ['star_only', 'sort_by', 'sort_dir']) {
+            if (currentParams.has(key)) {
+              targetUrl.searchParams.set(key, currentParams.get(key) || '');
+            }
+          }
+          targetUrl.searchParams.delete('tag');
+          return;
+        }
+
         const currentReadFilter = currentParams.get('read_filter') || '';
         const shouldKeepTargetReadFilter =
           currentReadFilter === 'history' && linkEl.matches('.tree-item, .feed-link');
