@@ -191,11 +191,19 @@
       <span class="entry-tags-row-sep" aria-hidden="true"></span>
       {% if selected_entry.manual_tags %} {% for tag in
       selected_entry.manual_tags %}
-      <a
-        class="entry-tag-link {% if selected_tag == tag %}active{% endif %}"
-        href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}"
-        >#{{ tag }}</a
-      >
+      <span class="entry-tag-chip-wrap">
+        <a
+          class="entry-tag-link {% if selected_tag == tag %}active{% endif %}"
+          href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_read_filter }}"
+          >#{{ tag }}</a
+        ><button
+          type="button"
+          class="entry-tag-remove"
+          data-tag-remove="{{ tag }}"
+          title="Remove #{{ tag }} from this post"
+          aria-label="Remove #{{ tag }} from this post"
+        >×</button>
+      </span>
       {% endfor %} {% endif %}
       <form
         method="post"

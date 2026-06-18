@@ -41,6 +41,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - Folder tree with recursive post list; read/unread, saved/starred, tags, sort, and filter
 - Keyboard navigation throughout
 - **Context menus** — right-click (or long-press) a feed, folder, or entry for contextual actions (mark feed/folder as read, etc.) without leaving the current view
+- **Manual tags** — tag any article from the article pane (the `sell` button); tags appear in the left-pane Tags list and click to filter. Remove a single tag from a post with the `×` on its chip, or right-click any tag (sidebar list or article chip) → **Delete tag everywhere** to strip it from every post (the tag drops out of the sidebar once nothing references it)
 - **Bulk mark-as-read** — toolbar dropdown or context menu; updates the visible list in-place with no page reload
 - **Read History** — reverse-chronological list of individually-opened articles, capped at 2,000 entries (main menu or folder-pane footer)
 - **Readability view** — extracts clean article text from the source page

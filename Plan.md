@@ -4,6 +4,14 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Tag removal / deletion** — manual tagging was add-only. The article-pane tag
+  chips now carry an `×` that removes that one tag from the post (submits the
+  reduced set in replace mode, `append_mode=0`). Right-clicking any tag (sidebar
+  list or article-pane chip) opens a context menu with **Delete tag everywhere**,
+  which (after a confirm) strips the tag from every entry via `/tags/delete` →
+  `delete_manual_tag_everywhere`; the sidebar entry disappears once its count hits
+  zero (tag-counts cache is now invalidated on tag mutations). Test:
+  `tests/integration/test_tag_removal.py`.
 - **Article lead image honors inline/media_rss strategy** — feeds pinned to the
   `inline` strategy (e.g. DeviantArt galleries) could show a list thumbnail but
   no article image: the list thumb bypasses the lead-image cache, but the article
@@ -164,19 +172,6 @@ list) are both **done**. Follow-ups all resolved:
   read the full-text RSS" stub; the full article is gated behind membership.
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
   without the user's subscription. Documented as a known limitation.
-
-### Tag management — remove / delete tags
-
-Manual tagging is currently **add-only**. The article-pane tag editor submits in
-append mode (`append_mode=1` in `_entry_pane.html`), merging typed tags with the
-existing set, and the displayed `#tags` are filter links with no remove control.
-There is no tag-management screen, so a tag only leaves the sidebar once it's
-gone from every post. The `/entries/tags` route already supports replace
-(`append_mode=0`, which deletes any omitted tag) — the UI just never uses it.
-- **Per-post remove** — an `×` on each tag chip in the article pane that removes
-  that one tag from the post (submit the reduced set via `append_mode=0`).
-- **Delete everywhere** — a bulk action to strip a tag from every post that has
-  it; the sidebar entry disappears once its count hits zero.
 
 ### Ideas
 
