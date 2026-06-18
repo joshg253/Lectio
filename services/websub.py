@@ -191,6 +191,16 @@ class WebSubService:
 
     # ------------------------------------------------------------------ push HMAC verification (POST callback)
 
+    def has_verified_subscription(self, feed_url: str) -> bool:
+        """True if the current tenant has a verified subscription (with a secret)
+        for this topic. Used to fan a push out to every subscribing user."""
+        with self._get_meta() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM websub_subscriptions WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
+                (feed_url,),
+            ).fetchone()
+        return row is not None
+
     def verify_push_signature(self, feed_url: str, body: bytes, signature_header: str) -> bool:
         """Return True if the X-Hub-Signature header is valid for this subscription's secret."""
         with self._get_meta() as conn:

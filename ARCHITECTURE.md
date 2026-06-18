@@ -377,12 +377,14 @@ Storage: `fever_feed_map`, `fever_group_map`, `fever_entry_map` in the meta DB. 
 1. **Hub discovery** — on feed add and periodically during refresh, `_discover_hub_url` fetches the feed URL and looks for `rel="hub"` in the HTTP `Link` header or in `<atom:link>` / `<link>` XML elements. A "no hub found" attempt is recorded in `websub_subscriptions.hub_tried_at` so the check is not repeated for 7 days.
 2. **Subscription** — `subscribe(feed_url, hub_url)` posts `hub.mode=subscribe` with a random HMAC secret and a 7-day lease request. The row is written as `verified=0` until the hub confirms.
 3. **Verification callback** (`GET /websub/callback`) — hub sends `hub.challenge`; `handle_verification` confirms the topic matches, marks the row `verified=1`, and echoes the challenge. FastAPI query-alias params (`hub.mode`, `hub.topic`, `hub.challenge`, `hub.lease_seconds`) map the dot-notation params cleanly.
-4. **Push callback** (`POST /websub/callback`) — hub delivers content; `verify_push_signature` checks HMAC-SHA256 (or SHA1 fallback) against the stored secret. On success, `feed_refresh_service.update_feeds([feed_url])` runs in a daemon thread so the full pipeline (dedup, automation, lead images) runs on the fresh content.
+4. **Push callback** (`POST /websub/callback`) — hub delivers content; `verify_push_signature` checks HMAC-SHA256 (or SHA1 fallback) against the stored secret. On success, `feed_refresh_service.update_feeds([feed_url])` runs so the full pipeline (dedup, automation, lead images) runs on the fresh content.
 5. **Lease renewal** — `renew_expiring_subscriptions()` re-subscribes any verified row whose `expires_at` is within 24 hours. Called each refresh cycle.
+
+**Multi-user fan-out:** the callback URL carries only the topic (no user), and `websub_subscriptions` is a per-user meta table, so both callbacks fan out across `_background_user_ids()` rather than acting on a single tenant. `_websub_verify_fanout` confirms the handshake for whichever user(s) have a matching pending subscription; `_process_websub_push` collects every user with a verified subscription for the topic, confirms the push is authentic against *any* of their secrets (a forged push matches none), then refreshes each subscriber under its own tenancy context in a daemon thread. Because the shared callback means the hub only retains the most recent subscriber's secret, validating against any one secret and fanning the refresh out to all subscribers is what lets several users share a single hub subscription.
 
 The service is initialized only when `LECTIO_PUBLIC_URL` is set; all integration points in `main.py` guard on `if websub_service`. Unsubscription on feed removal is best-effort — hubs expire leases anyway.
 
-Storage: `websub_subscriptions (feed_url TEXT PK, hub_url TEXT, secret TEXT, lease_seconds INTEGER, subscribed_at REAL, expires_at REAL, verified INTEGER, hub_tried_at REAL)` in the meta DB.
+Storage: `websub_subscriptions (feed_url TEXT PK, hub_url TEXT, secret TEXT, lease_seconds INTEGER, subscribed_at REAL, expires_at REAL, verified INTEGER, hub_tried_at REAL)` in the per-user meta DB.
 
 ## Security direction
 
