@@ -4,6 +4,27 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **feed_strategy_cache / feed_display_prefs fresh-DB migration fix** — the
+  `image_alt`/`image_title` and `caption_source` columns were added by ALTERs
+  that ran before their table's `CREATE`, so a brand-new meta DB never got them
+  and `get_feed_properties` raised `no such column: image_alt`. Folded the
+  columns into the base `CREATE` (idempotent ALTERs kept for existing DBs).
+  Test: `tests/integration/test_meta_schema_migrations.py`.
+- **rule_run_log nightly prune fixed** — the 90-day prune in
+  `_daily_maintenance_for_user` queried a misnamed `ran_at` column and compared
+  the ISO-text `run_at` against an int epoch, so it always raised, was swallowed,
+  and the log grew unbounded. Now compares against an ISO cutoff on `run_at`.
+  Test: `tests/integration/test_maintenance_prune.py`.
+- **Inline YouTube player fixed** — the embed set `enablejsapi=1` without an
+  `origin=` parameter, which YouTube now refuses to play. Nothing in the app
+  drives the IFrame JS API, so the embed now uses YouTube's canonical markup
+  (`youtube-nocookie.com` host, `referrerpolicy`, no `enablejsapi`) via a single
+  `_youtube_embed_html` helper shared by both injection sites.
+- **Tag filter fixed** — clicking a manual tag now surfaces every tagged entry,
+  not just those inside the newest-N fetch window. The tag is pushed into
+  reader's native `tags=` argument (SQL-side match across the whole library)
+  instead of being post-filtered over the truncated page window, which had
+  hidden tagged entries older than that window.
 - **`/api/img` server-side cache** — the image proxy now caches fetched bytes in
   a global content-addressed store (`lectio_img_cache.sqlite`), downscaling to
   `LECTIO_IMG_CACHE_MAX_DIM` and evicting on a last-accessed TTL
@@ -52,6 +73,20 @@ Phasing:
      find which users subscribe to it (across per-user `websub_subscriptions`)
      and refresh each. Until then a push refreshes only the default user; other
      users still get the content on their next scheduled pass.
+   - ~~**Update scheduling policy**~~ — addressed for the current scale. Users
+     are still refreshed sequentially within a tick (every user every tick, which
+     is fine at 1–3 users), but `_rotate_for_fairness` now rotates the per-tick
+     start user round-robin so there's no fixed first-mover bias and a slow/hung
+     user delays a different set of downstream users each pass. Deeper fairness at
+     real scale (per-user concurrency, fetch budgets) stays deferred behind this
+     seam. Test: `tests/integration/test_scheduled_refresh_fairness.py`.
+   - ~~**WebSub push callback**~~ — DONE. The shared callback carries only the
+     topic, so both the verification GET and the content push now fan out across
+     `_background_user_ids()`: verification confirms whichever user has a pending
+     subscription, and a push refreshes every subscriber (after confirming
+     authenticity against any one user's secret) under that user's context. Previously
+     both ran as the empty default tenant, so no real user's WebSub worked.
+     Tests: `tests/integration/test_websub_fanout.py`.
    - **Update scheduling policy** — revisit cadence/fairness across many users
      (currently each user is processed sequentially every poll tick).
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
@@ -71,34 +106,55 @@ Phasing:
 
 ### Feed Properties — fetch history & automations
 
-- **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
-  feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
-  errors/backoff). Surfaces why a feed is stale or flagged problematic.
+- ~~**Fetch-history tab**~~ — DONE. New `feed_fetch_history` table logs one row
+  per non-skipped refresh attempt (status, HTTP status, new-entry count,
+  duration, error) from `FeedRefreshService`; `get_feed_fetch_history` feeds the
+  Feed Properties → **History** tab (All / New entries / Errors filters).
+  Retention bounded in daily maintenance (`LECTIO_FETCH_HISTORY_KEEP` per feed,
+  `LECTIO_FETCH_HISTORY_MAX_AGE_DAYS` age cap). Tests:
+  `tests/integration/test_fetch_history.py`.
 - **Automations-applied view** — show which automations (auto-taggers, dedup,
   strip rules, lead-image strategy overrides) have been applied to the feed, so
   the user can see what Lectio is doing to a feed's content without reading code.
+- **Fetch-history tab** — add a tab (or tabs) in Feed Properties showing the
+  feed's recent refresh/fetch history (timestamps, HTTP status, entries added,
+  errors/backoff). Surfaces why a feed is stale or flagged problematic.
+- ~~**Automations-applied view**~~ — DONE. Feed Properties → **Automations** tab
+  shows the rules in effect for a feed (global / its folder / feed-scoped, from
+  `highlight_keywords`) plus recent runs that touched its entries (from
+  `rule_run_log_entries`). `collect_feed_automations` in main.py; tests in
+  `tests/integration/test_feed_automations.py`.
 
 ### DeviantArt — remaining follow-ups
 
 Phase 1 (public galleries via OAuth2 **client-credentials**, rendered to `file://`
 feeds) and Phase 2 (the **authorization_code** flow: per-user connect/disconnect,
 token refresh, watch-list → feeds sync (add-only), and push-galleries → DA watch
-list) are both **done**. Remaining:
-- **Auto watch-list sync** on a schedule (currently manual via the Settings
-  button) — fold into daily maintenance like the YouTube sync, for connected users.
-- **Mature deviations** — the user token unlocks full-resolution mature content;
-  confirm the gallery fetch passes the user token (not just the app token) for
-  connected users so `!NSFW`-folder images aren't withheld/blurred.
-- **wixmp hotlink images** — if DeviantArt's `wixmp.com` image URLs 403 on
-  hotlink, add `wixmp.com` to the `/api/img` proxy allowlist.
+list) are both **done**. Follow-ups all resolved:
+- ~~**Auto watch-list sync**~~ — DONE. `sync_deviantart_watchlist` now runs in
+  `_daily_maintenance_for_user` for connected users (gated on a user token),
+  alongside the YouTube sync; still available on demand from the Settings button.
+  Test: `tests/integration/test_deviantart_maintenance_sync.py`.
+- ~~**Mature deviations**~~ — already correct. Every connected refresh path
+  (watch-list sync, watch feed, scheduled + manual `refresh_all_deviantart_feeds`)
+  passes `get_deviantart_user_token()` into `fetch_gallery`/`fetch_watch_feed`,
+  and both always send `mature_content=true`. The only token-less caller is the
+  not-connected standalone-gallery fallback, which has no user token by design.
+- ~~**wixmp hotlink images**~~ — already handled. `wixmp.com` is in
+  `_HOTLINK_IMG_HOSTS`, so its `<img>` URLs route through the `/api/img` proxy.
 
 ### Podcast feeds — missing embedded audio
 
-- Some podcast feeds render without the inline `<audio>` player. The injector
-  (`_find_entry_audio_url` + the audio-player block in the entry route) only
-  fires for entries with an audio enclosure it recognizes; investigate feeds
-  whose audio lives in a non-standard enclosure/`media:content` shape or only in
-  the entry link, and broaden detection.
+- ~~Broaden inline-audio detection~~ — DONE. `_find_entry_audio_url` now matches
+  enclosures by audio extension on the URL *path* (so `?token=` query strings and
+  untyped/oddly-typed enclosures still match), covers more extensions
+  (`.m4b/.aac/.oga/.flac`), and falls back to the entry link when it points
+  straight at an audio file. Test: `tests/unit/test_audio_detection.py`.
+- **Remaining (media:content):** audio that lives only in `<media:content>` still
+  isn't detected — the `reader` library keeps standard `<enclosure>` elements but
+  drops media:content, so it never reaches the entry object. Supporting it would
+  need re-parsing the raw feed (or a reader-layer change); deferred as a separate,
+  larger effort.
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 
@@ -147,6 +203,14 @@ list) are both **done**. Remaining:
 
 ## Backburner
 
+- **feed_strategy_cache migration ordering (latent)** — in `ensure_meta_schema`,
+  the `ALTER TABLE feed_strategy_cache ADD COLUMN image_alt/image_title`
+  statements run *before* the table's `CREATE TABLE IF NOT EXISTS`, so on a
+  brand-new meta DB the ALTERs hit "no such table" (swallowed) and the base
+  CREATE then makes the table without those columns — `get_feed_properties`
+  would `OperationalError: no such column: image_alt`. Existing DBs were
+  migrated before the reorder so they're fine; fix by moving the CREATE ahead of
+  the ALTERs (or folding the columns into the base CREATE).
 - **Deployment genericization (minimal, after multi-user phases)** — the app is
   already proxy-agnostic; the coupling is in packaging. Decided scope: make the
   base `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels),
