@@ -52,8 +52,13 @@ Phasing:
      find which users subscribe to it (across per-user `websub_subscriptions`)
      and refresh each. Until then a push refreshes only the default user; other
      users still get the content on their next scheduled pass.
-   - **Update scheduling policy** — revisit cadence/fairness across many users
-     (currently each user is processed sequentially every poll tick).
+   - ~~**Update scheduling policy**~~ — addressed for the current scale. Users
+     are still refreshed sequentially within a tick (every user every tick, which
+     is fine at 1–3 users), but `_rotate_for_fairness` now rotates the per-tick
+     start user round-robin so there's no fixed first-mover bias and a slow/hung
+     user delays a different set of downstream users each pass. Deeper fairness at
+     real scale (per-user concurrency, fetch budgets) stays deferred behind this
+     seam. Test: `tests/integration/test_scheduled_refresh_fairness.py`.
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
    `url_guard.safe_get` / `safe_get_async` follow redirects manually and
    re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
