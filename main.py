@@ -8531,12 +8531,13 @@ def _daily_maintenance_for_user() -> None:
     if get_deviantart_user_token():
         try:
             result = sync_deviantart_watchlist()
+            rate_suffix = " (rate limited)" if result.get("rate_limited") else ""
             if result.get("error"):
-                LOGGER.error("[maintenance] DeviantArt watch-list sync error: %s", result["error"])
+                LOGGER.error("[maintenance] DeviantArt watch-list sync error%s: %s",
+                             rate_suffix, result["error"])
             else:
                 LOGGER.info("[maintenance] DeviantArt watch-list sync: +%d watched=%d%s",
-                            result.get("added", 0), result.get("total", 0),
-                            " (rate limited)" if result.get("rate_limited") else "")
+                            result.get("added", 0), result.get("total", 0), rate_suffix)
         except Exception:
             LOGGER.exception("[maintenance] DeviantArt watch-list sync failed")
 
