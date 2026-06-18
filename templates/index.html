@@ -268,7 +268,7 @@
               <li>
                 <a
                   class="tag-link {% if selected_tag == tag_row.name %}active{% endif %}"
-                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}{{ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != 'all' else '') }}"
+                  href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag_row.name | urlencode }}{{ _tree_sq }}&read_filter=all&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
                   title="#{{ tag_row.name }}"
                 >
                   <span class="tag-label">#{{ tag_row.name }}</span>
@@ -1120,6 +1120,10 @@
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
 
+  <div id="tag-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-tag-delete" class="context-menu-item danger">Delete tag everywhere</button>
+  </div>
+
   <div id="debug-confirm-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">
       <div class="modal-header-row">
@@ -1391,6 +1395,13 @@
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
           {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
+          {# Also list feeds attached directly to the root "All Feeds" folder
+             (depth 0) — otherwise feeds added without a folder are invisible
+             and unmanageable here. Shown last, labelled "Ungrouped". #}
+          {% set _root_rows = folder_rows | selectattr('depth', 'equalto', 0) | list %}
+          {% if _root_rows and settings_feeds_by_folder.get(_root_rows[0].id) %}
+          {% set child_rows = child_rows + [_root_rows[0]] %}
+          {% endif %}
           {% if child_rows %}
           {% set cadence_options = [(0, 'Global'), (1, '1 min'), (2, '2 min'), (5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '1 hr'), (120, '2 hr'), (360, '6 hr'), (720, '12 hr'), (1440, '1 day')] %}
           <div class="feeds-folder-search">
@@ -1407,7 +1418,7 @@
             <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
               <td class="settings-folder-name">
                 <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
-                <span class="settings-folder-name-text">{{ row.name }}</span>
+                <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
                 {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
@@ -1437,6 +1448,7 @@
                 {% else %}
                 <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-disable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Disable feed" aria-label="Disable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility_off</span></button>
                 {% endif %}
+                <button type="button" class="settings-folder-props-btn settings-feed-unsub-btn" data-settings-feed-unsubscribe data-feed-url="{{ feed.url }}" data-feed-title="{{ feed.title }}" data-folder-id="{{ row.id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
               </td>
             </tr>
             {% endfor %}
@@ -2915,6 +2927,8 @@
     const contextMenu = document.getElementById('folder-context-menu');
     const rootContextMenu = document.getElementById('root-context-menu');
     const postContextMenu = document.getElementById('post-context-menu');
+    const tagContextMenu = document.getElementById('tag-context-menu');
+    let contextTagName = null;
     const treeNav = document.querySelector('.tree');
     const refreshButton = document.getElementById('ctx-refresh');
     const markReadButton = document.getElementById('ctx-mark-read');
@@ -3350,6 +3364,24 @@
         }
 
         const currentParams = new URL(window.location.href, window.location.origin).searchParams;
+
+        // Leaving a tag view: clicking a tag forces read_filter=all, so when the
+        // user then picks a folder/feed, restore the filter that was active
+        // before the tag (carried in resume_read_filter) — mirroring how exiting
+        // History returns to the prior filter. Drop the tag from the target.
+        if (currentParams.get('tag')) {
+          const resume = currentParams.get('resume_read_filter') || 'unread';
+          targetUrl.searchParams.set('read_filter', resume);
+          targetUrl.searchParams.set('resume_read_filter', resume);
+          for (const key of ['star_only', 'sort_by', 'sort_dir']) {
+            if (currentParams.has(key)) {
+              targetUrl.searchParams.set(key, currentParams.get(key) || '');
+            }
+          }
+          targetUrl.searchParams.delete('tag');
+          return;
+        }
+
         const currentReadFilter = currentParams.get('read_filter') || '';
         const shouldKeepTargetReadFilter =
           currentReadFilter === 'history' && linkEl.matches('.tree-item, .feed-link');
@@ -3960,6 +3992,24 @@
       rootContextMenu.setAttribute('hidden', '');
     }
 
+    function showTagContextMenu(event) {
+      if (!tagContextMenu) {
+        return;
+      }
+      hideContextMenu();
+      hideRootContextMenu();
+      hidePostContextMenu();
+      positionMenuInViewport(tagContextMenu, event.clientX, event.clientY);
+      tagContextMenu.removeAttribute('hidden');
+    }
+
+    function hideTagContextMenu() {
+      if (!tagContextMenu) {
+        return;
+      }
+      tagContextMenu.setAttribute('hidden', '');
+    }
+
     function setMenuItemVisible(item, visible) {
       if (!item) {
         return;
@@ -3977,6 +4027,7 @@
       hideContextMenu();
       hidePostContextMenu();
       hideRootContextMenu();
+      hideTagContextMenu();
     }
 
     function closeFeedPropertiesModal() {
@@ -4027,7 +4078,12 @@
       if (feedPropImgSection) feedPropImgSection.hidden = false;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
       if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
-      if (feedPropUnsubscribeBtn) feedPropUnsubscribeBtn.setAttribute('hidden', '');
+      if (feedPropUnsubscribeBtn) {
+        feedPropUnsubscribeBtn.setAttribute('hidden', '');
+        // Re-enable: the success path leaves it disabled, so without this a
+        // second open in the same page session has a dead (no-click) button.
+        feedPropUnsubscribeBtn.disabled = false;
+      }
       const activePost = document.querySelector('.post-item.active');
       const activeEntryId = (activePost?.getAttribute('data-post-feed-url') === feedUrl)
         ? (activePost?.getAttribute('data-post-entry-id') || '')
@@ -4057,7 +4113,7 @@
 
         const data = await response.json();
         if (!data.found) {
-          setFeedPropText(feedPropTitle, feedUrl);
+          setFeedPropText(feedPropRealTitle, feedUrl);
           setFeedPropText(feedPropHealth, 'error');
           setFeedPropText(feedPropHealthDetail, data.error || 'Feed not found.');
           return;
@@ -4872,38 +4928,86 @@
       _feedPropCloseOnClick = false;
     });
 
+    // Single source of truth for unsubscribing one feed from one folder. Every
+    // entry point (sidebar context menu, Feed Properties modal, Settings feed
+    // row, problematic-feeds panels) calls this so the request + UI cleanup stay
+    // identical and can't drift. POSTs, then strips the feed from all surfaces
+    // (sidebar tree, Settings list, problem panels). Throws on a failed request
+    // so callers can surface their own error UI. `function` decl is hoisted, so
+    // callers defined earlier/later in this scope can all use it.
+    async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
+      const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
+      const resp = await fetch('/feeds/unsubscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
+        credentials: 'same-origin',
+        body: body.toString(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const fu = CSS.escape(feedUrl);
+      const fid = CSS.escape(String(folderId));
+      document.querySelector(
+        `.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${fid}"]`
+      )?.closest('.tree-feed-item')?.remove();
+      let removedSettingsRows = 0;
+      document.querySelectorAll(
+        `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"][data-folder-id="${fid}"]`
+      ).forEach(btn => { if (btn.closest('.settings-feed-row')) { btn.closest('.settings-feed-row').remove(); removedSettingsRows++; } });
+      // Keep the Settings folder row consistent: decrement its feed count and,
+      // if it's now empty, disable/collapse its expand toggle.
+      if (removedSettingsRows) {
+        const folderRow = document.querySelector(`.settings-folder-row[data-folder-row="${fid}"]`);
+        const countCell = folderRow?.querySelector('.settings-folder-feeds');
+        if (countCell) {
+          const n = Math.max(0, (parseInt(countCell.textContent, 10) || 0) - removedSettingsRows);
+          countCell.textContent = String(n);
+          if (n === 0) {
+            const toggle = folderRow.querySelector('[data-folder-toggle]');
+            toggle?.setAttribute('disabled', '');
+            toggle?.setAttribute('aria-expanded', 'false');
+          }
+        }
+      }
+      document.querySelectorAll(`.problem-feed-item[data-feed-url="${fu}"]`).forEach(el => el.remove());
+
+      if (opts.title) showToastMessage(`Unsubscribed from "${opts.title}".`);
+
+      // Refresh the post list so entries from the now-removed feed disappear.
+      // If the list is scoped to this very feed, open its folder instead; for a
+      // folder/All-Feeds/tag view, just reload the current scope in place.
+      // Prefer a soft (SPA) refresh; fall back to full navigation only when the
+      // feed itself was the active scope.
+      if (opts.refresh !== false) {
+        const cur = new URL(window.location.href, window.location.origin);
+        const viewingThisFeed = cur.searchParams.get('list_feed_url') === feedUrl;
+        if (viewingThisFeed) {
+          cur.searchParams.delete('list_feed_url');
+          cur.searchParams.delete('feed_url');
+          cur.searchParams.delete('entry_id');
+          cur.searchParams.set('folder_id', String(folderId));
+        }
+        const target = cur.pathname + cur.search;
+        if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+          // pushHistory only when we changed scope (left the dead feed view).
+          loadScopePanesWithoutFullRefresh(target, viewingThisFeed);
+        } else if (viewingThisFeed) {
+          window.location.assign(target);
+        }
+      }
+    }
+
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropUnsubscribeBtn.dataset.feedUrl;
-      const folderIdStr = (feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0];
-      const folderId = parseInt(folderIdStr, 10);
+      const folderId = parseInt((feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0], 10);
       if (!feedUrl || !folderId) return;
-      const title = feedPropTitle?.textContent || feedUrl;
+      const title = feedPropRealTitle?.textContent || feedUrl;
       if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
       feedPropUnsubscribeBtn.disabled = true;
-      const feedLi = document.querySelector(
-        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
-      )?.closest('.tree-feed-item');
-      if (feedLi) feedLi.style.opacity = '0.4';
-      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
       try {
-        const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
-        const resp = await fetch('/feeds/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' }, credentials: 'same-origin', body: body.toString() });
-        if (!resp.ok) throw new Error('request failed');
+        await unsubscribeFeedRequest(feedUrl, folderId, { title });
         closeFeedPropertiesModal();
-        // Remove from sidebar tree
-        if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
-        // Remove from problematic-feeds panels (Failing / Acknowledged) if open
-        document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(feedUrl)}"]`)
-          .forEach(el => el.remove());
-        showToastMessage(`Unsubscribed from "${title}".`);
-        if (wasActive) {
-          const params = new URLSearchParams(window.location.search);
-          params.delete('feed_url'); params.delete('entry_id');
-          params.set('folder_id', String(folderId));
-          window.location.assign('/?' + params.toString());
-        }
       } catch {
-        if (feedLi) feedLi.style.opacity = '';
         window.alert('Unsubscribe failed. Please try again.');
         feedPropUnsubscribeBtn.disabled = false;
       }
@@ -5384,6 +5488,64 @@
       hideFolderSubmenu();
       showContextMenu(event);
     }, true);
+
+    // Right-click a tag (sidebar list or article-pane chip) to manage it.
+    // Capture phase so it wins over the tag links' own navigation handlers.
+    document.addEventListener('contextmenu', (event) => {
+      if (!(event.target instanceof Element) || !tagContextMenu) {
+        return;
+      }
+      const tagTarget = event.target.closest('.tag-link, .entry-tag-link');
+      if (!tagTarget) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      // Sidebar links carry the tag in data via the href; chips render #tag text.
+      const params = new URLSearchParams((tagTarget.getAttribute('href') || '').split('?')[1] || '');
+      contextTagName = (params.get('tag') || tagTarget.textContent || '').trim().replace(/^#+/, '').toLowerCase();
+      if (!contextTagName) {
+        return;
+      }
+      showTagContextMenu(event);
+    }, true);
+
+    document.getElementById('ctx-tag-delete')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const tagName = contextTagName;
+      hideAllContextMenus();
+      if (!tagName) {
+        return;
+      }
+      if (!window.confirm(`Delete the tag "#${tagName}" from every post?\n\nThis removes the tag everywhere it appears. This cannot be undone.`)) {
+        return;
+      }
+      try {
+        const body = new URLSearchParams({ tag: tagName });
+        const resp = await fetch('/tags/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' },
+          credentials: 'same-origin',
+          body: body.toString(),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!data.ok) {
+          showToastMessage(data.error || 'Failed to delete tag.');
+          return;
+        }
+        // Drop the tag's filter from the URL if it was active, then reload so
+        // the sidebar counts and any tagged-view list refresh consistently.
+        const urlParams = new URLSearchParams(window.location.search);
+        if ((urlParams.get('tag') || '').toLowerCase() === tagName) {
+          urlParams.delete('tag');
+        }
+        window.location.assign('/?' + urlParams.toString());
+      } catch {
+        showToastMessage('Failed to delete tag.');
+      }
+    });
 
     refreshButton?.addEventListener('click', () => {
       if (contextTargetType === 'feed') {
@@ -6677,48 +6839,21 @@
         return;
       }
 
-      const confirmed = window.confirm(`Unsubscribe feed \"${contextFolderName.trim() || contextFeedUrl}\"?`);
-      if (!confirmed) {
+      const title = contextFolderName.trim() || contextFeedUrl;
+      if (!window.confirm(`Unsubscribe feed "${title}"?`)) {
         hideContextMenu();
         return;
       }
-
       hideAllContextMenus();
 
-      // Find the sidebar <li> for this feed before the async call so we can
-      // remove it on success without a full reload.
+      const feedUrl = contextFeedUrl;
+      const folderId = contextFolderId;
       const feedLi = document.querySelector(
-        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(contextFeedUrl)}"][data-folder-id="${CSS.escape(String(contextFolderId))}"]`
+        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
       )?.closest('.tree-feed-item');
-
-      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
       if (feedLi) feedLi.style.opacity = '0.4';
 
-      const body = new URLSearchParams();
-      body.set('folder_id', contextFolderId);
-      body.set('feed_url', contextFeedUrl);
-      fetch('/feeds/unsubscribe', {
-        method: 'POST',
-        headers: {
-          'X-Requested-With': 'lectio-sidebar',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        credentials: 'same-origin',
-        body: body.toString(),
-      })
-        .then((response) => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
-          if (wasActive) {
-            // Navigate to the folder view so the post list is no longer
-            // showing entries from a feed that no longer exists.
-            const params = new URLSearchParams(window.location.search);
-            params.delete('feed_url');
-            params.delete('entry_id');
-            params.set('folder_id', String(contextFolderId));
-            window.location.assign('/?' + params.toString());
-          }
-        })
+      unsubscribeFeedRequest(feedUrl, folderId, { title })
         .catch((err) => {
           if (feedLi) feedLi.style.opacity = '';
           window.alert(`Unsubscribe failed: ${err}`);
@@ -9001,15 +9136,18 @@
             anyVisible = true;
             return;
           }
-          // Match on folder name OR feed names (per the "Filter folders and
-          // feeds…" copy). A folder-name match reveals the folder with all its
-          // feeds; otherwise show only the feeds that match.
+          // Match on folder name OR feed name OR feed URL (per the "Filter
+          // folders and feeds…" copy). A folder-name match reveals the folder
+          // with all its feeds; otherwise show only the feeds that match.
           const nameEl = folderRow.querySelector('.settings-folder-name-text');
           const folderMatch = !!nameEl && nameEl.textContent.toLowerCase().includes(q);
           let anyFeedMatch = false;
           feedRows.forEach(fr => {
             const t = fr.querySelector('.settings-feed-name-text');
-            const feedMatch = folderMatch || (!!t && t.textContent.toLowerCase().includes(q));
+            const url = (t && t.getAttribute('data-feed-properties-url')) || '';
+            const feedMatch = folderMatch
+              || (!!t && t.textContent.toLowerCase().includes(q))
+              || url.toLowerCase().includes(q);
             fr.hidden = !feedMatch;
             if (feedMatch) anyFeedMatch = true;
           });
@@ -9208,28 +9346,17 @@
         if (!window.confirm(`Unsubscribe from this feed?\n\n${url}`)) return;
 
         const li = unsubTrigger.closest('.problem-feed-item');
+        // Capture the panel before the helper removes the row, so we can update
+        // its count/empty-state afterward.
+        const isAcked = li?.closest('[data-problem-panel="acked"]');
+        const panelKey = isAcked ? 'acked' : 'failing';
+        const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
         if (li) li.style.opacity = '0.4';
         unsubTrigger.disabled = true;
 
-        const body = new URLSearchParams();
-        body.set('folder_id', folderId);
-        body.set('feed_url', url);
-        fetch('/feeds/unsubscribe', {
-          method: 'POST',
-          headers: {
-            'X-Requested-With': 'lectio-problem-feeds',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          credentials: 'same-origin',
-          body: body.toString(),
-        })
-          .then((response) => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        unsubscribeFeedRequest(url, folderId)
+          .then(() => {
             const modal = document.getElementById('problematic-feeds-modal');
-            const isAcked = li?.closest('[data-problem-panel="acked"]');
-            const panelKey = isAcked ? 'acked' : 'failing';
-            const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
-            if (li && li.parentNode) li.parentNode.removeChild(li);
             if (modal) {
               updateProblemTabCount(panelKey, -1);
               const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
@@ -9239,6 +9366,28 @@
           .catch((err) => {
             if (li) li.style.opacity = '';
             unsubTrigger.disabled = false;
+            window.alert(`Unsubscribe failed: ${err}`);
+          });
+      }
+
+      // Settings → Feeds → Folders: trashcan on each feed row.
+      const settingsUnsub = event.target.closest('[data-settings-feed-unsubscribe]');
+      if (settingsUnsub) {
+        event.preventDefault();
+        const url = settingsUnsub.getAttribute('data-feed-url');
+        const folderId = settingsUnsub.getAttribute('data-folder-id');
+        const title = settingsUnsub.getAttribute('data-feed-title') || url;
+        if (!url || !folderId) return;
+        if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.\n\n${url}`)) return;
+
+        const tr = settingsUnsub.closest('.settings-feed-row');
+        if (tr) tr.style.opacity = '0.4';
+        settingsUnsub.disabled = true;
+
+        unsubscribeFeedRequest(url, folderId, { title })
+          .catch((err) => {
+            if (tr) tr.style.opacity = '';
+            settingsUnsub.disabled = false;
             window.alert(`Unsubscribe failed: ${err}`);
           });
       }
@@ -9955,6 +10104,52 @@
           targetInput.focus();
         });
       }
+
+      // Per-post tag removal — the × on each tag chip submits the reduced set
+      // in replace mode (append_mode=0) so the one tag drops off this post.
+      for (const removeBtn of document.querySelectorAll('[data-tag-remove]')) {
+        if (removeBtn.dataset.boundClick) {
+          continue;
+        }
+        removeBtn.dataset.boundClick = '1';
+        removeBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!(entryTagsForm instanceof HTMLFormElement) || !(entryTagsMergedInput instanceof HTMLInputElement)) {
+            return;
+          }
+          const tagToRemove = normalizeTagToken(removeBtn.getAttribute('data-tag-remove') || '');
+          if (!tagToRemove) {
+            return;
+          }
+
+          const reduced = tokenizeTags(entryTagsMergedInput.value).filter((token) => token !== tagToRemove);
+          const body = new URLSearchParams(new FormData(entryTagsForm));
+          body.set('append_mode', '0');
+          body.set('tags_text', reduced.join(' '));
+
+          removeBtn.disabled = true;
+          try {
+            const resp = await fetch('/entries/tags', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+              credentials: 'same-origin',
+              body: body.toString(),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            } else {
+              removeBtn.disabled = false;
+              showToastMessage(data.error || 'Failed to remove tag.');
+            }
+          } catch {
+            removeBtn.disabled = false;
+            showToastMessage('Failed to remove tag.');
+          }
+        });
+      }
     }
 
     function isTypingTarget(target) {
@@ -10190,13 +10385,10 @@
         if (d.status === 'feed' || d.status === 'feeds') {
           selectedFeedUrl = d.feeds[0].url;
           if (d.direct) {
-            const fid = folderSelect.value === '__new__' ? null : folderSelect.value;
-            if (fid) {
-              document.getElementById('afd-ff-url').value = selectedFeedUrl;
-              document.getElementById('afd-ff-folder').value = fid;
-              document.getElementById('afd-feed-form').submit();
-              return;
-            }
+            // Direct feed URL: enable the button and let the user pick their
+            // folder and click Add Feed. (Previously this auto-submitted on
+            // validation using whatever folder was selected — usually the
+            // default root — ignoring the user's folder choice and button click.)
             setMsg('Direct feed URL.', 'ok');
             submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
           } else {
