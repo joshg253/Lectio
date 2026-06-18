@@ -137,7 +137,10 @@ Per-user background work: the scheduled refresh loop and the daily-maintenance
 loop both iterate every enabled user (`_background_user_ids`) and run each pass
 under that user's context — feeds refresh on each user's cadence, and per-user
 maintenance (rule-log prune, orphan cleanup, meta/starred VACUUM, email-batch
-flush) runs against each user's DBs. The startup tasks follow the same rule:
+flush) runs against each user's DBs. Users are processed sequentially within a
+tick (every user every tick); `_rotate_for_fairness` rotates the per-tick start
+user round-robin so there's no fixed first-mover bias — adequate at the 1–3 user
+target, with per-user concurrency and fetch budgets deferred behind that seam. The startup tasks follow the same rule:
 the scraped-feed sync, auto-taggers, guid-churn dedup, and the YouTube /
 lead-image / starred-archive / read-history backfills all run once per enabled
 user via `_for_each_background_user` — a bare daemon thread inherits no
