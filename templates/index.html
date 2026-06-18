@@ -1395,6 +1395,13 @@
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
           {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
+          {# Also list feeds attached directly to the root "All Feeds" folder
+             (depth 0) — otherwise feeds added without a folder are invisible
+             and unmanageable here. Shown last, labelled "Ungrouped". #}
+          {% set _root_rows = folder_rows | selectattr('depth', 'equalto', 0) | list %}
+          {% if _root_rows and settings_feeds_by_folder.get(_root_rows[0].id) %}
+          {% set child_rows = child_rows + [_root_rows[0]] %}
+          {% endif %}
           {% if child_rows %}
           {% set cadence_options = [(0, 'Global'), (1, '1 min'), (2, '2 min'), (5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '1 hr'), (120, '2 hr'), (360, '6 hr'), (720, '12 hr'), (1440, '1 day')] %}
           <div class="feeds-folder-search">
@@ -1411,7 +1418,7 @@
             <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
               <td class="settings-folder-name">
                 <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
-                <span class="settings-folder-name-text">{{ row.name }}</span>
+                <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
                 {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
@@ -4940,24 +4947,38 @@
 
       const fu = CSS.escape(feedUrl);
       const fid = CSS.escape(String(folderId));
-      const feedLi = document.querySelector(
+      document.querySelector(
         `.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${fid}"]`
-      )?.closest('.tree-feed-item');
-      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
-      feedLi?.remove();
+      )?.closest('.tree-feed-item')?.remove();
       document.querySelectorAll(
         `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"][data-folder-id="${fid}"]`
       ).forEach(btn => btn.closest('.settings-feed-row')?.remove());
       document.querySelectorAll(`.problem-feed-item[data-feed-url="${fu}"]`).forEach(el => el.remove());
 
       if (opts.title) showToastMessage(`Unsubscribed from "${opts.title}".`);
-      if (opts.reloadIfActive && wasActive) {
-        const params = new URLSearchParams(window.location.search);
-        params.delete('feed_url'); params.delete('entry_id');
-        params.set('folder_id', String(folderId));
-        window.location.assign('/?' + params.toString());
+
+      // Refresh the post list so entries from the now-removed feed disappear.
+      // If the list is scoped to this very feed, open its folder instead; for a
+      // folder/All-Feeds/tag view, just reload the current scope in place.
+      // Prefer a soft (SPA) refresh; fall back to full navigation only when the
+      // feed itself was the active scope.
+      if (opts.refresh !== false) {
+        const cur = new URL(window.location.href, window.location.origin);
+        const viewingThisFeed = cur.searchParams.get('list_feed_url') === feedUrl;
+        if (viewingThisFeed) {
+          cur.searchParams.delete('list_feed_url');
+          cur.searchParams.delete('feed_url');
+          cur.searchParams.delete('entry_id');
+          cur.searchParams.set('folder_id', String(folderId));
+        }
+        const target = cur.pathname + cur.search;
+        if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+          // pushHistory only when we changed scope (left the dead feed view).
+          loadScopePanesWithoutFullRefresh(target, viewingThisFeed);
+        } else if (viewingThisFeed) {
+          window.location.assign(target);
+        }
       }
-      return { wasActive };
     }
 
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
@@ -4968,7 +4989,7 @@
       if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
       feedPropUnsubscribeBtn.disabled = true;
       try {
-        await unsubscribeFeedRequest(feedUrl, folderId, { title, reloadIfActive: true });
+        await unsubscribeFeedRequest(feedUrl, folderId, { title });
         closeFeedPropertiesModal();
       } catch {
         window.alert('Unsubscribe failed. Please try again.');
@@ -6815,7 +6836,7 @@
       )?.closest('.tree-feed-item');
       if (feedLi) feedLi.style.opacity = '0.4';
 
-      unsubscribeFeedRequest(feedUrl, folderId, { title, reloadIfActive: true })
+      unsubscribeFeedRequest(feedUrl, folderId, { title })
         .catch((err) => {
           if (feedLi) feedLi.style.opacity = '';
           window.alert(`Unsubscribe failed: ${err}`);
