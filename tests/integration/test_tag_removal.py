@@ -86,3 +86,29 @@ def test_delete_everywhere_unknown_tag_removes_nothing(reader_with_entries):
 def test_delete_everywhere_rejects_invalid_tag(reader_with_entries):
     assert main.delete_manual_tag_everywhere("  ") == 0
     assert main.delete_manual_tag_everywhere(None) == 0
+
+
+def test_tag_count_dedupes_same_article_across_feeds(reader_with_entries):
+    """The same article syndicated across two feeds (identical entry id under
+    two feed URLs) is one entry_tags row per feed, but the post list collapses
+    it to a single item. The sidebar tally must count distinct ids so it matches
+    what clicking the tag shows — not the raw row count."""
+    reader = reader_with_entries
+    other_feed = "https://example.test/feed-mirror"
+    reader.add_feed(other_feed, allow_invalid_url=True)
+    # Same entry id ("e0") present in both feeds — a syndicated duplicate.
+    reader.add_entry(
+        {
+            "feed_url": other_feed,
+            "id": "e0",
+            "title": "title 0",
+            "published": BASE,
+        }
+    )
+    main.set_manual_tags_for_entry(FEED, "e0", "cpp")
+    main.set_manual_tags_for_entry(other_feed, "e0", "cpp")
+    main.invalidate_tag_counts_cache()
+
+    rows = main.get_tag_counts_for_feeds({FEED, other_feed})
+    cpp = next(row for row in rows if row["name"] == "cpp")
+    assert cpp["count"] == 1  # one article, not two entry_tags rows
