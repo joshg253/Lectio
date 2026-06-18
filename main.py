@@ -10879,7 +10879,17 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         message = f"Feed added (discovered from {url})."
     try:
         add_feed_to_folder(target_url, folder_id)
-        feed_refresh_service.update_feeds([target_url])
+        # Fetch the feed's entries in the background so Add Feed returns
+        # immediately. The first refresh can take 10-30s (network + parse +
+        # per-entry processing); blocking on it made the dialog spin long
+        # enough that users assumed it failed and re-added. The feed shows in
+        # the sidebar right away; its entries populate a moment later (and the
+        # scheduled refresh would catch it regardless).
+        threading.Thread(
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [target_url]),
+            daemon=True,
+        ).start()
     except Exception as exc:
         message = f"Feed add failed: {exc}"
     return RedirectResponse(
