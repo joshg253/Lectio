@@ -35,6 +35,10 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _tables(conn: sqlite3.Connection) -> set[str]:
+    return {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
 @pytest.mark.parametrize(
     "table,required",
     [
@@ -44,6 +48,42 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 )
 def test_fresh_schema_has_migrated_columns(fresh_meta, table, required):
     assert required <= _columns(fresh_meta, table)
+
+
+def test_existing_db_missing_table_is_upgraded(tmp_path):
+    """A meta DB provisioned before feed_fetch_history existed must gain the
+    table when ensure_meta_schema re-runs — otherwise Feed Properties 500s with
+    "no such table: feed_fetch_history". This mirrors the per-user startup
+    schema migration that re-runs ensure_meta_schema for every tenant."""
+    saved = tenancy._layout
+    main._meta_conn_local.pool = None
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    try:
+        # Seed a near-empty legacy meta DB with no feed_fetch_history table.
+        legacy = sqlite3.connect(str(tenancy.meta_db_path()))
+        legacy.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)")
+        legacy.commit()
+        legacy.close()
+        main._meta_conn_local.pool = None
+
+        conn = main.get_meta_connection()
+        assert "feed_fetch_history" not in _tables(conn)
+        main._meta_conn_local.pool = None
+
+        main.ensure_meta_schema()
+
+        conn = main.get_meta_connection()
+        assert "feed_fetch_history" in _tables(conn)
+        # Query the History tab path to prove it no longer raises.
+        assert main.get_feed_fetch_history(conn, "https://example.test/feed") == []
+    finally:
+        main._meta_conn_local.pool = None
+        tenancy._layout = saved
 
 
 def test_existing_db_missing_columns_is_upgraded(tmp_path):

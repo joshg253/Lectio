@@ -805,6 +805,18 @@ async def lifespan(app: FastAPI):
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
     bootstrap_admin()
+
+    # Bring every existing user's meta/starred schema up to current.  The bare
+    # ensure_*_schema() calls above only touch the default tenant; per-user DBs
+    # are otherwise schema-init'd only at provision time, so any table added
+    # after a user was provisioned (e.g. feed_fetch_history) is missing from
+    # their DB and surfaces as a "no such table" 500 (Feed Properties, etc.).
+    # ensure_*_schema are idempotent, so this is a cheap no-op once migrated.
+    def _ensure_user_schema() -> None:
+        ensure_meta_schema()
+        ensure_starred_archive_schema()
+    _for_each_background_user("per-user schema migration", _ensure_user_schema)
+
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
@@ -4814,7 +4826,46 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
             reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
     invalidate_has_manual_tags_cache()
+    invalidate_tag_counts_cache()
     return next_tags
+
+
+def delete_manual_tag_everywhere(tag: str | None) -> int:
+    """Strip a manual tag from every entry that carries it. Returns the number
+    of entries the tag was removed from. Used by the tag-management delete
+    action so a tag leaves the sidebar once nothing references it."""
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        return 0
+
+    key = f"{MANUAL_TAG_KEY_PREFIX}{normalized}"
+    removed = 0
+    failed = 0
+    with get_reader() as reader:
+        # reader filters entries by tag key in SQL, so this stays a single
+        # pass across the whole library rather than a per-entry scan.
+        for entry in list(reader.get_entries(tags=[key])):
+            try:
+                reader.delete_tag(entry.resource_id, key)
+                removed += 1
+            except Exception:
+                # Keep going so one bad entry doesn't abort the whole cleanup,
+                # but log it so the failure is diagnosable.
+                failed += 1
+                LOGGER.warning(
+                    "delete_manual_tag_everywhere: failed to remove %r from %s",
+                    normalized, entry.resource_id, exc_info=True,
+                )
+    if failed:
+        LOGGER.warning(
+            "delete_manual_tag_everywhere: %r removed from %d entries, %d failed",
+            normalized, removed, failed,
+        )
+
+    if removed:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return removed
 
 
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
@@ -5001,6 +5052,11 @@ def invalidate_has_manual_tags_cache() -> None:
         _has_manual_tags_cache.clear()
 
 
+def invalidate_tag_counts_cache() -> None:
+    with tag_counts_cache_lock:
+        tag_counts_cache.clear()
+
+
 def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     if not feed_urls:
         return []
@@ -5025,8 +5081,13 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
+            # COUNT(DISTINCT id), not COUNT(*): the same article syndicated
+            # across two feeds (same entry id under two feed URLs) is one row per
+            # feed in entry_tags, but the post list collapses it to a single item
+            # via build_entry_dedupe_key. Counting distinct ids keeps the sidebar
+            # tally consistent with what clicking the tag actually shows.
             rows = conn.execute(
-                f"SELECT key, COUNT(*) FROM entry_tags"
+                f"SELECT key, COUNT(DISTINCT id) FROM entry_tags"
                 f" WHERE key LIKE ? AND feed IN ({placeholders})"
                 f" GROUP BY key",
                 [f"{prefix}%", *sorted_feeds],
@@ -10830,7 +10891,17 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         message = f"Feed added (discovered from {url})."
     try:
         add_feed_to_folder(target_url, folder_id)
-        feed_refresh_service.update_feeds([target_url])
+        # Fetch the feed's entries in the background so Add Feed returns
+        # immediately. The first refresh can take 10-30s (network + parse +
+        # per-entry processing); blocking on it made the dialog spin long
+        # enough that users assumed it failed and re-added. The feed shows in
+        # the sidebar right away; its entries populate a moment later (and the
+        # scheduled refresh would catch it regardless).
+        threading.Thread(
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [target_url]),
+            daemon=True,
+        ).start()
     except Exception as exc:
         message = f"Feed add failed: {exc}"
     return RedirectResponse(
@@ -12791,6 +12862,26 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/tags/delete")
+def delete_manual_tag(
+    request: Request,
+    tag: str = Form(...),
+):
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        if request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar"):
+            return JSONResponse({"ok": False, "error": "Invalid tag."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+
+    removed = delete_manual_tag_everywhere(normalized)
+
+    if request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar"):
+        return JSONResponse({"ok": True, "tag": normalized, "removed": removed})
+
+    message = f"Removed #{normalized} from {removed} post{'' if removed == 1 else 's'}."
+    return RedirectResponse(url=f"/?message={quote_plus(message)}", status_code=303)
 
 
 @app.post("/entries/mark-range-read")
