@@ -29,11 +29,19 @@ def _entry(enclosures=(), link=""):
         ("https://cdn.test/ep1.opus", True),
         ("https://cdn.test/page.html", False),
         ("https://cdn.test/image.jpg?x=.mp3", False),  # ext only in query
+        ("  https://cdn.test/ep1.mp3  ", True),  # surrounding whitespace
         ("", False),
     ],
 )
 def test_url_has_audio_ext(url, expected):
     assert main._url_has_audio_ext(url) is expected
+
+
+def test_no_enclosures_and_non_audio_link_returns_none():
+    # No enclosure to match and the link is an article page, not media —
+    # confirms the link fallback only fires for actual audio.
+    e = _entry(enclosures=[], link="https://blog.test/post/123")
+    assert main._find_entry_audio_url(e) is None
 
 
 def test_typed_audio_enclosure():
