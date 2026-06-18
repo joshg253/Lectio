@@ -10396,13 +10396,10 @@
         if (d.status === 'feed' || d.status === 'feeds') {
           selectedFeedUrl = d.feeds[0].url;
           if (d.direct) {
-            const fid = folderSelect.value === '__new__' ? null : folderSelect.value;
-            if (fid) {
-              document.getElementById('afd-ff-url').value = selectedFeedUrl;
-              document.getElementById('afd-ff-folder').value = fid;
-              document.getElementById('afd-feed-form').submit();
-              return;
-            }
+            // Direct feed URL: enable the button and let the user pick their
+            // folder and click Add Feed. (Previously this auto-submitted on
+            // validation using whatever folder was selected — usually the
+            // default root — ignoring the user's folder choice and button click.)
             setMsg('Direct feed URL.', 'ok');
             submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
           } else {
