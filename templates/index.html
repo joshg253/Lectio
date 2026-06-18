@@ -4921,43 +4921,56 @@
       _feedPropCloseOnClick = false;
     });
 
+    // Single source of truth for unsubscribing one feed from one folder. Every
+    // entry point (sidebar context menu, Feed Properties modal, Settings feed
+    // row, problematic-feeds panels) calls this so the request + UI cleanup stay
+    // identical and can't drift. POSTs, then strips the feed from all surfaces
+    // (sidebar tree, Settings list, problem panels). Throws on a failed request
+    // so callers can surface their own error UI. `function` decl is hoisted, so
+    // callers defined earlier/later in this scope can all use it.
+    async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
+      const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
+      const resp = await fetch('/feeds/unsubscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
+        credentials: 'same-origin',
+        body: body.toString(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const fu = CSS.escape(feedUrl);
+      const fid = CSS.escape(String(folderId));
+      const feedLi = document.querySelector(
+        `.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${fid}"]`
+      )?.closest('.tree-feed-item');
+      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
+      feedLi?.remove();
+      document.querySelectorAll(
+        `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"][data-folder-id="${fid}"]`
+      ).forEach(btn => btn.closest('.settings-feed-row')?.remove());
+      document.querySelectorAll(`.problem-feed-item[data-feed-url="${fu}"]`).forEach(el => el.remove());
+
+      if (opts.title) showToastMessage(`Unsubscribed from "${opts.title}".`);
+      if (opts.reloadIfActive && wasActive) {
+        const params = new URLSearchParams(window.location.search);
+        params.delete('feed_url'); params.delete('entry_id');
+        params.set('folder_id', String(folderId));
+        window.location.assign('/?' + params.toString());
+      }
+      return { wasActive };
+    }
+
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropUnsubscribeBtn.dataset.feedUrl;
-      const folderIdStr = (feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0];
-      const folderId = parseInt(folderIdStr, 10);
+      const folderId = parseInt((feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0], 10);
       if (!feedUrl || !folderId) return;
       const title = feedPropRealTitle?.textContent || feedUrl;
       if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
       feedPropUnsubscribeBtn.disabled = true;
-      const feedLi = document.querySelector(
-        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
-      )?.closest('.tree-feed-item');
-      if (feedLi) feedLi.style.opacity = '0.4';
-      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
       try {
-        const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
-        const resp = await fetch('/feeds/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' }, credentials: 'same-origin', body: body.toString() });
-        if (!resp.ok) throw new Error('request failed');
+        await unsubscribeFeedRequest(feedUrl, folderId, { title, reloadIfActive: true });
         closeFeedPropertiesModal();
-        // Remove from sidebar tree
-        if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
-        // Remove from problematic-feeds panels (Failing / Acknowledged) if open
-        document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(feedUrl)}"]`)
-          .forEach(el => el.remove());
-        // Remove the Settings → Feeds row(s) for this feed so the change shows
-        // when the modal was opened from the settings list.
-        document.querySelectorAll(
-          `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
-        ).forEach(btn => btn.closest('.settings-feed-row')?.remove());
-        showToastMessage(`Unsubscribed from "${title}".`);
-        if (wasActive) {
-          const params = new URLSearchParams(window.location.search);
-          params.delete('feed_url'); params.delete('entry_id');
-          params.set('folder_id', String(folderId));
-          window.location.assign('/?' + params.toString());
-        }
       } catch {
-        if (feedLi) feedLi.style.opacity = '';
         window.alert('Unsubscribe failed. Please try again.');
         feedPropUnsubscribeBtn.disabled = false;
       }
@@ -6788,48 +6801,21 @@
         return;
       }
 
-      const confirmed = window.confirm(`Unsubscribe feed \"${contextFolderName.trim() || contextFeedUrl}\"?`);
-      if (!confirmed) {
+      const title = contextFolderName.trim() || contextFeedUrl;
+      if (!window.confirm(`Unsubscribe feed "${title}"?`)) {
         hideContextMenu();
         return;
       }
-
       hideAllContextMenus();
 
-      // Find the sidebar <li> for this feed before the async call so we can
-      // remove it on success without a full reload.
+      const feedUrl = contextFeedUrl;
+      const folderId = contextFolderId;
       const feedLi = document.querySelector(
-        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(contextFeedUrl)}"][data-folder-id="${CSS.escape(String(contextFolderId))}"]`
+        `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
       )?.closest('.tree-feed-item');
-
-      const wasActive = feedLi?.querySelector('.feed-link.active') !== null;
       if (feedLi) feedLi.style.opacity = '0.4';
 
-      const body = new URLSearchParams();
-      body.set('folder_id', contextFolderId);
-      body.set('feed_url', contextFeedUrl);
-      fetch('/feeds/unsubscribe', {
-        method: 'POST',
-        headers: {
-          'X-Requested-With': 'lectio-sidebar',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        credentials: 'same-origin',
-        body: body.toString(),
-      })
-        .then((response) => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          if (feedLi && feedLi.parentNode) feedLi.parentNode.removeChild(feedLi);
-          if (wasActive) {
-            // Navigate to the folder view so the post list is no longer
-            // showing entries from a feed that no longer exists.
-            const params = new URLSearchParams(window.location.search);
-            params.delete('feed_url');
-            params.delete('entry_id');
-            params.set('folder_id', String(contextFolderId));
-            window.location.assign('/?' + params.toString());
-          }
-        })
+      unsubscribeFeedRequest(feedUrl, folderId, { title, reloadIfActive: true })
         .catch((err) => {
           if (feedLi) feedLi.style.opacity = '';
           window.alert(`Unsubscribe failed: ${err}`);
@@ -9322,28 +9308,17 @@
         if (!window.confirm(`Unsubscribe from this feed?\n\n${url}`)) return;
 
         const li = unsubTrigger.closest('.problem-feed-item');
+        // Capture the panel before the helper removes the row, so we can update
+        // its count/empty-state afterward.
+        const isAcked = li?.closest('[data-problem-panel="acked"]');
+        const panelKey = isAcked ? 'acked' : 'failing';
+        const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
         if (li) li.style.opacity = '0.4';
         unsubTrigger.disabled = true;
 
-        const body = new URLSearchParams();
-        body.set('folder_id', folderId);
-        body.set('feed_url', url);
-        fetch('/feeds/unsubscribe', {
-          method: 'POST',
-          headers: {
-            'X-Requested-With': 'lectio-problem-feeds',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          credentials: 'same-origin',
-          body: body.toString(),
-        })
-          .then((response) => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        unsubscribeFeedRequest(url, folderId)
+          .then(() => {
             const modal = document.getElementById('problematic-feeds-modal');
-            const isAcked = li?.closest('[data-problem-panel="acked"]');
-            const panelKey = isAcked ? 'acked' : 'failing';
-            const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
-            if (li && li.parentNode) li.parentNode.removeChild(li);
             if (modal) {
               updateProblemTabCount(panelKey, -1);
               const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
@@ -9357,8 +9332,7 @@
           });
       }
 
-      // Settings → Feeds → Folders: trashcan on each feed row unsubscribes that
-      // feed from its folder (reusing the same /feeds/unsubscribe AJAX path).
+      // Settings → Feeds → Folders: trashcan on each feed row.
       const settingsUnsub = event.target.closest('[data-settings-feed-unsubscribe]');
       if (settingsUnsub) {
         event.preventDefault();
@@ -9372,30 +9346,7 @@
         if (tr) tr.style.opacity = '0.4';
         settingsUnsub.disabled = true;
 
-        const body = new URLSearchParams();
-        body.set('folder_id', folderId);
-        body.set('feed_url', url);
-        fetch('/feeds/unsubscribe', {
-          method: 'POST',
-          headers: {
-            'X-Requested-With': 'lectio-settings-feeds',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          credentials: 'same-origin',
-          body: body.toString(),
-        })
-          .then((response) => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            if (tr && tr.parentNode) tr.parentNode.removeChild(tr);
-            // Mirror the Feed Properties unsub: drop the feed from the sidebar
-            // tree and any problematic-feeds panels so the UI stays consistent.
-            document.querySelectorAll(
-              `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(url)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
-            ).forEach(link => link.closest('.tree-feed-item')?.remove());
-            document.querySelectorAll(`.problem-feed-item[data-feed-url="${CSS.escape(url)}"]`)
-              .forEach(el => el.remove());
-            showToastMessage(`Unsubscribed from "${title}".`);
-          })
+        unsubscribeFeedRequest(url, folderId, { title })
           .catch((err) => {
             if (tr) tr.style.opacity = '';
             settingsUnsub.disabled = false;
