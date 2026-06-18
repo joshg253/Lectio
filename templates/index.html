@@ -1120,6 +1120,10 @@
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
 
+  <div id="tag-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-tag-delete" class="context-menu-item danger">Delete tag everywhere</button>
+  </div>
+
   <div id="debug-confirm-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="debug-confirm-title">
       <div class="modal-header-row">
@@ -2915,6 +2919,8 @@
     const contextMenu = document.getElementById('folder-context-menu');
     const rootContextMenu = document.getElementById('root-context-menu');
     const postContextMenu = document.getElementById('post-context-menu');
+    const tagContextMenu = document.getElementById('tag-context-menu');
+    let contextTagName = null;
     const treeNav = document.querySelector('.tree');
     const refreshButton = document.getElementById('ctx-refresh');
     const markReadButton = document.getElementById('ctx-mark-read');
@@ -3960,6 +3966,24 @@
       rootContextMenu.setAttribute('hidden', '');
     }
 
+    function showTagContextMenu(event) {
+      if (!tagContextMenu) {
+        return;
+      }
+      hideContextMenu();
+      hideRootContextMenu();
+      hidePostContextMenu();
+      positionMenuInViewport(tagContextMenu, event.clientX, event.clientY);
+      tagContextMenu.removeAttribute('hidden');
+    }
+
+    function hideTagContextMenu() {
+      if (!tagContextMenu) {
+        return;
+      }
+      tagContextMenu.setAttribute('hidden', '');
+    }
+
     function setMenuItemVisible(item, visible) {
       if (!item) {
         return;
@@ -3977,6 +4001,7 @@
       hideContextMenu();
       hidePostContextMenu();
       hideRootContextMenu();
+      hideTagContextMenu();
     }
 
     function closeFeedPropertiesModal() {
@@ -5384,6 +5409,63 @@
       hideFolderSubmenu();
       showContextMenu(event);
     }, true);
+
+    // Right-click a tag (sidebar list or article-pane chip) to manage it.
+    // Capture phase so it wins over the tag links' own navigation handlers.
+    document.addEventListener('contextmenu', (event) => {
+      if (!(event.target instanceof Element) || !tagContextMenu) {
+        return;
+      }
+      const tagTarget = event.target.closest('.tag-link, .entry-tag-link');
+      if (!tagTarget) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      // Sidebar links carry the tag in data via the href; chips render #tag text.
+      const params = new URLSearchParams((tagTarget.getAttribute('href') || '').split('?')[1] || '');
+      contextTagName = (params.get('tag') || tagTarget.textContent || '').trim().replace(/^#+/, '').toLowerCase();
+      if (!contextTagName) {
+        return;
+      }
+      showTagContextMenu(event);
+    }, true);
+
+    document.getElementById('ctx-tag-delete')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const tagName = contextTagName;
+      hideAllContextMenus();
+      if (!tagName) {
+        return;
+      }
+      if (!window.confirm(`Delete the tag "#${tagName}" from every post?\n\nThis removes the tag everywhere it appears. This cannot be undone.`)) {
+        return;
+      }
+      try {
+        const body = new URLSearchParams({ tag: tagName });
+        const resp = await fetch('/tags/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' },
+          credentials: 'same-origin',
+          body: body.toString(),
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+          showToastMessage(data.error || 'Failed to delete tag.');
+          return;
+        }
+        // Drop the tag's filter from the URL if it was active, then reload so
+        // the sidebar counts and any tagged-view list refresh consistently.
+        const urlParams = new URLSearchParams(window.location.search);
+        if ((urlParams.get('tag') || '').toLowerCase() === tagName) {
+          urlParams.delete('tag');
+        }
+        window.location.assign('/?' + urlParams.toString());
+      } catch {
+        showToastMessage('Failed to delete tag.');
+      }
+    });
 
     refreshButton?.addEventListener('click', () => {
       if (contextTargetType === 'feed') {
@@ -9953,6 +10035,52 @@
           }
 
           targetInput.focus();
+        });
+      }
+
+      // Per-post tag removal — the × on each tag chip submits the reduced set
+      // in replace mode (append_mode=0) so the one tag drops off this post.
+      for (const removeBtn of document.querySelectorAll('[data-tag-remove]')) {
+        if (removeBtn.dataset.boundClick) {
+          continue;
+        }
+        removeBtn.dataset.boundClick = '1';
+        removeBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!(entryTagsForm instanceof HTMLFormElement) || !(entryTagsMergedInput instanceof HTMLInputElement)) {
+            return;
+          }
+          const tagToRemove = normalizeTagToken(removeBtn.getAttribute('data-tag-remove') || '');
+          if (!tagToRemove) {
+            return;
+          }
+
+          const reduced = tokenizeTags(entryTagsMergedInput.value).filter((token) => token !== tagToRemove);
+          const body = new URLSearchParams(new FormData(entryTagsForm));
+          body.set('append_mode', '0');
+          body.set('tags_text', reduced.join(' '));
+
+          removeBtn.disabled = true;
+          try {
+            const resp = await fetch('/entries/tags', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+              credentials: 'same-origin',
+              body: body.toString(),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+              loadEntryPaneWithoutFullRefresh(window.location.href, false);
+            } else {
+              removeBtn.disabled = false;
+              showToastMessage(data.error || 'Failed to remove tag.');
+            }
+          } catch {
+            removeBtn.disabled = false;
+            showToastMessage('Failed to remove tag.');
+          }
         });
       }
     }

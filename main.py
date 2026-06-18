@@ -4814,7 +4814,34 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
             reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
     invalidate_has_manual_tags_cache()
+    invalidate_tag_counts_cache()
     return next_tags
+
+
+def delete_manual_tag_everywhere(tag: str | None) -> int:
+    """Strip a manual tag from every entry that carries it. Returns the number
+    of entries the tag was removed from. Used by the tag-management delete
+    action so a tag leaves the sidebar once nothing references it."""
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        return 0
+
+    key = f"{MANUAL_TAG_KEY_PREFIX}{normalized}"
+    removed = 0
+    with get_reader() as reader:
+        # reader filters entries by tag key in SQL, so this stays a single
+        # pass across the whole library rather than a per-entry scan.
+        for entry in list(reader.get_entries(tags=[key])):
+            try:
+                reader.delete_tag(entry.resource_id, key)
+                removed += 1
+            except Exception:
+                continue
+
+    if removed:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return removed
 
 
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
@@ -4999,6 +5026,11 @@ def has_any_manual_tags() -> bool:
 def invalidate_has_manual_tags_cache() -> None:
     with _has_manual_tags_lock:
         _has_manual_tags_cache.clear()
+
+
+def invalidate_tag_counts_cache() -> None:
+    with tag_counts_cache_lock:
+        tag_counts_cache.clear()
 
 
 def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
@@ -12791,6 +12823,26 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/tags/delete")
+def delete_manual_tag(
+    request: Request,
+    tag: str = Form(...),
+):
+    normalized = normalize_tag_value(tag)
+    if not normalized:
+        if request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar"):
+            return JSONResponse({"ok": False, "error": "Invalid tag."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+
+    removed = delete_manual_tag_everywhere(normalized)
+
+    if request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar"):
+        return JSONResponse({"ok": True, "tag": normalized, "removed": removed})
+
+    message = f"Removed #{normalized} from {removed} post{'' if removed == 1 else 's'}."
+    return RedirectResponse(url=f"/?message={quote_plus(message)}", status_code=303)
 
 
 @app.post("/entries/mark-range-read")
