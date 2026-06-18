@@ -5069,8 +5069,13 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     try:
         conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
         try:
+            # COUNT(DISTINCT id), not COUNT(*): the same article syndicated
+            # across two feeds (same entry id under two feed URLs) is one row per
+            # feed in entry_tags, but the post list collapses it to a single item
+            # via build_entry_dedupe_key. Counting distinct ids keeps the sidebar
+            # tally consistent with what clicking the tag actually shows.
             rows = conn.execute(
-                f"SELECT key, COUNT(*) FROM entry_tags"
+                f"SELECT key, COUNT(DISTINCT id) FROM entry_tags"
                 f" WHERE key LIKE ? AND feed IN ({placeholders})"
                 f" GROUP BY key",
                 [f"{prefix}%", *sorted_feeds],
