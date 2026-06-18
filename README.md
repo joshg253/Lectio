@@ -48,6 +48,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Search** within the current scope
 - **YouTube duration prefix** — `[H:MM:SS]` shown in post list and title for YouTube feeds
 - **Inline rendering fixups** — emoji glyphs embedded as images (WordPress wp-smiley, IP.Board/twemoji) are sized to match the surrounding text instead of rendering as full-size images; body images load with `referrerpolicy="no-referrer"` so hotlink-protected hosts (which swap a placeholder image when the referer is foreign) serve the real image, and known hotlink hosts are routed through the built-in image proxy so even a previously cached placeholder is bypassed. The proxy keeps a server-side cache of fetched images (`LECTIO_IMG_CACHE_DAYS` last-accessed retention, `0` = keep forever; downscaled to `LECTIO_IMG_CACHE_MAX_DIM` px on the longest side — both adjustable in the Administration page), so images load faster on revisits and survive short-lived signed CDN URLs (e.g. DeviantArt/wixmp) even after their tokens expire
+- **Bare-text feed rendering** — feeds that ship a plain-text summary instead of HTML (bare `https://` URLs, line breaks as literal or double-escaped `<br>`) get those URLs linkified and breaks rendered, rather than shown as unstyled literal text; genuinely plain prose is left in a whitespace-preserving block
 - **Rachel by the Bay** support.
 
 ### Lead images

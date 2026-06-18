@@ -7037,6 +7037,39 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     return image_url
 
 
+_PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
+_BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+
+
+def _promote_plaintext_summary(summary: str | None) -> str | None:
+    """Turn a bare-text summary into renderable HTML, or None to leave it as-is.
+
+    Some feeds (e.g. orpheus.network news) ship no HTML content — only a
+    plain-text summary carrying bare ``https://`` URLs and line breaks encoded as
+    literal ``<br>`` or double-escaped ``&lt;br&gt;``. Rendered in the template's
+    ``<pre>`` fallback those URLs aren't clickable and the breaks show as literal
+    text. When a summary actually contains URLs or break markers, promote it to
+    content_html: normalize the breaks to real ``<br>`` and linkify the URLs.
+    Genuinely plain prose (no URLs, no breaks) returns None so the ``<pre>``
+    fallback keeps preserving its whitespace layout."""
+    if not summary or not summary.strip():
+        return None
+    if not _PLAINTEXT_PROMOTE_RE.search(summary):
+        return None
+    # Collapse escaped/literal <br> to newlines, then treat the whole thing as
+    # plain text: escape it, restore newlines as <br>, and linkify bare URLs.
+    text = re.sub(r"&lt;br\s*/?\s*&gt;", "\n", summary, flags=re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    escaped = html.escape(text)
+
+    def _linkify(m: re.Match) -> str:
+        seg = m.group(0)  # already HTML-escaped
+        return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
+
+    escaped = _BARE_URL_RE.sub(_linkify, escaped)
+    return escaped.replace("\n", "<br>")
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7061,6 +7094,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _cv = content_html or content.value
             if _looks_like_bbcode(_cv):
                 content_html = _bbcode_to_html(content_html if content_html else content.value)
+
+        # Bare-text feeds (no HTML content): promote a URL/break-bearing plain-text
+        # summary to content_html so links work and breaks render, instead of the
+        # unstyled <pre> fallback. Returns None for genuinely plain prose, which
+        # keeps the <pre> path. Runs before the <br>->paragraph pipeline below so a
+        # promoted summary benefits from it too.
+        if not content_html:
+            content_html = _promote_plaintext_summary(getattr(entry, "summary", None))
 
         # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
         # of http://).  The reader library resolves these as relative paths, producing
