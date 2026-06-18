@@ -4,6 +4,11 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Inline YouTube player fixed** — the embed set `enablejsapi=1` without an
+  `origin=` parameter, which YouTube now refuses to play. Nothing in the app
+  drives the IFrame JS API, so the embed now uses YouTube's canonical markup
+  (`youtube-nocookie.com` host, `referrerpolicy`, no `enablejsapi`) via a single
+  `_youtube_embed_html` helper shared by both injection sites.
 - **Tag filter fixed** — clicking a manual tag now surfaces every tagged entry,
   not just those inside the newest-N fetch window. The tag is pushed into
   reader's native `tags=` argument (SQL-side match across the whole library)
@@ -122,6 +127,9 @@ list) are both **done**. Remaining:
 
 ### Bugs to investigate
 
+- **Tags don't show their articles** — clicking a tag isn't surfacing the tagged
+  articles in the list. Check the tag-filter query path (selected_tag →
+  list_entries_for_feeds) and the tag link wiring in the sidebar.
 - **YouTube video playback fails in the entry pane** — the inline player no longer
   plays. Check the embed/iframe injection for YouTube entries and any CSP/referrer
   or nocookie-domain changes.
