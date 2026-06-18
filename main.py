@@ -6514,6 +6514,16 @@ def list_entries_for_feeds(
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
         need_all = bool(search_terms or normalized_sort_dir == "asc")
+        # When a manual tag is selected, push the filter into reader's native
+        # tags= argument so the match happens in SQL across the whole library.
+        # Previously the tag was applied only as a post-filter on the newest-N
+        # window fetched below, so tagged entries outside that window (tags are
+        # sparse) never surfaced — clicking a tag showed nothing.
+        tag_filter = (
+            [f"{MANUAL_TAG_KEY_PREFIX}{normalized_selected_tag}"]
+            if normalized_selected_tag
+            else None
+        )
 
         if history_fast_keys:
             # Fast history path: fetch each entry by primary key (indexed lookup)
@@ -6522,7 +6532,7 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
-        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32:
+        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32 and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
             # direct SQL query sorted ASC and fetch Entry objects only for matched rows.
@@ -6574,14 +6584,14 @@ def list_entries_for_feeds(
             PER_FEED_QUERY_THRESHOLD = 32
             if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
                 for feed_url in feed_urls:
-                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter):
+                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter, tags=tag_filter):
                         all_feed_entries.append(entry)
                         if not need_all and len(all_feed_entries) >= fetch_limit:
                             break
                     if not need_all and len(all_feed_entries) >= fetch_limit:
                         break
             else:
-                for entry in reader.get_entries(read=reader_read_filter):
+                for entry in reader.get_entries(read=reader_read_filter, tags=tag_filter):
                     if entry.feed_url not in feed_urls:
                         continue
                     all_feed_entries.append(entry)
