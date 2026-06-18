@@ -4840,6 +4840,7 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
 
     key = f"{MANUAL_TAG_KEY_PREFIX}{normalized}"
     removed = 0
+    failed = 0
     with get_reader() as reader:
         # reader filters entries by tag key in SQL, so this stays a single
         # pass across the whole library rather than a per-entry scan.
@@ -4848,7 +4849,18 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
                 reader.delete_tag(entry.resource_id, key)
                 removed += 1
             except Exception:
-                continue
+                # Keep going so one bad entry doesn't abort the whole cleanup,
+                # but log it so the failure is diagnosable.
+                failed += 1
+                LOGGER.warning(
+                    "delete_manual_tag_everywhere: failed to remove %r from %s",
+                    normalized, entry.resource_id, exc_info=True,
+                )
+    if failed:
+        LOGGER.warning(
+            "delete_manual_tag_everywhere: %r removed from %d entries, %d failed",
+            normalized, removed, failed,
+        )
 
     if removed:
         invalidate_has_manual_tags_cache()

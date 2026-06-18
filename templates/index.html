@@ -4950,9 +4950,25 @@
       document.querySelector(
         `.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${fid}"]`
       )?.closest('.tree-feed-item')?.remove();
+      let removedSettingsRows = 0;
       document.querySelectorAll(
         `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"][data-folder-id="${fid}"]`
-      ).forEach(btn => btn.closest('.settings-feed-row')?.remove());
+      ).forEach(btn => { if (btn.closest('.settings-feed-row')) { btn.closest('.settings-feed-row').remove(); removedSettingsRows++; } });
+      // Keep the Settings folder row consistent: decrement its feed count and,
+      // if it's now empty, disable/collapse its expand toggle.
+      if (removedSettingsRows) {
+        const folderRow = document.querySelector(`.settings-folder-row[data-folder-row="${fid}"]`);
+        const countCell = folderRow?.querySelector('.settings-folder-feeds');
+        if (countCell) {
+          const n = Math.max(0, (parseInt(countCell.textContent, 10) || 0) - removedSettingsRows);
+          countCell.textContent = String(n);
+          if (n === 0) {
+            const toggle = folderRow.querySelector('[data-folder-toggle]');
+            toggle?.setAttribute('disabled', '');
+            toggle?.setAttribute('aria-expanded', 'false');
+          }
+        }
+      }
       document.querySelectorAll(`.problem-feed-item[data-feed-url="${fu}"]`).forEach(el => el.remove());
 
       if (opts.title) showToastMessage(`Unsubscribed from "${opts.title}".`);
@@ -5513,6 +5529,7 @@
           credentials: 'same-origin',
           body: body.toString(),
         });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (!data.ok) {
           showToastMessage(data.error || 'Failed to delete tag.');
