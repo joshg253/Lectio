@@ -71,6 +71,20 @@ def test_tagged_entry_outside_fetch_window_is_returned(reader_with_entries):
     assert [p["id"] for p in posts] == ["e0"]
 
 
+def test_tagged_entry_returned_with_ascending_sort(reader_with_entries):
+    # Ascending sort takes a different fetch branch (the raw-SQL fast path is
+    # skipped when a tag is selected). Tag the newest entry — which sorts last in
+    # ascending order and would fall outside a small page window — and verify it
+    # still comes back via the reader tags= filter.
+    main.set_manual_tags_for_entry(FEED, "e5", "mytag")
+
+    posts = main.list_entries_for_feeds(
+        {FEED}, limit=2, sort_dir="asc", selected_tag="mytag"
+    )
+
+    assert [p["id"] for p in posts] == ["e5"]
+
+
 def test_tag_filter_excludes_untagged_entries(reader_with_entries):
     main.set_manual_tags_for_entry(FEED, "e0", "mytag")
     main.set_manual_tags_for_entry(FEED, "e3", "mytag")
