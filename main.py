@@ -805,6 +805,18 @@ async def lifespan(app: FastAPI):
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
     bootstrap_admin()
+
+    # Bring every existing user's meta/starred schema up to current.  The bare
+    # ensure_*_schema() calls above only touch the default tenant; per-user DBs
+    # are otherwise schema-init'd only at provision time, so any table added
+    # after a user was provisioned (e.g. feed_fetch_history) is missing from
+    # their DB and surfaces as a "no such table" 500 (Feed Properties, etc.).
+    # ensure_*_schema are idempotent, so this is a cheap no-op once migrated.
+    def _ensure_user_schema() -> None:
+        ensure_meta_schema()
+        ensure_starred_archive_schema()
+    _for_each_background_user("per-user schema migration", _ensure_user_schema)
+
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
         app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
