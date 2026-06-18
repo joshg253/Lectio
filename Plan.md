@@ -69,10 +69,13 @@ Phasing:
    `tests/services/test_lead_images_tenancy.py`.
    Remaining background work still running as the default user only (lower
    priority; scheduled refresh covers the feeds within the cadence window):
-   - **WebSub push callback** — a push carries only a topic (feed URL); needs to
-     find which users subscribe to it (across per-user `websub_subscriptions`)
-     and refresh each. Until then a push refreshes only the default user; other
-     users still get the content on their next scheduled pass.
+   - ~~**WebSub push callback**~~ — DONE. The shared callback carries only the
+     topic, so both the verification GET and the content push now fan out across
+     `_background_user_ids()`: verification confirms whichever user has a pending
+     subscription, and a push refreshes every subscriber (after confirming
+     authenticity against any one user's secret) under that user's context. Previously
+     both ran as the empty default tenant, so no real user's WebSub worked.
+     Tests: `tests/integration/test_websub_fanout.py`.
    - **Update scheduling policy** — revisit cadence/fairness across many users
      (currently each user is processed sequentially every poll tick).
 4. ~~**SSRF hardening**~~ — DONE for the two directly-reachable proxies.
