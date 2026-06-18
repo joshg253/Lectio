@@ -4,6 +4,17 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **feed_strategy_cache / feed_display_prefs fresh-DB migration fix** — the
+  `image_alt`/`image_title` and `caption_source` columns were added by ALTERs
+  that ran before their table's `CREATE`, so a brand-new meta DB never got them
+  and `get_feed_properties` raised `no such column: image_alt`. Folded the
+  columns into the base `CREATE` (idempotent ALTERs kept for existing DBs).
+  Test: `tests/integration/test_meta_schema_migrations.py`.
+- **rule_run_log nightly prune fixed** — the 90-day prune in
+  `_daily_maintenance_for_user` queried a misnamed `ran_at` column and compared
+  the ISO-text `run_at` against an int epoch, so it always raised, was swallowed,
+  and the log grew unbounded. Now compares against an ISO cutoff on `run_at`.
+  Test: `tests/integration/test_maintenance_prune.py`.
 - **Inline YouTube player fixed** — the embed set `enablejsapi=1` without an
   `origin=` parameter, which YouTube now refuses to play. Nothing in the app
   drives the IFrame JS API, so the embed now uses YouTube's canonical markup
