@@ -3838,6 +3838,52 @@ body[data-keyboard-open="1"] .action-modal-panel {
   margin: 0.25rem 0;
 }
 
+.feed-prop-automations-list {
+  list-style: none;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.feed-prop-automation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-color, #ccc);
+  border-radius: 6px;
+}
+.feed-prop-automation-item--off {
+  opacity: 0.6;
+}
+.feed-prop-automation-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.feed-prop-automation-keyword {
+  font-size: 0.8rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.15));
+}
+.feed-prop-automation-scope {
+  font-size: 0.78rem;
+  margin-left: auto;
+  opacity: 0.75;
+}
+.feed-prop-automation-off {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--warning-color, #b26a00);
+}
+.feed-prop-automation-detail {
+  font-size: 0.8rem;
+}
+
 .feed-prop-preset-row {
   display: flex;
   gap: 0.5rem;
