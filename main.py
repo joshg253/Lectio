@@ -8543,10 +8543,31 @@ def _effective_auto_refresh_minutes() -> int:
     return getattr(app.state, "auto_refresh_minutes", 0)
 
 
+_scheduled_refresh_rotation = 0
+
+
+def _rotate_for_fairness(uids: list[str]) -> list[str]:
+    """Rotate the per-tick user order round-robin so the same user isn't always
+    processed first.
+
+    Users are refreshed sequentially within a tick (adequate at the 1–3 trusted
+    user target — every user is still processed every tick). Rotating the start
+    point each pass spreads any first-mover advantage and means a slow or hanging
+    user delays a different set of downstream users each time rather than always
+    the same ones. Deeper fairness at scale (per-user concurrency, fetch budgets)
+    stays deferred behind this seam per the multi-user plan."""
+    global _scheduled_refresh_rotation
+    if len(uids) <= 1:
+        return uids
+    offset = _scheduled_refresh_rotation % len(uids)
+    _scheduled_refresh_rotation = (_scheduled_refresh_rotation + 1) % len(uids)
+    return uids[offset:] + uids[:offset]
+
+
 def _run_scheduled_refresh_for_all_users() -> None:
     """One scheduled-refresh pass across every background user, each under its
     own tenancy context so the refresh hits that user's databases."""
-    for uid in _background_user_ids():
+    for uid in _rotate_for_fairness(_background_user_ids()):
         with tenancy.user_context(uid):
             try:
                 _scheduled_refresh_tick()
