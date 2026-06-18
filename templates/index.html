@@ -4106,7 +4106,7 @@
 
         const data = await response.json();
         if (!data.found) {
-          setFeedPropText(feedPropTitle, feedUrl);
+          setFeedPropText(feedPropRealTitle, feedUrl);
           setFeedPropText(feedPropHealth, 'error');
           setFeedPropText(feedPropHealthDetail, data.error || 'Feed not found.');
           return;
@@ -4926,7 +4926,7 @@
       const folderIdStr = (feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0];
       const folderId = parseInt(folderIdStr, 10);
       if (!feedUrl || !folderId) return;
-      const title = feedPropTitle?.textContent || feedUrl;
+      const title = feedPropRealTitle?.textContent || feedUrl;
       if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
       feedPropUnsubscribeBtn.disabled = true;
       const feedLi = document.querySelector(
