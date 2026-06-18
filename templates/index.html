@@ -1626,6 +1626,7 @@
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
         <button type="button" class="hl-tab-btn hl-tab-btn--active" data-feed-prop-tab="info" role="tab" aria-selected="true">Info</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="tuning" role="tab" aria-selected="false">Tuning</button>
+        <button type="button" class="hl-tab-btn" data-feed-prop-tab="history" role="tab" aria-selected="false">History</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="automations" role="tab" aria-selected="false">Automations</button>
       </div>
       <div id="feed-prop-tab-info" class="feed-prop-tab-panel">
@@ -1799,6 +1800,16 @@
           <span id="feed-prop-flush-batch-status" class="feed-prop-strategy-hint"></span>
         </div>
       </div>
+      <div id="feed-prop-tab-history" class="feed-prop-tab-panel" hidden>
+        <h4 class="feed-prop-section-title">Recent fetches</h4>
+        <p class="feed-prop-strategy-hint">Each refresh attempt for this feed — newest first. Use it to see why a feed is stale or flagged problematic.</p>
+        <div class="feed-prop-history-filter" role="group" aria-label="Filter fetch history">
+          <button type="button" class="feed-prop-history-filter-btn feed-prop-history-filter-btn--active" data-history-filter="all">All</button>
+          <button type="button" class="feed-prop-history-filter-btn" data-history-filter="new">New entries</button>
+          <button type="button" class="feed-prop-history-filter-btn" data-history-filter="error">Errors</button>
+        </div>
+        <p id="feed-prop-history-empty" class="feed-prop-strat-empty muted" hidden>No fetch history recorded yet.</p>
+        <ul id="feed-prop-history-list" class="feed-prop-history-list"></ul>
       <div id="feed-prop-tab-automations" class="feed-prop-tab-panel" hidden>
         <h4 class="feed-prop-section-title">Rules in effect</h4>
         <p class="feed-prop-strategy-hint">Automations that act on this feed because they're scoped to it, its folder, or all feeds. Manage rules in Settings → Rules.</p>
@@ -3048,6 +3059,7 @@
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
     const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
+    const feedPropTabHistory = document.getElementById('feed-prop-tab-history');
     const feedPropTabAutomations = document.getElementById('feed-prop-tab-automations');
     const feedPropYtSection = document.getElementById('feed-prop-yt-section');
     const feedPropImgSection = document.getElementById('feed-prop-img-section');
@@ -3064,6 +3076,7 @@
         });
         if (feedPropTabInfo) feedPropTabInfo.hidden = tab !== 'info';
         if (feedPropTabTuning) feedPropTabTuning.hidden = tab !== 'tuning';
+        if (feedPropTabHistory) feedPropTabHistory.hidden = tab !== 'history';
         if (feedPropTabAutomations) feedPropTabAutomations.hidden = tab !== 'automations';
       });
     });
@@ -4032,6 +4045,7 @@
       });
       if (feedPropTabInfo) feedPropTabInfo.hidden = false;
       if (feedPropTabTuning) feedPropTabTuning.hidden = true;
+      if (feedPropTabHistory) feedPropTabHistory.hidden = true;
       if (feedPropTabAutomations) feedPropTabAutomations.hidden = true;
       feedPropertiesModal.removeAttribute('hidden');
 
@@ -4110,6 +4124,7 @@
         if (feedPropImgSection) feedPropImgSection.hidden = isYoutubeFeed;
         if (feedPropDevSection) feedPropDevSection.hidden = !isDevFeed;
 
+        setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
 
         if (feedPropHideShorts) {
@@ -4432,6 +4447,82 @@
       if (feedPropCaptionTitlePreview) feedPropCaptionTitlePreview.textContent = row?.image_title || '';
     }
 
+    let feedHistoryRows = [];
+    let feedHistoryFilter = 'all';
+
+    function setFeedHistory(rows) {
+      feedHistoryRows = Array.isArray(rows) ? rows : [];
+      feedHistoryFilter = 'all';
+      document.querySelectorAll('[data-history-filter]').forEach(b => {
+        b.classList.toggle('feed-prop-history-filter-btn--active', b.getAttribute('data-history-filter') === 'all');
+      });
+      renderFeedHistory();
+    }
+
+    function renderFeedHistory() {
+      const list = document.getElementById('feed-prop-history-list');
+      const empty = document.getElementById('feed-prop-history-empty');
+      if (!list) return;
+      const rows = feedHistoryRows.filter(r => {
+        if (feedHistoryFilter === 'error') return r.status === 'error';
+        if (feedHistoryFilter === 'new') return (r.new_entries || 0) > 0;
+        return true;
+      });
+      list.replaceChildren();
+      rows.forEach(r => {
+        const li = document.createElement('li');
+        const isError = r.status === 'error';
+        li.className = 'feed-prop-history-item' + (isError ? ' feed-prop-history-item--error' : '');
+
+        const head = document.createElement('span');
+        head.className = 'feed-prop-history-head';
+        const badge = document.createElement('span');
+        badge.className = 'feed-prop-history-badge ' + (isError ? 'feed-prop-history-badge--error' : 'feed-prop-history-badge--ok');
+        badge.textContent = isError ? 'Error' : 'OK';
+        head.appendChild(badge);
+        const when = document.createElement('span');
+        when.className = 'feed-prop-history-when';
+        when.textContent = r.fetched_at || '';
+        head.appendChild(when);
+        if (typeof r.http_status === 'number') {
+          const http = document.createElement('span');
+          http.className = 'feed-prop-history-meta';
+          http.textContent = `HTTP ${r.http_status}`;
+          head.appendChild(http);
+        }
+        if (!isError && typeof r.new_entries === 'number') {
+          const ne = document.createElement('span');
+          ne.className = 'feed-prop-history-meta';
+          ne.textContent = r.new_entries > 0 ? `+${r.new_entries} new` : 'no change';
+          head.appendChild(ne);
+        }
+        if (typeof r.duration_ms === 'number') {
+          const dur = document.createElement('span');
+          dur.className = 'feed-prop-history-meta';
+          dur.textContent = `${r.duration_ms} ms`;
+          head.appendChild(dur);
+        }
+        li.appendChild(head);
+        if (isError && r.error) {
+          const err = document.createElement('span');
+          err.className = 'feed-prop-history-error muted';
+          err.textContent = r.error;
+          li.appendChild(err);
+        }
+        list.appendChild(li);
+      });
+      if (empty) empty.hidden = rows.length > 0;
+    }
+
+    document.querySelectorAll('[data-history-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        feedHistoryFilter = btn.getAttribute('data-history-filter') || 'all';
+        document.querySelectorAll('[data-history-filter]').forEach(b => {
+          b.classList.toggle('feed-prop-history-filter-btn--active', b === btn);
+        });
+        renderFeedHistory();
+      });
+    });
     function renderFeedAutomations(automations) {
       const rulesList = document.getElementById('feed-prop-automations-rules');
       const rulesEmpty = document.getElementById('feed-prop-automations-rules-empty');
