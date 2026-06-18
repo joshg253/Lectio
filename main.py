@@ -2111,7 +2111,8 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT PRIMARY KEY,
                 show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
                 show_lead_image_as_thumb INTEGER NOT NULL DEFAULT 1,
-                show_image_caption INTEGER NOT NULL DEFAULT -1
+                show_image_caption INTEGER NOT NULL DEFAULT -1,
+                caption_source TEXT
             )
             """
         )
@@ -2123,6 +2124,8 @@ def ensure_meta_schema() -> None:
                 image_url TEXT,
                 fetched_at REAL NOT NULL,
                 error TEXT,
+                image_alt TEXT,
+                image_title TEXT,
                 PRIMARY KEY (feed_url, strategy)
             )
             """
@@ -5094,6 +5097,92 @@ def get_feed_fetch_history(conn, feed_url: str, limit: int = 30) -> list[dict]:
             "error": r["error"],
         })
     return history
+_AUTOMATION_TYPE_LABELS = {
+    "highlight": "Highlight",
+    "mark_as_read": "Auto mark read",
+    "deduplicate": "Deduplicate",
+    "email_article": "Email article",
+}
+_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed"}
+
+
+def _automation_rule_detail(rule: dict) -> str:
+    """A short human description of what a rule does, per rule type."""
+    rule_type = str(rule.get("type", ""))
+    search_in = str(rule.get("search_in") or "title")
+    if rule_type == "highlight":
+        return f"{rule.get('color') or 'yellow'} · matches {search_in}"
+    if rule_type == "mark_as_read":
+        return f"matches {search_in}"
+    if rule_type == "deduplicate":
+        method = str(rule.get("keyword") or "slug")
+        window = int(rule.get("dedup_window_hours") or 24)
+        return f"{method} match · {window}h window"
+    if rule_type == "email_article":
+        to = str(rule.get("email_to") or "").strip()
+        return f"to {to}" if to else "email"
+    return ""
+
+
+def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict:
+    """Automations that act on this feed: configured rules in scope + recent runs.
+
+    Rules come from the highlight_keywords table (which holds every rule type, not
+    just highlights); a rule applies to this feed when its scope is global, this
+    feed directly, or a folder the feed belongs to. Recent runs come from
+    rule_run_log_entries, the per-entry record of what automation actually fired
+    on this feed's entries — so the user can see what Lectio is doing without
+    reading code."""
+    folder_id_set = {int(f) for f in folder_ids}
+    rules: list[dict] = []
+    for rule in get_highlight_keywords(conn):
+        scope = str(rule.get("scope", ""))
+        scope_id = str(rule.get("scope_id") or "")
+        if scope == "global":
+            applies = True
+        elif scope == "feed":
+            applies = scope_id == feed_url
+        elif scope == "folder":
+            applies = scope_id.isdigit() and int(scope_id) in folder_id_set
+        else:
+            applies = False
+        if not applies:
+            continue
+        rule_type = str(rule.get("type", ""))
+        rules.append({
+            "type": rule_type,
+            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+            "scope_label": _AUTOMATION_SCOPE_LABELS.get(scope, scope),
+            "keyword": str(rule.get("keyword") or ""),
+            "enabled": bool(rule.get("enabled")),
+            "detail": _automation_rule_detail(rule),
+        })
+
+    recent_runs: list[dict] = []
+    run_rows = conn.execute(
+        "SELECT l.run_at AS run_at, l.rule_type AS rule_type, l.keyword AS keyword,"
+        " l.trigger AS trigger, COUNT(e.entry_id) AS affected"
+        " FROM rule_run_log l JOIN rule_run_log_entries e ON e.log_id = l.id"
+        " WHERE e.feed_url = ?"
+        " GROUP BY l.id ORDER BY l.run_at DESC LIMIT 15",
+        (feed_url,),
+    ).fetchall()
+    for r in run_rows:
+        run_at_raw = r["run_at"]
+        try:
+            run_at = format_datetime_for_ui(datetime.fromisoformat(str(run_at_raw)))
+        except Exception:
+            run_at = str(run_at_raw or "")
+        rule_type = str(r["rule_type"] or "")
+        recent_runs.append({
+            "run_at": run_at,
+            "type_label": _AUTOMATION_TYPE_LABELS.get(rule_type, rule_type or "Rule"),
+            "keyword": str(r["keyword"] or ""),
+            "trigger": str(r["trigger"] or ""),
+            "affected": int(r["affected"] or 0),
+        })
+
+    return {"rules": rules, "recent_runs": recent_runs}
 
 
 def get_feed_properties(feed_url: str) -> dict:
@@ -5221,6 +5310,9 @@ def get_feed_properties(feed_url: str) -> dict:
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
+            "automations": collect_feed_automations(
+                _pc, feed_url, [int(r["folder_id"]) for r in _folder_id_rows]
+            ),
             "backoff_active": _backoff_active,
             "backoff_domain_driven": _backoff_domain_driven,
             "backoff_domain": _feed_domain if _backoff_domain_driven else None,
@@ -5680,16 +5772,43 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+_AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
+
+
+def _url_has_audio_ext(url: str) -> bool:
+    """True if the URL's path ends in a known audio extension.
+
+    Matches on the path only, so a tracking/auth query string (e.g.
+    ``…/ep1.mp3?token=abc``) — common on podcast CDNs — doesn't defeat the
+    extension check the way a naive endswith on the whole URL would.
+    """
+    if not url:
+        return False
+    # Trim surrounding whitespace some feeds leave around URLs, which would
+    # otherwise land in the parsed path and defeat the extension check.
+    return urlparse(url.strip()).path.lower().endswith(_AUDIO_EXTS)
+
+
 def _find_entry_audio_url(entry) -> str | None:
-    """Return the first audio enclosure URL from an entry object, or None."""
+    """Return a usable audio URL for an entry, or None.
+
+    Checks, in order: audio enclosures (by MIME type, or an audio extension on
+    the URL path so query strings and untyped/oddly-typed enclosures still
+    match), then the entry link when it points straight at an audio file (some
+    podcast feeds carry no enclosure and set the link to the media URL).
+
+    Note: audio that lives only in ``<media:content>`` is not recoverable here —
+    the reader library keeps standard ``<enclosure>`` elements but drops
+    media:content, so it never reaches this entry object.
+    """
     for enc in (getattr(entry, "enclosures", None) or []):
         enc_url = getattr(enc, "href", None) or getattr(enc, "url", None) or ""
         enc_type = (getattr(enc, "type", None) or "").lower()
-        if enc_url and (
-            enc_type.startswith("audio/")
-            or any(enc_url.lower().endswith(ext) for ext in (".mp3", ".m4a", ".ogg", ".opus", ".wav"))
-        ):
+        if enc_url and (enc_type.startswith("audio/") or _url_has_audio_ext(enc_url)):
             return enc_url
+    link = getattr(entry, "link", None) or ""
+    if _url_has_audio_ext(link):
+        return link
     return None
 
 
@@ -6566,6 +6685,16 @@ def list_entries_for_feeds(
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
         need_all = bool(search_terms or normalized_sort_dir == "asc")
+        # When a manual tag is selected, push the filter into reader's native
+        # tags= argument so the match happens in SQL across the whole library.
+        # Previously the tag was applied only as a post-filter on the newest-N
+        # window fetched below, so tagged entries outside that window (tags are
+        # sparse) never surfaced — clicking a tag showed nothing.
+        tag_filter = (
+            [f"{MANUAL_TAG_KEY_PREFIX}{normalized_selected_tag}"]
+            if normalized_selected_tag
+            else None
+        )
 
         if history_fast_keys:
             # Fast history path: fetch each entry by primary key (indexed lookup)
@@ -6574,7 +6703,7 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
-        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32:
+        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32 and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
             # direct SQL query sorted ASC and fetch Entry objects only for matched rows.
@@ -6626,14 +6755,14 @@ def list_entries_for_feeds(
             PER_FEED_QUERY_THRESHOLD = 32
             if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
                 for feed_url in feed_urls:
-                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter):
+                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter, tags=tag_filter):
                         all_feed_entries.append(entry)
                         if not need_all and len(all_feed_entries) >= fetch_limit:
                             break
                     if not need_all and len(all_feed_entries) >= fetch_limit:
                         break
             else:
-                for entry in reader.get_entries(read=reader_read_filter):
+                for entry in reader.get_entries(read=reader_read_filter, tags=tag_filter):
                     if entry.feed_url not in feed_urls:
                         continue
                     all_feed_entries.append(entry)
@@ -7089,6 +7218,31 @@ def _lead_image_display_url(image_url: str | None) -> str | None:
     return image_url
 
 
+def _youtube_embed_html(video_id: str) -> str:
+    """Inline YouTube player markup for a video id.
+
+    Matches YouTube's current canonical embed: the privacy-enhanced
+    ``youtube-nocookie.com`` host and ``referrerpolicy`` rather than the JS API.
+    We deliberately omit ``enablejsapi=1`` — nothing in the app drives the IFrame
+    JS API, and YouTube refuses playback when it is set without a matching
+    ``origin=`` parameter, which silently broke the inline player.
+
+    The result is injected into content_html (rendered with ``| safe``), so the
+    video id is HTML-escaped before interpolation — defense in depth in case the
+    upstream extractor's validation is ever loosened (the id is otherwise always
+    ``[A-Za-z0-9_-]``)."""
+    safe_id = html.escape(video_id, quote=True)
+    src = f"https://www.youtube-nocookie.com/embed/{safe_id}?rel=0"
+    return (
+        '<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
+        f'<iframe width="100%" height="315" src="{src}" title="YouTube video player" '
+        'frameborder="0" allowfullscreen loading="lazy" '
+        'referrerpolicy="strict-origin-when-cross-origin" '
+        'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
+        "></iframe></div>"
+    )
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7173,15 +7327,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 vid = youtube_duration_service.extract_video_id(raw_url)
                 if not vid:
                     return ""
-                params = "?rel=0&modestbranding=0&controls=1&enablejsapi=1"
-                embed_src = f"https://www.youtube.com/embed/{vid}{params}"
-                return (
-                    f'<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
-                    f'<iframe width="100%" height="315" src="{embed_src}" '
-                    'frameborder="0" allowfullscreen loading="lazy" '
-                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
-                    "></iframe></div>"
-                )
+                return _youtube_embed_html(vid)
             content_html = re.sub(
                 r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
                 r'\s*<a[^>]+href=["\']'
@@ -7206,17 +7352,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             base_html = content_html if isinstance(content_html, str) and content_html.strip() else (entry.summary or "")
 
             # Only inject if not already present
-            if video_id and ("youtube.com/embed/" not in str(base_html)):
-                # Fixed player parameters: controls enabled, modest branding off, no related videos, enable JS API
-                params = "?rel=0&modestbranding=0&controls=1&enablejsapi=1"
-                embed_src = f"https://www.youtube.com/embed/{video_id}{params}"
-                embed_html = (
-                    f'<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
-                    f'<iframe width="100%" height="315" src="{embed_src}" '
-                    'frameborder="0" allowfullscreen loading="lazy" '
-                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
-                    "></iframe></div>"
-                )
+            if video_id and ("/embed/" not in str(base_html)):
+                embed_html = _youtube_embed_html(video_id)
                 # Ensure base_html is wrapped as HTML
                 if not isinstance(base_html, str):
                     base_html = ""
@@ -8499,12 +8636,15 @@ def _run_daily_maintenance() -> None:
 def _daily_maintenance_for_user() -> None:
     """Per-user nightly cleanup for the currently-bound tenancy user."""
 
-    # 1. Prune rule_run_log older than 90 days.
+    # 1. Prune rule_run_log older than 90 days. run_at is stored as a naive
+    # ISO-8601 string (datetime.now().isoformat()), so compare against an ISO
+    # cutoff — comparing the TEXT column to an int epoch never matched, and the
+    # column was misnamed ran_at, so this prune silently never ran.
     try:
-        cutoff = int(time.time()) - 90 * 86400
+        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         with get_meta_connection() as conn:
             old_ids = [r[0] for r in conn.execute(
-                "SELECT id FROM rule_run_log WHERE ran_at < ?", (cutoff,)
+                "SELECT id FROM rule_run_log WHERE run_at < ?", (cutoff,)
             ).fetchall()]
             if old_ids:
                 placeholders = ",".join("?" * len(old_ids))
@@ -8602,7 +8742,24 @@ def _daily_maintenance_for_user() -> None:
         except Exception:
             LOGGER.exception("[maintenance] YouTube sync failed")
 
-    # 6. Record this user's last-ran timestamp.
+    # 6. DeviantArt watch-list → gallery feeds sync — per-user, only when the
+    # account is connected. Mirrors the YouTube sync above so the watch list no
+    # longer needs the manual Settings button. sync_deviantart_watchlist is
+    # add-only and self-throttles against DeviantArt's rate limit.
+    if get_deviantart_user_token():
+        try:
+            result = sync_deviantart_watchlist()
+            rate_suffix = " (rate limited)" if result.get("rate_limited") else ""
+            if result.get("error"):
+                LOGGER.error("[maintenance] DeviantArt watch-list sync error%s: %s",
+                             rate_suffix, result["error"])
+            else:
+                LOGGER.info("[maintenance] DeviantArt watch-list sync: +%d watched=%d%s",
+                            result.get("added", 0), result.get("total", 0), rate_suffix)
+        except Exception:
+            LOGGER.exception("[maintenance] DeviantArt watch-list sync failed")
+
+    # 7. Record this user's last-ran timestamp.
     with get_meta_connection() as conn:
         set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
 
