@@ -13689,9 +13689,11 @@ async def api_favicon(domain: str) -> Response:
     host = domain.strip().lower()
     if not host:
         return Response(status_code=400)
-    # Reject anything that looks like an IP or has a scheme prefix (SSRF vector).
-    # Legitimate domain params are plain hostnames like "example.com".
-    if host.startswith("http") or "/" in host:
+    # Reject anything carrying a path or an explicit scheme prefix (SSRF vector).
+    # Legitimate domain params are plain hostnames like "example.com". Match the
+    # scheme as "http:"/"https:" (not a bare "http" prefix, which would wrongly
+    # reject real hosts such as "httpbin.org").
+    if "/" in host or host.startswith(("http:", "https:")):
         return Response(status_code=400)
 
     cache_key = f"favicon:{host}"
