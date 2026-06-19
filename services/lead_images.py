@@ -1886,6 +1886,10 @@ class LeadImageService:
         return False
 
     def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None) -> bool:
+        # Sanitized inline-SVG data URIs (from services.svg_sanitize, e.g. a
+        # per-feed plugin's hero SVG) are trusted and carry no remote host to vet.
+        if image_url.startswith("data:image/svg+xml,"):
+            return True
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
