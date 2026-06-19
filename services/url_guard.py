@@ -161,6 +161,26 @@ def safe_get(
     raise UnsafeURLError(f"too many redirects starting from {url!r}")
 
 
+def safe_head(
+    url: str,
+    *,
+    timeout: float = 5.0,
+    headers: dict | None = None,
+) -> httpx.Response:
+    """SSRF-safe HEAD probe with its own ``follow_redirects=False`` client.
+
+    HEAD has no per-hop revalidation counterpart to :func:`safe_get` (a redirect
+    just comes back as a 3xx), so this validates the target URL up front and
+    refuses to follow redirects, closing the redirect-to-internal bypass for the
+    image-fetchability / comic-URL probes. Raises :class:`UnsafeURLError` for an
+    unsafe target.
+    """
+    if not is_safe_outbound_url(url):
+        raise UnsafeURLError(url)
+    with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
+        return client.head(url)
+
+
 async def safe_get_async(
     client: httpx.AsyncClient,
     url: str,
