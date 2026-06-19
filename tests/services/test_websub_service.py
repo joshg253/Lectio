@@ -10,6 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import httpx
+
+from services import websub as websub_mod
 from services.websub import WebSubService
 
 
@@ -287,6 +290,77 @@ def test_renew_skips_not_expiring(tmp_path):
     svc.renew_expiring_subscriptions()
 
     assert calls == []
+
+
+# ------------------------------------------------------------------ SSRF hardening
+
+_INTERNAL = "http://169.254.169.254/latest/meta-data"
+
+
+def _unsafe(url: str) -> bool:
+    return "169.254.169.254" not in url and ".internal" not in url
+
+
+def test_discover_hub_refuses_internal_redirect(tmp_path, monkeypatch):
+    """A feed that 302-bounces to an internal address must not be followed; the
+    discovery swallows the UnsafeURLError and reports no hub."""
+    monkeypatch.setattr(websub_mod, "is_safe_outbound_url", _unsafe)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == _FEED_URL:
+            return httpx.Response(302, headers={"location": _INTERNAL})
+        return httpx.Response(200, content=b"SECRET")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        websub_mod.httpx, "Client",
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+    )
+    svc = _build_service(tmp_path / "meta.sqlite")
+    assert svc._discover_hub_url(_FEED_URL) is None
+
+
+def test_subscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
+    monkeypatch.setattr(websub_mod, "is_safe_outbound_url", _unsafe)
+    posted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.append(str(request.url))
+        return httpx.Response(204)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        websub_mod.httpx, "Client",
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+    )
+    svc = _build_service(tmp_path / "meta.sqlite")
+    svc.subscribe(_FEED_URL, _INTERNAL)
+    assert posted == []  # no POST to the internal hub
+
+
+def test_unsubscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
+    db = tmp_path / "meta.sqlite"
+    _insert_sub(db, hub_url=_INTERNAL)
+    monkeypatch.setattr(websub_mod, "is_safe_outbound_url", _unsafe)
+    posted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.append(str(request.url))
+        return httpx.Response(204)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        websub_mod.httpx, "Client",
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+    )
+    svc = _build_service(db)
+    svc.unsubscribe(_FEED_URL)
+    assert posted == []  # no POST to internal hub
+    # row still removed regardless
+    row = _make_conn(db).execute(
+        "SELECT 1 FROM websub_subscriptions WHERE feed_url=?", (_FEED_URL,)
+    ).fetchone()
+    assert row is None
 
 
 # ------------------------------------------------------------------ maybe_discover_hubs
