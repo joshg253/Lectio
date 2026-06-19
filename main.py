@@ -8098,6 +8098,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "summary": _summary,
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url),
+            "show_lead_in_article": _show_lead_in_article,
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
