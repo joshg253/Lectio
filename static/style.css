@@ -3517,6 +3517,57 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .afd-compare-btn:hover { background: var(--hover-bg); }
 .afd-compare-btn:disabled { opacity: 0.5; cursor: default; }
 
+/* Settings → Feeds → Compare selected (sfc) */
+.sfc-col-check { width: 2rem; text-align: center; }
+.sfc-check { cursor: pointer; }
+.sfc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.sfc-compare-btn {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.82rem;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.sfc-compare-btn:hover:not(:disabled) { background: var(--hover-bg); }
+.sfc-compare-btn:disabled { opacity: 0.5; cursor: default; }
+.sfc-count { font-size: 0.8rem; color: var(--muted); }
+.sfc-panel {
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.sfc-panel-heading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 0.25rem;
+}
+.sfc-card {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.sfc-card:last-child { border-bottom: none; }
+.sfc-card-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sfc-panel-error { font-size: 0.85rem; color: var(--danger, #d97070); margin: 0; }
+
 .afd-pf {
   display: grid;
   gap: 0.4rem;

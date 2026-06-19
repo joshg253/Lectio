@@ -175,13 +175,7 @@ list) are both **done**. Follow-ups all resolved:
 
 ### Ideas
 
-- **Compare existing subscriptions** — the `/feeds/compare` route (format,
-  full-text vs summaries, image presence, publish vs modified-only dates, GUID
-  type) is only wired into the Add Feed auto-discovery picker, so it can't
-  compare feeds you're *already* subscribed to. Add a Compare action to the
-  Settings → Feeds → Folders list: select/match multiple feeds and compare them
-  head-to-head with the same chips, to help decide which of several similar
-  subscriptions (e.g. two same-host RSS variants) to keep and which to unsub.
+- ~~**Compare existing subscriptions**~~ — addressed: Settings → Feeds → Folders now has per-feed checkboxes and a "Compare selected" button (2–6 feeds) that calls `/feeds/compare` and renders the same chips as the Add-Feed picker.
 - **Inline SVG as thumbnail/lead image** — some feeds ship an inline `<svg>` (or a
   `data:image/svg+xml` / `.svg` URL) as the post art. Support rendering inline SVG
   code as the thumbnail image (analogue to raster thumbs) — sanitize the SVG,
