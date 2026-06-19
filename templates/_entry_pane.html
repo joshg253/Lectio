@@ -363,7 +363,7 @@
     >
       {% if selected_entry.lead_image_url %}
       <img
-        class="entry-lead-image"
+        class="entry-lead-image{% if selected_entry.lead_image_url.startswith('data:image/svg') %} entry-lead-image--vector{% endif %}"
         src="{{ selected_entry.lead_image_url }}"
         alt="{{ selected_entry.image_title_text or '' }}"
         {% if selected_entry.image_title_text %}title="{{ selected_entry.image_title_text }}"{% endif %}

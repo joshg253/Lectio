@@ -2896,6 +2896,14 @@ button:hover, .button-link:hover {
   margin: 0 0 0.85rem;
 }
 
+/* Inline-SVG (vector) lead images carry only a small intrinsic viewBox size,
+   so render them at a consistent, readable display width instead of their
+   tiny natural pixels. Aspect ratio is preserved by height:auto. */
+.entry-lead-image--vector {
+  width: min(320px, 100%);
+  height: auto;
+}
+
 .entry-lead-image-popped {
   animation: lead-image-pop-in 0.3s ease-out;
 }
