@@ -79,6 +79,23 @@ def test_allows_internal_url_fragment():
     assert "url(#grad)" in out
 
 
+def test_viewbox_only_gets_intrinsic_size():
+    # An <img> of a viewBox-only SVG has no intrinsic size and renders 0×0;
+    # width/height must be derived from the viewBox so it's visible.
+    out = sanitize_svg(ANALOGUE)  # viewBox="0 0 105 85", no width/height
+    assert out is not None
+    assert 'width="105"' in out
+    assert 'height="85"' in out
+
+
+def test_existing_width_height_preserved():
+    out = sanitize_svg(
+        '<svg viewBox="0 0 10 10" width="40" height="20"><path d="M0 0"/></svg>'
+    )
+    assert out is not None
+    assert 'width="40"' in out and 'height="20"' in out
+
+
 def test_empty_shell_rejected():
     assert sanitize_svg("<svg></svg>") is None
     assert sanitize_svg("") is None
