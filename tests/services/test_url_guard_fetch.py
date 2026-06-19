@@ -87,6 +87,27 @@ def test_redirect_loop_capped(allow_public):
 # --- async variants ---------------------------------------------------------
 
 
+@pytest.fixture
+def mock_head_client(monkeypatch):
+    """Force url_guard.safe_head's internal client onto the MockTransport."""
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kw: real_client(transport=httpx.MockTransport(_handler), follow_redirects=False),
+    )
+
+
+def test_safe_head_blocks_internal(allow_public, mock_head_client):
+    with pytest.raises(url_guard.UnsafeURLError):
+        url_guard.safe_head("http://169.254.169.254/latest/meta-data")
+
+
+def test_safe_head_allows_public(allow_public, mock_head_client):
+    resp = url_guard.safe_head("https://pub.test/img")
+    assert resp.status_code == 200
+
+
 def _async_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(_handler), follow_redirects=False)
 

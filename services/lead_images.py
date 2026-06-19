@@ -14,6 +14,7 @@ import feedparser
 import httpx
 
 from services import tenancy
+from services import url_guard
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
@@ -2176,8 +2177,9 @@ class LeadImageService:
         _use_urllib = False
         _corp_restricted = False
         try:
-            with httpx.Client(follow_redirects=True, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
-                response = client.get(url)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
+                response = url_guard.safe_get(client, url)
                 if response.status_code == 409:
                     m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
                     if m:
@@ -2187,7 +2189,7 @@ class LeadImageService:
                             parsed_host = urlparse(url)
                             domain = parsed_host.netloc.lstrip("www.")
                             client.cookies.set(cname.strip(), cval.strip(), domain=domain)
-                        response = client.get(url)
+                        response = url_guard.safe_get(client, url)
                 response.raise_for_status()
                 _corp = response.headers.get("cross-origin-resource-policy", "").lower()
                 _corp_restricted = _corp in ("same-site", "same-origin")
@@ -2223,11 +2225,8 @@ class LeadImageService:
         if domain_cache is not None and domain in domain_cache:
             return domain_cache[domain]
         try:
-            resp = httpx.head(
-                image_url,
-                follow_redirects=True,
-                timeout=4.0,
-                headers={"User-Agent": self._user_agent},
+            resp = url_guard.safe_head(
+                image_url, timeout=4.0, headers={"User-Agent": self._user_agent}
             )
             ok = resp.status_code < 400
         except Exception:
