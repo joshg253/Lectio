@@ -227,9 +227,10 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   probes), the source-proxy / readability / feed-tag fetches in main.py, and the
   service-layer background fetches (lead-image plugins, lead-image source-page
   fetch, the page scraper, and the starred-archive text/byte fetches) — all with
-  `follow_redirects=False`, closing the redirect-to-internal bypass. Service-layer
-  HEAD probes (image-fetchability / comic-URL checks) can't use `safe_get`, so
-  they pre-validate with `is_safe_outbound_url` and fetch `follow_redirects=False`.
+  `follow_redirects=False`, closing the redirect-to-internal bypass. HEAD probes
+  (image-fetchability / comic-URL checks) go through `url_guard.safe_head`, which
+  validates the target and fetches `follow_redirects=False` (HEAD has no per-hop
+  counterpart to `safe_get`).
   Still open: WebSub hub fetches and the `reader` library's own feed refresh (a
   subscribed `http://10.x` host is still fetched); and full DNS-rebind closure
   needs connection IP-pinning (the validate→connect window is small but nonzero).

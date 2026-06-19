@@ -2225,15 +2225,8 @@ class LeadImageService:
         if domain_cache is not None and domain in domain_cache:
             return domain_cache[domain]
         try:
-            # follow_redirects=False + precheck so a HEAD probe can't be bounced
-            # to an internal target (no safe HEAD helper exists).
-            if not is_safe_outbound_url(image_url):
-                raise url_guard.UnsafeURLError(image_url)
-            resp = httpx.head(
-                image_url,
-                follow_redirects=False,
-                timeout=4.0,
-                headers={"User-Agent": self._user_agent},
+            resp = url_guard.safe_head(
+                image_url, timeout=4.0, headers={"User-Agent": self._user_agent}
             )
             ok = resp.status_code < 400
         except Exception:

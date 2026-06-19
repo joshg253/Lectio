@@ -779,31 +779,31 @@ class StarredArchiveService:
                 urls.add(urljoin(base_url, href))
         return urls
 
+    def _fetch_guarded(self, url: str) -> httpx.Response:
+        """SSRF-safe GET shared by the text/byte archive fetchers.
+
+        follow_redirects=False so url_guard.safe_get validates every hop; keeps
+        timeout, UA, and redirect policy in one place.
+        """
+        with httpx.Client(
+            follow_redirects=False,
+            timeout=ARCHIVE_FETCH_TIMEOUT_S,
+            headers={"User-Agent": self._user_agent},
+        ) as client:
+            resp = url_guard.safe_get(client, url)
+        resp.raise_for_status()
+        return resp
+
     def _fetch_text(self, url: str) -> str | None:
         try:
-            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
-            with httpx.Client(
-                follow_redirects=False,
-                timeout=ARCHIVE_FETCH_TIMEOUT_S,
-                headers={"User-Agent": self._user_agent},
-            ) as client:
-                resp = url_guard.safe_get(client, url)
-            resp.raise_for_status()
-            return resp.text
+            return self._fetch_guarded(url).text
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("starred archive: text fetch failed for %s: %s", url, exc)
             return None
 
     def _fetch_bytes(self, url: str) -> tuple[bytes, str] | None:
         try:
-            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
-            with httpx.Client(
-                follow_redirects=False,
-                timeout=ARCHIVE_FETCH_TIMEOUT_S,
-                headers={"User-Agent": self._user_agent},
-            ) as client:
-                resp = url_guard.safe_get(client, url)
-            resp.raise_for_status()
+            resp = self._fetch_guarded(url)
             return resp.content, resp.headers.get("content-type", "").split(";")[0].strip() or "application/octet-stream"
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("starred archive: byte fetch failed for %s: %s", url, exc)
