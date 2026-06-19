@@ -10496,6 +10496,17 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
+    # Sanitized inline-SVG lead images arrive as data:image/svg+xml URIs. There's
+    # nothing to rasterize/crop (they're vector); decode and serve the SVG directly
+    # so every /thumb consumer (post list, Feed Properties, previews) renders them.
+    if url.startswith("data:image/svg+xml,"):
+        svg = unquote(url[len("data:image/svg+xml,"):])
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
+        )
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)
