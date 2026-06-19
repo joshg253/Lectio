@@ -7891,7 +7891,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
                 if _fa or _ft:
                     image_title_text = _ft or _fa  # title preferred for auto display
-                    lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
+                    lead_image_service.persist_image_alt_async(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
             else:
                 lead_image_service.queue_source_html_fetch(
                     entry.link,
@@ -8011,7 +8011,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     flags=re.IGNORECASE,
                 ).strip() or None
 
-        lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+        # Persist off the request thread (and skip when unchanged) so an open
+        # never blocks on the meta-DB writer held by the background backfill.
+        lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
@@ -8098,6 +8100,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "summary": _summary,
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url),
+            "show_lead_in_article": _show_lead_in_article,
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
@@ -10496,6 +10499,17 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
     return a cached JPEG.  This eliminates the progressive-load flicker caused by
     downloading full-size hero images into the small post-list thumbnail slot."""
+    # Sanitized inline-SVG lead images arrive as data:image/svg+xml URIs. There's
+    # nothing to rasterize/crop (they're vector); decode and serve the SVG directly
+    # so every /thumb consumer (post list, Feed Properties, previews) renders them.
+    if url.startswith("data:image/svg+xml,"):
+        svg = unquote(url[len("data:image/svg+xml,"):])
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
+        )
+
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return Response(status_code=400)
