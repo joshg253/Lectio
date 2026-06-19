@@ -361,7 +361,7 @@
         data-lead-image-entry-id="{{ selected_entry.id }}"
       {% endif %}
     >
-      {% if selected_entry.lead_image_url %}
+      {% if selected_entry.lead_image_url and selected_entry.show_lead_in_article %}
       <img
         class="entry-lead-image{% if selected_entry.lead_image_url.startswith('data:image/svg') %} entry-lead-image--vector{% endif %}"
         src="{{ selected_entry.lead_image_url }}"
