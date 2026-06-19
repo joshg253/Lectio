@@ -128,10 +128,10 @@ Phasing:
    DONE: the lead-image plugins, lead-image source-page fetch, page scraper, and
    starred-archive text/byte fetches route through `safe_get` (`follow_redirects=
    False`); their HEAD probes pre-validate with `is_safe_outbound_url`. Test:
-   `tests/services/test_service_fetch_ssrf.py`. Remaining hardening: (a) WebSub
-   hub fetches still pass `follow_redirects=True`; (b) full DNS-rebind closure
-   needs connection IP-pinning (the validate→connect TOCTOU window is now small
-   but nonzero) — deferred as lower-priority for the trusted-user threat model.
+   `tests/services/test_service_fetch_ssrf.py`. WebSub hub fetches are now guarded
+   too (see Code health). Remaining hardening: full DNS-rebind closure needs
+   connection IP-pinning (the validate→connect TOCTOU window is now small but
+   nonzero) — deferred as lower-priority for the trusted-user threat model.
 5. ~~**Data migration**~~ — DONE. `scripts/migrate_to_multiuser.py` copies the
    legacy DBs into `DATA_DIR/users/<user_id>/` (user_id resolved from the auth
    DB), dry-run default, reversible, integrity-checked. `--apply` run on the real
@@ -218,6 +218,13 @@ list) are both **done**. Follow-ups all resolved:
 
 ### Code health
 
+- ~~**WebSub hub fetches still follow redirects (SSRF)**~~ — DONE. The three httpx
+  calls in `services/websub.py` followed redirects: `_discover_hub_url` now fetches
+  the user-supplied `feed_url` via `url_guard.safe_get` (per-hop revalidation), and
+  `subscribe` / `unsubscribe` pre-validate the discovered `hub_url` with
+  `is_safe_outbound_url` and POST with `follow_redirects=False` (safe_get is
+  GET-only). Closes the redirect-to-internal bypass on the WebSub surface. Tests:
+  SSRF cases in `tests/services/test_websub_service.py`.
 - ~~**Duplicate / near-duplicate code deep dive**~~ — DONE. The five copy-pasted
   feed-removal sequences (unsubscribe route, remove-from-folder, delete-folder,
   dedup same/cross, format upgrade) collapsed into `purge_orphaned_feed`. Fixed
