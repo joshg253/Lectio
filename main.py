@@ -656,7 +656,7 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/dev/feeds/", "/fever", "/greader/", "/websub/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
 _configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
 AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
@@ -1253,7 +1253,7 @@ class _TenancyMiddleware:
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/fever", "/greader/", "/websub/")
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/fever", "/greader/", "/websub/")
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
@@ -1361,7 +1361,7 @@ class _RejectPrefetchMiddleware:
        and /static bypass both layers so probes and asset prefetches still work.
     """
 
-    PASSTHROUGH_PREFIXES = ("/healthz", "/static", "/login", "/api/img")
+    PASSTHROUGH_PREFIXES = ("/healthz", "/static", "/login", "/api/img", "/api/favicon")
 
     def __init__(self, app):
         self.app = app
@@ -5116,7 +5116,7 @@ def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
         host = urlparse(feed_url).hostname
     if not host:
         return None
-    return f"https://www.google.com/s2/favicons?domain={quote_plus(host)}&sz=32"
+    return f"/api/favicon?domain={quote_plus(host)}"
 
 
 def get_feed_title_map() -> dict[str, str]:
@@ -13661,6 +13661,84 @@ async def api_img_proxy(u: str) -> Response:
         media_type=content_type,
         headers={"Cache-Control": cache_ctrl},
     )
+
+
+_FAVICON_CACHE_CONTROL = "public, max-age=86400"
+_FAVICON_FALLBACK_PATH = BASE_DIR / "static" / "favicon-fallback.svg"
+
+
+@app.get("/api/favicon")
+async def api_favicon(domain: str) -> Response:
+    """Favicon resolver with a three-hop fallback chain.
+
+    Tries in order:
+      1. Google's faviconV2 service (via s2/favicons redirect).
+      2. The site's own /favicon.ico.
+      3. A bundled neutral SVG placeholder.
+
+    Every outbound fetch goes through url_guard.safe_get_async with
+    follow_redirects=False so SSRF is prevented on the domain parameter and all
+    redirect hops. Results (including the placeholder) are cached in the shared
+    img_cache DB under the key "favicon:<host>", so repeat lookups skip the
+    chain entirely.
+
+    Auth-exempt and CSRF-exempt (same as /api/img) — the browser's <img> tag
+    fetches it without cookies/tokens.
+    """
+    # Reject clearly unsafe domain values before any DNS/network work.
+    host = domain.strip().lower()
+    if not host:
+        return Response(status_code=400)
+    # Reject anything that looks like an IP or has a scheme prefix (SSRF vector).
+    # Legitimate domain params are plain hostnames like "example.com".
+    if host.startswith("http") or "/" in host:
+        return Response(status_code=400)
+
+    cache_key = f"favicon:{host}"
+    cached = _img_cache_get(cache_key)
+    if cached is not None:
+        body, content_type = cached
+        return Response(content=body, media_type=content_type, headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
+
+    google_url = f"https://www.google.com/s2/favicons?domain={quote_plus(host)}&sz=32"
+    favicon_ico_url = f"https://{host}/favicon.ico"
+
+    async with httpx.AsyncClient(follow_redirects=False, timeout=8.0) as client:
+        # Hop 1: Google faviconV2 (via redirect from s2/favicons).
+        try:
+            resp = await url_guard.safe_get_async(
+                client, google_url, headers={"User-Agent": READABILITY_USER_AGENT}
+            )
+            ct = resp.headers.get("content-type", "")
+            if resp.status_code == 200 and ct.startswith("image/"):
+                body = resp.content
+                _img_cache_store(cache_key, body, ct)
+                return Response(content=body, media_type=ct, headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
+        except (url_guard.UnsafeURLError, Exception):
+            pass
+
+        # Hop 2: site's own /favicon.ico.
+        if url_guard.is_safe_outbound_url(favicon_ico_url):
+            try:
+                resp = await url_guard.safe_get_async(
+                    client, favicon_ico_url, headers={"User-Agent": READABILITY_USER_AGENT}
+                )
+                ct = resp.headers.get("content-type", "")
+                if resp.status_code == 200 and (ct.startswith("image/") or ct.startswith("application/octet")):
+                    body = resp.content
+                    ct_store = ct if ct.startswith("image/") else "image/x-icon"
+                    _img_cache_store(cache_key, body, ct_store)
+                    return Response(content=body, media_type=ct_store, headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
+            except (url_guard.UnsafeURLError, Exception):
+                pass
+
+    # Hop 3: bundled neutral SVG placeholder.
+    try:
+        placeholder = _FAVICON_FALLBACK_PATH.read_bytes()
+    except OSError:
+        return Response(status_code=502)
+    _img_cache_store(cache_key, placeholder, "image/svg+xml")
+    return Response(content=placeholder, media_type="image/svg+xml", headers={"Cache-Control": _FAVICON_CACHE_CONTROL})
 
 
 @app.get("/healthz")
