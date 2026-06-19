@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from services.lead_images import LeadImageService
@@ -1077,20 +1078,12 @@ def test_no_svg_no_thumb(tmp_path: Path):
 
 # --- request-path async persistence (perf: keep opens off the meta-DB writer) ---
 
-class _SyncThread:
-    """Runs the target inline so async writes are deterministic in tests."""
-    def __init__(self, target=None, daemon=None):
-        self._target = target
-    def start(self):
-        if self._target:
-            self._target()
-
 
 def test_persist_lead_image_async_writes_when_changed(tmp_path, monkeypatch):
-    import services.lead_images as li
-    monkeypatch.setattr(li.threading, "Thread", _SyncThread)
     db = tmp_path / "meta.sqlite"
     service = _build_service(db, [])
+    # Run the queued write inline so the test is deterministic (no worker thread).
+    monkeypatch.setattr(service, "_enqueue_write", lambda uid, fn: fn())
     service.persist_lead_image_async("https://f/x.xml", "e1", "https://img/a.jpg")
     with _make_conn(db) as conn:
         row = conn.execute(
@@ -1100,16 +1093,47 @@ def test_persist_lead_image_async_writes_when_changed(tmp_path, monkeypatch):
 
 
 def test_persist_lead_image_async_skips_unchanged(tmp_path, monkeypatch):
-    import services.lead_images as li
-    spawned = []
-    monkeypatch.setattr(
-        li.threading, "Thread",
-        lambda *a, **k: spawned.append(k.get("target")) or _SyncThread(*a, **k),
-    )
     service = _build_service(tmp_path / "meta.sqlite", [])
+    enqueued = []
+    monkeypatch.setattr(service, "_enqueue_write", lambda uid, fn: enqueued.append(fn))
     # Seed the in-memory cache as if already persisted.
     service._cache[("https://f/x.xml", "e1")] = "https://img/a.jpg"
     service.persist_lead_image_async("https://f/x.xml", "e1", "https://img/a.jpg")
-    assert spawned == []  # unchanged -> no DB-write thread spawned
-    # In-memory cache stays correct either way.
+    assert enqueued == []  # unchanged -> nothing enqueued for the writer
     assert service._cache[("https://f/x.xml", "e1")] == "https://img/a.jpg"
+
+
+def test_persist_image_alt_async_skips_unchanged(tmp_path, monkeypatch):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    enqueued = []
+    monkeypatch.setattr(service, "_enqueue_write", lambda uid, fn: enqueued.append(fn))
+    key = ("https://f/x.xml", "e1")
+    service._alt_cache[key] = "alt"
+    service._title_cache[key] = "title"
+    service.persist_image_alt_async("https://f/x.xml", "e1", "alt", title_text="title")
+    assert enqueued == []  # unchanged -> nothing enqueued
+
+
+def test_write_worker_drains_queue(tmp_path):
+    """The shared worker processes enqueued writes (and survives a failing one)."""
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    boom_ran = threading.Event()
+    ok_ran = threading.Event()
+
+    def _boom():
+        boom_ran.set()
+        raise RuntimeError("write failed")
+
+    def _ok():
+        service.store_entry_lead_image("https://f/x.xml", "e9", "https://img/z.jpg")
+        ok_ran.set()
+
+    service._enqueue_write("u", _boom)   # failure is logged, worker keeps going
+    service._enqueue_write("u", _ok)
+    assert ok_ran.wait(timeout=5) and boom_ran.is_set()
+    with _make_conn(db) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e9",)
+        ).fetchone()
+    assert row is not None and row["image_url"] == "https://img/z.jpg"
