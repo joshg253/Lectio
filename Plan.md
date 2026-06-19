@@ -187,12 +187,7 @@ list) are both **done**. Follow-ups all resolved:
   code as the thumbnail image (analogue to raster thumbs) — sanitize the SVG,
   size/crop it like other thumbs, and decide caching (SVG is text, not a wixmp-style
   binary). Scope safely (no scripts in SVG).
-- **Favicon fallback for feeds Google's service can't resolve** — sidebar/feed
-  favicons are fetched via Google's `faviconV2` endpoint (`t*.gstatic.com`),
-  which returns 404 for some hosts (e.g. private/less-indexed sites), leaving no
-  icon and a noisy console 404. Investigate a fallback chain: try the site's
-  own `/favicon.ico` (proxied), then a generic placeholder, instead of relying
-  solely on Google. Consider caching results to avoid repeat lookups.
+- ~~**Favicon fallback for feeds Google's service can't resolve**~~ — DONE. `/api/favicon` resolves icons via Google → `/favicon.ico` → SVG placeholder, with img-cache caching.
 - **Automated screenshot refresh** — script (Playwright or similar) to regenerate
   the README/docs screenshots on demand. Must run against sanitized/demo data —
   exclude private feeds (e.g. torrent trackers) so nothing sensitive lands in
