@@ -1007,3 +1007,69 @@ def test_og_scrape_manual_keeps_inline_when_source_misses(tmp_path: Path, monkey
         ).fetchone()
     assert row is not None
     assert row["image_url"] == inline_img, "transient source miss clobbered the inline image"
+
+
+# --- inline <svg> thumbnails (PR5) -----------------------------------------
+
+_INLINE_SVG = (
+    '<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M1 1H9V9Z" fill="currentColor"></path></svg>'
+)
+
+
+def test_inline_svg_used_as_thumb_when_no_raster(tmp_path: Path):
+    feed = "https://analogue.example/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="svg-1",
+        link="https://analogue.example/post/",
+        content_html=f"<p>Notes</p>{_INLINE_SVG}",
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    thumb = service.extract_inline_thumb_url(entry)
+
+    assert thumb is not None
+    assert thumb.startswith("data:image/svg+xml,")
+    assert "%3Cpath" in thumb  # path geometry survived sanitization
+
+
+def test_raster_image_preferred_over_inline_svg(tmp_path: Path):
+    feed = "https://analogue.example/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="svg-2",
+        link="https://analogue.example/post/",
+        content_html=f'<img src="https://cdn.example/hero.jpg">{_INLINE_SVG}',
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    thumb = service.extract_inline_thumb_url(entry)
+
+    assert thumb == "https://cdn.example/hero.jpg"
+
+
+def test_extract_inline_svg_thumb_url_public_helper(tmp_path: Path):
+    feed = "https://analogue.example/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="svg-3",
+        link="https://analogue.example/post/",
+        content_html=f"<div>{_INLINE_SVG}</div>",
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    assert service.extract_inline_svg_thumb_url(entry).startswith("data:image/svg+xml,")
+
+
+def test_no_svg_no_thumb(tmp_path: Path):
+    feed = "https://analogue.example/feed.xml"
+    entry = _FakeEntry(
+        feed_url=feed,
+        entry_id="svg-4",
+        link="https://analogue.example/post/",
+        content_html="<p>just text, no images</p>",
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [entry])
+
+    assert service.extract_inline_svg_thumb_url(entry) is None

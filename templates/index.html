@@ -485,9 +485,14 @@
           data-smart-ms="{{ post.smart_min_scale or '' }}"
           data-fill-zoom="{{ post.fill_zoom or '' }}"
         >
+          {% set _is_data_thumb = post.thumbnail_url and post.thumbnail_url.startswith('data:') %}
           <div class="post-thumbnail {% if not post.thumbnail_url %}is-empty{% endif %} crop-{{ post.thumb_crop or 'cover' }}"
-            {% if post.thumb_crop == 'smart' and post.thumbnail_url %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
-            {% if post.thumbnail_url %}
+            {% if post.thumb_crop == 'smart' and post.thumbnail_url and not _is_data_thumb %}style="background-image:url('/thumb?url={{ post.thumbnail_url | urlencode }}&crop=cover')"{% endif %}>
+            {% if _is_data_thumb %}
+            {# Inline-SVG thumbnail: render the sanitized data URI directly (CSS sizes it; /thumb only rasterizes http(s)). #}
+            <img class="post-thumbnail-image" src="{{ post.thumbnail_url }}" alt=""
+              onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+            {% elif post.thumbnail_url %}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}{% if post.fill_zoom and post.fill_zoom != 1.0 and post.thumb_crop != 'smart' and post.thumb_crop != 'contain' %}&fz={{ post.fill_zoom }}{% endif %}" alt=""
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% endif %}
@@ -5889,7 +5894,7 @@
                 img.loading = 'lazy';
                 img.onerror = function() {
                   const _s = this.getAttribute('src');
-                  if (!_s || _s.startsWith('/api/img?')) {
+                  if (!_s || _s.startsWith('/api/img?') || _s.startsWith('data:')) {
                     this.style.display = 'none';
                   } else {
                     this.setAttribute('src', '/api/img?u=' + encodeURIComponent(this.src));
