@@ -556,6 +556,54 @@ class LeadImageService:
         except Exception:
             pass
 
+    def persist_lead_image_async(self, feed_url: str, entry_id: str, image_url: str | None) -> None:
+        """Request-path lead-image persistence that never blocks the response.
+
+        The article-open path calls this instead of store_entry_lead_image. It
+        refreshes the in-memory cache synchronously, then — only when the value
+        actually changed — writes the meta DB on a daemon thread (tenancy
+        re-bound). Re-opening an already-resolved entry skips the write entirely.
+        This keeps the request thread off the single-writer meta-DB lock that the
+        background lead-image backfill holds; otherwise opens waited up to the
+        meta busy_timeout (10s) whenever a backfill write was in flight.
+        """
+        key = (feed_url, entry_id)
+        unchanged = key in self._cache and self._cache[key] == image_url
+        self._cache[key] = image_url
+        self._fetched_at_cache[key] = time.time()
+        if unchanged:
+            return
+        uid = tenancy.current_user_id()
+
+        def _bg() -> None:
+            with tenancy.user_context(uid):
+                self.store_entry_lead_image(feed_url, entry_id, image_url)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def persist_image_alt_async(
+        self, feed_url: str, entry_id: str, alt_text: str | None, title_text: str | None = None
+    ) -> None:
+        """Async + skip-if-unchanged counterpart of store_entry_image_alt for the
+        request path (same rationale as persist_lead_image_async)."""
+        key = (feed_url, entry_id)
+        unchanged = (
+            key in self._alt_cache
+            and self._alt_cache[key] == alt_text
+            and self._title_cache.get(key) == title_text
+        )
+        self._alt_cache[key] = alt_text
+        self._title_cache[key] = title_text
+        if unchanged:
+            return
+        uid = tenancy.current_user_id()
+
+        def _bg() -> None:
+            with tenancy.user_context(uid):
+                self.store_entry_image_alt(feed_url, entry_id, alt_text, title_text=title_text)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
     def rename_feed_url_in_cache(self, old_url: str, new_url: str) -> None:
         """Re-key all in-memory cache entries from old_url to new_url after a feed URL change."""
         for cache in (self._cache, self._alt_cache, self._title_cache, self._fetched_at_cache):
