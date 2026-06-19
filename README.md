@@ -93,6 +93,9 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
   - **Automations tab** — shows which rules act on this feed (because they're scoped to it, its folder, or all feeds) and the recent automation runs that touched its entries, so you can see what Lectio is doing to a feed without reading the rules list
 - **Duplicate feed scan** (Manage Feeds → Duplicates) — detects feeds subscribed more than once under different URL variants: trailing-slash differences, format-selector params (`?alt=rss`), and known equivalent/renamed domains (e.g. `old.reddit.com` ↔ `www.reddit.com`, and `tapastic.com` → `tapas.io`). Renamed domains are rewritten automatically when adding or importing feeds. Same-folder duplicates are auto-removed; cross-folder duplicates let you choose which folder to keep. Optional **Rescue unread posts** (default on) marks entries in the surviving feed as unread if the removed feed had them unread, preventing posts silently lost to Deduplicate rules from disappearing permanently.
 
+### Icons
+- **Feed favicons** — sidebar feed icons are resolved server-side via `/api/favicon`, which tries Google's faviconV2 service first, then falls back to the site's own `/favicon.ico`, and finally serves a neutral SVG globe placeholder. Results are cached in the image-cache DB so repeat lookups skip outbound fetches entirely. This eliminates console 404s for feeds whose domains Google's service can't resolve (private/less-indexed sites).
+
 ### Reliability
 - Conditional HTTP requests (ETag / If-Modified-Since via `reader` library)
 - Exponential backoff per feed and per domain on errors; 410 Gone permanently disables a feed
