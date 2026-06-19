@@ -1411,7 +1411,7 @@
             <input type="search" id="feeds-folder-search-input" class="feeds-folder-search-input" placeholder="Filter folders and feeds…" autocomplete="off" aria-label="Filter folders and feeds" />
           </div>
           <table class="settings-folders-table">
-            <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th></tr></thead>
+            <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check" title="Select for comparison"></th></tr></thead>
             <tbody>
             {% for row in child_rows %}
             {% set failing = folder_failing_counts.get(row.id, 0) %}
@@ -1435,9 +1435,10 @@
                 <button type="button" class="settings-folder-props-btn" data-folder-automation-id="{{ row.id }}" title="Folder automation" aria-label="Folder automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
                 <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
               </td>
+              <td class="sfc-col-check"></td>
             </tr>
             {% for feed in folder_feeds %}
-            <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" hidden>
+            <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" data-feed-url="{{ feed.url }}" hidden>
               <td class="settings-feed-name" colspan="3">
                 <button type="button" class="settings-feed-name-text settings-feed-name-btn" data-feed-properties-url="{{ feed.url }}"{% if feed.has_error %} data-feed-error="1"{% endif %} title="{{ feed.url }}">{{ feed.title }}</button>
                 {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
@@ -1453,11 +1454,19 @@
                 {% endif %}
                 <button type="button" class="settings-folder-props-btn settings-feed-unsub-btn" data-settings-feed-unsubscribe data-feed-url="{{ feed.url }}" data-feed-title="{{ feed.title }}" data-folder-id="{{ row.id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
               </td>
+              <td class="sfc-col-check">
+                <input type="checkbox" class="sfc-check" data-sfc-url="{{ feed.url }}" aria-label="Select {{ feed.title }} for comparison" title="Select for comparison" />
+              </td>
             </tr>
             {% endfor %}
             {% endfor %}
             </tbody>
           </table>
+          <div class="sfc-toolbar" id="sfc-toolbar" hidden>
+            <button type="button" class="sfc-compare-btn" id="sfc-compare-btn" disabled>Compare selected</button>
+            <span class="sfc-count" id="sfc-count"></span>
+          </div>
+          <div class="sfc-panel" id="sfc-panel" hidden></div>
           {% else %}
           <p class="muted" style="padding:0.5rem 0">No folders yet.</p>
           {% endif %}
@@ -9396,6 +9405,162 @@
       }
     });
 
+    /**
+     * Build a DocumentFragment with .afd-chip spans for one /feeds/compare result.
+     * Returns a fragment containing a .afd-feed-meta div (and, if applicable,
+     * an .afd-feed-title-row div).  On error, wraps the error in a .afd-feed-meta
+     * with an .afd-chip--bad span.
+     * Shared by the Add-Feed picker (compareFeedsPicker) and the Settings compare panel.
+     */
+    function buildCompareChips(res) {
+      const frag = document.createDocumentFragment();
+      function chip(text, cls) {
+        const s = document.createElement('span');
+        s.textContent = text;
+        s.className = cls ? 'afd-chip afd-chip--' + cls : 'afd-chip';
+        return s;
+      }
+      if (res.error) {
+        const errMeta = document.createElement('div');
+        errMeta.className = 'afd-feed-meta';
+        const err = document.createElement('span');
+        err.className = 'afd-chip afd-chip--bad';
+        err.textContent = res.error;
+        errMeta.append(err);
+        frag.append(errMeta);
+        return frag;
+      }
+      const meta = document.createElement('div');
+      meta.className = 'afd-feed-meta';
+      const tags = [
+        chip(res.format),
+        chip(res.full_text ? '✓ Full text' : 'Summaries', res.full_text ? 'good' : null),
+        chip(res.image_count > 0 ? '✓ images' : '✗ no images', res.image_count > 0 ? 'good' : 'bad'),
+        chip(res.date_field === 'published' ? '✓ pub dates'
+           : res.date_field === 'modified_only' ? '⚠ modified-only' : '✗ no dates',
+             res.date_field === 'published' ? 'good' : 'bad'),
+        chip(res.guid_type === 'url' ? '✓ URL IDs'
+           : res.guid_type === 'string' ? 'string IDs' : '✗ no IDs',
+             res.guid_type === 'url' ? 'good' : res.guid_type === 'string' ? null : 'bad'),
+      ];
+      tags.forEach(t => meta.append(t));
+      frag.append(meta);
+      if (res.sample_title || res.latest_date) {
+        const titleRow = document.createElement('div');
+        titleRow.className = 'afd-feed-meta afd-feed-title-row';
+        if (res.sample_title) {
+          const t = res.sample_title.length > 60 ? res.sample_title.slice(0, 60) + '…' : res.sample_title;
+          titleRow.append(chip('"' + t + '"', 'title'));
+        }
+        if (res.latest_date) titleRow.append(chip(res.latest_date));
+        frag.append(titleRow);
+      }
+      return frag;
+    }
+
+    // Settings → Feeds → Folders: feed comparison via checkboxes.
+    (function () {
+      const feedsTab = document.getElementById('settings-tab-feeds');
+      if (!feedsTab) return;
+      const toolbar = document.getElementById('sfc-toolbar');
+      const compareBtn = document.getElementById('sfc-compare-btn');
+      const countEl = document.getElementById('sfc-count');
+      const panel = document.getElementById('sfc-panel');
+      if (!toolbar || !compareBtn || !countEl || !panel) return;
+
+      const MAX_COMPARE = 6;
+
+      function getSelectedUrls() {
+        // Dedupe by URL — a feed can appear in multiple folders.
+        const seen = new Set();
+        feedsTab.querySelectorAll('.sfc-check:checked').forEach(cb => {
+          const u = cb.dataset.sfcUrl;
+          if (u) seen.add(u);
+        });
+        return [...seen];
+      }
+
+      function updateToolbar() {
+        const urls = getSelectedUrls();
+        const n = urls.length;
+        toolbar.hidden = n === 0;
+        compareBtn.disabled = n < 2;
+        if (n === 0) {
+          countEl.textContent = '';
+        } else if (n > MAX_COMPARE) {
+          countEl.textContent = `${n} selected — max ${MAX_COMPARE}`;
+          compareBtn.disabled = true;
+        } else {
+          countEl.textContent = `${n} selected`;
+        }
+      }
+
+      // Listen for checkbox changes anywhere in the feeds tab (covers dynamically
+      // shown rows after folder expand).
+      feedsTab.addEventListener('change', (e) => {
+        if (e.target.classList.contains('sfc-check')) {
+          updateToolbar();
+          // Collapse the panel when selection changes so it does not show stale results.
+          panel.hidden = true;
+        }
+      });
+
+      compareBtn.addEventListener('click', async () => {
+        const urls = getSelectedUrls();
+        if (urls.length < 2 || urls.length > MAX_COMPARE) return;
+        compareBtn.disabled = true;
+        compareBtn.textContent = 'Comparing…';
+        panel.hidden = true;
+        try {
+          const qs = urls.map(u => 'url=' + encodeURIComponent(u)).join('&');
+          const r = await fetch('/feeds/compare?' + qs);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const results = await r.json();
+
+          // Build panel content.
+          panel.innerHTML = '';
+          const heading = document.createElement('p');
+          heading.className = 'sfc-panel-heading';
+          heading.textContent = 'Feed comparison';
+          panel.append(heading);
+
+          // Build a title lookup from the checked rows (by URL).
+          const titleByUrl = {};
+          feedsTab.querySelectorAll('.sfc-check:checked').forEach(cb => {
+            const u = cb.dataset.sfcUrl;
+            if (!u || titleByUrl[u]) return;
+            const nameBtn = cb.closest('.settings-feed-row')?.querySelector('.settings-feed-name-text');
+            titleByUrl[u] = nameBtn?.textContent?.trim() || u;
+          });
+
+          results.forEach(res => {
+            const card = document.createElement('div');
+            card.className = 'sfc-card';
+            const nameEl = document.createElement('div');
+            nameEl.className = 'sfc-card-name';
+            nameEl.textContent = titleByUrl[res.url] || res.url;
+            nameEl.title = res.url;
+            card.append(nameEl);
+            card.append(buildCompareChips(res));
+            panel.append(card);
+          });
+
+          panel.hidden = false;
+        } catch (err) {
+          panel.innerHTML = '';
+          const msg = document.createElement('p');
+          msg.className = 'sfc-panel-error';
+          msg.textContent = `Compare failed: ${err.message || err}`;
+          panel.append(msg);
+          panel.hidden = false;
+        } finally {
+          compareBtn.disabled = false;
+          compareBtn.textContent = 'Compare selected';
+          updateToolbar();
+        }
+      });
+    })();
+
     rootAddFolderButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -10439,38 +10604,9 @@
             const rb = pickEl.querySelector('input[value="' + CSS.escape(res.url) + '"]');
             const item = rb?.closest('.afd-pick-item');
             if (!item) return;
-            let meta = item.querySelector('.afd-feed-meta');
-            if (!meta) { meta = document.createElement('div'); meta.className = 'afd-feed-meta'; item.append(meta); }
-            if (res.error) { meta.textContent = res.error; return; }
-            meta.innerHTML = '';
-            function chip(text, cls) {
-              const s = document.createElement('span');
-              s.textContent = text;
-              if (cls) s.className = 'afd-chip afd-chip--' + cls;
-              else s.className = 'afd-chip';
-              return s;
-            }
-            const tags = [
-              chip(res.format),
-              chip(res.full_text ? '✓ Full text' : 'Summaries', res.full_text ? 'good' : null),
-              chip(res.image_count > 0 ? '✓ images' : '✗ no images', res.image_count > 0 ? 'good' : 'bad'),
-              chip(res.date_field === 'published' ? '✓ pub dates'
-                 : res.date_field === 'modified_only' ? '⚠ modified-only' : '✗ no dates',
-                   res.date_field === 'published' ? 'good' : 'bad'),
-              chip(res.guid_type === 'url' ? '✓ URL IDs'
-                 : res.guid_type === 'string' ? 'string IDs' : '✗ no IDs',
-                   res.guid_type === 'url' ? 'good' : res.guid_type === 'string' ? null : 'bad'),
-            ];
-            tags.forEach(t => meta.append(t));
-            if (res.sample_title || res.latest_date) {
-              let titleRow = item.querySelector('.afd-feed-title-row');
-              if (!titleRow) { titleRow = document.createElement('div'); titleRow.className = 'afd-feed-meta afd-feed-title-row'; item.append(titleRow); }
-              if (res.sample_title) {
-                const t = res.sample_title.length > 60 ? res.sample_title.slice(0, 60) + '…' : res.sample_title;
-                titleRow.append(chip('"' + t + '"', 'title'));
-              }
-              if (res.latest_date) titleRow.append(chip(res.latest_date));
-            }
+            // Remove any existing chip rows before re-rendering.
+            item.querySelectorAll('.afd-feed-meta, .afd-feed-title-row').forEach(el => el.remove());
+            item.append(buildCompareChips(res));
           });
           btn.remove();
         } catch (_) { btn.disabled = false; btn.textContent = 'Compare feeds'; }
