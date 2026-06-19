@@ -8,8 +8,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+from services import svg_sanitize
 from services import url_guard
 from services.url_guard import is_safe_outbound_url
+
+# A whole inline <svg>…</svg> element (non-greedy).
+_SVG_ELEMENT_RE = re.compile(r"<svg\b[^>]*>.*?</svg\s*>", re.IGNORECASE | re.DOTALL)
 
 
 def _guarded_get(url: str, *, timeout: float = 8.0, headers: dict | None = None) -> httpx.Response:
@@ -956,7 +960,55 @@ class WinPenPackPlugin:
         return None
 
 
+@dataclass(frozen=True)
+class AnalogueLeadImagePlugin:
+    """Analogue (analogue.co) firmware/announcement pages have no image in the
+    feed — the article's hero is a monochrome device illustration rendered as an
+    inline ``<svg>`` on the source page. Fetch the page, pull out that hero SVG
+    (the only one with the large responsive ``w-[34vw]`` width class; the rest are
+    small fixed-size UI icons), sanitize it, and return it as a ``data:`` URI.
+    """
+
+    host_contains: tuple[str, ...] = ("analogue.co",)
+    # Class marker unique to the hero device illustration across analogue pages.
+    _hero_class_marker: str = "w-[34vw]"
+
+    def _is_target(self, url: str) -> bool:
+        host = urlparse(url).netloc.lower()
+        return any(h in host for h in self.host_contains)
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        return False
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        if not entry_link or not self._is_target(entry_link):
+            return None
+        try:
+            r = _guarded_get(entry_link, timeout=8.0, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            page = r.text
+        except Exception:
+            return None
+        for m in _SVG_ELEMENT_RE.finditer(page):
+            svg = m.group(0)
+            # Match only the hero illustration, not the 20+ small UI-chrome icons.
+            open_tag = svg[: svg.find(">") + 1]
+            if self._hero_class_marker not in open_tag:
+                continue
+            uri = svg_sanitize.svg_to_data_uri(svg)
+            if uri:
+                return uri
+        return None
+
+
 DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
+    AnalogueLeadImagePlugin(),
     StandardEbooksLeadImagePlugin(),
     FutureSiteLeadImagePlugin(),
     WordPressComicPlugin(),

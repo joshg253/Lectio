@@ -83,7 +83,16 @@ def sanitize_svg(markup: str) -> str | None:
         return None
     from bs4 import BeautifulSoup, Comment
 
-    soup = BeautifulSoup(markup, "html.parser")
+    # The XML parser preserves case (SVG names/attrs are case-sensitive:
+    # viewBox, clipPath, linearGradient, …); html.parser would lowercase them
+    # and break rendering. Fall back to html.parser if the fragment isn't
+    # well-formed enough for the XML parser.
+    try:
+        soup = BeautifulSoup(markup, "xml")
+        if soup.find("svg") is None:
+            soup = BeautifulSoup(markup, "html.parser")
+    except Exception:
+        soup = BeautifulSoup(markup, "html.parser")
     root = soup.find("svg")
     if root is None:
         return None
