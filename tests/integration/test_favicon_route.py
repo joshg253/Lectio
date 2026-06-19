@@ -217,6 +217,20 @@ def test_domain_with_scheme_returns_400():
     assert r.status_code == 400
 
 
+def test_domain_starting_with_http_is_not_rejected(monkeypatch):
+    """A real hostname that merely starts with 'http' (httpbin.org, http2.x) must
+    not be mistaken for a scheme-prefixed URL and 400'd."""
+    stub, fetch = _make_stub([
+        httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes()),
+    ])
+    monkeypatch.setattr(url_guard, "safe_get_async", fetch)
+    with _client() as client:
+        r = client.get("/api/favicon", params={"domain": "httpbin.org"})
+    assert r.status_code == 200
+    assert r.content == _png_bytes()
+    assert stub["calls"] == 1
+
+
 # ---------------------------------------------------------------------------
 # get_favicon_url returns same-origin URL
 # ---------------------------------------------------------------------------
