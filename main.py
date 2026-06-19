@@ -7002,6 +7002,10 @@ def list_entries_for_feeds(
                     str(getattr(entry, "id", "") or ""),
                     str(getattr(entry, "link", "") or ""),
                 )
+            if not _raw_thumb:
+                # Last resort: a raw inline <svg> in the entry content (sanitized
+                # → data URI). Keeps the list thumb consistent with the article.
+                _raw_thumb = lead_image_service.extract_inline_svg_thumb_url(entry)
         _thumb = _raw_thumb if _show_thumb else None
         _feed_thumb_crop = str(_feed_prefs.get("thumb_crop") or "cover")
         if _feed_thumb_crop not in _VALID_THUMB_CROPS:
@@ -7292,10 +7296,14 @@ def _derive_article_lead_image(entry) -> str | None:
     feed_url = str(getattr(entry, "feed_url", "") or "")
     strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
     if strategy == "inline":
+        # extract_inline_thumb_url already includes the inline-<svg> fallback.
         return lead_image_service.extract_inline_thumb_url(entry)
     if strategy == "media_rss":
-        return lead_image_service.extract_media_rss_thumb_url(entry)
-    return lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        result = lead_image_service.extract_media_rss_thumb_url(entry)
+    else:
+        result = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+    # Last resort: a raw inline <svg> in the entry content (sanitized → data URI).
+    return result or lead_image_service.extract_inline_svg_thumb_url(entry)
 _PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 

@@ -246,6 +246,14 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   and `javascript:`/`vbscript:`/`data:` URLs (incl. control-char-obfuscated). It
   replaced regex sanitizers that let unquoted handlers and `href="javascript:"`
   through. Feed-entry content relies on feedparser's upstream sanitization.
+- **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can become
+  a list thumbnail / article lead image. `services/svg_sanitize.py` parses and
+  rebuilds it with a presentation/geometry tag+attribute allowlist, dropping the
+  `script`/`style`/`foreignObject`/`image`/`use`/`a` subtrees, every `on*`
+  handler, all `href`/`xlink:href`, and any non-`url(#fragment)` reference, then
+  serves it as a `data:image/svg+xml` URI (kept vector — no rasterization, no
+  outbound fetch). The general HTML sanitizer still drops `<svg>` from article
+  bodies; this path is only the dedicated thumbnail/lead extractor.
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 

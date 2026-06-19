@@ -15,6 +15,7 @@ import httpx
 
 from services import tenancy
 from services import url_guard
+from services import svg_sanitize
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
 
@@ -24,6 +25,9 @@ class LeadImageService:
 
     _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
     _LINK_TAG_RE = re.compile(r"<link\b[^>]*>", re.IGNORECASE)
+    # Whole inline <svg>…</svg> element (non-greedy), for feeds that express an
+    # article icon/hero as raw inline SVG rather than an <img>.
+    _INLINE_SVG_RE = re.compile(r"<svg\b[^>]*>.*?</svg\s*>", re.IGNORECASE | re.DOTALL)
     _IMG_ATTR_RE = re.compile(
         r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'
         r'(?:"([^"]*)"'
@@ -880,6 +884,28 @@ class LeadImageService:
         feed_url = str(getattr(entry, "feed_url", "") or "")
         base_url = entry_link or feed_url
 
+        prepared = self._prepared_content_html(entry, feed_url)
+        for html_candidate in prepared:
+            inline_image = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
+            if (
+                inline_image
+                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
+                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
+            ):
+                return inline_image
+        # No raster image — fall back to a raw inline <svg> (sanitized → data URI).
+        for html_candidate in prepared:
+            svg_uri = self._extract_inline_svg_data_uri(html_candidate)
+            if svg_uri:
+                return svg_uri
+        return None
+
+    def _prepared_content_html(self, entry: object, feed_url: str) -> list[str]:
+        """Entry content + summary HTML, feed-block-stripped and bbcode-normalized.
+
+        Shared by the inline-image and inline-<svg> thumbnail extractors so both
+        see the same prepared content. No HTTP requests; reader-DB content only.
+        """
         html_candidates: list[str] = []
         try:
             content = getattr(entry, "get_content", lambda **_: None)(prefer_summary=False)
@@ -891,17 +917,35 @@ class LeadImageService:
         if isinstance(summary, str) and summary.strip():
             html_candidates.append(summary)
 
+        prepared: list[str] = []
         for html_candidate in html_candidates:
             if feed_url:
                 html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
-            html_candidate = self._bbcode_img_to_html(html_candidate)
-            inline_image = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
-            if (
-                inline_image
-                and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
-                and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
-            ):
-                return inline_image
+            prepared.append(self._bbcode_img_to_html(html_candidate))
+        return prepared
+
+    def extract_inline_svg_thumb_url(self, entry: object) -> str | None:
+        """Return a sanitized inline-``<svg>`` data URI from the entry content, or None.
+
+        Last-resort thumbnail/lead source for feeds that express an article icon
+        as raw inline SVG. Bypasses the cache; no HTTP requests."""
+        feed_url = str(getattr(entry, "feed_url", "") or "")
+        for html_candidate in self._prepared_content_html(entry, feed_url):
+            uri = self._extract_inline_svg_data_uri(html_candidate)
+            if uri:
+                return uri
+        return None
+
+    def _extract_inline_svg_data_uri(self, html_text: str) -> str | None:
+        """Return a sanitized ``data:image/svg+xml`` URI for the first usable inline
+        ``<svg>`` in ``html_text``, or None. Scripts/handlers/external refs are
+        stripped; see :mod:`services.svg_sanitize`."""
+        if not html_text or "<svg" not in html_text.lower():
+            return None
+        for m in self._INLINE_SVG_RE.finditer(html_text):
+            uri = svg_sanitize.svg_to_data_uri(m.group(0))
+            if uri:
+                return uri
         return None
 
     def extract_media_rss_thumb_url(self, entry: object) -> str | None:
