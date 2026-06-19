@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import logging
+import queue
 import re
 import sqlite3
 import threading
@@ -18,6 +20,8 @@ from services import url_guard
 from services import svg_sanitize
 from services.lead_image_plugins import DEFAULT_LEAD_IMAGE_PLUGINS, LeadImagePlugin
 from services.url_guard import is_safe_outbound_url
+
+LOGGER = logging.getLogger(__name__)
 
 
 class LeadImageService:
@@ -264,6 +268,14 @@ class LeadImageService:
         self._entry_crop_cache: dict[tuple[str, str], str] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
+        # Single background writer for request-path lead-image persistence. A
+        # shared worker (vs a thread per write) bounds thread count under load,
+        # and serializing the writes through one consumer suits SQLite's
+        # single-writer model — they never contend with each other, only with the
+        # backfill. Started lazily on first enqueue.
+        self._write_queue: queue.Queue[tuple[str, Callable[[], None]]] = queue.Queue()
+        self._write_worker_started = False
+        self._write_worker_lock = threading.Lock()
         # Semaphore ensures at most one chunk-backfill thread runs at a time;
         # subsequent chunk requests skip rather than pile up.
         self._chunk_backfill_sem = threading.Semaphore(1)
@@ -556,16 +568,42 @@ class LeadImageService:
         except Exception:
             pass
 
+    def _write_worker_loop(self) -> None:
+        """Drain queued request-path writes, each under its captured tenancy."""
+        while True:
+            uid, fn = self._write_queue.get()
+            try:
+                with tenancy.user_context(uid):
+                    fn()
+            except Exception:  # noqa: BLE001 — background write; log and keep draining
+                LOGGER.debug("lead-image background write failed", exc_info=True)
+            finally:
+                self._write_queue.task_done()
+
+    def _enqueue_write(self, uid: str, fn: Callable[[], None]) -> None:
+        """Hand a persistence callable to the single background writer, starting
+        it lazily on first use."""
+        if not self._write_worker_started:
+            with self._write_worker_lock:
+                if not self._write_worker_started:
+                    threading.Thread(
+                        target=self._write_worker_loop,
+                        name="leadimage-writer",
+                        daemon=True,
+                    ).start()
+                    self._write_worker_started = True
+        self._write_queue.put((uid, fn))
+
     def persist_lead_image_async(self, feed_url: str, entry_id: str, image_url: str | None) -> None:
         """Request-path lead-image persistence that never blocks the response.
 
         The article-open path calls this instead of store_entry_lead_image. It
         refreshes the in-memory cache synchronously, then — only when the value
-        actually changed — writes the meta DB on a daemon thread (tenancy
-        re-bound). Re-opening an already-resolved entry skips the write entirely.
-        This keeps the request thread off the single-writer meta-DB lock that the
-        background lead-image backfill holds; otherwise opens waited up to the
-        meta busy_timeout (10s) whenever a backfill write was in flight.
+        actually changed — hands the meta-DB write to the shared background writer
+        (tenancy re-bound). Re-opening an already-resolved entry skips the write
+        entirely. This keeps the request thread off the single-writer meta-DB lock
+        that the background lead-image backfill holds; otherwise opens waited up to
+        the meta busy_timeout (10s) whenever a backfill write was in flight.
         """
         key = (feed_url, entry_id)
         unchanged = key in self._cache and self._cache[key] == image_url
@@ -574,12 +612,7 @@ class LeadImageService:
         if unchanged:
             return
         uid = tenancy.current_user_id()
-
-        def _bg() -> None:
-            with tenancy.user_context(uid):
-                self.store_entry_lead_image(feed_url, entry_id, image_url)
-
-        threading.Thread(target=_bg, daemon=True).start()
+        self._enqueue_write(uid, lambda: self.store_entry_lead_image(feed_url, entry_id, image_url))
 
     def persist_image_alt_async(
         self, feed_url: str, entry_id: str, alt_text: str | None, title_text: str | None = None
@@ -597,12 +630,9 @@ class LeadImageService:
         if unchanged:
             return
         uid = tenancy.current_user_id()
-
-        def _bg() -> None:
-            with tenancy.user_context(uid):
-                self.store_entry_image_alt(feed_url, entry_id, alt_text, title_text=title_text)
-
-        threading.Thread(target=_bg, daemon=True).start()
+        self._enqueue_write(
+            uid, lambda: self.store_entry_image_alt(feed_url, entry_id, alt_text, title_text=title_text)
+        )
 
     def rename_feed_url_in_cache(self, old_url: str, new_url: str) -> None:
         """Re-key all in-memory cache entries from old_url to new_url after a feed URL change."""
