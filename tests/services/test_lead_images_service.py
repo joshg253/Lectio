@@ -1073,3 +1073,43 @@ def test_no_svg_no_thumb(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [entry])
 
     assert service.extract_inline_svg_thumb_url(entry) is None
+
+
+# --- request-path async persistence (perf: keep opens off the meta-DB writer) ---
+
+class _SyncThread:
+    """Runs the target inline so async writes are deterministic in tests."""
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+    def start(self):
+        if self._target:
+            self._target()
+
+
+def test_persist_lead_image_async_writes_when_changed(tmp_path, monkeypatch):
+    import services.lead_images as li
+    monkeypatch.setattr(li.threading, "Thread", _SyncThread)
+    db = tmp_path / "meta.sqlite"
+    service = _build_service(db, [])
+    service.persist_lead_image_async("https://f/x.xml", "e1", "https://img/a.jpg")
+    with _make_conn(db) as conn:
+        row = conn.execute(
+            "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e1",)
+        ).fetchone()
+    assert row is not None and row["image_url"] == "https://img/a.jpg"
+
+
+def test_persist_lead_image_async_skips_unchanged(tmp_path, monkeypatch):
+    import services.lead_images as li
+    spawned = []
+    monkeypatch.setattr(
+        li.threading, "Thread",
+        lambda *a, **k: spawned.append(k.get("target")) or _SyncThread(*a, **k),
+    )
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    # Seed the in-memory cache as if already persisted.
+    service._cache[("https://f/x.xml", "e1")] = "https://img/a.jpg"
+    service.persist_lead_image_async("https://f/x.xml", "e1", "https://img/a.jpg")
+    assert spawned == []  # unchanged -> no DB-write thread spawned
+    # In-memory cache stays correct either way.
+    assert service._cache[("https://f/x.xml", "e1")] == "https://img/a.jpg"

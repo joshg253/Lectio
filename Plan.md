@@ -4,6 +4,16 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Article-open DB-write contention fixed** — every `/entries/pane` open ran a
+  synchronous `store_entry_lead_image` (and conditionally `store_entry_image_alt`)
+  write to `entry_lead_images` on the request thread. SQLite allows one writer at
+  a time, so when the background lead-image backfill held the meta-DB writer the
+  open waited up to the 10s `busy_timeout` — producing intermittent 10–20s article
+  opens and `database is locked` warnings at large feed counts. Article opens now
+  call `persist_lead_image_async` / `persist_image_alt_async`, which update the
+  in-memory cache synchronously and push the DB write to a daemon thread (tenancy
+  re-bound) **only when the value changed** — so re-opening an already-resolved
+  entry does no write at all. Tests in `tests/services/test_lead_images_service.py`.
 - **Inline-SVG thumbnails / lead images** — a post with no raster image but a raw
   inline `<svg>` in its content (e.g. analogue.co firmware notes) now uses that
   SVG as the list thumbnail and article lead image. `services/svg_sanitize.py`
@@ -220,10 +230,11 @@ list) are both **done**. Follow-ups all resolved:
   opening an article can do a blocking outbound source-page fetch (plugin
   fallbacks / source-page scrape, up to the 8–15s fetch timeout) on the request
   thread (`main.py:7530`), so for feeds that need a source fetch the article pane
-  stalls for seconds. Most painful right after a rebuild when background backfills
-  also contend. Move the derivation off the request path: serve the cached
-  lead image immediately and resolve a miss in the background (or precompute on
-  refresh), so article-open never waits on a network fetch.
+  stalls for seconds. *(Partly addressed — see "Article-open DB-write
+  contention" in Recently Completed: the per-open meta writes are now
+  off-thread, so the dominant lock-wait stall is gone. The remaining piece is the
+  synchronous source-page **fetch** itself for cache-miss entries; precompute on
+  refresh or resolve fully in the background.)*
 
 ### Later
 

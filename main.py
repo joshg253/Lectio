@@ -7891,7 +7891,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
                 if _fa or _ft:
                     image_title_text = _ft or _fa  # title preferred for auto display
-                    lead_image_service.store_entry_image_alt(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
+                    lead_image_service.persist_image_alt_async(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
             else:
                 lead_image_service.queue_source_html_fetch(
                     entry.link,
@@ -8011,7 +8011,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     flags=re.IGNORECASE,
                 ).strip() or None
 
-        lead_image_service.store_entry_lead_image(str(entry.feed_url), str(entry.id), lead_image_url)
+        # Persist off the request thread (and skip when unchanged) so an open
+        # never blocks on the meta-DB writer held by the background backfill.
+        lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
