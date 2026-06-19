@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from services import url_guard
 from services.url_guard import is_safe_outbound_url
 
 _WP_COMIC_UPLOAD_RE = re.compile(
@@ -174,8 +175,9 @@ class WordPressComicPlugin:
         # This avoids _fetch_source_lead_image picking up site-chrome images
         # (title banners, nav buttons) that appear before the comic in the DOM.
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0) as client:
-                r = client.get(entry_link)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=8.0) as client:
+                r = url_guard.safe_get(client, entry_link)
             r.raise_for_status()
             for pattern in (_OG_IMAGE_RE, _OG_IMAGE_RE_REVERSED):
                 m = pattern.search(r.text)
@@ -249,8 +251,9 @@ class PennyArcadePlugin:
         if not is_safe_outbound_url(entry_link):
             return None
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0) as client:
-                r = client.get(entry_link)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=8.0) as client:
+                r = url_guard.safe_get(client, entry_link)
             r.raise_for_status()
             for pattern in (_OG_IMAGE_RE, _OG_IMAGE_RE_REVERSED):
                 m = pattern.search(r.text)
@@ -330,8 +333,9 @@ class MisfilePlugin:
         if not is_safe_outbound_url(entry_link):
             return None
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0) as client:
-                r = client.get(entry_link)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=8.0) as client:
+                r = url_guard.safe_get(client, entry_link)
             r.raise_for_status()
             m = re.search(
                 r'src=["\']([^"\']+' + re.escape(self._COMIC_PATH) + r'[^"\']+\.(?:png|jpe?g|gif|webp))["\']',
@@ -380,8 +384,9 @@ class JohnnyWanderPlugin:
         if not is_safe_outbound_url(entry_link):
             return None
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0) as client:
-                r = client.get(entry_link)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=8.0) as client:
+                r = url_guard.safe_get(client, entry_link)
             r.raise_for_status()
             m = re.search(
                 r'src=["\']([^"\']+' + re.escape(self._COMIC_PATH) + r'[^"\']+\.(?:png|jpe?g|gif|webp))["\']',
@@ -649,23 +654,25 @@ class TheRockCocksPlugin:
             )
             if m:
                 comic_url = m.group(1).replace(self._THUMB_PATH, self._COMIC_PATH)
-                try:
-                    resp = httpx.head(comic_url, follow_redirects=True, timeout=3.0)
-                    if resp.headers.get("content-type", "").startswith("image"):
-                        return comic_url
-                except Exception:
-                    pass
+                # follow_redirects=False + precheck so a HEAD probe can't be
+                # bounced to an internal target (no safe HEAD helper exists).
+                if is_safe_outbound_url(comic_url):
+                    try:
+                        resp = httpx.head(comic_url, follow_redirects=False, timeout=3.0)
+                        if resp.headers.get("content-type", "").startswith("image"):
+                            return comic_url
+                    except Exception:
+                        pass
                 break  # /comics/ URL is age-gated; fall through to og:image fetch
         # The derived /comics/ URL didn't work — fetch og:image from the source page.
         if not entry_link:
             return None
         try:
-            resp = httpx.get(
-                entry_link,
-                follow_redirects=True,
-                timeout=6.0,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=6.0) as client:
+                resp = url_guard.safe_get(
+                    client, entry_link, headers={"User-Agent": "Mozilla/5.0"}
+                )
             for pattern in (
                 re.compile(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', re.I),
                 re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', re.I),
@@ -787,8 +794,11 @@ class OglafPlugin:
         after the strip rotates.  Scraping the page gives the canonical URL.
         """
         try:
-            resp = httpx.get(entry_link, follow_redirects=True, timeout=4.0,
-                             headers={"User-Agent": "Mozilla/5.0"})
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=4.0) as client:
+                resp = url_guard.safe_get(
+                    client, entry_link, headers={"User-Agent": "Mozilla/5.0"}
+                )
             if resp.status_code != 200:
                 return None
             m = re.search(
@@ -814,7 +824,7 @@ class OglafPlugin:
 
         # Try the slug-guessed comic URL.
         comic_url = self._comic_url(entry_link)
-        if comic_url:
+        if comic_url and is_safe_outbound_url(comic_url):
             try:
                 resp = httpx.head(comic_url, follow_redirects=False, timeout=2.0,
                                   headers={"User-Agent": "Mozilla/5.0"})
@@ -937,8 +947,9 @@ class WinPenPackPlugin:
         if not is_safe_outbound_url(entry_link):
             return None
         try:
-            with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
-                r = client.get(entry_link)
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+            with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
+                r = url_guard.safe_get(client, entry_link)
             r.raise_for_status()
             m = re.search(
                 r'([^"\'<>\s]*' + re.escape(self._THUMB_PATH) + r'[^"\'<>\s]+\.(?:png|jpe?g|gif|webp))',

@@ -102,12 +102,14 @@ Phasing:
    `url_guard.safe_get` / `safe_get_async` follow redirects manually and
    re-validate every hop with `is_safe_outbound_url`; `/api/img` (auth-exempt!)
    and `/thumb` now use them with `follow_redirects=False`, closing the
-   redirect-to-internal bypass. 18 new tests. Remaining hardening: (a) the
-   service-layer fetches that still pass `follow_redirects=True` (lead-image /
-   scraper / source-proxy in main.py + services) should adopt the same helpers;
-   (b) full DNS-rebind closure needs connection IP-pinning (the validate→connect
-   TOCTOU window is now small but nonzero) — deferred as lower-priority for the
-   trusted-user threat model.
+   redirect-to-internal bypass. 18 new tests. Service-layer follow-up now also
+   DONE: the lead-image plugins, lead-image source-page fetch, page scraper, and
+   starred-archive text/byte fetches route through `safe_get` (`follow_redirects=
+   False`); their HEAD probes pre-validate with `is_safe_outbound_url`. Test:
+   `tests/services/test_service_fetch_ssrf.py`. Remaining hardening: (a) WebSub
+   hub fetches still pass `follow_redirects=True`; (b) full DNS-rebind closure
+   needs connection IP-pinning (the validate→connect TOCTOU window is now small
+   but nonzero) — deferred as lower-priority for the trusted-user threat model.
 5. ~~**Data migration**~~ — DONE. `scripts/migrate_to_multiuser.py` copies the
    legacy DBs into `DATA_DIR/users/<user_id>/` (user_id resolved from the auth
    DB), dry-run default, reversible, integrity-checked. `--apply` run on the real
