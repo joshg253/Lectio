@@ -4,6 +4,18 @@ This file is the backlog and staging area for future work.
 
 ## Recently Completed
 
+- **Inline-SVG thumbnails / lead images** — a post with no raster image but a raw
+  inline `<svg>` in its content (e.g. analogue.co firmware notes) now uses that
+  SVG as the list thumbnail and article lead image. `services/svg_sanitize.py`
+  strips scripts / `on*` handlers / external & `href` refs (only `url(#fragment)`
+  kept) via a BeautifulSoup allowlist and emits a `data:image/svg+xml` URI — kept
+  vector, no rasterization, no outbound fetch. `currentColor` icons get a neutral
+  fallback color so they're visible standalone. Extracted as a last-resort source
+  in `extract_inline_thumb_url` / `extract_inline_svg_thumb_url` and
+  `_derive_article_lead_image`; the template renders `data:` thumbnails directly
+  (bypassing `/thumb`, which only rasterizes http(s)). Tests:
+  `tests/services/test_svg_sanitize.py`, inline-SVG cases in
+  `tests/services/test_lead_images_service.py`.
 - **Tag removal / deletion** — manual tagging was add-only. The article-pane tag
   chips now carry an `×` that removes that one tag from the post (submits the
   reduced set in replace mode, `append_mode=0`). Right-clicking any tag (sidebar
@@ -204,6 +216,14 @@ list) are both **done**. Follow-ups all resolved:
   force-archives pending saves and WebSub-unsubscribes; dedup/upgrade now
   WebSub-unsubscribe the removed URL. Test:
   `tests/integration/test_feed_removal_consolidation.py`.
+- **`_derive_article_lead_image` runs synchronously on `/entries/pane`** —
+  opening an article can do a blocking outbound source-page fetch (plugin
+  fallbacks / source-page scrape, up to the 8–15s fetch timeout) on the request
+  thread (`main.py:7530`), so for feeds that need a source fetch the article pane
+  stalls for seconds. Most painful right after a rebuild when background backfills
+  also contend. Move the derivation off the request path: serve the cached
+  lead image immediately and resolve a miss in the background (or precompute on
+  refresh), so article-open never waits on a network fetch.
 
 ### Later
 
