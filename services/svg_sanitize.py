@@ -128,6 +128,27 @@ def sanitize_svg(markup: str) -> str | None:
         return None
     root.attrs.setdefault("xmlns", "http://www.w3.org/2000/svg")
 
+    # Ensure intrinsic dimensions: an SVG with only a viewBox (no width/height)
+    # has no intrinsic size, so a standalone <img> renders it at 0×0 (invisible).
+    # Many inline SVGs size themselves via CSS classes that don't apply inside an
+    # <img>, so derive width/height from the viewBox when absent.
+    _attr_keys = {k.lower(): k for k in root.attrs}
+    if "width" not in _attr_keys or "height" not in _attr_keys:
+        vb = root.attrs.get(_attr_keys.get("viewbox", ""), "")
+        parts = vb.replace(",", " ").split()
+        if len(parts) == 4:
+            try:
+                vw, vh = float(parts[2]), float(parts[3])
+            except ValueError:
+                vw = vh = 0.0
+            if vw > 0 and vh > 0:
+                def _fmt(n: float) -> str:
+                    return str(int(n)) if n == int(n) else str(n)
+                if "width" not in _attr_keys:
+                    root.attrs["width"] = _fmt(vw)
+                if "height" not in _attr_keys:
+                    root.attrs["height"] = _fmt(vh)
+
     rebuilt = str(root)
     if "currentColor".lower() in rebuilt.lower() and "color=" not in rebuilt.lower():
         root.attrs["color"] = _CURRENT_COLOR_FALLBACK
