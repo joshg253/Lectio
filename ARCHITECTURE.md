@@ -224,12 +224,15 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   manually and re-validate every hop against private/loopback/link-local space.
   Now applied to all reachable user/feed-controlled fetches: `/api/img`, `/thumb`,
   feed discovery (`_guarded_get` / `_guarded_head`, which also pre-validate HEAD
-  probes), and the source-proxy / readability / feed-tag fetches in main.py — all
-  with `follow_redirects=False`, closing the redirect-to-internal bypass. Still
-  open: background lead-image plugin / WebSub / scraper fetches and the `reader`
-  library's own feed refresh (a subscribed `http://10.x` host is still fetched);
-  and full DNS-rebind closure needs connection IP-pinning (the validate→connect
-  window is small but nonzero).
+  probes), the source-proxy / readability / feed-tag fetches in main.py, and the
+  service-layer background fetches (lead-image plugins, lead-image source-page
+  fetch, the page scraper, and the starred-archive text/byte fetches) — all with
+  `follow_redirects=False`, closing the redirect-to-internal bypass. Service-layer
+  HEAD probes (image-fetchability / comic-URL checks) can't use `safe_get`, so
+  they pre-validate with `is_safe_outbound_url` and fetch `follow_redirects=False`.
+  Still open: WebSub hub fetches and the `reader` library's own feed refresh (a
+  subscribed `http://10.x` host is still fetched); and full DNS-rebind closure
+  needs connection IP-pinning (the validate→connect window is small but nonzero).
 - **Subscription scheme allowlist** — user-supplied feed URLs (Add Feed, OPML
   import, discovered `<link>` candidates) are restricted to http/https via
   `_is_subscribable_feed_url`. `reader` natively fetches `file://`, so without

@@ -22,6 +22,8 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from services import url_guard
+
 LOGGER = logging.getLogger(__name__)
 
 _scraped_feeds_dir: Path | None = None
@@ -65,8 +67,9 @@ def scraped_feed_id_from_url(file_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _fetch_html(url: str) -> str:
-    with httpx.Client(timeout=20, follow_redirects=True, headers=_FETCH_HEADERS) as client:
-        resp = client.get(url)
+    # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+    with httpx.Client(timeout=20, follow_redirects=False, headers=_FETCH_HEADERS) as client:
+        resp = url_guard.safe_get(client, url)
         resp.raise_for_status()
         return resp.text
 

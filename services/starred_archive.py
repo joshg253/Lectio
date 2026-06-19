@@ -36,7 +36,7 @@ from PIL import Image as _PILImage
 from readability import Document
 
 from services import tenancy
-from services.url_guard import is_safe_outbound_url
+from services import url_guard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -780,15 +780,14 @@ class StarredArchiveService:
         return urls
 
     def _fetch_text(self, url: str) -> str | None:
-        if not is_safe_outbound_url(url):
-            return None
         try:
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
             with httpx.Client(
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=ARCHIVE_FETCH_TIMEOUT_S,
                 headers={"User-Agent": self._user_agent},
             ) as client:
-                resp = client.get(url)
+                resp = url_guard.safe_get(client, url)
             resp.raise_for_status()
             return resp.text
         except Exception as exc:  # noqa: BLE001
@@ -796,15 +795,14 @@ class StarredArchiveService:
             return None
 
     def _fetch_bytes(self, url: str) -> tuple[bytes, str] | None:
-        if not is_safe_outbound_url(url):
-            return None
         try:
+            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
             with httpx.Client(
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=ARCHIVE_FETCH_TIMEOUT_S,
                 headers={"User-Agent": self._user_agent},
             ) as client:
-                resp = client.get(url)
+                resp = url_guard.safe_get(client, url)
             resp.raise_for_status()
             return resp.content, resp.headers.get("content-type", "").split(";")[0].strip() or "application/octet-stream"
         except Exception as exc:  # noqa: BLE001
