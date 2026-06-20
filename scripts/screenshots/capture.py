@@ -53,6 +53,40 @@ def _shoot(page, out: Path, name: str, *, clip_selector: str | None = None) -> N
     print(f"  wrote {target.name}")
 
 
+def capture_admin(base_url: str, out_dir: Path, admin_user: str, admin_pw: str) -> None:
+    """Shoot the multi-user Administration page (with the user-management table).
+
+    Runs against a separate instance booted in ``multi`` mode by the orchestrator.
+    Logs in as the bootstrap admin, creates a couple of demo users so the table
+    has rows, then captures the Users section (including the Delete action).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        ctx = browser.new_context(viewport=_VIEWPORT, device_scale_factor=2)
+        page = ctx.new_page()
+        _set_theme(page, "dark")
+
+        page.goto(base_url + "/login", wait_until="networkidle")
+        page.fill("#login-username", admin_user)
+        page.fill("#login-password", admin_pw)
+        page.click("button[type='submit']")
+        page.wait_for_load_state("networkidle")
+
+        for name, pw_ in (("alice", "demo-password"), ("mallory", "demo-password")):
+            page.goto(base_url + "/administration", wait_until="networkidle")
+            page.fill("form[action='/admin/users/create'] input[name='username']", name)
+            page.fill("form[action='/admin/users/create'] input[name='password']", pw_)
+            page.click("form[action='/admin/users/create'] button[type='submit']")
+            page.wait_for_load_state("networkidle")
+
+        page.goto(base_url + "/administration", wait_until="networkidle")
+        page.wait_for_timeout(400)
+        _shoot(page, out_dir, "11administration.png")
+        ctx.close()
+        browser.close()
+
+
 def capture(base_url: str, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
@@ -109,6 +143,34 @@ def capture(base_url: str, out_dir: Path) -> None:
         page.locator("[data-feed-prop-tab='tuning']").click()
         page.wait_for_timeout(500)
         _shoot(page, out_dir, "7feedtuning.png", clip_selector="#feed-properties-modal")
+        # 8: same modal, History tab (synthetic fetch history).
+        page.locator("[data-feed-prop-tab='history']").click()
+        page.wait_for_timeout(600)
+        _shoot(page, out_dir, "8feedhistory.png", clip_selector="#feed-properties-modal")
+        ctx.close()
+
+        # 9: Tag filtering — click a sidebar tag, then open the first tagged post.
+        ctx, page = new_page("dark")
+        page.goto(base_url, wait_until="networkidle")
+        page.locator(".tag-link").first.click()
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(300)
+        page.locator(".post-main-link").first.click()
+        page.wait_for_timeout(700)
+        _shoot(page, out_dir, "9tags.png")
+        ctx.close()
+
+        # 10: Read History view (read_filter=history) — navigate via its menu link.
+        ctx, page = new_page("dark")
+        page.goto(base_url, wait_until="networkidle")
+        href = page.evaluate(
+            "(() => { const el = document.querySelector('.filter-history-item[href]');"
+            " return el ? el.getAttribute('href') : null; })()"
+        )
+        if href:
+            page.goto(base_url.rstrip("/") + href, wait_until="networkidle")
+            page.wait_for_timeout(500)
+            _shoot(page, out_dir, "10history.png")
         ctx.close()
 
         browser.close()

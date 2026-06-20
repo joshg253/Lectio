@@ -30,6 +30,10 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 ![Folder Properties](docs/screenshots/5folderprops.png)
 ![Feed Properties — Info](docs/screenshots/6feedprops.png)
 ![Feed Properties — Tuning](docs/screenshots/7feedtuning.png)
+![Feed Properties — History](docs/screenshots/8feedhistory.png)
+![Tag filtering](docs/screenshots/9tags.png)
+![Read History](docs/screenshots/10history.png)
+![Administration (multi-user)](docs/screenshots/11administration.png)
 
 </details>
 
