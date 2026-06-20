@@ -1237,6 +1237,15 @@
         <input type="hidden" id="email-article-feed-url" name="feed_url" value="{{ selected_entry.feed_url if selected_entry else '' }}" />
         <input type="hidden" id="email-article-entry-id" name="entry_id" value="{{ selected_entry.id if selected_entry else '' }}" />
         <label class="action-modal-label" for="email-article-to">To</label>
+        {% if email_to_default or email_contacts %}
+        <select id="email-article-contact-select" class="action-modal-input" aria-label="Choose a saved contact">
+          <option value="">— choose a saved contact —</option>
+          {% if email_to_default %}<option value="{{ email_to_default }}">Me ({{ email_to_default }})</option>{% endif %}
+          {% for c in email_contacts or [] %}
+          <option value="{{ c.address }}">{{ c.label }} ({{ c.address }})</option>
+          {% endfor %}
+        </select>
+        {% endif %}
         <input
           id="email-article-to"
           name="to_addr"
@@ -1247,6 +1256,12 @@
           required
           autocomplete="email"
         />
+        {% if profile_email %}
+        <label class="action-modal-checkbox">
+          <input type="checkbox" id="email-article-cc-me" name="cc_me" value="1" />
+          Cc me ({{ profile_email }}) so replies come back to a thread
+        </label>
+        {% endif %}
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
           <button id="email-article-send" type="submit">Send</button>
@@ -2714,8 +2729,24 @@
       const entryIdInput = document.getElementById('email-article-entry-id');
       if (feedUrlInput instanceof HTMLInputElement) feedUrlInput.value = btn.getAttribute('data-email-feed-url') || '';
       if (entryIdInput instanceof HTMLInputElement) entryIdInput.value = btn.getAttribute('data-email-entry-id') || '';
+      const contactSel = document.getElementById('email-article-contact-select');
+      if (contactSel instanceof HTMLSelectElement) contactSel.value = '';
+      const ccMe = document.getElementById('email-article-cc-me');
+      if (ccMe instanceof HTMLInputElement) ccMe.checked = false;
       if (modal) modal.removeAttribute('hidden');
     });
+
+    // Picking a saved contact fills the free-text To field (which still accepts
+    // any typed address).
+    const emailContactSel = document.getElementById('email-article-contact-select');
+    if (emailContactSel instanceof HTMLSelectElement) {
+      emailContactSel.addEventListener('change', () => {
+        const toInput = document.getElementById('email-article-to');
+        if (emailContactSel.value && toInput instanceof HTMLInputElement) {
+          toInput.value = emailContactSel.value;
+        }
+      });
+    }
 
     const emailArticleForm = document.getElementById('email-article-form');
     const emailArticleModal = document.getElementById('email-article-modal');

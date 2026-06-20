@@ -78,6 +78,66 @@ def test_successful_send_returns_ok(monkeypatch):
     assert "a@b.com" in data["message"]
 
 
+class _DummyConn:
+    def __enter__(self):
+        return self
+    def __exit__(self, *_):
+        pass
+
+
+def _capture_cc(monkeypatch, *, profile_email):
+    """Stub profile-email lookup + send, returning a dict that records cc_addr."""
+    captured: dict = {}
+    monkeypatch.setattr(main, "get_meta_connection", lambda: _DummyConn())
+    monkeypatch.setattr(main, "get_setting", lambda conn, key: profile_email)
+
+    def _send(**kw):
+        captured["cc_addr"] = kw.get("cc_addr")
+        captured["reply_to"] = kw.get("reply_to")
+        return (True, None)
+
+    monkeypatch.setattr(main, "send_article_email", _send)
+    return captured
+
+
+def test_cc_me_adds_profile_as_cc(monkeypatch):
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry())
+    captured = _capture_cc(monkeypatch, profile_email="me@example.com")
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={
+            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com", "cc_me": "1",
+        })
+    assert r.status_code == 200
+    assert captured["cc_addr"] == "me@example.com"
+    assert captured["reply_to"] == "me@example.com"
+    assert "Cc me@example.com" in r.json()["message"]
+
+
+def test_cc_me_unchecked_no_cc(monkeypatch):
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry())
+    captured = _capture_cc(monkeypatch, profile_email="me@example.com")
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={
+            "feed_url": "x", "entry_id": "1", "to_addr": "a@b.com",
+        })
+    assert r.status_code == 200
+    assert captured["cc_addr"] is None
+    assert captured["reply_to"] is None
+
+
+def test_cc_me_skips_self_cc_but_sets_reply_to(monkeypatch):
+    """Emailing your own address: no self-Cc, but Reply-To is still set."""
+    app = _build_app(monkeypatch, configured=True, entry=_make_entry())
+    captured = _capture_cc(monkeypatch, profile_email="me@example.com")
+    with TestClient(app) as client:
+        r = client.post("/entries/email", data={
+            "feed_url": "x", "entry_id": "1", "to_addr": "ME@example.com", "cc_me": "1",
+        })
+    assert r.status_code == 200
+    assert captured["cc_addr"] is None
+    assert captured["reply_to"] == "me@example.com"
+
+
 def test_send_failure_returns_500(monkeypatch):
     app = _build_app(monkeypatch, configured=True, entry=_make_entry(), send_result=(False, "Resend API error"))
     with TestClient(app) as client:

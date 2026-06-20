@@ -13376,6 +13376,7 @@ def email_entry(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
     to_addr: str = Form(...),
+    cc_me: bool = Form(False),
 ):
     if not is_email_configured():
         return JSONResponse({"ok": False, "error": "Email not configured."}, status_code=503)
@@ -13383,6 +13384,21 @@ def email_entry(
     to_addr = to_addr.strip()
     if not to_addr:
         return JSONResponse({"ok": False, "error": "No recipient address."}, status_code=400)
+
+    # "Cc me" makes the share a repliable thread: set Reply-To to the sender's
+    # profile email so a recipient's reply reaches them (the From is the Resend
+    # sender domain, which may not accept mail), and Cc the sender a copy. Skip the
+    # Cc when the sender would be Cc'ing their own to_addr (Reply-To to self is
+    # harmless and still wanted).
+    cc_addr: str | None = None
+    reply_to: str | None = None
+    if cc_me:
+        with get_meta_connection() as conn:
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+        if profile_email:
+            reply_to = profile_email
+            if profile_email.lower() != to_addr.lower():
+                cc_addr = profile_email
 
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -13414,9 +13430,12 @@ def email_entry(
         feed_title=feed_title,
         link=link,
         excerpt=excerpt,
+        cc_addr=cc_addr,
+        reply_to=reply_to,
     )
     if ok:
-        return JSONResponse({"ok": True, "message": f"Sent to {to_addr}"})
+        msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")
+        return JSONResponse({"ok": True, "message": msg})
     LOGGER.warning("email send failed for %s/%s: %s", feed_url, entry_id, error)
     return JSONResponse({"ok": False, "error": error or "Send failed."}, status_code=500)
 
