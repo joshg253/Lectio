@@ -47,6 +47,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from services import deviantart as deviantart_service
 from services import passwords
 from services import podcast_audio
+from services import podcast_feed_discovery
 from services import scraper_service
 from services import takeout_service
 from services import tenancy
@@ -2200,10 +2201,17 @@ def ensure_meta_schema() -> None:
             CREATE TABLE IF NOT EXISTS feed_media_scan (
                 feed_url TEXT PRIMARY KEY,
                 scanned_at REAL NOT NULL,
-                found INTEGER NOT NULL DEFAULT 0
+                found INTEGER NOT NULL DEFAULT 0,
+                suggested_audio_feed TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        # Added after feed_media_scan shipped: the podcast-host feed discovered
+        # for an audio-less feed (so we can suggest subscribing to the audio feed).
+        try:
+            conn.execute("ALTER TABLE feed_media_scan ADD COLUMN suggested_audio_feed TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS highlight_keywords (
@@ -5956,6 +5964,14 @@ def _scan_feed_media_audio(feed_url: str) -> None:
             found_map = podcast_audio.extract_media_audio(resp.content)
     except Exception:
         LOGGER.debug("media:content scan failed for %s", feed_url, exc_info=True)
+
+    # When the feed carries no audio of its own, the audio often lives in a
+    # separate podcast-host feed (Libsyn/Buzzsprout/…) referenced on the episode
+    # page. Detect it so we can suggest subscribing to the audio feed.
+    suggested = ""
+    if not found_map:
+        suggested = _discover_suggested_audio_feed(feed_url)
+
     with get_meta_connection() as conn:
         for entry_id, audio_url in found_map.items():
             conn.execute(
@@ -5964,11 +5980,60 @@ def _scan_feed_media_audio(feed_url: str) -> None:
                 (feed_url, entry_id, audio_url),
             )
         conn.execute(
-            "INSERT INTO feed_media_scan (feed_url, scanned_at, found) VALUES (?, ?, ?)"
-            " ON CONFLICT(feed_url) DO UPDATE SET scanned_at = excluded.scanned_at, found = excluded.found",
-            (feed_url, time.time(), 1 if found_map else 0),
+            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(feed_url) DO UPDATE SET scanned_at = excluded.scanned_at,"
+            " found = excluded.found, suggested_audio_feed = excluded.suggested_audio_feed",
+            (feed_url, time.time(), 1 if found_map else 0, suggested),
         )
         conn.commit()
+
+
+def _discover_suggested_audio_feed(feed_url: str) -> str:
+    """Fetch a recent entry's page and look for a podcast-host audio feed.
+
+    Returns the discovered feed URL (empty string if none). Best effort; the feed
+    itself isn't re-fetched — we use a recent entry's link page, where the host
+    player embed / feed URL lives."""
+    try:
+        with get_reader() as reader:
+            link = ""
+            for entry in reader.get_entries(feed=feed_url, sort="recent"):
+                link = (entry.link or "").strip()
+                if link:
+                    break
+        if not link or not url_guard.is_safe_outbound_url(link):
+            return ""
+        with httpx.Client(follow_redirects=False, timeout=8.0,
+                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, link)
+        if resp.status_code != 200 or not resp.text:
+            return ""
+        found = podcast_feed_discovery.find_podcast_host_feed(resp.text) or ""
+        # Don't suggest the feed we're already looking at.
+        if found and found.rstrip("/") == feed_url.rstrip("/"):
+            return ""
+        return found
+    except Exception:
+        LOGGER.debug("audio-feed discovery failed for %s", feed_url, exc_info=True)
+        return ""
+
+
+def _get_suggested_audio_feed(conn: sqlite3.Connection, feed_url: str) -> str | None:
+    row = conn.execute(
+        "SELECT suggested_audio_feed FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
+    ).fetchone()
+    return (row[0] or None) if row else None
+
+
+def _is_feed_subscribed(conn: sqlite3.Connection, feed_url: str) -> bool:
+    """True if the URL (slash-insensitive) is in any folder."""
+    fu = feed_url.rstrip("/")
+    row = conn.execute(
+        "SELECT 1 FROM folder_feeds WHERE feed_url = ? OR feed_url = ? LIMIT 1",
+        (fu, fu + "/"),
+    ).fetchone()
+    return bool(row)
 
 
 def _queue_media_audio_scan(feed_url: str) -> None:
@@ -7634,8 +7699,16 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Point the player at /entries/media/audio so signed URLs that have
         # expired are automatically refreshed server-side before redirect.
         # _resolve_* adds the media:content fallback (cached; scans in background).
+        _audio_feed_suggestion: str | None = None
         with get_meta_connection() as _mconn:
-            _audio_url: str | None = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
+            _audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
+            if not _audio_url:
+                # No playable audio in this feed — a separate podcast-host feed may
+                # carry it. Surface it (unless it's already subscribed) so the user
+                # can add the audio feed.
+                _sugg = _get_suggested_audio_feed(_mconn, feed_url)
+                if _sugg and not _is_feed_subscribed(_mconn, _sugg):
+                    _audio_feed_suggestion = _sugg
         if _audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
             _safe_feed_url = quote_plus(feed_url)
             _safe_entry_id = quote_plus(entry_id)
@@ -8257,6 +8330,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "feed_tag_suggestions": feed_tag_suggestions,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,
+            "audio_feed_suggestion": _audio_feed_suggestion,
         }
 
 

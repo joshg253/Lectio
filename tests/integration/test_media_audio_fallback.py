@@ -95,6 +95,35 @@ def test_stale_scan_is_rescanned(configured, monkeypatch):
     assert calls == [FEED]
 
 
+def test_suggested_audio_feed_stored_when_no_media(configured, monkeypatch):
+    # Feed itself has no media:content audio, so the scan should fall back to
+    # discovering a podcast-host feed and record the suggestion.
+    class _Resp:
+        status_code = 200
+        content = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
+                   b"<item><guid>e1</guid></item></channel></rss>")
+
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
+                        lambda fu: "https://feeds.libsyn.com/21070/rss")
+    main._scan_feed_media_audio(FEED)
+    with main.get_meta_connection() as conn:
+        assert main._get_suggested_audio_feed(conn, FEED) == "https://feeds.libsyn.com/21070/rss"
+
+
+def test_is_feed_subscribed(configured):
+    with main.get_meta_connection() as conn:
+        assert main._is_feed_subscribed(conn, "https://feeds.libsyn.com/21070/rss") is False
+        conn.execute(
+            "INSERT INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+            (1, "https://feeds.libsyn.com/21070/rss"),
+        )
+        conn.commit()
+        assert main._is_feed_subscribed(conn, "https://feeds.libsyn.com/21070/rss") is True
+        # slash-insensitive
+        assert main._is_feed_subscribed(conn, "https://feeds.libsyn.com/21070/rss/") is True
+
+
 def test_scan_persists_results_and_marker(configured, monkeypatch):
     feed_bytes = (
         '<?xml version="1.0"?>'
