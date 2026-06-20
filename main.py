@@ -13385,14 +13385,20 @@ def email_entry(
     if not to_addr:
         return JSONResponse({"ok": False, "error": "No recipient address."}, status_code=400)
 
-    # Cc the sender (their profile email) so the message becomes a thread the
-    # recipient can reply-all to. Skip when the sender would be Cc'ing themselves.
+    # "Cc me" makes the share a repliable thread: set Reply-To to the sender's
+    # profile email so a recipient's reply reaches them (the From is the Resend
+    # sender domain, which may not accept mail), and Cc the sender a copy. Skip the
+    # Cc when the sender would be Cc'ing their own to_addr (Reply-To to self is
+    # harmless and still wanted).
     cc_addr: str | None = None
+    reply_to: str | None = None
     if cc_me:
         with get_meta_connection() as conn:
             profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
-        if profile_email and profile_email.lower() != to_addr.lower():
-            cc_addr = profile_email
+        if profile_email:
+            reply_to = profile_email
+            if profile_email.lower() != to_addr.lower():
+                cc_addr = profile_email
 
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -13425,6 +13431,7 @@ def email_entry(
         link=link,
         excerpt=excerpt,
         cc_addr=cc_addr,
+        reply_to=reply_to,
     )
     if ok:
         msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")
