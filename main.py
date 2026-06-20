@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Sequence, cast
-from urllib.parse import parse_qs, quote, quote_plus, urlencode, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urlparse
 
 import feedparser
 import httpx
@@ -49,8 +49,10 @@ from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
 from services import scraper_service
+from services import html_sanitize
 from services import takeout_service
 from services import tenancy
+from services import youtube_embeds
 from services import url_guard
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
@@ -267,6 +269,18 @@ CHUNK_SIZE = 10
 FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
 FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
+# Honest identifier for outbound fetches — names the app and links to the repo,
+# the good-citizen behavior some hosts (e.g. rachelbythebay.com) explicitly
+# reward. This is the DEFAULT for podcast discovery/borrow fetches.
+LECTIO_HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
+# Some podcast-host feeds (Buzzsprout, Libsyn, …) sit behind Cloudflare, which
+# 403s any non-browser UA. We escalate to this browser UA ONLY after the honest
+# request is actually refused (see _polite_safe_get) — never preemptively, so we
+# don't spoof hosts that are happy to serve Lectio.
+PODCAST_FETCH_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 # In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
 # Values: True = same-site/same-origin (proxy needed), False = no restriction.
 _CORP_DOMAIN_CACHE: dict[str, bool] = {}
@@ -2196,13 +2210,29 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Recovered YouTube embeds (feedparser strips the <iframe>, so a WP
+        # YouTube block reaches us as an empty figure). video_ids is a
+        # space-separated list in document order; '' means a YouTube embed was
+        # present but no id was recoverable (a cached negative). Populated by the
+        # same raw-feed re-parse as entry_media_audio.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_media_video (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                video_ids TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feed_media_scan (
                 feed_url TEXT PRIMARY KEY,
                 scanned_at REAL NOT NULL,
                 found INTEGER NOT NULL DEFAULT 0,
-                suggested_audio_feed TEXT NOT NULL DEFAULT ''
+                suggested_audio_feed TEXT NOT NULL DEFAULT '',
+                ok INTEGER NOT NULL DEFAULT 1
             )
             """
         )
@@ -2210,6 +2240,14 @@ def ensure_meta_schema() -> None:
         # for an audio-less feed (so we can suggest subscribing to the audio feed).
         try:
             conn.execute("ALTER TABLE feed_media_scan ADD COLUMN suggested_audio_feed TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        # Added later: distinguish a scan that completed cleanly with no audio
+        # (back off a long time) from one that errored mid-way — e.g. a host feed
+        # we discovered but couldn't fetch (Cloudflare 403) — so transient
+        # failures retry soon instead of inheriting the 7-day "empty" backoff.
+        try:
+            conn.execute("ALTER TABLE feed_media_scan ADD COLUMN ok INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
         conn.execute(
@@ -5882,6 +5920,55 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+# WordPress "rss_footer" boilerplate appended to feed content: "The post <title>
+# appeared first on <site>." Plugins add near-duplicate variants ("first appeared
+# on") and some double-encode the wrapping <p> (so the reader shows literal
+# "<p>...</p>" text). Match the paragraph text tolerantly of leading/trailing
+# literal p-tags, anchored on "The post … appeared … on …".
+_WP_POST_FOOTER_RE = re.compile(
+    r'^\s*(?:</?p>\s*)*The post\b.*?\b(?:first appeared|appeared first)\s+on\b.*?\.\s*(?:</?p>\s*)*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _fix_wp_post_footer(content_html: str) -> str:
+    """Tidy the trailing WordPress "The post … appeared … on …" footer.
+
+    The footer itself is fine to keep, but feeds mangle it two ways: plugins emit
+    it twice ("first appeared on" + "appeared first on"), and some double-encode
+    the wrapping <p> so it renders as literal "<p>…</p>" text. Keep a single
+    footer paragraph, drop the duplicates, and strip the literal tag artifacts
+    from the one kept. Only trailing <p> blocks are touched (stop at the first
+    non-footer paragraph), so real content is never affected."""
+    if "appeared" not in content_html.lower():
+        return content_html  # cheap guard
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    paras = soup.find_all("p")
+    footer_ps = []
+    for p in reversed(paras):
+        if p.parent is None:
+            continue
+        if _WP_POST_FOOTER_RE.match(p.get_text(" ", strip=True)):
+            footer_ps.append(p)
+        else:
+            break  # contiguous trailing footers only
+    if not footer_ps:
+        return content_html
+    footer_ps.reverse()  # document order
+    keep = footer_ps[0]
+    for dup in footer_ps[1:]:
+        dup.decompose()
+    # Remove literal "<p>"/"</p>" text artifacts (double-encoded tags) from the
+    # kept footer, leaving the sentence intact.
+    for s in list(keep.strings):
+        cleaned = re.sub(r"</?p\s*>", "", str(s), flags=re.IGNORECASE)
+        if cleaned != s:
+            s.replace_with(cleaned)
+    return str(soup)
+
+
 _AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
 
 
@@ -5922,10 +6009,79 @@ def _find_entry_audio_url(entry) -> str | None:
     return None
 
 
+def _format_enclosure_size(length) -> str:
+    """Render an enclosure ``length`` (bytes) as a short human label, or ''.
+
+    Feeds often set a placeholder length (e.g. ``1024``) when the real size is
+    unknown, so anything under ~2 KB is treated as meaningless and dropped.
+    """
+    try:
+        size = int(length)
+    except (TypeError, ValueError):
+        return ""
+    if size < 2048:
+        return ""
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024.0
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return ""
+
+
+def _enclosure_label(enc_url: str, enc_type: str) -> str:
+    """Friendly label for a download link: the file name, else the MIME type."""
+    name = unquote(urlparse(enc_url).path.rsplit("/", 1)[-1]).strip()
+    if name:
+        return name
+    return enc_type or "attachment"
+
+
+def _render_entry_attachments(entry, audio_url: str | None) -> str:
+    """Render a footer "Attachments" section for non-audio enclosures.
+
+    Magazine/document feeds (e.g. Full Circle) attach the issue PDF/EPUB as
+    ``<enclosure>`` elements that never appear in the article body. The audio
+    enclosure (if any) is already surfaced as a player, so it's skipped here to
+    avoid a duplicate link.
+    """
+    seen: set[str] = set()
+    items: list[str] = []
+    for enc in (getattr(entry, "enclosures", None) or []):
+        enc_url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+        if not enc_url or enc_url in seen:
+            continue
+        enc_type = (getattr(enc, "type", None) or "").lower()
+        if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
+            continue  # surfaced as the audio player
+        if audio_url and enc_url == audio_url:
+            continue
+        seen.add(enc_url)
+        label = html.escape(_enclosure_label(enc_url, enc_type))
+        size = _format_enclosure_size(getattr(enc, "length", None))
+        meta = f" <span style=\"color:var(--muted,#888);\">({size})</span>" if size else ""
+        safe_url = html.escape(enc_url, quote=True)
+        items.append(
+            f'<li><a href="{safe_url}" target="_blank" rel="noopener noreferrer" download>'
+            f'{label}</a>{meta}</li>'
+        )
+    if not items:
+        return ""
+    return (
+        '<div class="entry-attachments" style="margin:1.5em 0 0.5em; '
+        'padding-top:0.75em; border-top:1px solid var(--border,#ddd);">'
+        '<div style="font-weight:600; margin-bottom:0.35em;">Attachments</div>'
+        f'<ul style="margin:0; padding-left:1.25em;">{"".join(items)}</ul>'
+        '</div>'
+    )
+
+
 # media:content scan cadence: rescan podcast feeds (audio found) often enough to
 # catch new episodes; barely ever rescan feeds that had none.
 _MEDIA_SCAN_TTL_FOUND = 6 * 3600
 _MEDIA_SCAN_TTL_EMPTY = 7 * 24 * 3600
+# A scan that errored mid-way (e.g. discovered a host feed but couldn't fetch it)
+# isn't proof there's no audio — retry well before the long "empty" backoff.
+_MEDIA_SCAN_TTL_ERROR = 6 * 3600
 _media_scan_in_progress: set[tuple[str, str]] = set()
 _media_scan_lock = threading.Lock()
 
@@ -5938,15 +6094,32 @@ def _lookup_media_audio(conn: sqlite3.Connection, feed_url: str, entry_id: str) 
     return (row[0] or None) if row else None
 
 
+def _lookup_media_video(conn: sqlite3.Connection, feed_url: str, entry_id: str) -> list[str] | None:
+    """Recovered YouTube ids for an entry: ``None`` = not scanned yet, ``[]`` =
+    scanned but nothing recoverable, otherwise the ids in document order."""
+    row = conn.execute(
+        "SELECT video_ids FROM entry_media_video WHERE feed_url = ? AND entry_id = ?",
+        (feed_url, entry_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0] or "").split()
+
+
 def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
     """True if this feed has never been scanned for media:content audio, or its
     cadence TTL has elapsed."""
     row = conn.execute(
-        "SELECT scanned_at, found FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
+        "SELECT scanned_at, found, ok FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
     ).fetchone()
     if not row:
         return True
-    ttl = _MEDIA_SCAN_TTL_FOUND if row[1] else _MEDIA_SCAN_TTL_EMPTY
+    if row[1]:
+        ttl = _MEDIA_SCAN_TTL_FOUND
+    elif not row[2]:  # errored mid-scan — not proof of "no audio"
+        ttl = _MEDIA_SCAN_TTL_ERROR
+    else:
+        ttl = _MEDIA_SCAN_TTL_EMPTY
     return (time.time() - float(row[0])) > ttl
 
 
@@ -5956,25 +6129,47 @@ def _scan_feed_media_audio(feed_url: str) -> None:
     Runs in a background thread; the caller captures and re-binds tenancy. Best
     effort — a fetch/parse failure still records the scan attempt so we back off."""
     found_map: dict[str, str] = {}
+    raw_feed: bytes | None = None
     try:
         with httpx.Client(follow_redirects=False, timeout=8.0,
                           headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, feed_url)
         if resp.status_code == 200 and resp.content:
-            found_map = podcast_audio.extract_media_audio(resp.content)
+            raw_feed = resp.content
+            found_map = podcast_audio.extract_media_audio(raw_feed)
     except Exception:
         LOGGER.debug("media:content scan failed for %s", feed_url, exc_info=True)
+
+    # The same raw feed also carries any YouTube embeds that feedparser/reader
+    # stripped from the stored content (the <iframe>, and thus the video id, is
+    # gone). Recover them here so the pane can rebuild the player.
+    video_map: dict[str, list[str]] = {}
+    if raw_feed is not None:
+        try:
+            video_map = youtube_embeds.extract_youtube_embeds(raw_feed)
+        except Exception:
+            LOGGER.debug("youtube-embed scan failed for %s", feed_url, exc_info=True)
 
     # When the feed carries no audio of its own, the audio often lives in a
     # separate podcast-host feed (Libsyn/Buzzsprout/…) referenced on the episode
     # page. Detect it so we can (a) borrow its audio into this feed's entries and
     # (b) suggest subscribing to the audio feed if borrowing didn't cover an entry.
     suggested = ""
+    errored = False
     if not found_map:
         suggested = _discover_suggested_audio_feed(feed_url)
         if suggested:
-            found_map = _borrow_audio_from_feed(feed_url, suggested)
+            borrowed = _borrow_audio_from_feed(feed_url, suggested)
+            if borrowed is None:
+                # We found a host feed but couldn't fetch it (network/HTTP error,
+                # e.g. a Cloudflare 403) — don't bank this as a settled "no audio".
+                errored = True
+            else:
+                found_map = borrowed
 
+    # ``ok`` is False only when we have positive reason to believe the scan was
+    # incomplete; a clean scan that simply found nothing is ok=1 (long backoff).
+    ok = 0 if (errored and not found_map) else 1
     with get_meta_connection() as conn:
         for entry_id, audio_url in found_map.items():
             conn.execute(
@@ -5982,14 +6177,39 @@ def _scan_feed_media_audio(feed_url: str) -> None:
                 " ON CONFLICT(feed_url, entry_id) DO UPDATE SET audio_url = excluded.audio_url",
                 (feed_url, entry_id, audio_url),
             )
+        for entry_id, vids in video_map.items():
+            conn.execute(
+                "INSERT INTO entry_media_video (feed_url, entry_id, video_ids) VALUES (?, ?, ?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET video_ids = excluded.video_ids",
+                (feed_url, entry_id, " ".join(vids)),
+            )
         conn.execute(
-            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed)"
-            " VALUES (?, ?, ?, ?)"
+            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed, ok)"
+            " VALUES (?, ?, ?, ?, ?)"
             " ON CONFLICT(feed_url) DO UPDATE SET scanned_at = excluded.scanned_at,"
-            " found = excluded.found, suggested_audio_feed = excluded.suggested_audio_feed",
-            (feed_url, time.time(), 1 if found_map else 0, suggested),
+            " found = excluded.found, suggested_audio_feed = excluded.suggested_audio_feed,"
+            " ok = excluded.ok",
+            (feed_url, time.time(), 1 if found_map else 0, suggested, ok),
         )
         conn.commit()
+
+
+def _polite_safe_get(url: str, *, timeout: float):
+    """SSRF-safe GET that identifies honestly as Lectio, escalating to a browser
+    UA only if the honest request is actually refused (HTTP 403).
+
+    Honest-by-default keeps us a good citizen for hosts that reward it (and never
+    spoofs a host that's happy to serve Lectio); the browser-UA fallback is a
+    last resort for Cloudflare-gated podcast hosts that blanket-403 non-browsers.
+    Returns the final response (caller checks status)."""
+    resp = None
+    for ua in (LECTIO_HONEST_USER_AGENT, PODCAST_FETCH_USER_AGENT):
+        with httpx.Client(follow_redirects=False, timeout=timeout,
+                          headers={"User-Agent": ua}) as client:
+            resp = url_guard.safe_get(client, url)
+        if resp.status_code != 403:
+            break  # served (or a non-403 error) — don't escalate
+    return resp
 
 
 def _discover_suggested_audio_feed(feed_url: str) -> str:
@@ -6007,9 +6227,7 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
                     break
         if not link or not url_guard.is_safe_outbound_url(link):
             return ""
-        with httpx.Client(follow_redirects=False, timeout=8.0,
-                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            resp = url_guard.safe_get(client, link)
+        resp = _polite_safe_get(link, timeout=8.0)
         if resp.status_code != 200 or not resp.text:
             return ""
         found = podcast_feed_discovery.find_podcast_host_feed(resp.text) or ""
@@ -6022,13 +6240,18 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
         return ""
 
 
-def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]:
+def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str] | None:
     """Match this feed's entries to audio in a podcast-host feed and return
     entry_id -> audio URL for the matches.
 
     Lets a notes-only website feed gain a player without a second subscription:
     the audio is sourced from the matching episode (by title, then episode
-    number) in the linked podcast feed."""
+    number) in the linked podcast feed.
+
+    Returns ``None`` when the host feed couldn't be fetched (network/HTTP error)
+    — distinct from an empty dict, which means it was fetched fine but nothing
+    matched. The caller uses that to retry a failed fetch soon rather than
+    backing it off as a settled "no audio" result."""
     try:
         with get_reader() as reader:
             titles = {
@@ -6037,15 +6260,13 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
             }
         if not titles or not url_guard.is_safe_outbound_url(host_feed_url):
             return {}
-        with httpx.Client(follow_redirects=False, timeout=10.0,
-                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            resp = url_guard.safe_get(client, host_feed_url)
+        resp = _polite_safe_get(host_feed_url, timeout=10.0)
         if resp.status_code != 200 or not resp.content:
-            return {}
+            return None
         return podcast_feed_discovery.match_episode_audio(resp.content, titles)
     except Exception:
         LOGGER.debug("audio borrow failed for %s from %s", feed_url, host_feed_url, exc_info=True)
-        return {}
+        return None
 
 
 def _get_suggested_audio_feed(conn: sqlite3.Connection, feed_url: str) -> str | None:
@@ -6141,95 +6362,23 @@ def _transform_kg_audio_cards(content_html: str) -> str:
     return "".join(result)
 
 
-# Allowlist HTML sanitizer for fetched article/source HTML rendered with `| safe`.
-# Regex sanitizing is unsafe (e.g. unquoted `onerror=`, `href="javascript:"` and
-# countless encoding tricks slip through), so we parse and rebuild instead.
-_SANITIZE_ALLOWED_TAGS = frozenset({
-    "a", "abbr", "address", "article", "aside", "b", "blockquote", "br", "caption",
-    "cite", "code", "col", "colgroup", "dd", "del", "details", "dfn", "div", "dl",
-    "dt", "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
-    "header", "hr", "i", "img", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p",
-    "picture", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub",
-    "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
-    "u", "ul", "var", "wbr", "audio", "video", "source",
-})
-# Dangerous tags whose entire subtree is dropped. Anything else not in the allow
-# list is unwrapped (its text/children kept) rather than deleted.
-_SANITIZE_DROP_TAGS = frozenset({
-    "script", "style", "iframe", "object", "embed", "form", "link", "meta", "base",
-    "noscript", "template", "svg", "math", "applet", "frame", "frameset", "title",
-    "button", "input", "select", "textarea", "option",
-})
-_SANITIZE_ALLOWED_ATTRS = {
-    "a": frozenset({"href", "title"}),
-    "img": frozenset({"src", "srcset", "alt", "title", "loading"}),
-    "source": frozenset({"src", "srcset", "type", "media"}),
-    "video": frozenset({"src", "controls", "poster", "preload"}),
-    "audio": frozenset({"src", "controls", "preload"}),
-    "td": frozenset({"colspan", "rowspan"}),
-    "th": frozenset({"colspan", "rowspan", "scope"}),
-    "col": frozenset({"span"}),
-    "colgroup": frozenset({"span"}),
-    "time": frozenset({"datetime"}),
-}
-_SANITIZE_URL_ATTRS = frozenset({"href", "src", "poster"})
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
-
-
-def _is_safe_attr_url(attr: str, value: str) -> bool:
-    """Reject javascript:/vbscript:/data: (and control-char-obfuscated variants);
-    allow relative URLs and http(s) (plus mailto/tel for href)."""
-    if not value or not value.strip():
-        return False
-    stripped = _CONTROL_CHARS_RE.sub("", value).lower()
-    if stripped.startswith(("javascript:", "vbscript:", "data:")):
-        return False
-    try:
-        scheme = urlparse(value).scheme.lower()
-    except ValueError:
-        return False
-    if scheme == "":
-        return True  # relative URL
-    if attr == "href":
-        return scheme in ("http", "https", "mailto", "tel")
-    return scheme in ("http", "https")
-
-
+# HTML sanitization lives in services.html_sanitize — the single allowlist
+# chokepoint shared by feed ingest (services.reader_sanitize) and the
+# readability/source-HTML paths below. It keeps safe embeds (iframes from a
+# curated host allowlist, sanitized SVG/MathML) instead of feedparser's
+# destroy-everything behavior.
 def _sanitize_html_allowlist(content: str) -> str:
-    if not content:
-        return content
-    from bs4 import BeautifulSoup, Comment
-
-    soup = BeautifulSoup(content, "html.parser")
-    for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
-        comment.extract()
-    for tag in soup.find_all(True):
-        name = (tag.name or "").lower()
-        if name in _SANITIZE_DROP_TAGS:
-            tag.decompose()
-            continue
-        if name not in _SANITIZE_ALLOWED_TAGS:
-            tag.unwrap()  # keep inner text/children, drop the unknown wrapper
-            continue
-        allowed = _SANITIZE_ALLOWED_ATTRS.get(name, frozenset())
-        for attr_name in list(tag.attrs):
-            la = attr_name.lower()
-            if la.startswith("on") or la == "style" or la not in allowed:
-                del tag.attrs[attr_name]
-                continue
-            if la in _SANITIZE_URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
-                del tag.attrs[attr_name]
-    return str(soup)
+    return html_sanitize.sanitize_html(content)
 
 
 def sanitize_readability_html(content: str) -> str:
     """Sanitize Readability-extracted article HTML (rendered with `| safe`)."""
-    return _sanitize_html_allowlist(content)
+    return html_sanitize.sanitize_html(content)
 
 
 def sanitize_source_html(content: str) -> str:
     """Sanitize proxied source-page HTML (rendered with `| safe`)."""
-    return _sanitize_html_allowlist(content)
+    return html_sanitize.sanitize_html(content)
 
 
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
@@ -7628,6 +7777,32 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+_YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
+
+
+def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) -> str:
+    """Replace stripped WordPress YouTube embed figures with real players.
+
+    feedparser removes the embed ``<iframe>``, leaving an empty
+    ``<figure class="wp-block-embed ... is-provider-youtube">``. Replace each such
+    figure, in document order, with the player for the matching recovered video
+    id. Figures past the end of ``video_ids`` are left untouched."""
+    if not video_ids:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    figures = [
+        fig for fig in soup.find_all("figure")
+        if _YT_EMBED_FIGURE_CLASS_RE.search(" ".join(fig.get("class", [])))
+    ]
+    if not figures:
+        return content_html
+    for fig, vid in zip(figures, video_ids):
+        fig.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
+    return str(soup)
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7717,6 +7892,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and "kg-audio-card" in content_html:
             content_html = _transform_kg_audio_cards(content_html)
 
+        # Tidy the WordPress "The post … appeared first on …" footer: keep one,
+        # drop plugin duplicates, and clean the double-encoded literal "<p>" tags
+        # some feeds emit. Generic across feeds.
+        if isinstance(content_html, str):
+            content_html = _fix_wp_post_footer(content_html)
+
         # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
         # replacing them with the literal text "<strong>iframe</strong>" inside a
         # class="embed-container" div, leaving an adjacent plain-text YouTube link.
@@ -7737,6 +7918,25 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 content_html,
                 flags=re.IGNORECASE,
             )
+
+        # Recover stripped YouTube embeds — feedparser removes the <iframe> from
+        # WordPress YouTube blocks, leaving an empty figure with the video id
+        # gone. Re-parse of the raw feed (sanitize off) caches the ids; inject
+        # the player when cached, else queue a scan so it fills in next open.
+        # Only needed for entries stored *before* feed ingest stopped stripping
+        # iframes (services.reader_sanitize) — newer entries keep the real embed,
+        # so skip recovery when an <iframe> is already present.
+        if (isinstance(content_html, str)
+                and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
+                and "<iframe" not in content_html.lower()):
+            with get_meta_connection() as _vconn:
+                _vids = _lookup_media_video(_vconn, feed_url, entry_id)
+            if _vids:
+                content_html = _inject_recovered_youtube_embeds(content_html, _vids)
+            elif _vids is None:
+                # Not scanned yet — force a scan (bypasses the audio TTL so a new
+                # post's embed isn't held back by a long no-audio backoff).
+                _queue_media_audio_scan(feed_url)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
@@ -7796,6 +7996,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 f'</div>'
             )
             content_html = _audio_player + (content_html or "")
+
+        # Footer attachments — non-audio enclosures (magazine PDFs, EPUBs, etc.)
+        # that never appear in the article body. The audio enclosure, if any, is
+        # already shown as a player above, so it's excluded here.
+        _attachments_html = _render_entry_attachments(entry, _audio_url)
+        if _attachments_html:
+            content_html = (content_html or "") + _attachments_html
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         feed_tag_suggestions = get_feed_tag_suggestions(

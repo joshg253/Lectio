@@ -242,20 +242,34 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   this an `xmlUrl="file:///…"` could read local files (other tenants' DBs, `.env`)
   on refresh. Internal scraped feeds still register their `file://` URLs through
   `reader.add_feed` directly, bypassing the user-facing guard.
-- **HTML sanitization** — proxied source-page and Readability HTML (rendered with
-  `| safe`) is sanitized by `_sanitize_html_allowlist`, a BeautifulSoup
-  tag/attribute allowlist that drops scriptable tags, all `on*` handlers, `style`,
-  and `javascript:`/`vbscript:`/`data:` URLs (incl. control-char-obfuscated). It
-  replaced regex sanitizers that let unquoted handlers and `href="javascript:"`
-  through. Feed-entry content relies on feedparser's upstream sanitization.
-- **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can become
-  a list thumbnail / article lead image. `services/svg_sanitize.py` parses and
-  rebuilds it with a presentation/geometry tag+attribute allowlist, dropping the
-  `script`/`style`/`foreignObject`/`image`/`use`/`a` subtrees, every `on*`
+- **HTML sanitization (Lectio owns it)** — `reader` parses feeds with
+  feedparser's `sanitize_html=True`, which *destroys* (not escapes) anything off
+  its allowlist — iframes, SVG, MathML, audio/video — silently stripping embeds
+  from every article. Lectio instead mounts a replacement parser
+  (`services/reader_sanitize.py`) that parses with sanitization **off** and runs
+  entry content/summary through its own allowlist (`services/html_sanitize.py`)
+  at ingest, so embeds survive while scripts/handlers don't. The same allowlist
+  also sanitizes proxied source-page and Readability HTML at render. Because
+  `reader` does no sanitizing of its own, that single allowlist is the only thing
+  standing between feed HTML and a `| safe` render — it drops scriptable tags,
+  all `on*` handlers, `style`, `javascript:`/`vbscript:`/`data:` URLs (incl.
+  control-char-obfuscated), and `object`/`embed`/`form`.
+- **Embed allowlist** — `<iframe>` is kept only when its `src` host is on
+  `_EMBED_HOST_ALLOWLIST` (YouTube/Vimeo/Dailymotion/Twitch/SoundCloud/Bandcamp/
+  Spotify + Twitter/CodePen/Reddit/Archive.org), https-only, matched by exact or
+  dot-suffix host (so `youtube.com.evil.com` doesn't slip through). Kept iframes
+  are forced into a `sandbox` (`allow-scripts allow-same-origin …` — same-origin
+  refers to the *embed's* origin, not Lectio's) with a conservative
+  `referrerpolicy` and lazy loading. Inline SVG is cleaned via
+  `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
+  allowlist.
+- **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
+  become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
+  and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping
+  the `script`/`style`/`foreignObject`/`image`/`use`/`a` subtrees, every `on*`
   handler, all `href`/`xlink:href`, and any non-`url(#fragment)` reference, then
   serves it as a `data:image/svg+xml` URI (kept vector — no rasterization, no
-  outbound fetch). The general HTML sanitizer still drops `<svg>` from article
-  bodies; this path is only the dedicated thumbnail/lead extractor.
+  outbound fetch).
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 
