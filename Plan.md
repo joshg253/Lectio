@@ -204,10 +204,14 @@ list) are both **done**. Follow-ups all resolved:
   one-click "Subscribe to the audio feed" banner when an entry has no audio and
   the host feed isn't already subscribed. Tests:
   `tests/services/test_podcast_feed_discovery.py`, suggestion cases in
-  `tests/integration/test_media_audio_fallback.py`. Stage 2 (TODO): **audio
-  borrowing** — keep the single website feed but resolve its entries' audio from
-  the matching episode (by title/date) in the linked podcast feed, so no
-  duplicate subscription is needed.
+  `tests/integration/test_media_audio_fallback.py`. Stage 2 (DONE): **audio
+  borrowing** — when an audio-less feed has a discovered host feed, the
+  background scan fetches it and matches each website entry to the host
+  episode's MP3 (`match_episode_audio`, by normalized title then episode
+  number), caching the borrowed URL in `entry_media_audio`. So the website feed
+  plays audio inline with no duplicate subscription; the suggestion banner only
+  appears for entries that couldn't be matched. Matcher tests in
+  `tests/services/test_podcast_feed_discovery.py`.
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 
