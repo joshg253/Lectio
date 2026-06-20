@@ -5967,10 +5967,13 @@ def _scan_feed_media_audio(feed_url: str) -> None:
 
     # When the feed carries no audio of its own, the audio often lives in a
     # separate podcast-host feed (Libsyn/Buzzsprout/…) referenced on the episode
-    # page. Detect it so we can suggest subscribing to the audio feed.
+    # page. Detect it so we can (a) borrow its audio into this feed's entries and
+    # (b) suggest subscribing to the audio feed if borrowing didn't cover an entry.
     suggested = ""
     if not found_map:
         suggested = _discover_suggested_audio_feed(feed_url)
+        if suggested:
+            found_map = _borrow_audio_from_feed(feed_url, suggested)
 
     with get_meta_connection() as conn:
         for entry_id, audio_url in found_map.items():
@@ -6017,6 +6020,32 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
     except Exception:
         LOGGER.debug("audio-feed discovery failed for %s", feed_url, exc_info=True)
         return ""
+
+
+def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]:
+    """Match this feed's entries to audio in a podcast-host feed and return
+    entry_id -> audio URL for the matches.
+
+    Lets a notes-only website feed gain a player without a second subscription:
+    the audio is sourced from the matching episode (by title, then episode
+    number) in the linked podcast feed."""
+    try:
+        with get_reader() as reader:
+            titles = {
+                str(e.id): (e.title or "")
+                for e in reader.get_entries(feed=feed_url, sort="recent", limit=120)
+            }
+        if not titles or not url_guard.is_safe_outbound_url(host_feed_url):
+            return {}
+        with httpx.Client(follow_redirects=False, timeout=10.0,
+                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, host_feed_url)
+        if resp.status_code != 200 or not resp.content:
+            return {}
+        return podcast_feed_discovery.match_episode_audio(resp.content, titles)
+    except Exception:
+        LOGGER.debug("audio borrow failed for %s from %s", feed_url, host_feed_url, exc_info=True)
+        return {}
 
 
 def _get_suggested_audio_feed(conn: sqlite3.Connection, feed_url: str) -> str | None:
