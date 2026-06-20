@@ -227,6 +227,38 @@ list) are both **done**. Follow-ups all resolved:
   Readability/source-scrape can't bypass the paywall, so there's no clean fix
   without the user's subscription. Documented as a known limitation.
 
+### Embeds & feed-content cleanup (follow-ups from the sanitization migration)
+
+Lectio now owns HTML sanitization (feedparser sanitize OFF at ingest, embeds
+kept — see ARCHITECTURE "HTML sanitization"). Surfaced during testing 2026-06-20;
+these are pre-existing feed-quality quirks, not regressions:
+
+- ~~**WordPress "The post … appeared first on …" footer boilerplate**~~ — DONE.
+  `_strip_wp_post_footer` removes the trailing self-link footer (incl. plugin
+  duplicates and the double-encoded literal-`<p>` variant). Test:
+  `tests/unit/test_wp_footer.py`.
+- **Backfill embeds on old entries** — entries stored before the sanitization
+  migration still have their embeds stripped; they only return when the feed is
+  re-fetched (reader re-stores on content change). YouTube has the
+  `entry_media_video` backfill; Bandcamp/SoundCloud/etc. do not. Options: a
+  polite one-time re-parse pass over subscribed feeds (sequential, honest UA,
+  not `--all` hammering), or just let feeds self-heal as they publish. Decide
+  scope. (folder-15 music feeds were re-fetched manually as a spot fix.)
+- **qwantz (Dinosaur Comics)** — feed wraps the comic in `<center><table>` nav
+  (archive/contact/merch/search + prev/next) above and below the image, and the
+  title/alt caption shows twice. Needs a per-site strip of the nav tables and a
+  caption de-dupe.
+- **Webcomic single-image feeds (e.g. claycomix)** — feed ships only one image
+  per post; multi-panel strips would need the webcomic source-page scrape
+  strategy. Confirm whether the user wants source-scraping enabled for these.
+- **Text-only feeds — show derived lead image in article** (e.g. mynorthwest,
+  gottadeal) — these feeds carry zero inline `<img>`; the thumbnail is derived
+  from the page OG image. Optionally inject that derived lead image at the top of
+  the article body when `show_lead_image_in_article` is on.
+- **Blogger "(untitled)" posts** (e.g. treecardgames) — some Blogger entries show
+  "(untitled)" though the web post has a title. Check whether the title is
+  present in the feed/`reader` model and recover it if so.
+
 ### Ideas
 
 - ~~**Compare existing subscriptions**~~ — addressed: Settings → Feeds → Folders now has per-feed checkboxes and a "Compare selected" button (2–6 feeds) that calls `/feeds/compare` and renders the same chips as the Add-Feed picker.
