@@ -89,8 +89,14 @@ Phasing:
 1. ~~**Tenancy resolver + per-user connection pool**~~ — DONE (see Recently
    Completed). `services/tenancy.py` + per-(thread, user) pools in main.py.
 2. ~~**Users table + per-user auth**~~ — DONE (core + account/admin UI at
-   `/account`, linked from the main menu in multi mode). Remaining: optional
-   user deletion (today: disable).
+   `/account`, linked from the main menu in multi mode). ~~Optional user
+   deletion~~ — DONE. The Administration → Users table gained a **Delete**
+   action (confirm-gated): `/admin/users/delete` drops the account row +
+   GReader tokens (`UserStore.delete_user`) and removes the user's isolated
+   data dir (`delete_user_storage`), leaving the global image/thumbnail caches
+   intact. Refuses self-deletion and the last admin (`count_admins`). Tests:
+   `tests/services/test_users.py`, `account_ui` scenario in
+   `tests/integration/_multiuser_harness.py`.
 3. ~~**Per-user API tokens**~~ + ~~**per-user scheduled refresh**~~ — DONE.
    ~~**Startup backfills + starred-archive worker as default user**~~ — DONE.
    The startup tasks (scraped-feed sync, auto-taggers, guid-churn dedup, and the

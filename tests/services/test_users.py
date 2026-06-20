@@ -101,6 +101,33 @@ def test_disabled_user_cannot_login(store):
     assert store.verify_login("alice", "pw") == uid
 
 
+def test_delete_user_removes_row_and_greader_tokens(store):
+    uid = store.create("alice", "pw")
+    token = store.issue_greader_token(uid)
+    assert store.resolve_greader_token(token) == uid
+    assert store.delete_user(uid) is True
+    assert store.get_by_id(uid) is None
+    assert store.get("alice") is None
+    assert store.resolve_greader_token(token) is None
+    # A username freed by deletion can be reused.
+    new_uid = store.create("alice", "pw2")
+    assert new_uid != uid
+
+
+def test_delete_unknown_user_returns_false(store):
+    assert store.delete_user("u_doesnotexist") is False
+
+
+def test_count_admins(store):
+    assert store.count_admins() == 0
+    store.create("alice", "pw", is_admin=True)
+    bob = store.create("bob", "pw", is_admin=True)
+    store.create("carol", "pw")
+    assert store.count_admins() == 2
+    store.delete_user(bob)
+    assert store.count_admins() == 1
+
+
 def test_set_password(store):
     uid = store.create("alice", "old")
     store.set_password(uid, "new")
