@@ -93,6 +93,7 @@ def _capture_cc(monkeypatch, *, profile_email):
 
     def _send(**kw):
         captured["cc_addr"] = kw.get("cc_addr")
+        captured["reply_to"] = kw.get("reply_to")
         return (True, None)
 
     monkeypatch.setattr(main, "send_article_email", _send)
@@ -108,6 +109,7 @@ def test_cc_me_adds_profile_as_cc(monkeypatch):
         })
     assert r.status_code == 200
     assert captured["cc_addr"] == "me@example.com"
+    assert captured["reply_to"] == "me@example.com"
     assert "Cc me@example.com" in r.json()["message"]
 
 
@@ -120,10 +122,11 @@ def test_cc_me_unchecked_no_cc(monkeypatch):
         })
     assert r.status_code == 200
     assert captured["cc_addr"] is None
+    assert captured["reply_to"] is None
 
 
-def test_cc_me_skips_self_cc(monkeypatch):
-    """Cc me must not Cc the recipient when the user emails their own address."""
+def test_cc_me_skips_self_cc_but_sets_reply_to(monkeypatch):
+    """Emailing your own address: no self-Cc, but Reply-To is still set."""
     app = _build_app(monkeypatch, configured=True, entry=_make_entry())
     captured = _capture_cc(monkeypatch, profile_email="me@example.com")
     with TestClient(app) as client:
@@ -132,6 +135,7 @@ def test_cc_me_skips_self_cc(monkeypatch):
         })
     assert r.status_code == 200
     assert captured["cc_addr"] is None
+    assert captured["reply_to"] == "me@example.com"
 
 
 def test_send_failure_returns_500(monkeypatch):
