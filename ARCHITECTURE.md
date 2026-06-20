@@ -224,16 +224,18 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   manually and re-validate every hop against private/loopback/link-local space.
   Now applied to all reachable user/feed-controlled fetches: `/api/img`, `/thumb`,
   feed discovery (`_guarded_get` / `_guarded_head`, which also pre-validate HEAD
-  probes), the source-proxy / readability / feed-tag fetches in main.py, and the
+  probes), the source-proxy / readability / feed-tag fetches in main.py, the
   service-layer background fetches (lead-image plugins, lead-image source-page
-  fetch, the page scraper, and the starred-archive text/byte fetches) — all with
-  `follow_redirects=False`, closing the redirect-to-internal bypass. HEAD probes
-  (image-fetchability / comic-URL checks) go through `url_guard.safe_head`, which
-  validates the target and fetches `follow_redirects=False` (HEAD has no per-hop
-  counterpart to `safe_get`).
-  Still open: WebSub hub fetches and the `reader` library's own feed refresh (a
-  subscribed `http://10.x` host is still fetched); and full DNS-rebind closure
-  needs connection IP-pinning (the validate→connect window is small but nonzero).
+  fetch, the page scraper, and the starred-archive text/byte fetches), and the
+  WebSub hub fetches (`_discover_hub_url` via `safe_get`; the subscribe /
+  unsubscribe POSTs pre-validate `hub_url` with `is_safe_outbound_url` since
+  `safe_get` is GET-only) — all with `follow_redirects=False`, closing the
+  redirect-to-internal bypass. HEAD probes (image-fetchability / comic-URL checks)
+  go through `url_guard.safe_head`, which validates the target and fetches
+  `follow_redirects=False` (HEAD has no per-hop counterpart to `safe_get`).
+  Still open: the `reader` library's own feed refresh (a subscribed `http://10.x`
+  host is still fetched); and full DNS-rebind closure needs connection IP-pinning
+  (the validate→connect window is small but nonzero).
 - **Subscription scheme allowlist** — user-supplied feed URLs (Add Feed, OPML
   import, discovered `<link>` candidates) are restricted to http/https via
   `_is_subscribable_feed_url`. `reader` natively fetches `file://`, so without

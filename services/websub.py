@@ -14,6 +14,8 @@ from urllib.parse import quote
 
 import httpx
 
+from services.url_guard import is_safe_outbound_url, safe_get
+
 
 class WebSubService:
     # Matches <atom:link rel="hub" href="..."/> or <link rel="hub" href="..."/> in either attr order.
@@ -51,8 +53,8 @@ class WebSubService:
     def _discover_hub_url(self, feed_url: str) -> str | None:
         """Fetch feed_url and return the hub URL from Link header or XML, or None."""
         try:
-            with httpx.Client(follow_redirects=True, timeout=10.0, headers={"User-Agent": self._user_agent}) as client:
-                resp = client.get(feed_url)
+            with httpx.Client(follow_redirects=False, timeout=10.0, headers={"User-Agent": self._user_agent}) as client:
+                resp = safe_get(client, feed_url)
             for segment in resp.headers.get("link", "").split(","):
                 m = self._HUB_HTTP_RE.search(segment)
                 if m:
@@ -127,8 +129,11 @@ class WebSubService:
                 "VALUES (?, ?, ?, ?, 0, ?)",
                 (feed_url, hub_url, secret, now, now),
             )
+        if not is_safe_outbound_url(hub_url):
+            self._logger.warning("[websub] refusing subscribe to unsafe hub %s", hub_url)
+            return
         try:
-            with httpx.Client(follow_redirects=True, timeout=10.0, headers={"User-Agent": self._user_agent}) as client:
+            with httpx.Client(follow_redirects=False, timeout=10.0, headers={"User-Agent": self._user_agent}) as client:
                 resp = client.post(hub_url, data={
                     "hub.mode": "subscribe",
                     "hub.topic": feed_url,
@@ -151,9 +156,9 @@ class WebSubService:
                 (feed_url,),
             ).fetchone()
             conn.execute("DELETE FROM websub_subscriptions WHERE feed_url=?", (feed_url,))
-        if row:
+        if row and is_safe_outbound_url(row["hub_url"]):
             try:
-                with httpx.Client(follow_redirects=True, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
+                with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
                     client.post(row["hub_url"], data={
                         "hub.mode": "unsubscribe",
                         "hub.topic": feed_url,
