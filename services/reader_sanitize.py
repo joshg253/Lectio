@@ -15,9 +15,17 @@ from __future__ import annotations
 import dataclasses
 import logging
 
-import feedparser
-
-from reader._parser.feedparser import FeedparserParser, _process_feed
+# Use the EXACT feedparser module reader uses (it may be the vendored copy,
+# reader._vendor.feedparser). reader's _process_feed decides which bozo
+# exceptions are survivable via isinstance against that module's exception
+# classes; importing the standalone `feedparser` here would yield different
+# classes, so survivable bozos (e.g. NonXMLContentType) would wrongly raise
+# ParseError and break every feed update that returns a body.
+from reader._parser.feedparser import (
+    FeedparserParser,
+    _process_feed,
+    feedparser,
+)
 
 from services import html_sanitize
 
