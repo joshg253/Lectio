@@ -5931,28 +5931,42 @@ _WP_POST_FOOTER_RE = re.compile(
 )
 
 
-def _strip_wp_post_footer(content_html: str) -> str:
-    """Remove trailing WordPress "The post … appeared … on …" footer paragraphs.
+def _fix_wp_post_footer(content_html: str) -> str:
+    """Tidy the trailing WordPress "The post … appeared … on …" footer.
 
-    Generic boilerplate (Inoreader shows it too); appears on every post and is
-    pure self-link spam. Only trailing <p> blocks are considered, stopping at the
-    first non-matching one, so real content is never touched."""
+    The footer itself is fine to keep, but feeds mangle it two ways: plugins emit
+    it twice ("first appeared on" + "appeared first on"), and some double-encode
+    the wrapping <p> so it renders as literal "<p>…</p>" text. Keep a single
+    footer paragraph, drop the duplicates, and strip the literal tag artifacts
+    from the one kept. Only trailing <p> blocks are touched (stop at the first
+    non-footer paragraph), so real content is never affected."""
     if "appeared" not in content_html.lower():
         return content_html  # cheap guard
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(content_html, "html.parser")
     paras = soup.find_all("p")
-    changed = False
+    footer_ps = []
     for p in reversed(paras):
         if p.parent is None:
             continue
         if _WP_POST_FOOTER_RE.match(p.get_text(" ", strip=True)):
-            p.decompose()
-            changed = True
+            footer_ps.append(p)
         else:
-            break  # stop at the first non-footer paragraph from the end
-    return str(soup) if changed else content_html
+            break  # contiguous trailing footers only
+    if not footer_ps:
+        return content_html
+    footer_ps.reverse()  # document order
+    keep = footer_ps[0]
+    for dup in footer_ps[1:]:
+        dup.decompose()
+    # Remove literal "<p>"/"</p>" text artifacts (double-encoded tags) from the
+    # kept footer, leaving the sentence intact.
+    for s in list(keep.strings):
+        cleaned = re.sub(r"</?p\s*>", "", str(s), flags=re.IGNORECASE)
+        if cleaned != s:
+            s.replace_with(cleaned)
+    return str(soup)
 
 
 _AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
@@ -7878,11 +7892,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if isinstance(content_html, str) and "kg-audio-card" in content_html:
             content_html = _transform_kg_audio_cards(content_html)
 
-        # Strip WordPress "The post … appeared first on …" footer boilerplate
-        # (often duplicated by plugins; some double-encode it into literal "<p>"
-        # text). Generic across feeds.
+        # Tidy the WordPress "The post … appeared first on …" footer: keep one,
+        # drop plugin duplicates, and clean the double-encoded literal "<p>" tags
+        # some feeds emit. Generic across feeds.
         if isinstance(content_html, str):
-            content_html = _strip_wp_post_footer(content_html)
+            content_html = _fix_wp_post_footer(content_html)
 
         # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
         # replacing them with the literal text "<strong>iframe</strong>" inside a
