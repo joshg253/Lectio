@@ -183,11 +183,18 @@ list) are both **done**. Follow-ups all resolved:
   untyped/oddly-typed enclosures still match), covers more extensions
   (`.m4b/.aac/.oga/.flac`), and falls back to the entry link when it points
   straight at an audio file. Test: `tests/unit/test_audio_detection.py`.
-- **Remaining (media:content):** audio that lives only in `<media:content>` still
-  isn't detected — the `reader` library keeps standard `<enclosure>` elements but
-  drops media:content, so it never reaches the entry object. Supporting it would
-  need re-parsing the raw feed (or a reader-layer change); deferred as a separate,
-  larger effort.
+- ~~**media:content audio**~~ — DONE. The `reader` library drops
+  `<media:content>` / `<media:group>`, so audio that lives only there never
+  reached the entry. `services/podcast_audio.py` re-parses the raw feed with
+  feedparser (which surfaces media:content) and extracts a per-entry audio URL.
+  `_resolve_entry_audio_url` consults a cache (`entry_media_audio`); on a miss for
+  a feed whose scan is due (`feed_media_scan` tracks last-scan time + whether
+  audio was found, with a short TTL for podcast feeds and a long one for feeds
+  with none) it enqueues a background SSRF-guarded re-parse, so the article open
+  never blocks and the player fills in on a later open. Used by the article view
+  and both `/entries/media/*` routes. Tests:
+  `tests/services/test_podcast_audio.py`,
+  `tests/integration/test_media_audio_fallback.py`.
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 
