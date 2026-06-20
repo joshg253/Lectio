@@ -3426,6 +3426,20 @@ body[data-keyboard-open="1"] .action-modal-panel {
   opacity: 0.75;
 }
 
+.action-modal-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
+.action-modal-checkbox input {
+  margin: 0;
+}
+
 .action-modal-hint {
   font-size: 0.82rem;
   color: var(--muted);
