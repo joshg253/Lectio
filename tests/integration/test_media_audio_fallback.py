@@ -167,6 +167,41 @@ def test_suggested_audio_feed_stored_when_no_media(configured, monkeypatch):
         assert main._get_suggested_audio_feed(conn, FEED) == "https://feeds.libsyn.com/21070/rss"
 
 
+def test_scan_persists_recovered_youtube_ids(configured, monkeypatch):
+    # The same raw-feed re-parse that finds audio also recovers stripped YouTube
+    # embeds; ids land in entry_media_video keyed by entry.
+    feed_bytes = (
+        '<?xml version="1.0"?>'
+        '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+        "<channel><title>T</title>"
+        '<item><guid>e1</guid><content:encoded><![CDATA['
+        '<figure class="wp-block-embed-youtube"><iframe '
+        'src="https://www.youtube.com/embed/weFUWLfaP28"></iframe></figure>'
+        "]]></content:encoded></item></channel></rss>"
+    ).encode()
+
+    class _Resp:
+        status_code = 200
+        content = feed_bytes
+
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed", lambda fu: "")
+    main._scan_feed_media_audio(FEED)
+    with main.get_meta_connection() as conn:
+        assert main._lookup_media_video(conn, FEED, "e1") == ["weFUWLfaP28"]
+        assert main._lookup_media_video(conn, FEED, "missing") is None  # not scanned
+
+
+def test_inject_recovered_youtube_embeds_rebuilds_player():
+    stored = ('<p>x</p><figure class="wp-block-embed is-provider-youtube">'
+              '<div class="wp-block-embed__wrapper"></div></figure>')
+    out = main._inject_recovered_youtube_embeds(stored, ["weFUWLfaP28"])
+    assert "youtube-nocookie.com/embed/weFUWLfaP28" in out
+    assert "wp-block-embed__wrapper" not in out
+    # No ids -> content unchanged.
+    assert main._inject_recovered_youtube_embeds(stored, []) == stored
+
+
 def test_discovery_fetches_with_browser_user_agent(configured, monkeypatch):
     # Buzzsprout/Libsyn host feeds and many episode pages sit behind Cloudflare,
     # which 403s the terse default UA. Discovery must use a browser UA so the

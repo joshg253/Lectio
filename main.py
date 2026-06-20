@@ -51,6 +51,7 @@ from services import podcast_feed_discovery
 from services import scraper_service
 from services import takeout_service
 from services import tenancy
+from services import youtube_embeds
 from services import url_guard
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
@@ -2200,6 +2201,21 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 audio_url TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        # Recovered YouTube embeds (feedparser strips the <iframe>, so a WP
+        # YouTube block reaches us as an empty figure). video_ids is a
+        # space-separated list in document order; '' means a YouTube embed was
+        # present but no id was recoverable (a cached negative). Populated by the
+        # same raw-feed re-parse as entry_media_audio.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_media_video (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                video_ids TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (feed_url, entry_id)
             )
             """
@@ -6024,6 +6040,18 @@ def _lookup_media_audio(conn: sqlite3.Connection, feed_url: str, entry_id: str) 
     return (row[0] or None) if row else None
 
 
+def _lookup_media_video(conn: sqlite3.Connection, feed_url: str, entry_id: str) -> list[str] | None:
+    """Recovered YouTube ids for an entry: ``None`` = not scanned yet, ``[]`` =
+    scanned but nothing recoverable, otherwise the ids in document order."""
+    row = conn.execute(
+        "SELECT video_ids FROM entry_media_video WHERE feed_url = ? AND entry_id = ?",
+        (feed_url, entry_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0] or "").split()
+
+
 def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
     """True if this feed has never been scanned for media:content audio, or its
     cadence TTL has elapsed."""
@@ -6047,14 +6075,26 @@ def _scan_feed_media_audio(feed_url: str) -> None:
     Runs in a background thread; the caller captures and re-binds tenancy. Best
     effort — a fetch/parse failure still records the scan attempt so we back off."""
     found_map: dict[str, str] = {}
+    raw_feed: bytes | None = None
     try:
         with httpx.Client(follow_redirects=False, timeout=8.0,
                           headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, feed_url)
         if resp.status_code == 200 and resp.content:
-            found_map = podcast_audio.extract_media_audio(resp.content)
+            raw_feed = resp.content
+            found_map = podcast_audio.extract_media_audio(raw_feed)
     except Exception:
         LOGGER.debug("media:content scan failed for %s", feed_url, exc_info=True)
+
+    # The same raw feed also carries any YouTube embeds that feedparser/reader
+    # stripped from the stored content (the <iframe>, and thus the video id, is
+    # gone). Recover them here so the pane can rebuild the player.
+    video_map: dict[str, list[str]] = {}
+    if raw_feed is not None:
+        try:
+            video_map = youtube_embeds.extract_youtube_embeds(raw_feed)
+        except Exception:
+            LOGGER.debug("youtube-embed scan failed for %s", feed_url, exc_info=True)
 
     # When the feed carries no audio of its own, the audio often lives in a
     # separate podcast-host feed (Libsyn/Buzzsprout/…) referenced on the episode
@@ -6082,6 +6122,12 @@ def _scan_feed_media_audio(feed_url: str) -> None:
                 "INSERT INTO entry_media_audio (feed_url, entry_id, audio_url) VALUES (?, ?, ?)"
                 " ON CONFLICT(feed_url, entry_id) DO UPDATE SET audio_url = excluded.audio_url",
                 (feed_url, entry_id, audio_url),
+            )
+        for entry_id, vids in video_map.items():
+            conn.execute(
+                "INSERT INTO entry_media_video (feed_url, entry_id, video_ids) VALUES (?, ?, ?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET video_ids = excluded.video_ids",
+                (feed_url, entry_id, " ".join(vids)),
             )
         conn.execute(
             "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed, ok)"
@@ -7735,6 +7781,32 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+_YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
+
+
+def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) -> str:
+    """Replace stripped WordPress YouTube embed figures with real players.
+
+    feedparser removes the embed ``<iframe>``, leaving an empty
+    ``<figure class="wp-block-embed ... is-provider-youtube">``. Replace each such
+    figure, in document order, with the player for the matching recovered video
+    id. Figures past the end of ``video_ids`` are left untouched."""
+    if not video_ids:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    figures = [
+        fig for fig in soup.find_all("figure")
+        if _YT_EMBED_FIGURE_CLASS_RE.search(" ".join(fig.get("class", [])))
+    ]
+    if not figures:
+        return content_html
+    for fig, vid in zip(figures, video_ids):
+        fig.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
+    return str(soup)
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7844,6 +7916,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 content_html,
                 flags=re.IGNORECASE,
             )
+
+        # Recover stripped YouTube embeds — feedparser removes the <iframe> from
+        # WordPress YouTube blocks, leaving an empty figure with the video id
+        # gone. Re-parse of the raw feed (sanitize off) caches the ids; inject
+        # the player when cached, else queue a scan so it fills in next open.
+        if isinstance(content_html, str) and _YT_EMBED_FIGURE_CLASS_RE.search(content_html):
+            with get_meta_connection() as _vconn:
+                _vids = _lookup_media_video(_vconn, feed_url, entry_id)
+            if _vids:
+                content_html = _inject_recovered_youtube_embeds(content_html, _vids)
+            elif _vids is None:
+                # Not scanned yet — force a scan (bypasses the audio TTL so a new
+                # post's embed isn't held back by a long no-audio backoff).
+                _queue_media_audio_scan(feed_url)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
