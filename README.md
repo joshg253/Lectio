@@ -33,6 +33,9 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 
 </details>
 
+<sub>Screenshots are regenerated from synthetic demo data (no real feeds) with
+`make screenshots` — see [scripts/refresh_screenshots.py](scripts/refresh_screenshots.py).</sub>
+
 ---
 
 ## Feature highlights
