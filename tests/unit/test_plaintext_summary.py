@@ -46,3 +46,51 @@ def test_html_is_escaped_no_injection():
     assert "<script>" not in out
     assert "&lt;script&gt;" in out
     assert '<a href="https://x.test"' in out
+
+
+def test_bare_image_url_becomes_img():
+    out = main._promote_plaintext_summary("https://i.ibb.co/abc/pic.jpg&lt;br&gt;caption")
+    assert '<img src="https://i.ibb.co/abc/pic.jpg"' in out
+    assert 'referrerpolicy="no-referrer"' in out
+    # An image URL is NOT also wrapped in an anchor.
+    assert "<a href=\"https://i.ibb.co/abc/pic.jpg\"" not in out
+
+
+@pytest.mark.parametrize("ext", ["png", "JPG", "jpeg", "gif", "webp"])
+def test_image_extensions_detected(ext):
+    out = main._promote_plaintext_summary(f"art: https://h.test/a.{ext}")
+    assert f'<img src="https://h.test/a.{ext}"' in out
+
+
+def test_double_escaped_ampersands_collapse_to_single():
+    # orpheus.network double-escapes & in URLs (&amp;amp;); the link must end up
+    # with a single &amp; (a valid href that decodes to one '&'), not amp;amp;.
+    out = main._promote_plaintext_summary(
+        "https://o.test/x.php?a=1&amp;amp;b=2 more"
+    )
+    assert "href=\"https://o.test/x.php?a=1&amp;b=2\"" in out
+    assert "&amp;amp;" not in out
+
+
+def test_excessive_break_runs_are_collapsed():
+    # Each break paired with a newline shouldn't produce 4+ <br> in a row.
+    out = main._promote_plaintext_summary("a&lt;br&gt;\n&lt;br&gt;\nb")
+    assert "<br><br><br>" not in out
+
+
+def test_looks_like_escaped_plaintext_detects_mislabeled_html():
+    # Content declared text/html but actually escaped plain text (orpheus.network).
+    assert main._looks_like_escaped_plaintext(
+        "https://x.test/a.jpg&lt;br&gt;hello&lt;br&gt;world"
+    ) is True
+
+
+def test_looks_like_escaped_plaintext_rejects_real_html():
+    assert main._looks_like_escaped_plaintext("<p>real</p><br>more") is False
+    # Real HTML that also happens to contain an escaped marker is left alone.
+    assert main._looks_like_escaped_plaintext("<div>x</div> &lt;br&gt;") is False
+
+
+@pytest.mark.parametrize("value", [None, "", "just text, no breaks"])
+def test_looks_like_escaped_plaintext_negative(value):
+    assert main._looks_like_escaped_plaintext(value) is False
