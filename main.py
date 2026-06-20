@@ -5920,6 +5920,41 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+# WordPress "rss_footer" boilerplate appended to feed content: "The post <title>
+# appeared first on <site>." Plugins add near-duplicate variants ("first appeared
+# on") and some double-encode the wrapping <p> (so the reader shows literal
+# "<p>...</p>" text). Match the paragraph text tolerantly of leading/trailing
+# literal p-tags, anchored on "The post … appeared … on …".
+_WP_POST_FOOTER_RE = re.compile(
+    r'^\s*(?:</?p>\s*)*The post\b.*?\b(?:first appeared|appeared first)\s+on\b.*?\.\s*(?:</?p>\s*)*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_wp_post_footer(content_html: str) -> str:
+    """Remove trailing WordPress "The post … appeared … on …" footer paragraphs.
+
+    Generic boilerplate (Inoreader shows it too); appears on every post and is
+    pure self-link spam. Only trailing <p> blocks are considered, stopping at the
+    first non-matching one, so real content is never touched."""
+    if "appeared" not in content_html.lower():
+        return content_html  # cheap guard
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    paras = soup.find_all("p")
+    changed = False
+    for p in reversed(paras):
+        if p.parent is None:
+            continue
+        if _WP_POST_FOOTER_RE.match(p.get_text(" ", strip=True)):
+            p.decompose()
+            changed = True
+        else:
+            break  # stop at the first non-footer paragraph from the end
+    return str(soup) if changed else content_html
+
+
 _AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
 
 
@@ -7842,6 +7877,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # <audio controls> element so it works in the reader.
         if isinstance(content_html, str) and "kg-audio-card" in content_html:
             content_html = _transform_kg_audio_cards(content_html)
+
+        # Strip WordPress "The post … appeared first on …" footer boilerplate
+        # (often duplicated by plugins; some double-encode it into literal "<p>"
+        # text). Generic across feeds.
+        if isinstance(content_html, str):
+            content_html = _strip_wp_post_footer(content_html)
 
         # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
         # replacing them with the literal text "<strong>iframe</strong>" inside a
