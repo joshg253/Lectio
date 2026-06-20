@@ -206,11 +206,13 @@ list) are both **done**. Follow-ups all resolved:
   size/crop it like other thumbs, and decide caching (SVG is text, not a wixmp-style
   binary). Scope safely (no scripts in SVG).
 - ~~**Favicon fallback for feeds Google's service can't resolve**~~ — DONE. `/api/favicon` resolves icons via Google → `/favicon.ico` → SVG placeholder, with img-cache caching.
-- ~~**Email Article → contacts picker**~~ — DONE. The Email Article dialog's "To"
-  field is now an `<input list>` backed by a `<datalist>` populated from the saved
-  contacts (Settings → Contacts), so it autocompletes known addresses while still
-  accepting any free-typed address. Template-only change in `templates/index.html`
-  (`email_contacts` is already in the page context).
+- ~~**Email Article → contacts picker**~~ — DONE. The Email Article dialog gained a
+  "choose a saved contact" `<select>` (the default address + Settings → Contacts)
+  that fills the free-text "To" field, which still accepts any typed address. A
+  `<datalist>` was tried first but browsers filter its suggestions by the input's
+  pre-filled value, so it showed nothing until cleared — a real select matches the
+  rule-editor pattern and the user's expectation. Template-only change in
+  `templates/index.html` (`email_contacts` / `email_to_default` already in context).
 - **Automated screenshot refresh** — script (Playwright or similar) to regenerate
   the README/docs screenshots on demand. Must run against sanitized/demo data —
   exclude private feeds (e.g. torrent trackers) so nothing sensitive lands in
