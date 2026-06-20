@@ -267,6 +267,14 @@ CHUNK_SIZE = 10
 FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
 FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
+# Podcast-host feeds (Buzzsprout, Libsyn, …) and many episode pages sit behind
+# Cloudflare, which 403s the terse READABILITY_USER_AGENT (its "localhost" URL
+# reads as a bot). Use a real browser UA for those outbound podcast fetches so
+# audio discovery/borrowing isn't silently blocked.
+PODCAST_FETCH_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 # In-memory cache of domains known to have Cross-Origin-Resource-Policy restrictions.
 # Values: True = same-site/same-origin (proxy needed), False = no restriction.
 _CORP_DOMAIN_CACHE: dict[str, bool] = {}
@@ -6074,7 +6082,7 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
         if not link or not url_guard.is_safe_outbound_url(link):
             return ""
         with httpx.Client(follow_redirects=False, timeout=8.0,
-                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                          headers={"User-Agent": PODCAST_FETCH_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, link)
         if resp.status_code != 200 or not resp.text:
             return ""
@@ -6104,7 +6112,7 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
         if not titles or not url_guard.is_safe_outbound_url(host_feed_url):
             return {}
         with httpx.Client(follow_redirects=False, timeout=10.0,
-                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                          headers={"User-Agent": PODCAST_FETCH_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, host_feed_url)
         if resp.status_code != 200 or not resp.content:
             return {}
