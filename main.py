@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Sequence, cast
-from urllib.parse import parse_qs, quote, quote_plus, urlencode, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urlparse
 
 import feedparser
 import httpx
@@ -5922,6 +5922,72 @@ def _find_entry_audio_url(entry) -> str | None:
     return None
 
 
+def _format_enclosure_size(length) -> str:
+    """Render an enclosure ``length`` (bytes) as a short human label, or ''.
+
+    Feeds often set a placeholder length (e.g. ``1024``) when the real size is
+    unknown, so anything under ~2 KB is treated as meaningless and dropped.
+    """
+    try:
+        size = int(length)
+    except (TypeError, ValueError):
+        return ""
+    if size < 2048:
+        return ""
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024.0
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return ""
+
+
+def _enclosure_label(enc_url: str, enc_type: str) -> str:
+    """Friendly label for a download link: the file name, else the MIME type."""
+    name = unquote(urlparse(enc_url).path.rsplit("/", 1)[-1]).strip()
+    if name:
+        return name
+    return enc_type or "attachment"
+
+
+def _render_entry_attachments(entry, audio_url: str | None) -> str:
+    """Render a footer "Attachments" section for non-audio enclosures.
+
+    Magazine/document feeds (e.g. Full Circle) attach the issue PDF/EPUB as
+    ``<enclosure>`` elements that never appear in the article body. The audio
+    enclosure (if any) is already surfaced as a player, so it's skipped here to
+    avoid a duplicate link.
+    """
+    seen: set[str] = set()
+    items: list[str] = []
+    for enc in (getattr(entry, "enclosures", None) or []):
+        enc_url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+        if not enc_url or enc_url in seen:
+            continue
+        enc_type = (getattr(enc, "type", None) or "").lower()
+        if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
+            continue  # surfaced as the audio player
+        if audio_url and enc_url == audio_url:
+            continue
+        seen.add(enc_url)
+        label = html.escape(_enclosure_label(enc_url, enc_type))
+        size = _format_enclosure_size(getattr(enc, "length", None))
+        meta = f" <span style=\"color:var(--muted,#888);\">({size})</span>" if size else ""
+        safe_url = html.escape(enc_url, quote=True)
+        items.append(
+            f'<li><a href="{safe_url}" target="_blank" rel="noopener noreferrer" download>'
+            f'{label}</a>{meta}</li>'
+        )
+    if not items:
+        return ""
+    return (
+        '<div class="entry-attachments" style="margin:1.5em 0 0.5em; '
+        'padding-top:0.75em; border-top:1px solid var(--border,#ddd);">'
+        '<div style="font-weight:600; margin-bottom:0.35em;">Attachments</div>'
+        f'<ul style="margin:0; padding-left:1.25em;">{"".join(items)}</ul>'
+        '</div>'
+    )
+
+
 # media:content scan cadence: rescan podcast feeds (audio found) often enough to
 # catch new episodes; barely ever rescan feeds that had none.
 _MEDIA_SCAN_TTL_FOUND = 6 * 3600
@@ -7796,6 +7862,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 f'</div>'
             )
             content_html = _audio_player + (content_html or "")
+
+        # Footer attachments — non-audio enclosures (magazine PDFs, EPUBs, etc.)
+        # that never appear in the article body. The audio enclosure, if any, is
+        # already shown as a player above, so it's excluded here.
+        _attachments_html = _render_entry_attachments(entry, _audio_url)
+        if _attachments_html:
+            content_html = (content_html or "") + _attachments_html
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         feed_tag_suggestions = get_feed_tag_suggestions(
