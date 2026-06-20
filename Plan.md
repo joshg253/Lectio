@@ -224,10 +224,14 @@ list) are both **done**. Follow-ups all resolved:
   a no-reply sending domain). Template + `/entries/email` route +
   `send_article_email` `reply_to` param. Test:
   `tests/integration/test_email_route.py`.
-- **Automated screenshot refresh** — script (Playwright or similar) to regenerate
-  the README/docs screenshots on demand. Must run against sanitized/demo data —
-  exclude private feeds (e.g. torrent trackers) so nothing sensitive lands in
-  committed images.
+- ~~**Automated screenshot refresh**~~ — DONE. `scripts/refresh_screenshots.py`
+  (`make screenshots`, Playwright via the `screenshots` extra) spins up a
+  throwaway single-user Lectio over a temp data dir seeded with fully-synthetic
+  demo feeds — `scripts/screenshots/` generates local RSS with inline-SVG art and
+  seeds a realistic read/saved/tagged state plus a couple of automation rules —
+  then captures the seven README shots. Hermetic and privacy-safe: no real feed is
+  ever fetched, so nothing private (e.g. torrent trackers) can land in a committed
+  image. Deterministic (fixed demo-feed port, no live network).
 - ~~**Push (WebSub) indicator**~~ — DONE. ⚡ glyph next to feed names in sidebar
   and Settings → Feeds for feeds with a verified active WebSub subscription
   (`verified=1 AND hub_url IS NOT NULL`). One query per page render into a `set`.
