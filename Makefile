@@ -1,7 +1,7 @@
 # Development helpers that use `uv` as the preferred runner.
 UV_CACHE_DIR=.uvcache
 
-.PHONY: lint types run test audit
+.PHONY: lint types run test audit screenshots
 
 lint:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff check .
@@ -22,3 +22,8 @@ test:
 # separate from `test` (a preview-tool change shouldn't break local test runs).
 audit:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv audit --preview-features audit --frozen
+
+# Regenerate docs/screenshots from synthetic demo data (no live feeds). Needs the
+# screenshots extra: `uv sync --extra screenshots && uv run playwright install chromium`.
+screenshots:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/refresh_screenshots.py
