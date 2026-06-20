@@ -269,10 +269,14 @@ CHUNK_SIZE = 10
 FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
 FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
-# Podcast-host feeds (Buzzsprout, Libsyn, …) and many episode pages sit behind
-# Cloudflare, which 403s the terse READABILITY_USER_AGENT (its "localhost" URL
-# reads as a bot). Use a real browser UA for those outbound podcast fetches so
-# audio discovery/borrowing isn't silently blocked.
+# Honest identifier for outbound fetches — names the app and links to the repo,
+# the good-citizen behavior some hosts (e.g. rachelbythebay.com) explicitly
+# reward. This is the DEFAULT for podcast discovery/borrow fetches.
+LECTIO_HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
+# Some podcast-host feeds (Buzzsprout, Libsyn, …) sit behind Cloudflare, which
+# 403s any non-browser UA. We escalate to this browser UA ONLY after the honest
+# request is actually refused (see _polite_safe_get) — never preemptively, so we
+# don't spoof hosts that are happy to serve Lectio.
 PODCAST_FETCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -6141,6 +6145,24 @@ def _scan_feed_media_audio(feed_url: str) -> None:
         conn.commit()
 
 
+def _polite_safe_get(url: str, *, timeout: float):
+    """SSRF-safe GET that identifies honestly as Lectio, escalating to a browser
+    UA only if the honest request is actually refused (HTTP 403).
+
+    Honest-by-default keeps us a good citizen for hosts that reward it (and never
+    spoofs a host that's happy to serve Lectio); the browser-UA fallback is a
+    last resort for Cloudflare-gated podcast hosts that blanket-403 non-browsers.
+    Returns the final response (caller checks status)."""
+    resp = None
+    for ua in (LECTIO_HONEST_USER_AGENT, PODCAST_FETCH_USER_AGENT):
+        with httpx.Client(follow_redirects=False, timeout=timeout,
+                          headers={"User-Agent": ua}) as client:
+            resp = url_guard.safe_get(client, url)
+        if resp.status_code != 403:
+            break  # served (or a non-403 error) — don't escalate
+    return resp
+
+
 def _discover_suggested_audio_feed(feed_url: str) -> str:
     """Fetch a recent entry's page and look for a podcast-host audio feed.
 
@@ -6156,9 +6178,7 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
                     break
         if not link or not url_guard.is_safe_outbound_url(link):
             return ""
-        with httpx.Client(follow_redirects=False, timeout=8.0,
-                          headers={"User-Agent": PODCAST_FETCH_USER_AGENT}) as client:
-            resp = url_guard.safe_get(client, link)
+        resp = _polite_safe_get(link, timeout=8.0)
         if resp.status_code != 200 or not resp.text:
             return ""
         found = podcast_feed_discovery.find_podcast_host_feed(resp.text) or ""
@@ -6191,9 +6211,7 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
             }
         if not titles or not url_guard.is_safe_outbound_url(host_feed_url):
             return {}
-        with httpx.Client(follow_redirects=False, timeout=10.0,
-                          headers={"User-Agent": PODCAST_FETCH_USER_AGENT}) as client:
-            resp = url_guard.safe_get(client, host_feed_url)
+        resp = _polite_safe_get(host_feed_url, timeout=10.0)
         if resp.status_code != 200 or not resp.content:
             return None
         return podcast_feed_discovery.match_episode_audio(resp.content, titles)
