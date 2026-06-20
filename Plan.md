@@ -237,7 +237,7 @@ list) are both **done**. Follow-ups all resolved:
   RESOLVED. `_derive_article_lead_image` now only consults the inline/media/cache
   extractors (`include_source_lookup=False`), so it never fetches on the request
   thread. The cache-miss source-page fetch is queued in the background
-  (`queue_source_fetch`) with a 0.8s best-effort cap wait so fast-responding sites
+  (`queue_source_fetch`) with a 0.8s best-effort cap wait, so fast-responding sites
   still fill the image on first open; when it doesn't land in time, the entry is
   marked `pending_lead_image`, the template emits `data-lead-image-pending`
   (`_entry_pane.html:358`), and the client polls `/entries/lead-image`
