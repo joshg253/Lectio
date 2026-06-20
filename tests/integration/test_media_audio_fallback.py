@@ -202,17 +202,15 @@ def test_inject_recovered_youtube_embeds_rebuilds_player():
     assert main._inject_recovered_youtube_embeds(stored, []) == stored
 
 
-def test_discovery_fetches_with_browser_user_agent(configured, monkeypatch):
-    # Buzzsprout/Libsyn host feeds and many episode pages sit behind Cloudflare,
-    # which 403s the terse default UA. Discovery must use a browser UA so the
-    # episode-page fetch isn't silently blocked.
+def _capture_uas(monkeypatch):
+    """Record the User-Agent of each outbound client; return the list."""
     import contextlib
 
-    captured = {}
+    uas: list = []
 
     class _FakeClient:
         def __init__(self, *a, headers=None, **kw):
-            captured["ua"] = (headers or {}).get("User-Agent")
+            uas.append((headers or {}).get("User-Agent"))
         def __enter__(self):
             return self
         def __exit__(self, *a):
@@ -224,19 +222,40 @@ def test_discovery_fetches_with_browser_user_agent(configured, monkeypatch):
             get_entries=lambda **kw: [SimpleNamespace(link="https://ep.test/1")]
         )
 
-    class _Resp:
-        status_code = 200
-        text = "<html>https://feeds.buzzsprout.com/1501960.rss</html>"
-
     monkeypatch.setattr(main, "get_reader", _fake_reader)
     monkeypatch.setattr(main.httpx, "Client", _FakeClient)
     monkeypatch.setattr(main.url_guard, "is_safe_outbound_url", lambda url: True)
-    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+    return uas
 
+
+def test_discovery_uses_honest_ua_by_default(configured, monkeypatch):
+    # Good-citizen behavior: identify honestly as Lectio; do NOT spoof a browser
+    # UA for hosts that serve us fine (e.g. rachelbythebay.com).
+    uas = _capture_uas(monkeypatch)
+
+    class _Ok:
+        status_code = 200
+        text = "<html>https://feeds.buzzsprout.com/1501960.rss</html>"
+
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Ok())
     found = main._discover_suggested_audio_feed(FEED)
     assert found == "https://feeds.buzzsprout.com/1501960.rss"
-    assert captured["ua"] == main.PODCAST_FETCH_USER_AGENT
-    assert "Mozilla/" in captured["ua"]
+    assert uas == [main.LECTIO_HONEST_USER_AGENT]  # honest only, no escalation
+
+
+def test_discovery_escalates_to_browser_ua_only_on_403(configured, monkeypatch):
+    # Cloudflare-gated host: the honest request is 403'd, so escalate to a browser
+    # UA — a last resort, never preemptive.
+    uas = _capture_uas(monkeypatch)
+    responses = [
+        SimpleNamespace(status_code=403, text="blocked", content=b"blocked"),
+        SimpleNamespace(status_code=200, text="<html>https://feeds.buzzsprout.com/1.rss</html>"),
+    ]
+    monkeypatch.setattr(main.url_guard, "safe_get",
+                        lambda client, url, **kw: responses.pop(0))
+    found = main._discover_suggested_audio_feed(FEED)
+    assert found == "https://feeds.buzzsprout.com/1.rss"
+    assert uas == [main.LECTIO_HONEST_USER_AGENT, main.PODCAST_FETCH_USER_AGENT]
 
 
 def test_is_feed_subscribed(configured):
