@@ -111,6 +111,35 @@ def test_queued_source_fetch_persists_under_the_requesting_user(configured):
     assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []
 
 
+def test_queued_source_fetch_does_not_persist_a_none_result(configured):
+    """A None from the interactive on-open source fetch is ambiguous — a transient
+    network failure is indistinguishable from a genuine "no image". Persisting it
+    would cement a momentary miss as a permanent negative and blank a thumbnail the
+    feed actually has (regression: Standard Ebooks covers vanished after opening an
+    entry whose page fetch transiently failed). The entry must stay unresolved so
+    the background backfill and the next open can still recover the image."""
+    def get_meta_connection():
+        return _make_meta(tenancy.meta_db_path())
+
+    svc = LeadImageService(
+        get_meta_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx([]),
+        user_agent="test",
+        extract_video_id=lambda link: None,
+    )
+    svc._fetch_source_lead_image = lambda link, **kw: None  # type: ignore[method-assign]
+    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]
+
+    feed, entry = "https://alice.example/feed", "e1"
+    with tenancy.user_context("alice"):
+        svc.queue_source_fetch(feed, entry, "https://alice.example/post")
+        assert svc.wait_for_source_fetch(feed, entry, timeout=5.0)
+
+    # Nothing persisted — the entry stays absent rather than a stored negative.
+    assert _rows(tenancy.meta_db_path("alice")) == []
+    assert (feed, entry) not in svc._cache
+
+
 def test_chunk_backfill_persists_under_the_active_user(configured):
     """The chunk-level visible-entry backfill (backfill_entry_list) must persist
     under whatever tenancy user is active when it runs.  The home route spawns it

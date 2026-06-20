@@ -284,6 +284,7 @@ DeviantArt's legacy `backend.deviantart.com/rss.xml` is behind a CloudFront WAF 
 - **Add = Watch** — while connected, adding a `deviantart.com/<user>` URL Watches that artist on DeviantArt (it then appears in the Watch feed) rather than creating a per-artist feed.
 - **Images** — deviations carry stable (non-expiring) signed `wixmp.com` image URLs. DA feeds are pinned to the `inline` strategy so the article lead image and list thumbnail derive statelessly from the embedded content image (no source-page scrape, nothing to clobber). `wixmp.com` is trusted in `_is_image_url_acceptable` (its long auto-generated filenames/UUIDs otherwise trip the avatar/ad heuristics) and routed through `/api/img`.
 - The lead-image cache reads through to its DB table on a miss, so stored images survive restarts (the in-memory cache is seeded once under the default tenancy and otherwise warms lazily).
+- The interactive on-open `queue_source_fetch` persists **only a positive result**. A `None` is ambiguous — a transient page-fetch failure is indistinguishable from a genuine "no image" — and this path runs once per opened entry with no retry, so storing `None` would cement a momentary miss as a permanent negative and blank a thumbnail the feed actually has (e.g. a Standard Ebooks cover, which lives in `media:thumbnail` and resolves via the page's `og:image`). Negative-recording is left to the background backfill, which retries on its own schedule.
 
 ## Duplicate entry suppression
 
