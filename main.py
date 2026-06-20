@@ -46,6 +46,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from services import deviantart as deviantart_service
 from services import passwords
+from services import podcast_audio
 from services import scraper_service
 from services import takeout_service
 from services import tenancy
@@ -2179,6 +2180,29 @@ def ensure_meta_schema() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS feed_fetch_history_by_feed"
             " ON feed_fetch_history (feed_url, fetched_at DESC)"
+        )
+        # Recovered media:content podcast audio (reader drops media:content, so we
+        # re-parse the raw feed on demand). entry_media_audio holds per-entry audio
+        # URLs found; feed_media_scan tracks when a feed was last scanned (and
+        # whether any audio was found) so we don't re-fetch non-podcast feeds.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_media_audio (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                audio_url TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_media_scan (
+                feed_url TEXT PRIMARY KEY,
+                scanned_at REAL NOT NULL,
+                found INTEGER NOT NULL DEFAULT 0
+            )
+            """
         )
         conn.execute(
             """
@@ -5890,6 +5914,102 @@ def _find_entry_audio_url(entry) -> str | None:
     return None
 
 
+# media:content scan cadence: rescan podcast feeds (audio found) often enough to
+# catch new episodes; barely ever rescan feeds that had none.
+_MEDIA_SCAN_TTL_FOUND = 6 * 3600
+_MEDIA_SCAN_TTL_EMPTY = 7 * 24 * 3600
+_media_scan_in_progress: set[tuple[str, str]] = set()
+_media_scan_lock = threading.Lock()
+
+
+def _lookup_media_audio(conn: sqlite3.Connection, feed_url: str, entry_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT audio_url FROM entry_media_audio WHERE feed_url = ? AND entry_id = ?",
+        (feed_url, entry_id),
+    ).fetchone()
+    return (row[0] or None) if row else None
+
+
+def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
+    """True if this feed has never been scanned for media:content audio, or its
+    cadence TTL has elapsed."""
+    row = conn.execute(
+        "SELECT scanned_at, found FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
+    ).fetchone()
+    if not row:
+        return True
+    ttl = _MEDIA_SCAN_TTL_FOUND if row[1] else _MEDIA_SCAN_TTL_EMPTY
+    return (time.time() - float(row[0])) > ttl
+
+
+def _scan_feed_media_audio(feed_url: str) -> None:
+    """Fetch the raw feed (SSRF-guarded) and persist any media:content audio URLs.
+
+    Runs in a background thread; the caller captures and re-binds tenancy. Best
+    effort — a fetch/parse failure still records the scan attempt so we back off."""
+    found_map: dict[str, str] = {}
+    try:
+        with httpx.Client(follow_redirects=False, timeout=8.0,
+                          headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, feed_url)
+        if resp.status_code == 200 and resp.content:
+            found_map = podcast_audio.extract_media_audio(resp.content)
+    except Exception:
+        LOGGER.debug("media:content scan failed for %s", feed_url, exc_info=True)
+    with get_meta_connection() as conn:
+        for entry_id, audio_url in found_map.items():
+            conn.execute(
+                "INSERT INTO entry_media_audio (feed_url, entry_id, audio_url) VALUES (?, ?, ?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET audio_url = excluded.audio_url",
+                (feed_url, entry_id, audio_url),
+            )
+        conn.execute(
+            "INSERT INTO feed_media_scan (feed_url, scanned_at, found) VALUES (?, ?, ?)"
+            " ON CONFLICT(feed_url) DO UPDATE SET scanned_at = excluded.scanned_at, found = excluded.found",
+            (feed_url, time.time(), 1 if found_map else 0),
+        )
+        conn.commit()
+
+
+def _queue_media_audio_scan(feed_url: str) -> None:
+    """Background-scan a feed for media:content audio (deduped, tenancy-bound)."""
+    uid = tenancy.current_user_id()
+    key = (uid, feed_url)
+    with _media_scan_lock:
+        if key in _media_scan_in_progress:
+            return
+        _media_scan_in_progress.add(key)
+
+    def _bg() -> None:
+        try:
+            with tenancy.user_context(uid):
+                _scan_feed_media_audio(feed_url)
+        finally:
+            with _media_scan_lock:
+                _media_scan_in_progress.discard(key)
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
+def _resolve_entry_audio_url(
+    conn: sqlite3.Connection, feed_url: str, entry_id: str, entry,
+) -> str | None:
+    """Standard enclosure/link audio detection, with a media:content fallback.
+
+    The fallback is cached per entry; on a cache miss for a feed that's due a
+    scan, a background re-parse is enqueued (so the article open never blocks)
+    and the player fills in on a later open."""
+    direct = _find_entry_audio_url(entry)
+    if direct:
+        return direct
+    cached = _lookup_media_audio(conn, feed_url, entry_id)
+    if cached:
+        return cached
+    if _media_scan_due(conn, feed_url):
+        _queue_media_audio_scan(feed_url)
+    return None
+
+
 def _transform_kg_audio_cards(content_html: str) -> str:
     """Replace Ghost CMS kg-audio-card widgets with plain <audio controls> elements.
 
@@ -7513,7 +7633,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # audio enclosure when the content doesn't already have an <audio> tag.
         # Point the player at /entries/media/audio so signed URLs that have
         # expired are automatically refreshed server-side before redirect.
-        _audio_url: str | None = _find_entry_audio_url(entry)
+        # _resolve_* adds the media:content fallback (cached; scans in background).
+        with get_meta_connection() as _mconn:
+            _audio_url: str | None = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
         if _audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
             _safe_feed_url = quote_plus(feed_url)
             _safe_entry_id = quote_plus(entry_id)
@@ -9278,7 +9400,8 @@ def media_audio_redirect(feed_url: str, entry_id: str):
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
             raise HTTPException(status_code=404, detail="Entry not found")
-        audio_url = _find_entry_audio_url(entry)
+        with get_meta_connection() as _mconn:
+            audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
         if not audio_url:
             raise HTTPException(status_code=404, detail="No audio enclosure found")
 
@@ -9318,7 +9441,8 @@ def media_audio_download(feed_url: str, entry_id: str):
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
             raise HTTPException(status_code=404, detail="Entry not found")
-        audio_url = _find_entry_audio_url(entry)
+        with get_meta_connection() as _mconn:
+            audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
         if not audio_url:
             raise HTTPException(status_code=404, detail="No audio enclosure found")
         entry_title = str(entry.title or "audio")
