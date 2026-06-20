@@ -375,6 +375,18 @@
       <p class="entry-image-title-text">{{ selected_entry.image_title_text }}</p>
       {% endif %}
       {% endif %}
+      {% if selected_entry.audio_feed_suggestion %}
+      <div class="audio-feed-suggestion">
+        <span class="audio-feed-suggestion-icon" aria-hidden="true">🎧</span>
+        <span class="audio-feed-suggestion-text">This podcast’s audio is published in a separate feed.</span>
+        <form method="post" action="/feeds" style="margin:0">
+          {{ csrf_input(request) | safe }}
+          <input type="hidden" name="feed_url" value="{{ selected_entry.audio_feed_suggestion }}" />
+          <input type="hidden" name="folder_id" value="{{ entry_feed_folder_id }}" />
+          <button type="submit" class="audio-feed-suggestion-btn">Subscribe to the audio feed</button>
+        </form>
+      </div>
+      {% endif %}
       {% if selected_entry.content_html %}
       <div class="entry-content">{{ selected_entry.content_html | safe }}</div>
       {% elif selected_entry.summary %}
