@@ -1246,7 +1246,13 @@
           placeholder="you@example.com"
           required
           autocomplete="email"
+          list="email-article-contacts"
         />
+        <datalist id="email-article-contacts">
+          {% for c in email_contacts or [] %}
+          <option value="{{ c.address }}"{% if c.label %} label="{{ c.label }}"{% endif %}></option>
+          {% endfor %}
+        </datalist>
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
           <button id="email-article-send" type="submit">Send</button>

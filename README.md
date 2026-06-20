@@ -72,6 +72,7 @@ The design priority is **speed of triage**: quickly marking things read, surfaci
 - **Mark as Read** — auto-marks matching entries at fetch time; scoped per feed, folder, or globally
 - **Deduplicate** — marks newer duplicates read across feeds; URL slug, title, slug+title, fuzzy, or safe match modes; results logged with per-article detail
 - **Email Article rules** — server-side rules that send matching articles via email (Resend); immediate or daily digest mode with Cc option
+- **Email Article dialog** — the "To" field autocompletes from your saved contacts (Settings → Contacts) while still accepting any address you type
 - All rules fire automatically at refresh time; manual "Run Now" available
 - **Quick rule from a post** — right-click a post title (in the list or the entry header) → Automation to open the rule editor with that feed pre-selected and the title pre-filled in the match field; right-click a feed name → Automation pre-selects that feed
 
