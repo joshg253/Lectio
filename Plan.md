@@ -233,15 +233,17 @@ list) are both **done**. Follow-ups all resolved:
   force-archives pending saves and WebSub-unsubscribes; dedup/upgrade now
   WebSub-unsubscribe the removed URL. Test:
   `tests/integration/test_feed_removal_consolidation.py`.
-- **`_derive_article_lead_image` runs synchronously on `/entries/pane`** —
-  opening an article can do a blocking outbound source-page fetch (plugin
-  fallbacks / source-page scrape, up to the 8–15s fetch timeout) on the request
-  thread (`main.py:7530`), so for feeds that need a source fetch the article pane
-  stalls for seconds. *(Partly addressed — see "Article-open DB-write
-  contention" in Recently Completed: the per-open meta writes are now
-  off-thread, so the dominant lock-wait stall is gone. The remaining piece is the
-  synchronous source-page **fetch** itself for cache-miss entries; precompute on
-  refresh or resolve fully in the background.)*
+- ~~**`_derive_article_lead_image` runs synchronously on `/entries/pane`**~~ —
+  RESOLVED. `_derive_article_lead_image` now only consults the inline/media/cache
+  extractors (`include_source_lookup=False`), so it never fetches on the request
+  thread. The cache-miss source-page fetch is queued in the background
+  (`queue_source_fetch`) with a 0.8s best-effort cap wait so fast-responding sites
+  still fill the image on first open; when it doesn't land in time, the entry is
+  marked `pending_lead_image`, the template emits `data-lead-image-pending`
+  (`_entry_pane.html:358`), and the client polls `/entries/lead-image`
+  (`index.html:5872`) to lazy-fill the image once the background fetch completes.
+  The earlier per-open meta-write contention was also moved off-thread (see
+  "Article-open DB-write contention" in Recently Completed).
 
 ### Later
 
