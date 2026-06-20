@@ -7323,6 +7323,29 @@ def _derive_article_lead_image(entry) -> str | None:
     return result or lead_image_service.extract_inline_svg_thumb_url(entry)
 _PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+# A bare URL that points straight at an image — rendered inline as <img> rather
+# than a link when it appears in a promoted plain-text summary. Trailing
+# punctuation is excluded by _BARE_URL_RE's character class already.
+_BARE_IMG_URL_RE = re.compile(r"\.(?:png|jpe?g|gif|webp|bmp|svg)$", re.IGNORECASE)
+
+
+# A real HTML tag (block or inline) — used to distinguish genuine HTML content
+# from plain text that a feed has merely escaped and mislabeled as text/html.
+_REAL_HTML_TAG_RE = re.compile(
+    r"<(?:p|div|br|a|img|ul|ol|li|table|tr|td|blockquote|pre|code|h[1-6]|span|strong|em|b|i)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_escaped_plaintext(value: str | None) -> bool:
+    """True when content declared as HTML is really escaped plain text: it carries
+    escaped break markers (``&lt;br&gt;``) but no actual HTML tags. Such feeds
+    (e.g. orpheus.network news) otherwise render as inert escaped text."""
+    if not value:
+        return False
+    if "&lt;br" not in value.lower():
+        return False
+    return not _REAL_HTML_TAG_RE.search(value)
 
 
 def _promote_plaintext_summary(summary: str | None) -> str | None:
@@ -7340,14 +7363,28 @@ def _promote_plaintext_summary(summary: str | None) -> str | None:
         return None
     if not _PLAINTEXT_PROMOTE_RE.search(summary):
         return None
-    # Collapse escaped/literal <br> to newlines, then treat the whole thing as
-    # plain text: escape it, restore newlines as <br>, and linkify bare URLs.
-    text = re.sub(r"&lt;br\s*/?\s*&gt;", "\n", summary, flags=re.IGNORECASE)
+    # Collapse escaped/literal <br> (possibly multiply-escaped, e.g. &amp;lt;br&amp;gt;)
+    # to newlines, then treat the whole thing as plain text.
+    text = re.sub(r"&(?:amp;)*lt;br\s*/?\s*&(?:amp;)*gt;", "\n", summary, flags=re.IGNORECASE)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    # These feeds escape inconsistently — break markers once but ampersands in
+    # URLs twice (&amp;amp;). Fully unescape (bounded) so URLs are correct, then
+    # re-escape exactly once below. Breaks are already newlines, so unescaping
+    # any remaining &lt;…&gt; just yields inert text we re-escape anyway.
+    for _ in range(3):
+        unescaped = html.unescape(text)
+        if unescaped == text:
+            break
+        text = unescaped
+    # Tame runs of blank lines (the feed pairs each <br> with a real newline).
+    text = re.sub(r"\n{3,}", "\n\n", text)
     escaped = html.escape(text)
 
     def _linkify(m: re.Match) -> str:
-        seg = m.group(0)  # already HTML-escaped
+        seg = m.group(0)  # already HTML-escaped; src/href-safe (no spaces/quotes)
+        if _BARE_IMG_URL_RE.search(html.unescape(seg)):
+            return (f'<img src="{seg}" alt="" loading="lazy" '
+                    f'referrerpolicy="no-referrer" style="max-width:100%;height:auto;">')
         return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
 
     escaped = _BARE_URL_RE.sub(_linkify, escaped)
@@ -7409,6 +7446,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # promoted summary benefits from it too.
         if not content_html:
             content_html = _promote_plaintext_summary(getattr(entry, "summary", None))
+        elif _looks_like_escaped_plaintext(content_html):
+            # Some feeds (e.g. orpheus.network news) declare their content as
+            # text/html but actually ship escaped plain text — literal
+            # ``&lt;br&gt;`` breaks, bare URLs, and double-escaped ``&amp;amp;``
+            # ampersands — so it renders as inert escaped text. Promote it the
+            # same way as a bare-text summary.
+            content_html = _promote_plaintext_summary(content_html) or content_html
 
         # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
         # of http://).  The reader library resolves these as relative paths, producing
