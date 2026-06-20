@@ -24,6 +24,8 @@
     .account-users { width: 100%; border-collapse: collapse; margin: .5rem 0; }
     .account-users th, .account-users td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid rgba(127,127,127,.25); }
     .account-hint { font-size: .82rem; opacity: .75; margin: .25rem 0; }
+    .account-users button.danger { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
+    .account-users td > div form { margin: 0; }
   </style>
 </head>
 <body class="account-page">
@@ -52,12 +54,20 @@
             <td>{{ u.db_human }}</td>
             <td>
               {% if u.user_id != user_id %}
-              <form method="post" action="/admin/users/disable" style="margin:0">
-                {{ csrf_input(request) | safe }}
-                <input type="hidden" name="user_id" value="{{ u.user_id }}" />
-                <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
-                <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
-              </form>
+              <div style="display:flex;gap:.4rem;align-items:center">
+                <form method="post" action="/admin/users/disable" style="margin:0">
+                  {{ csrf_input(request) | safe }}
+                  <input type="hidden" name="user_id" value="{{ u.user_id }}" />
+                  <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
+                  <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
+                </form>
+                <form method="post" action="/admin/users/delete" style="margin:0"
+                      onsubmit="return confirm('Permanently delete {{ u.username }} and ALL their feeds, folders, and saved articles? This cannot be undone.');">
+                  {{ csrf_input(request) | safe }}
+                  <input type="hidden" name="user_id" value="{{ u.user_id }}" />
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </div>
               {% else %}<span>—</span>{% endif %}
             </td>
           </tr>

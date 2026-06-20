@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -1894,6 +1895,22 @@ def provision_user_storage(user_id: str) -> None:
         # reader builds its own schema on first client(); opening provisions it.
         with get_reader():
             pass
+
+
+def delete_user_storage(user_id: str) -> None:
+    """Recursively remove a user's isolated data directory
+    (``DATA_DIR/users/<user_id>/`` and all its DBs). No-op for the default
+    (legacy top-level) user, whose files are never owned by a deletable account.
+
+    Content-addressed caches (thumbnails, image proxy, lead-image/strategy
+    results) are global and hold no per-user data, so they are intentionally
+    left untouched.
+    """
+    if user_id == tenancy.DEFAULT_USER_ID:
+        return
+    data_dir = tenancy.user_data_dir(user_id)
+    if data_dir.exists():
+        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 def _seed_admin_integrations_from_env(admin_id: str) -> None:
@@ -9807,6 +9824,34 @@ async def admin_disable_user(request: Request):
         return _account_redirect(error="No such user.")
     user_store.set_disabled(target_id, disabled)
     return _account_redirect(msg=f"{'Disabled' if disabled else 'Enabled'} {target['username']!r}.")
+
+
+@app.post("/admin/users/delete")
+async def admin_delete_user(request: Request):
+    """Permanently remove a user: drops the account row + GReader tokens and
+    deletes the user's isolated data directory. Admin-only; cannot delete your
+    own account or the last remaining admin."""
+    if not MULTI_USER or user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    target_id = str(form.get("user_id") or "")
+    if target_id == admin:
+        return _account_redirect(error="You cannot delete your own account.")
+    target = user_store.get_by_id(target_id)
+    if target is None:
+        return _account_redirect(error="No such user.")
+    if target["is_admin"] and user_store.count_admins() <= 1:
+        return _account_redirect(error="Cannot delete the last admin account.")
+    try:
+        delete_user_storage(target_id)
+        user_store.delete_user(target_id)
+    except Exception:
+        LOGGER.exception("admin delete user failed for %r", target_id)
+        return _account_redirect(error="Could not delete user (see server logs).")
+    return _account_redirect(msg=f"Deleted user {target['username']!r} and all their data.")
 
 
 @app.post("/admin/users/reset-password")

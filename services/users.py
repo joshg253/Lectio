@@ -244,6 +244,22 @@ class UserStore:
         with self._connect() as conn:
             conn.execute("UPDATE users SET disabled = ? WHERE user_id = ?", (1 if disabled else 0, user_id))
 
+    def delete_user(self, user_id: str) -> bool:
+        """Remove an account from the registry, dropping its row and any GReader
+        bearer tokens. Returns True if a row was deleted. This only touches the
+        global account DB — the caller is responsible for deleting the user's
+        isolated on-disk data (see ``delete_user_storage`` in main.py)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM greader_api_tokens WHERE user_id = ?", (user_id,))
+            cur = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            return cur.rowcount > 0
+
+    def count_admins(self) -> int:
+        """Number of enabled-or-disabled admin accounts. Used to refuse deleting
+        the last admin (which would lock everyone out of the admin page)."""
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0])
+
     # --- auth (inputs are typed usernames; outputs are stable user_ids) ---
 
     def verify_login(self, username: str, password: str,

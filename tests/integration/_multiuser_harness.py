@@ -249,6 +249,29 @@ def _scenario_account_ui() -> None:
         assert r.status_code == 303
         assert main.user_store.get_api_token(admin_id) != old_token
 
+        # Admin deletes a user → account row gone + isolated data dir removed.
+        tok = _csrf_token(client.get("/administration").text)
+        r = client.post("/admin/users/create",
+                        data={"_csrf": tok, "username": "tempuser", "password": "temp-pw"},
+                        follow_redirects=False)
+        assert r.status_code == 303
+        temp_id = main.user_store.get("tempuser")["user_id"]
+        temp_dir = tenancy.user_data_dir(temp_id)
+        assert temp_dir.exists()
+        tok = _csrf_token(client.get("/administration").text)
+        r = client.post("/admin/users/delete",
+                        data={"_csrf": tok, "user_id": temp_id}, follow_redirects=False)
+        assert r.status_code == 303
+        assert main.user_store.get_by_id(temp_id) is None
+        assert not temp_dir.exists()
+
+        # Admin cannot delete their own account, nor the last admin.
+        tok = _csrf_token(client.get("/administration").text)
+        r = client.post("/admin/users/delete",
+                        data={"_csrf": tok, "user_id": admin_id}, follow_redirects=False)
+        assert r.status_code == 303 and "error" in r.headers["location"]
+        assert main.user_store.get_by_id(admin_id) is not None
+
         # --- non-admin cannot reach admin actions ---
         # carol was renamed to caroline above; the password is unchanged.
         assert client.post("/login", data={"username": "caroline", "password": "carol-pw"},
