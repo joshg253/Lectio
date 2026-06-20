@@ -2707,10 +2707,20 @@ class LeadImageService:
             try:
                 with tenancy.user_context(uid):
                     image_url = self._fetch_source_lead_image(entry_link, is_webcomic=is_wc)
-                    self.store_entry_lead_image(feed_url, entry_id, image_url)
-                    # HTML is now in _source_html_cache from the lead-image fetch.
-                    # Extract and persist alt text while we have it — no second HTTP fetch.
+                    # Only persist a positive result. A None here is ambiguous — a
+                    # transient fetch failure (timeout, network blip) looks identical
+                    # to a genuine "page has no image", and this interactive on-open
+                    # path runs against a single entry with no retry. Storing None
+                    # would cement a momentary miss as a permanent negative, blanking
+                    # a thumbnail the feed actually has (e.g. Standard Ebooks covers,
+                    # which live in media:thumbnail and resolve via the page og:image).
+                    # The background backfill owns negative-recording on its own retry
+                    # schedule; leaving the entry unresolved lets it (and the next
+                    # open) recover the image.
                     if image_url:
+                        self.store_entry_lead_image(feed_url, entry_id, image_url)
+                        # HTML is now in _source_html_cache from the lead-image fetch.
+                        # Extract and persist alt text while we have it — no second HTTP fetch.
                         self._maybe_store_alt_from_cache(feed_url, entry_id, entry_link, image_url, is_webcomic=is_wc)
             except Exception:
                 pass
