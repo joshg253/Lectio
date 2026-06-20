@@ -69,8 +69,9 @@ def test_reader_api_registers_ua_lazy_init(monkeypatch):
     ReaderApi("test.sqlite").client()
 
     assert len(inserted) == 1
-    # Our hook must be inserted at position 0 (runs last = after reader's post_init)
-    assert len(inserted[0]._parser.lazy_init_funcs) == 1
+    # Two hooks are registered: the User-Agent response hook and the
+    # sanitizing-parser swap (services.reader_sanitize.install).
+    assert len(inserted[0]._parser.lazy_init_funcs) == 2
 
 
 def test_reader_api_ua_hook_sets_lectio_header(monkeypatch):
@@ -89,6 +90,7 @@ def test_reader_api_ua_hook_sets_lectio_header(monkeypatch):
         def __init__(self):
             self.lazy_init_funcs = []
             self.retrievers = {"https://": FakeRetriever(), "http://": FakeRetriever()}
+            self.parsers_by_mime_type = {}  # for the sanitize-swap hook
 
         def lazy_init(self, fn):
             return fn
@@ -102,9 +104,10 @@ def test_reader_api_ua_hook_sets_lectio_header(monkeypatch):
 
     r = ReaderApi("test.sqlite").client()
 
-    # Simulate do_lazy_init: call the inserted hook with the parser
-    hook = r._parser.lazy_init_funcs[0]
-    hook(r._parser)
+    # Simulate do_lazy_init: run every registered hook (the UA hook and the
+    # sanitize-swap hook); order-independent.
+    for hook in r._parser.lazy_init_funcs:
+        hook(r._parser)
 
     for retr in r._parser.retrievers.values():
         assert retr.session.headers.get("User-Agent") == _EXPECTED_UA

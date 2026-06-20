@@ -49,6 +49,7 @@ from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
 from services import scraper_service
+from services import html_sanitize
 from services import takeout_service
 from services import tenancy
 from services import youtube_embeds
@@ -6294,95 +6295,23 @@ def _transform_kg_audio_cards(content_html: str) -> str:
     return "".join(result)
 
 
-# Allowlist HTML sanitizer for fetched article/source HTML rendered with `| safe`.
-# Regex sanitizing is unsafe (e.g. unquoted `onerror=`, `href="javascript:"` and
-# countless encoding tricks slip through), so we parse and rebuild instead.
-_SANITIZE_ALLOWED_TAGS = frozenset({
-    "a", "abbr", "address", "article", "aside", "b", "blockquote", "br", "caption",
-    "cite", "code", "col", "colgroup", "dd", "del", "details", "dfn", "div", "dl",
-    "dt", "em", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
-    "header", "hr", "i", "img", "ins", "kbd", "li", "main", "mark", "nav", "ol", "p",
-    "picture", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub",
-    "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
-    "u", "ul", "var", "wbr", "audio", "video", "source",
-})
-# Dangerous tags whose entire subtree is dropped. Anything else not in the allow
-# list is unwrapped (its text/children kept) rather than deleted.
-_SANITIZE_DROP_TAGS = frozenset({
-    "script", "style", "iframe", "object", "embed", "form", "link", "meta", "base",
-    "noscript", "template", "svg", "math", "applet", "frame", "frameset", "title",
-    "button", "input", "select", "textarea", "option",
-})
-_SANITIZE_ALLOWED_ATTRS = {
-    "a": frozenset({"href", "title"}),
-    "img": frozenset({"src", "srcset", "alt", "title", "loading"}),
-    "source": frozenset({"src", "srcset", "type", "media"}),
-    "video": frozenset({"src", "controls", "poster", "preload"}),
-    "audio": frozenset({"src", "controls", "preload"}),
-    "td": frozenset({"colspan", "rowspan"}),
-    "th": frozenset({"colspan", "rowspan", "scope"}),
-    "col": frozenset({"span"}),
-    "colgroup": frozenset({"span"}),
-    "time": frozenset({"datetime"}),
-}
-_SANITIZE_URL_ATTRS = frozenset({"href", "src", "poster"})
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
-
-
-def _is_safe_attr_url(attr: str, value: str) -> bool:
-    """Reject javascript:/vbscript:/data: (and control-char-obfuscated variants);
-    allow relative URLs and http(s) (plus mailto/tel for href)."""
-    if not value or not value.strip():
-        return False
-    stripped = _CONTROL_CHARS_RE.sub("", value).lower()
-    if stripped.startswith(("javascript:", "vbscript:", "data:")):
-        return False
-    try:
-        scheme = urlparse(value).scheme.lower()
-    except ValueError:
-        return False
-    if scheme == "":
-        return True  # relative URL
-    if attr == "href":
-        return scheme in ("http", "https", "mailto", "tel")
-    return scheme in ("http", "https")
-
-
+# HTML sanitization lives in services.html_sanitize — the single allowlist
+# chokepoint shared by feed ingest (services.reader_sanitize) and the
+# readability/source-HTML paths below. It keeps safe embeds (iframes from a
+# curated host allowlist, sanitized SVG/MathML) instead of feedparser's
+# destroy-everything behavior.
 def _sanitize_html_allowlist(content: str) -> str:
-    if not content:
-        return content
-    from bs4 import BeautifulSoup, Comment
-
-    soup = BeautifulSoup(content, "html.parser")
-    for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
-        comment.extract()
-    for tag in soup.find_all(True):
-        name = (tag.name or "").lower()
-        if name in _SANITIZE_DROP_TAGS:
-            tag.decompose()
-            continue
-        if name not in _SANITIZE_ALLOWED_TAGS:
-            tag.unwrap()  # keep inner text/children, drop the unknown wrapper
-            continue
-        allowed = _SANITIZE_ALLOWED_ATTRS.get(name, frozenset())
-        for attr_name in list(tag.attrs):
-            la = attr_name.lower()
-            if la.startswith("on") or la == "style" or la not in allowed:
-                del tag.attrs[attr_name]
-                continue
-            if la in _SANITIZE_URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
-                del tag.attrs[attr_name]
-    return str(soup)
+    return html_sanitize.sanitize_html(content)
 
 
 def sanitize_readability_html(content: str) -> str:
     """Sanitize Readability-extracted article HTML (rendered with `| safe`)."""
-    return _sanitize_html_allowlist(content)
+    return html_sanitize.sanitize_html(content)
 
 
 def sanitize_source_html(content: str) -> str:
     """Sanitize proxied source-page HTML (rendered with `| safe`)."""
-    return _sanitize_html_allowlist(content)
+    return html_sanitize.sanitize_html(content)
 
 
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
@@ -7921,7 +7850,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # WordPress YouTube blocks, leaving an empty figure with the video id
         # gone. Re-parse of the raw feed (sanitize off) caches the ids; inject
         # the player when cached, else queue a scan so it fills in next open.
-        if isinstance(content_html, str) and _YT_EMBED_FIGURE_CLASS_RE.search(content_html):
+        # Only needed for entries stored *before* feed ingest stopped stripping
+        # iframes (services.reader_sanitize) — newer entries keep the real embed,
+        # so skip recovery when an <iframe> is already present.
+        if (isinstance(content_html, str)
+                and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
+                and "<iframe" not in content_html.lower()):
             with get_meta_connection() as _vconn:
                 _vids = _lookup_media_video(_vconn, feed_url, entry_id)
             if _vids:
