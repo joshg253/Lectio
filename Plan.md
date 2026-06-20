@@ -195,6 +195,19 @@ list) are both **done**. Follow-ups all resolved:
   and both `/entries/media/*` routes. Tests:
   `tests/services/test_podcast_audio.py`,
   `tests/integration/test_media_audio_fallback.py`.
+- **Website-feed vs podcast-host-feed** — common gotcha: a site's blog/WordPress
+  feed (rich notes) has no audio while the MP3s live in a separate podcast-host
+  feed (Libsyn/Buzzsprout/Transistor/Megaphone/Simplecast/…) referenced on the
+  episode page. Stage 1 (DONE): `services/podcast_feed_discovery.py` detects that
+  host feed from the episode page during the media-audio background scan and
+  stores it (`feed_media_scan.suggested_audio_feed`); the article view shows a
+  one-click "Subscribe to the audio feed" banner when an entry has no audio and
+  the host feed isn't already subscribed. Tests:
+  `tests/services/test_podcast_feed_discovery.py`, suggestion cases in
+  `tests/integration/test_media_audio_fallback.py`. Stage 2 (TODO): **audio
+  borrowing** — keep the single website feed but resolve its entries' audio from
+  the matching episode (by title/date) in the linked podcast feed, so no
+  duplicate subscription is needed.
 
 ### Feed rendering — plain-text & paywalled feeds (low priority)
 

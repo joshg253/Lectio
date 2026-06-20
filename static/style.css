@@ -2878,6 +2878,31 @@ button:hover, .button-link:hover {
   overflow-x: clip;
 }
 
+.audio-feed-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line, #ccc);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.08);
+  font-size: 0.9rem;
+}
+.audio-feed-suggestion-icon { font-size: 1.1rem; }
+.audio-feed-suggestion-text { flex: 1 1 12rem; opacity: 0.85; }
+.audio-feed-suggestion-btn {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--accent, #3a7afe);
+  border-radius: 6px;
+  background: var(--accent, #3a7afe);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.audio-feed-suggestion-btn:hover { filter: brightness(1.08); }
+
 .entry-content table {
   max-width: 100%;
 }
