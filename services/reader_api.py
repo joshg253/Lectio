@@ -8,6 +8,8 @@ import sqlite3
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
+from services import reader_sanitize
+
 # Capture the original setup_db before class definition so the subclass can
 # call it even when _ReaderStorage is monkeypatched in tests.
 _reader_storage_setup_db = _ReaderStorage.setup_db
@@ -113,5 +115,9 @@ class ReaderApi:
                     retr.response_hooks.append(_fix_feed_response)
 
         r._parser.lazy_init_funcs.insert(0, _add_response_hook)
+
+        # Replace feedparser's destroy-everything sanitizer with Lectio's own
+        # allowlist (keeps safe embeds: iframes from trusted hosts, SVG, MathML).
+        reader_sanitize.install(r)
 
         return r
