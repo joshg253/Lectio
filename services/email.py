@@ -235,6 +235,7 @@ def send_article_email(
     link: str,
     excerpt: str,
     cc_addr: str | None = None,
+    reply_to: str | None = None,
 ) -> tuple[bool, str | None]:
     """Send a share email. Returns (ok, error_message)."""
     import resend
@@ -250,6 +251,8 @@ def send_article_email(
     }
     if cc_addr:
         payload["cc"] = [cc_addr]
+    if reply_to:
+        payload["reply_to"] = reply_to
     try:
         resend.Emails.send(payload)
         return True, None
