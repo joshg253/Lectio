@@ -1256,6 +1256,12 @@
           required
           autocomplete="email"
         />
+        {% if profile_email %}
+        <label class="action-modal-checkbox">
+          <input type="checkbox" id="email-article-cc-me" name="cc_me" value="1" />
+          Cc me ({{ profile_email }}) so replies come back to a thread
+        </label>
+        {% endif %}
         <div class="action-modal-actions">
           <button type="button" class="action-modal-cancel" data-close-modal="email-article-modal">Cancel</button>
           <button id="email-article-send" type="submit">Send</button>
@@ -2725,6 +2731,8 @@
       if (entryIdInput instanceof HTMLInputElement) entryIdInput.value = btn.getAttribute('data-email-entry-id') || '';
       const contactSel = document.getElementById('email-article-contact-select');
       if (contactSel instanceof HTMLSelectElement) contactSel.value = '';
+      const ccMe = document.getElementById('email-article-cc-me');
+      if (ccMe instanceof HTMLInputElement) ccMe.checked = false;
       if (modal) modal.removeAttribute('hidden');
     });
 

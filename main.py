@@ -13376,6 +13376,7 @@ def email_entry(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
     to_addr: str = Form(...),
+    cc_me: bool = Form(False),
 ):
     if not is_email_configured():
         return JSONResponse({"ok": False, "error": "Email not configured."}, status_code=503)
@@ -13383,6 +13384,15 @@ def email_entry(
     to_addr = to_addr.strip()
     if not to_addr:
         return JSONResponse({"ok": False, "error": "No recipient address."}, status_code=400)
+
+    # Cc the sender (their profile email) so the message becomes a thread the
+    # recipient can reply-all to. Skip when the sender would be Cc'ing themselves.
+    cc_addr: str | None = None
+    if cc_me:
+        with get_meta_connection() as conn:
+            profile_email = get_setting(conn, PROFILE_EMAIL_SETTING_KEY) or ""
+        if profile_email and profile_email.lower() != to_addr.lower():
+            cc_addr = profile_email
 
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -13414,9 +13424,11 @@ def email_entry(
         feed_title=feed_title,
         link=link,
         excerpt=excerpt,
+        cc_addr=cc_addr,
     )
     if ok:
-        return JSONResponse({"ok": True, "message": f"Sent to {to_addr}"})
+        msg = f"Sent to {to_addr}" + (f" (Cc {cc_addr})" if cc_addr else "")
+        return JSONResponse({"ok": True, "message": msg})
     LOGGER.warning("email send failed for %s/%s: %s", feed_url, entry_id, error)
     return JSONResponse({"ok": False, "error": error or "Send failed."}, status_code=500)
 
