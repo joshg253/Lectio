@@ -1,5 +1,6 @@
 # Lectio Claude Instructions
 
+- Be concise. Avoid filler. Ask before expanding beyond the task.
 - Local-first, single-user RSS reader.
 - Reader-first: prefer `reader` API/plugin behavior before custom code.
 - Preserve the 3-layer split:

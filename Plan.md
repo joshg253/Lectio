@@ -25,7 +25,9 @@ This file is the backlog and staging area for future work.
   `_derive_article_lead_image`; the template renders `data:` thumbnails directly
   (bypassing `/thumb`, which only rasterizes http(s)). Tests:
   `tests/services/test_svg_sanitize.py`, inline-SVG cases in
-  `tests/services/test_lead_images_service.py`.
+  `tests/services/test_lead_images_service.py`. Note: rare in practice — only
+  analogue.co is known to use it, and surfacing it generally still needs some
+  hands-on per-feed plugin work, so this is not a broadly-applicable strategy.
 - **Tag removal / deletion** — manual tagging was add-only. The article-pane tag
   chips now carry an `×` that removes that one tag from the post (submits the
   reduced set in replace mode, `append_mode=0`). Right-clicking any tag (sidebar
@@ -261,12 +263,14 @@ these are pre-existing feed-quality quirks, not regressions:
 
 ### Ideas
 
+- **Outbound webhooks / IFTTT / Zapier etc.** — let automation rules (or a global
+  hook) POST matching entries to an external service: a generic webhook URL plus
+  presets for IFTTT (Maker/Webhooks applet), Zapier, and similar. Lets users wire
+  Lectio into downstream automations (push notifications, Notion/Sheets, home
+  automation, reposting). Reuse the existing rule match/scope machinery; send a
+  JSON payload (title, link, feed, tags, summary). Must route through the SSRF
+  guard and be per-user in multi mode.
 - ~~**Compare existing subscriptions**~~ — addressed: Settings → Feeds → Folders now has per-feed checkboxes and a "Compare selected" button (2–6 feeds) that calls `/feeds/compare` and renders the same chips as the Add-Feed picker.
-- **Inline SVG as thumbnail/lead image** — some feeds ship an inline `<svg>` (or a
-  `data:image/svg+xml` / `.svg` URL) as the post art. Support rendering inline SVG
-  code as the thumbnail image (analogue to raster thumbs) — sanitize the SVG,
-  size/crop it like other thumbs, and decide caching (SVG is text, not a wixmp-style
-  binary). Scope safely (no scripts in SVG).
 - ~~**Favicon fallback for feeds Google's service can't resolve**~~ — DONE. `/api/favicon` resolves icons via Google → `/favicon.ico` → SVG placeholder, with img-cache caching.
 - ~~**Email Article → contacts picker**~~ — DONE. The Email Article dialog gained a
   "choose a saved contact" `<select>` (the default address + Settings → Contacts)
@@ -296,6 +300,13 @@ these are pre-existing feed-quality quirks, not regressions:
 
 ### Code health
 
+- **Serious duplicate-code / code-smell deep dive** — a fresh, thorough pass over
+  the whole codebase (beyond the earlier feed-removal consolidation): hunt
+  copy-pasted/near-duplicate blocks, oversized functions in `main.py`, leaky
+  layering (UI/service/storage), dead code, inconsistent error handling, and
+  repeated SQL/connection boilerplate. Goal is a prioritized refactor list, then
+  consolidate behind the existing service seams without changing behavior. Keep
+  each refactor test-backed.
 - ~~**WebSub hub fetches still follow redirects (SSRF)**~~ — DONE. The three httpx
   calls in `services/websub.py` followed redirects: `_discover_hub_url` now fetches
   the user-supplied `feed_url` via `url_guard.safe_get` (per-hop revalidation), and
