@@ -95,6 +95,62 @@ def test_stale_scan_is_rescanned(configured, monkeypatch):
     assert calls == [FEED]
 
 
+def test_errored_scan_is_rescanned_before_empty_ttl(configured, monkeypatch):
+    # A scan that errored mid-way (ok=0) must retry on the short error TTL, well
+    # before the long empty-feed backoff — so a Cloudflare 403 on a host feed
+    # isn't banked as a settled "no audio".
+    calls = []
+    monkeypatch.setattr(main, "_queue_media_audio_scan", lambda fu: calls.append(fu))
+    with main.get_meta_connection() as conn:
+        # Older than the error TTL but far newer than the empty TTL.
+        aged = time.time() - main._MEDIA_SCAN_TTL_ERROR - 10
+        conn.execute(
+            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, ok) VALUES (?, ?, 0, 0)",
+            (FEED, aged),
+        )
+        conn.commit()
+        main._resolve_entry_audio_url(conn, FEED, "e1", _entry())
+    assert calls == [FEED]
+
+
+def test_failed_borrow_records_not_ok(configured, monkeypatch):
+    # Feed has no media:content; a host feed is discovered but its fetch fails,
+    # so the scan must record ok=0 (retry soon), not a settled empty result.
+    class _Resp:
+        status_code = 200
+        content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
+
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
+                        lambda fu: "https://feeds.buzzsprout.com/1.rss")
+    monkeypatch.setattr(main, "_borrow_audio_from_feed", lambda fu, host: None)
+    main._scan_feed_media_audio(FEED)
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)
+        ).fetchone()
+        assert tuple(row) == (0, 0)
+        assert main._media_scan_due(conn, FEED) is False  # just scanned; not due yet
+
+
+def test_clean_empty_scan_records_ok(configured, monkeypatch):
+    # Host feed fetched fine but matched nothing -> empty dict, a settled result.
+    class _Resp:
+        status_code = 200
+        content = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
+
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+    monkeypatch.setattr(main, "_discover_suggested_audio_feed",
+                        lambda fu: "https://feeds.buzzsprout.com/1.rss")
+    monkeypatch.setattr(main, "_borrow_audio_from_feed", lambda fu, host: {})
+    main._scan_feed_media_audio(FEED)
+    with main.get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT found, ok FROM feed_media_scan WHERE feed_url = ?", (FEED,)
+        ).fetchone()
+        assert tuple(row) == (0, 1)
+
+
 def test_suggested_audio_feed_stored_when_no_media(configured, monkeypatch):
     # Feed itself has no media:content audio, so the scan should fall back to
     # discovering a podcast-host feed and record the suggestion.

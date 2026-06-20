@@ -2210,7 +2210,8 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT PRIMARY KEY,
                 scanned_at REAL NOT NULL,
                 found INTEGER NOT NULL DEFAULT 0,
-                suggested_audio_feed TEXT NOT NULL DEFAULT ''
+                suggested_audio_feed TEXT NOT NULL DEFAULT '',
+                ok INTEGER NOT NULL DEFAULT 1
             )
             """
         )
@@ -2218,6 +2219,14 @@ def ensure_meta_schema() -> None:
         # for an audio-less feed (so we can suggest subscribing to the audio feed).
         try:
             conn.execute("ALTER TABLE feed_media_scan ADD COLUMN suggested_audio_feed TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        # Added later: distinguish a scan that completed cleanly with no audio
+        # (back off a long time) from one that errored mid-way — e.g. a host feed
+        # we discovered but couldn't fetch (Cloudflare 403) — so transient
+        # failures retry soon instead of inheriting the 7-day "empty" backoff.
+        try:
+            conn.execute("ALTER TABLE feed_media_scan ADD COLUMN ok INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
         conn.execute(
@@ -6000,6 +6009,9 @@ def _render_entry_attachments(entry, audio_url: str | None) -> str:
 # catch new episodes; barely ever rescan feeds that had none.
 _MEDIA_SCAN_TTL_FOUND = 6 * 3600
 _MEDIA_SCAN_TTL_EMPTY = 7 * 24 * 3600
+# A scan that errored mid-way (e.g. discovered a host feed but couldn't fetch it)
+# isn't proof there's no audio — retry well before the long "empty" backoff.
+_MEDIA_SCAN_TTL_ERROR = 6 * 3600
 _media_scan_in_progress: set[tuple[str, str]] = set()
 _media_scan_lock = threading.Lock()
 
@@ -6016,11 +6028,16 @@ def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
     """True if this feed has never been scanned for media:content audio, or its
     cadence TTL has elapsed."""
     row = conn.execute(
-        "SELECT scanned_at, found FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
+        "SELECT scanned_at, found, ok FROM feed_media_scan WHERE feed_url = ?", (feed_url,)
     ).fetchone()
     if not row:
         return True
-    ttl = _MEDIA_SCAN_TTL_FOUND if row[1] else _MEDIA_SCAN_TTL_EMPTY
+    if row[1]:
+        ttl = _MEDIA_SCAN_TTL_FOUND
+    elif not row[2]:  # errored mid-scan — not proof of "no audio"
+        ttl = _MEDIA_SCAN_TTL_ERROR
+    else:
+        ttl = _MEDIA_SCAN_TTL_EMPTY
     return (time.time() - float(row[0])) > ttl
 
 
@@ -6044,11 +6061,21 @@ def _scan_feed_media_audio(feed_url: str) -> None:
     # page. Detect it so we can (a) borrow its audio into this feed's entries and
     # (b) suggest subscribing to the audio feed if borrowing didn't cover an entry.
     suggested = ""
+    errored = False
     if not found_map:
         suggested = _discover_suggested_audio_feed(feed_url)
         if suggested:
-            found_map = _borrow_audio_from_feed(feed_url, suggested)
+            borrowed = _borrow_audio_from_feed(feed_url, suggested)
+            if borrowed is None:
+                # We found a host feed but couldn't fetch it (network/HTTP error,
+                # e.g. a Cloudflare 403) — don't bank this as a settled "no audio".
+                errored = True
+            else:
+                found_map = borrowed
 
+    # ``ok`` is False only when we have positive reason to believe the scan was
+    # incomplete; a clean scan that simply found nothing is ok=1 (long backoff).
+    ok = 0 if (errored and not found_map) else 1
     with get_meta_connection() as conn:
         for entry_id, audio_url in found_map.items():
             conn.execute(
@@ -6057,11 +6084,12 @@ def _scan_feed_media_audio(feed_url: str) -> None:
                 (feed_url, entry_id, audio_url),
             )
         conn.execute(
-            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed)"
-            " VALUES (?, ?, ?, ?)"
+            "INSERT INTO feed_media_scan (feed_url, scanned_at, found, suggested_audio_feed, ok)"
+            " VALUES (?, ?, ?, ?, ?)"
             " ON CONFLICT(feed_url) DO UPDATE SET scanned_at = excluded.scanned_at,"
-            " found = excluded.found, suggested_audio_feed = excluded.suggested_audio_feed",
-            (feed_url, time.time(), 1 if found_map else 0, suggested),
+            " found = excluded.found, suggested_audio_feed = excluded.suggested_audio_feed,"
+            " ok = excluded.ok",
+            (feed_url, time.time(), 1 if found_map else 0, suggested, ok),
         )
         conn.commit()
 
@@ -6096,13 +6124,18 @@ def _discover_suggested_audio_feed(feed_url: str) -> str:
         return ""
 
 
-def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]:
+def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str] | None:
     """Match this feed's entries to audio in a podcast-host feed and return
     entry_id -> audio URL for the matches.
 
     Lets a notes-only website feed gain a player without a second subscription:
     the audio is sourced from the matching episode (by title, then episode
-    number) in the linked podcast feed."""
+    number) in the linked podcast feed.
+
+    Returns ``None`` when the host feed couldn't be fetched (network/HTTP error)
+    — distinct from an empty dict, which means it was fetched fine but nothing
+    matched. The caller uses that to retry a failed fetch soon rather than
+    backing it off as a settled "no audio" result."""
     try:
         with get_reader() as reader:
             titles = {
@@ -6115,11 +6148,11 @@ def _borrow_audio_from_feed(feed_url: str, host_feed_url: str) -> dict[str, str]
                           headers={"User-Agent": PODCAST_FETCH_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, host_feed_url)
         if resp.status_code != 200 or not resp.content:
-            return {}
+            return None
         return podcast_feed_discovery.match_episode_audio(resp.content, titles)
     except Exception:
         LOGGER.debug("audio borrow failed for %s from %s", feed_url, host_feed_url, exc_info=True)
-        return {}
+        return None
 
 
 def _get_suggested_audio_feed(conn: sqlite3.Connection, feed_url: str) -> str | None:
