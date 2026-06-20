@@ -111,6 +111,43 @@ def test_suggested_audio_feed_stored_when_no_media(configured, monkeypatch):
         assert main._get_suggested_audio_feed(conn, FEED) == "https://feeds.libsyn.com/21070/rss"
 
 
+def test_discovery_fetches_with_browser_user_agent(configured, monkeypatch):
+    # Buzzsprout/Libsyn host feeds and many episode pages sit behind Cloudflare,
+    # which 403s the terse default UA. Discovery must use a browser UA so the
+    # episode-page fetch isn't silently blocked.
+    import contextlib
+
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self, *a, headers=None, **kw):
+            captured["ua"] = (headers or {}).get("User-Agent")
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    @contextlib.contextmanager
+    def _fake_reader():
+        yield SimpleNamespace(
+            get_entries=lambda **kw: [SimpleNamespace(link="https://ep.test/1")]
+        )
+
+    class _Resp:
+        status_code = 200
+        text = "<html>https://feeds.buzzsprout.com/1501960.rss</html>"
+
+    monkeypatch.setattr(main, "get_reader", _fake_reader)
+    monkeypatch.setattr(main.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(main.url_guard, "is_safe_outbound_url", lambda url: True)
+    monkeypatch.setattr(main.url_guard, "safe_get", lambda client, url, **kw: _Resp())
+
+    found = main._discover_suggested_audio_feed(FEED)
+    assert found == "https://feeds.buzzsprout.com/1501960.rss"
+    assert captured["ua"] == main.PODCAST_FETCH_USER_AGENT
+    assert "Mozilla/" in captured["ua"]
+
+
 def test_is_feed_subscribed(configured):
     with main.get_meta_connection() as conn:
         assert main._is_feed_subscribed(conn, "https://feeds.libsyn.com/21070/rss") is False
