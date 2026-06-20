@@ -10,6 +10,25 @@ from services import reader_sanitize
 from services.reader_sanitize import SanitizingFeedparserParser
 
 
+def test_uses_readers_feedparser_not_standalone():
+    # reader's _process_feed decides survivable bozos via isinstance against its
+    # (possibly vendored) feedparser exception classes. Using the standalone
+    # `feedparser` here yields different classes, so survivable bozos wrongly
+    # raise ParseError and break every feed update returning a body.
+    from reader._parser.feedparser import feedparser as reader_feedparser
+    assert reader_sanitize.feedparser is reader_feedparser
+
+
+def test_survives_nonxml_contenttype_bozo():
+    # feedparser sets a NonXMLContentType bozo when no content-type is supplied
+    # (reader's stream path). _process_feed must SURVIVE it (it's in reader's
+    # survivable list) and return entries, not raise ParseError.
+    import io
+    raw = _feed('<p>hi</p>')
+    feed, entries = SanitizingFeedparserParser()("https://x.test/feed", io.BytesIO(raw), {})
+    assert len(entries) == 1
+
+
 def _feed(body: str) -> bytes:
     return (
         '<?xml version="1.0"?>'
