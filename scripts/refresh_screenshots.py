@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import http.server
 import os
+import secrets
 import shutil
 import socket
 import socketserver
@@ -93,12 +94,19 @@ def main() -> int:
     args = ap.parse_args()
 
     data_dir = Path(tempfile.mkdtemp(prefix="lectio-shots-"))
+    admin_data_dir = Path(tempfile.mkdtemp(prefix="lectio-shots-admin-"))
     feeds_dir = data_dir / "feeds"
     feed_port = _free_port(_DEMO_FEED_PORT)
     app_port = _free_port()
     base_app_url = f"http://127.0.0.1:{app_port}"
 
-    server_proc: subprocess.Popen | None = None
+    procs: list[subprocess.Popen] = []
+
+    def _stop(proc: subprocess.Popen) -> None:
+        proc.terminate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=10)
+
     try:
         print(f"Demo data dir: {data_dir}")
         _write_demo_feeds(feeds_dir)
@@ -113,6 +121,13 @@ def main() -> int:
             "LECTIO_SECURITY_MODE": "single",
             "LECTIO_USERNAME": "",
             "LECTIO_PASSWORD": "",
+            # Blank out any real instance config from the developer's .env so it
+            # can never land in a committed screenshot.
+            "RESEND_API_KEY": "",
+            "LECTIO_EMAIL_FROM": "lectio@demo.example",
+            "LECTIO_EMAIL_TO": "you@demo.example",
+            "YOUTUBE_API_KEY": "",
+            "YOUTUBE_CHANNEL_ID": "",
         })
 
         # Seed the library while the demo feeds are being served locally.
@@ -136,22 +151,56 @@ def main() -> int:
              "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
             env=serve_env, cwd=str(ROOT),
         )
+        procs.append(server_proc)
         _wait_healthy(base_app_url + "/", server_proc)
 
         print(f"Capturing screenshots → {args.out}")
         from scripts.screenshots import capture  # deferred: needs Playwright
         capture.capture(base_app_url, args.out)
+        _stop(server_proc)
+
+        # Second pass: the multi-user Administration page (needs `multi` mode, a
+        # fresh data dir, and a logged-in admin session).
+        admin_user, admin_pw = "demoadmin", "demo-admin-pw"
+        admin_port = _free_port()
+        admin_url = f"http://127.0.0.1:{admin_port}"
+        admin_env = dict(os.environ, **{
+            "LECTIO_DATA_DIR": str(admin_data_dir),
+            "PYTHONPATH": str(ROOT),
+            "LECTIO_SECURITY_MODE": "multi",
+            "LECTIO_ADMIN_USERNAME": admin_user,
+            "LECTIO_ADMIN_PASSWORD": admin_pw,
+            "LECTIO_SECRET_KEY": secrets.token_hex(32),
+            "LECTIO_HTTPS_ONLY": "0",
+            "LECTIO_DEBUG": "0",
+            "LECTIO_DISABLE_STARTUP_BACKFILL": "1",
+            # Blank out any real instance config from the developer's .env so it
+            # can't land in the committed Administration screenshot.
+            "RESEND_API_KEY": "",
+            "LECTIO_EMAIL_FROM": "lectio@demo.example",
+            "LECTIO_EMAIL_TO": "you@demo.example",
+            "YOUTUBE_API_KEY": "",
+            "YOUTUBE_CHANNEL_ID": "",
+        })
+        print(f"Starting multi-user Lectio on {admin_url}…")
+        admin_proc = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "main:app",
+             "--host", "127.0.0.1", "--port", str(admin_port), "--log-level", "warning"],
+            env=admin_env, cwd=str(ROOT),
+        )
+        procs.append(admin_proc)
+        _wait_healthy(admin_url + "/login", admin_proc)
+        capture.capture_admin(admin_url, args.out, admin_user, admin_pw)
         print("Done.")
         return 0
     finally:
-        if server_proc is not None:
-            server_proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                server_proc.wait(timeout=10)
-        if args.keep_data:
-            print(f"Kept demo data dir: {data_dir}")
-        else:
-            shutil.rmtree(data_dir, ignore_errors=True)
+        for proc in procs:
+            _stop(proc)
+        for d in (data_dir, admin_data_dir):
+            if args.keep_data:
+                print(f"Kept demo data dir: {d}")
+            else:
+                shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
