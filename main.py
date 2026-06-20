@@ -5969,6 +5969,32 @@ def _fix_wp_post_footer(content_html: str) -> str:
     return str(soup)
 
 
+def _clean_qwantz_content(content_html: str) -> str:
+    """Strip Dinosaur Comics (qwantz.com) nav chrome, keep comic + commentary.
+
+    The feed wraps the comic in ``<center>`` with a nav table above the image
+    (archive / contact / merch / search / about) and another below it whose first
+    row is prev/date/next nav and whose second row is the dated author
+    commentary. Rebuild the body as just the comic ``<img>`` (its ``title`` holds
+    the secret hover text, kept for the caption) followed by that commentary, so
+    the duplicated nav and date links don't clutter the reading view."""
+    if "qwantz.com" not in content_html and 'class="comic"' not in content_html:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    img = soup.find("img", class_="comic") or soup.find("img")
+    if img is None:
+        return content_html  # not the shape we expect; leave untouched
+    # The commentary lives in the only wide (colspan=3) cell with real text.
+    commentary_html = ""
+    for td in soup.find_all("td"):
+        if str(td.get("colspan")) == "3" and td.get_text(strip=True):
+            commentary_html = "".join(str(c) for c in td.contents)
+            break
+    return str(img) + commentary_html
+
+
 _AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
 
 
@@ -7039,6 +7065,46 @@ def build_readability_response(source_url: str) -> HTMLResponse:
     )
 
 
+# Blogger posts can ship an empty feed <title> while the real title lives only
+# as the first body heading and in the post URL slug (e.g. treecardgames). Recover
+# a readable title from the slug so the list/article don't show "(untitled)".
+# Scoped to Blogger so genuinely-untitled posts elsewhere (e.g. Tumblr reblogs)
+# keep their "(untitled)" label.
+_BLOGGER_FEED_RE = re.compile(r"blogspot\.com|blogger\.com|/feeds/posts/default", re.IGNORECASE)
+
+
+def _title_from_blogger_slug(link: str) -> str | None:
+    """Humanize a Blogger post URL slug into a title, or None.
+
+    e.g. ``https://x.blogspot.com/2026/06/gin-rummy-strategies-essential.html``
+    → ``Gin Rummy Strategies Essential``.
+    """
+    if not link:
+        return None
+    slug = urlparse(link).path.rsplit("/", 1)[-1]
+    slug = re.sub(r"\.html?$", "", slug, flags=re.IGNORECASE)
+    words = [w for w in slug.split("-") if w]
+    if not words:
+        return None
+    return " ".join(w.capitalize() for w in words)
+
+
+def _display_title(entry) -> str:
+    """Entry title for display, recovering Blogger empty-title posts from the slug.
+
+    Returns the feed title when present; otherwise, for Blogger feeds only, a
+    title humanized from the URL slug. Falls back to "" (template renders
+    "(untitled)") for genuinely-untitled posts on other sites."""
+    title = (getattr(entry, "title", None) or "").strip()
+    if title:
+        return title
+    feed_url = str(getattr(entry, "feed_url", "") or "")
+    link = str(getattr(entry, "link", "") or "")
+    if _BLOGGER_FEED_RE.search(feed_url) or _BLOGGER_FEED_RE.search(link):
+        return _title_from_blogger_slug(link) or ""
+    return ""
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -7252,7 +7318,7 @@ def list_entries_for_feeds(
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
 
-            title_text = entry.title
+            title_text = _display_title(entry) or entry.title
             if search_terms:
                 search_haystack = " ".join(
                     [
@@ -7897,6 +7963,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # some feeds emit. Generic across feeds.
         if isinstance(content_html, str):
             content_html = _fix_wp_post_footer(content_html)
+
+        # Dinosaur Comics (qwantz): strip the nav tables wrapping the comic and
+        # keep only the comic image + dated author commentary.
+        if isinstance(content_html, str) and "qwantz.com" in feed_url:
+            content_html = _clean_qwantz_content(content_html)
 
         # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
         # replacing them with the literal text "<strong>iframe</strong>" inside a
@@ -8587,7 +8658,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
-            "title": entry.title,
+            "title": _display_title(entry) or entry.title,
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
@@ -12616,6 +12687,34 @@ def refresh_feed_strategy_cache_route(
         )
 
     return JSONResponse({"ok": True, "strategy_cache": results})
+
+
+@app.post("/feeds/reparse")
+def reparse_feed_route(feed_url: str = Form(...)):
+    """Force a full re-fetch + re-parse of one feed to backfill embeds on old
+    entries.
+
+    Entries stored before ingest stopped sanitizing feed HTML (see
+    services.reader_sanitize) have their iframe/SVG embeds stripped; they only
+    return when reader re-stores the entry on a content change. reader skips
+    unchanged feeds via conditional GET, so we mark the feed stale first
+    (reader's own mechanism to ignore the cached ETag/Last-Modified) and then
+    update it: the now-unsanitized re-parse yields a different content hash for
+    those old entries, so reader re-stores them with embeds intact. Read/star
+    state is preserved (reader keys on entry id, not content)."""
+    try:
+        with get_reader() as reader:
+            # set_feed_stale is reader's supported "ignore HTTP caching on next
+            # update" flag (used by its own --new=False path); private attr but
+            # stable across reader 3.x.
+            reader._storage.set_feed_stale(feed_url, True)
+            updated = reader.update_feed(feed_url)
+    except Exception as exc:  # FeedNotFoundError, network/parse errors
+        LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    modified = int(getattr(updated, "modified", 0)) if updated else 0
+    new = int(getattr(updated, "new", 0)) if updated else 0
+    return JSONResponse({"ok": True, "modified": modified, "new": new})
 
 
 @app.post("/feeds/move")
