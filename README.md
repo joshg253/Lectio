@@ -47,8 +47,9 @@ The short version:
   attachments, recovered YouTube embeds, and bare-text feed cleanup.
 - **Lead images** — per-feed extraction strategies with side-by-side comparison,
   smart crop/fit tuning, caption sourcing, junk-image rejection, and inline-SVG art.
-- **Automation** — highlight, mark-as-read, deduplicate, and email-article rules;
-  all fire at refresh time with a manual "Run Now".
+- **Automation** — highlight, mark-as-read, deduplicate, email-article, and
+  outbound-webhook rules (generic JSON or IFTTT Maker; SSRF-guarded); all fire at
+  refresh time with a manual "Run Now".
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.
