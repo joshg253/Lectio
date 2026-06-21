@@ -7937,6 +7937,84 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+def _inject_source_gallery(content_html, entry, lead_image_url):
+    """Append the source article's images to an image-less feed body (paizo blog).
+
+    Extracted from get_entry_detail; the caller gates this on the per-feed
+    inject_source_images pref + a present entry.link. Collects the source page's
+    images (deduped against the lead and existing body images), priming the source
+    HTML in the background and filling on a later open if it isn't cached yet."""
+    _exclude_imgs: set[str] = set()
+    if lead_image_url:
+        _exclude_imgs.add(lead_image_url)
+    for _m in re.finditer(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html or "", re.IGNORECASE):
+        _exclude_imgs.add(html.unescape(_m.group(1)))
+    _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+    if not _gallery:
+        # Prime the source HTML in the background, wait briefly, then retry — so the
+        # gallery fills on first open for fast sites, later otherwise.
+        lead_image_service.queue_source_html_fetch(entry.link)
+        lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
+        _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+    if _gallery:
+        _figs = "".join(
+            f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" '
+            f'referrerpolicy="no-referrer"></figure>'
+            for u in _gallery
+        )
+        content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
+    return content_html
+
+
+def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
+    """Resolve the article's lead image and whether it's still pending.
+
+    Extracted from get_entry_detail. Derives the lead image by feed strategy,
+    discards avatar/headshot images, and — for a never-processed entry with no
+    inline image — kicks off a background source-page fetch (waiting ≤0.8s so fast
+    sites fill on first open). Returns ``(lead_image_url, pending)``; both are None/
+    False when a YouTube embed was injected (the player replaces the lead image)."""
+    lead_image_url = _derive_article_lead_image(entry)
+    # Discard avatar/portrait images (author headshots, profile pics) that some
+    # feeds embed as the first image; prefer no image over a face. Check path only —
+    # CDN domains like "googleusercontent.com" contain "user" and would
+    # false-positive on a full-URL search.
+    if lead_image_url:
+        _lead_parsed = urlparse(lead_image_url)
+        if lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path):
+            lead_image_url = None
+    # Try source scraping when the entry has never been processed (ABSENT cache) and
+    # the feed provides no inline image — covers article-only feeds where the best
+    # image lives on the source page. (A stored None is left alone: it conflates
+    # auto-discovered "none" with a user-cleared image; the background job retries
+    # negatives on its own schedule.)
+    _cache_key = (str(entry.feed_url), str(entry.id))
+    _cached_val = lead_image_service._cache.get(_cache_key, "ABSENT")
+    _should_source_fetch = (
+        _cached_val == "ABSENT"
+        and lead_image_url is None
+        and not lead_image_service._is_feed_none_strategy(str(entry.feed_url))
+    )
+    pending = False
+    if _should_source_fetch and entry.link:
+        # Queue the source-page fetch in the background, then wait briefly so a
+        # fast-responding site fills the image on the very first open without a
+        # polling round-trip. Cap at 0.8s — slow hosts (Squarespace, WordPress.com)
+        # exceed it and fill in on the next open instead.
+        lead_image_service.queue_source_fetch(str(entry.feed_url), str(entry.id), entry.link)
+        _fetch_t0 = time.monotonic()
+        lead_image_service.wait_for_source_fetch(str(entry.feed_url), str(entry.id), timeout=0.8)
+        _fetch_ms = int((time.monotonic() - _fetch_t0) * 1000)
+        LOGGER.info("[perf] entry_detail: source_fetch_wait=%dms %s", _fetch_ms, entry.link)
+        lead_image_url = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        pending = (lead_image_url is None) and show_lead_in_article and not video_id
+    # A YouTube embed already shows the video; a separate lead image (its thumbnail)
+    # above the player would be redundant.
+    if video_id:
+        return None, False
+    return lead_image_url, pending
+
+
 def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
     """Prepend the podcast audio player and append footer attachments to an entry.
 
@@ -8200,59 +8278,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             _disp = get_feed_display_prefs(_prefs_conn, str(entry.feed_url))
         _show_lead_in_article = bool(_disp.get("show_lead_image_in_article", 1))
 
-        lead_image_url = _derive_article_lead_image(entry)
-        # Discard avatar/portrait images (author headshots, profile pics) that
-        # some feeds embed as the first image; prefer no image over a face.
-        # Check path only — CDN domains like "googleusercontent.com" contain
-        # "user" and would false-positive on a full-URL search.
-        if lead_image_url:
-            _lead_parsed = urlparse(lead_image_url)
-            if lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path):
-                lead_image_url = None
-        # Try source scraping when the entry has never been processed (ABSENT cache)
-        # and the feed provides no inline image — covers article-only feeds where
-        # the best image lives on the source page, not in the feed content.
-        # (The previous Condition B — "None stored but feed now has image" — was
-        # removed: it conflated auto-discovered None with user-cleared None,
-        # causing the OG to pop back whenever the user cleared an entry's image.
-        # The background job handles auto-retry of negative entries on its own schedule.)
-        _cache_key = (str(entry.feed_url), str(entry.id))
-        _cached_val = lead_image_service._cache.get(_cache_key, "ABSENT")
-        _should_source_fetch = (
-            _cached_val == "ABSENT"
-            and lead_image_url is None
-            and not lead_image_service._is_feed_none_strategy(str(entry.feed_url))
+        lead_image_url, _pending_lead_image = _resolve_article_lead_image(
+            entry, video_id, _show_lead_in_article
         )
-        _pending_lead_image = False
-        if _should_source_fetch and entry.link:
-            # Queue the source-page fetch in the background.  Then wait briefly
-            # (≤3 s) so that alt/title text is ready on the very first open of a
-            # new entry, without blocking indefinitely on slow sites.  If the
-            # timeout expires the result arrives on the next open as before.
-            lead_image_service.queue_source_fetch(
-                str(entry.feed_url), str(entry.id), entry.link
-            )
-            _fetch_t0 = time.monotonic()
-            # Wait briefly so fast-responding sites deliver the image on first
-            # open without a polling round-trip. Cap at 0.8 s — Squarespace,
-            # WordPress.com, and other slow hosts routinely exceed 3 s, so the
-            # old 3 s timeout made opening 3 unread entries feel like a ~9 s hang.
-            lead_image_service.wait_for_source_fetch(
-                str(entry.feed_url), str(entry.id), timeout=0.8
-            )
-            _fetch_ms = int((time.monotonic() - _fetch_t0) * 1000)
-            LOGGER.info("[perf] entry_detail: source_fetch_wait=%dms %s", _fetch_ms, entry.link)
-            # Re-read the image URL now that the fetch may have completed.
-            lead_image_url = lead_image_service.extract_entry_thumbnail_url(
-                entry, include_source_lookup=False
-            )
-            _pending_lead_image = (lead_image_url is None) and _show_lead_in_article and not video_id
-        # If we injected a YouTube embed for this entry, avoid showing a
-        # separate lead image (typically the video thumbnail) above the
-        # embedded player — it looks redundant and visually noisy.
-        if video_id:
-            lead_image_url = None
-            _pending_lead_image = False
 
         # Remove inline images whose src URL is a logo, tracker, or avatar — these
         # are typically brand assets or analytics pixels embedded by feed publishers
@@ -8699,31 +8727,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
 
-        # Source-page image gallery — for feeds whose body carries no/few images
-        # but whose source article has several (e.g. paizo blog), inject the source
-        # page's images into the entry. Opt-in per feed (inject_source_images).
-        # Runs before the hotlink/no-referrer pass below so injected images are
-        # proxied and referrer-stripped like the rest.
+        # Source-page image gallery (opt-in per feed) — runs before the hotlink/
+        # no-referrer pass below so injected images are proxied/referrer-stripped too.
         if _disp.get("inject_source_images") and entry.link:
-            _exclude_imgs: set[str] = set()
-            if lead_image_url:
-                _exclude_imgs.add(lead_image_url)
-            for _m in re.finditer(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html or "", re.IGNORECASE):
-                _exclude_imgs.add(html.unescape(_m.group(1)))
-            _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
-            if not _gallery:
-                # Prime the source HTML in the background, wait briefly, then retry —
-                # so the gallery fills on first open for fast sites, later otherwise.
-                lead_image_service.queue_source_html_fetch(entry.link)
-                lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
-                _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
-            if _gallery:
-                _figs = "".join(
-                    f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" '
-                    f'referrerpolicy="no-referrer"></figure>'
-                    for u in _gallery
-                )
-                content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
+            content_html = _inject_source_gallery(content_html, entry, lead_image_url)
 
         # Suppress the Referer on inline body images so hotlink-protected hosts
         # serve the real image instead of a placeholder, and route known
