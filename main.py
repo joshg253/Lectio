@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Sequence, cast
-from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -294,7 +294,11 @@ _CORP_DOMAIN_CACHE: dict[str, bool] = {}
 # stays correct. Add a registrable domain (matches it and any subdomain).
 # wixmp.com serves DeviantArt images behind short-lived signed (?token=) URLs;
 # proxying caches the bytes server-side so the article image survives token expiry.
-_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset({"nanolx.org", "wixmp.com"})
+# private-user-images.githubusercontent.com serves GitHub release/issue screenshots
+# behind short-lived (~5 min) JWT-signed URLs — same problem, same fix.
+_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset(
+    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com"}
+)
 
 
 def _is_hotlink_img_host(netloc: str) -> bool:
@@ -7803,7 +7807,14 @@ def _derive_article_lead_image(entry) -> str | None:
             or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         )
     elif strategy == "media_rss":
-        result = lead_image_service.extract_media_rss_thumb_url(entry)
+        # reader drops <media:content>/<media:group>, so the media extractor often
+        # returns None on the stored entry even though the image was captured (via a
+        # raw re-parse) into the lead-image cache. Fall back to the cache-consulting
+        # extractor — the same image the list thumbnail shows (e.g. paizo).
+        result = (
+            lead_image_service.extract_media_rss_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
     else:
         result = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
     # Last resort: a raw inline <svg> in the entry content (sanitized → data URI).
@@ -14339,6 +14350,31 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
         LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
 
 
+# Query params that are per-request signing tokens, not image identity. Stripping
+# them from the cache key lets a signed-CDN image (GitHub private-user-images JWT,
+# wixmp/S3 ?token/X-Amz-*) stay cache-resident across token rotations, so it keeps
+# loading after the original short-lived URL expires. The full URL (with token) is
+# still used for the actual fetch.
+_IMG_CACHE_VOLATILE_PARAMS = frozenset({
+    "jwt", "token", "sig", "signature", "expires", "exp",
+    "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
+    "x-amz-security-token", "x-amz-signature", "x-amz-signedheaders",
+})
+
+
+def _img_cache_key_url(u: str) -> str:
+    """Normalize an image URL for the cache key by dropping volatile signing params."""
+    try:
+        parsed = urlparse(u)
+    except ValueError:
+        return u
+    kept = [
+        (k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True)
+        if k.lower() not in _IMG_CACHE_VOLATILE_PARAMS
+    ]
+    return urlunparse(parsed._replace(query=urlencode(kept)))
+
+
 @app.get("/api/img")
 async def api_img_proxy(u: str) -> Response:
     """Server-side image proxy with a content-addressed cache.
@@ -14358,7 +14394,7 @@ async def api_img_proxy(u: str) -> Response:
     """
     if urlparse(u).scheme not in ("http", "https"):
         return Response(status_code=400)
-    cache_key = hashlib.sha256(u.encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(_img_cache_key_url(u).encode("utf-8")).hexdigest()
     cached = _img_cache_get(cache_key)
     if cached is not None:
         body, content_type = cached
