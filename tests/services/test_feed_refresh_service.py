@@ -68,7 +68,8 @@ def _make_conn(db_path: Path):
     return conn
 
 
-def _build_service(db_path: Path, reader: _FakeReader, yt_calls: list[str], lead_calls: list[str]):
+def _build_service(db_path: Path, reader, yt_calls: list[str], lead_calls: list[str],
+                   on_fetch_refused=None):
     def get_meta_connection():
         return _make_conn(db_path)
 
@@ -82,7 +83,65 @@ def _build_service(db_path: Path, reader: _FakeReader, yt_calls: list[str], lead
         refresh_debug_enabled=False,
         failed_feed_backoff_base_seconds=60,
         failed_feed_backoff_max_seconds=24 * 60 * 60,
+        on_fetch_refused=on_fetch_refused,
     )
+
+
+def test_is_fetch_refusal_classifies_only_refusals():
+    f = FeedRefreshService._is_fetch_refusal
+    assert f(RuntimeError("HTTP 415 Unsupported Media Type"))
+    assert f(RuntimeError("403 Forbidden"))
+    assert f(RuntimeError("read operation timed out"))
+    assert f(RuntimeError("server returned 503"))
+    assert not f(RuntimeError("404 Not Found"))
+    assert not f(RuntimeError("410 Gone"))
+    assert not f(RuntimeError("401 Unauthorized"))
+
+
+class _RefusingReader:
+    """Fails the first update of a feed with a refusal, succeeds on retry."""
+    def __init__(self, refuse_urls: set[str]):
+        self.refuse_urls = set(refuse_urls)
+        self.attempts: list[str] = []
+
+    def update_feed(self, feed_url: str):
+        self.attempts.append(feed_url)
+        if feed_url in self.refuse_urls:
+            self.refuse_urls.discard(feed_url)  # refuse only the first attempt
+            raise RuntimeError("HTTP 415 Unsupported Media Type")
+
+
+def test_refusal_triggers_flag_and_retry(tmp_path: Path):
+    db_path = tmp_path / "m.sqlite"
+    reader = _RefusingReader({"https://blocked.test/feed"})
+    flagged: list[str] = []
+
+    def on_refused(url: str) -> bool:
+        flagged.append(url)
+        return True  # newly flagged → service should retry once
+
+    service = _build_service(db_path, reader, [], [], on_fetch_refused=on_refused)
+    service.update_feeds(["https://blocked.test/feed"])
+
+    assert flagged == ["https://blocked.test/feed"]
+    # Retried after flagging (two attempts total).
+    assert reader.attempts == ["https://blocked.test/feed", "https://blocked.test/feed"]
+    # The successful retry cleared the failure state.
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures, last_success_at FROM feed_failure_state WHERE feed_url = ?",
+            ("https://blocked.test/feed",),
+        ).fetchone()
+    assert row is not None and row["consecutive_failures"] == 0
+    assert row["last_success_at"] is not None
+
+
+def test_refusal_no_retry_when_not_newly_flagged(tmp_path: Path):
+    # Already-flagged feed (callback returns False) must not retry-loop.
+    reader = _RefusingReader({"https://blocked.test/feed"})
+    service = _build_service(tmp_path / "m2.sqlite", reader, [], [], on_fetch_refused=lambda _u: False)
+    service.update_feeds(["https://blocked.test/feed"])
+    assert reader.attempts == ["https://blocked.test/feed"]  # no retry
 
 
 def test_compute_backoff_caps_at_max(tmp_path: Path):

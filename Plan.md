@@ -46,6 +46,11 @@ this file only tracks what's still open.
 
 ## Known limitations (not bugs)
 
+- **Hard JS bot-walls** (e.g. seattletimes — HTTP 202 + empty body) — some feeds sit
+  behind a challenge that returns success-with-no-body to *any* non-headless client,
+  so even the browser-identity escalation can't fetch them. Lectio escalates on
+  refusal (403/415/429/503/timeout) but won't run a headless browser; these feeds
+  stay unsubscribable. Surfaced as a "site is blocking automated access" message.
 - **Webcomic single-image feeds** (e.g. claycomix) — investigated: not multi-panel.
   A single `wp-post-image` per entry; the source page's extra `<img>`s are DRM'd
   early-access previews + support badges. The webcomic strategy already surfaces the

@@ -1847,6 +1847,10 @@
           <h4 class="feed-prop-section-title">Maintenance</h4>
           <button type="button" id="feed-prop-reparse-btn" class="feed-prop-refresh-btn" title="Force a full re-fetch to restore embeds (videos, players) stripped from older posts">Backfill embeds</button>
           <span id="feed-prop-reparse-status" class="feed-prop-strategy-hint"></span>
+          <div id="feed-prop-browser-ua-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">🌐 This feed fetches with a browser identity (its server refused the default client).</span>
+            <button type="button" id="feed-prop-browser-ua-reset" class="feed-prop-inline-btn" title="Go back to the honest default identity for this feed">Reset to default identity</button>
+          </div>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>
@@ -3133,6 +3137,8 @@
     const feedPropUnsubscribeBtn = document.getElementById('feed-prop-unsubscribe-btn');
     const feedPropReparseBtn = document.getElementById('feed-prop-reparse-btn');
     const feedPropReparseStatus = document.getElementById('feed-prop-reparse-status');
+    const feedPropBrowserUaRow = document.getElementById('feed-prop-browser-ua-row');
+    const feedPropBrowserUaReset = document.getElementById('feed-prop-browser-ua-reset');
     const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
@@ -4249,6 +4255,7 @@
         if (feedPropYtSection) feedPropYtSection.hidden = !isYoutubeFeed;
         if (feedPropImgSection) feedPropImgSection.hidden = isYoutubeFeed;
         if (feedPropDevSection) feedPropDevSection.hidden = !isDevFeed;
+        if (feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = !data.browser_ua;
 
         setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
@@ -5170,6 +5177,20 @@
         if (feedPropReparseStatus) feedPropReparseStatus.textContent = `Error: ${err.message}`;
       } finally {
         feedPropReparseBtn.disabled = false;
+      }
+    });
+
+    feedPropBrowserUaReset?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      if (!feedUrl) return;
+      feedPropBrowserUaReset.disabled = true;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, enabled: '0' });
+        const resp = await fetch('/feeds/browser-ua', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (json.ok && feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = true;
+      } catch { /* leave row visible on error */ } finally {
+        feedPropBrowserUaReset.disabled = false;
       }
     });
 

@@ -57,7 +57,7 @@ from services import url_guard
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
-from services.feed_discovery import discover_feed_urls
+from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
 from services.feed_refresh import FeedRefreshService
 from services.lead_images import LeadImageService
 from services.reader_api import ReaderApi
@@ -2157,6 +2157,15 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS browser_ua_feeds (
+                feed_url TEXT PRIMARY KEY,
+                flagged_at TEXT NOT NULL DEFAULT (datetime('now')),
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS feed_display_prefs (
                 feed_url TEXT PRIMARY KEY,
                 show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
@@ -3083,6 +3092,34 @@ def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
 def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT feed_url FROM disabled_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+def get_browser_ua_feed_urls(conn: sqlite3.Connection) -> set[str]:
+    """Feeds whose fetch should use a browser identity (UA + headers).
+
+    A feed lands here only after an honest-UA fetch was *refused* (HTTP
+    403/415/429/503 or a hang) — see `_maybe_flag_browser_ua`. The request hook in
+    services.reader_api consults this set so the next fetch escalates. This is a
+    good-citizen escalation (only on refusal, never preemptive); it does not evade
+    IP-level blocks."""
+    rows = conn.execute("SELECT feed_url FROM browser_ua_feeds").fetchall()
+    return {str(r["feed_url"]) for r in rows}
+
+
+def flag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
+    """Mark a feed for browser-identity fetches. Returns True if newly flagged."""
+    feed_url = feed_url.strip()
+    if not feed_url:
+        return False
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO browser_ua_feeds (feed_url, reason) VALUES (?, ?)",
+        (feed_url, reason[:200]),
+    )
+    return cur.rowcount > 0
+
+
+def unflag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str) -> None:
+    conn.execute("DELETE FROM browser_ua_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
 def disable_feed(feed_url: str) -> None:
@@ -4924,6 +4961,54 @@ class _PersistentReaderProxy:
         return getattr(self._reader, name)
 
 
+# Per-user cache of browser-UA-flagged feed URLs, consulted by reader's per-feed
+# request hook on every fetch. Refreshed on a short TTL (the set changes only when
+# a feed is flagged/unflagged) and invalidated immediately on those writes.
+_browser_ua_cache: dict[str, set[str]] = {}
+_browser_ua_cache_at: dict[str, float] = {}
+_browser_ua_cache_lock = threading.Lock()
+_BROWSER_UA_CACHE_TTL = 30.0
+
+
+def _browser_ua_feeds_for(uid: str) -> set[str]:
+    now = time.monotonic()
+    with _browser_ua_cache_lock:
+        cached = _browser_ua_cache.get(uid)
+        if cached is not None and (now - _browser_ua_cache_at.get(uid, 0.0)) < _BROWSER_UA_CACHE_TTL:
+            return cached
+    try:
+        with tenancy.user_context(uid):
+            with get_meta_connection() as conn:
+                feeds = get_browser_ua_feed_urls(conn)
+    except Exception:
+        feeds = set()
+    with _browser_ua_cache_lock:
+        _browser_ua_cache[uid] = feeds
+        _browser_ua_cache_at[uid] = now
+    return feeds
+
+
+def _invalidate_browser_ua_cache() -> None:
+    with _browser_ua_cache_lock:
+        _browser_ua_cache.clear()
+        _browser_ua_cache_at.clear()
+
+
+def _flag_browser_ua_on_refusal(feed_url: str) -> bool:
+    """Flag a feed for browser-identity fetches after an honest-UA refusal and
+    invalidate the cache so an immediate retry escalates. Returns True if newly
+    flagged (a feed already flagged returns False, so the caller won't retry-loop)."""
+    try:
+        with get_meta_connection() as conn:
+            newly = flag_browser_ua_feed(conn, feed_url, reason="refused honest UA on refresh")
+    except Exception:
+        return False
+    if newly:
+        _invalidate_browser_ua_cache()
+        LOGGER.info("[refresh] flagged %s for browser-identity fetches", feed_url)
+    return newly
+
+
 def get_reader():
     """Per-(thread, user) persistent Reader, resolved via the tenancy seam.
 
@@ -4942,7 +5027,12 @@ def get_reader():
         pool.move_to_end(uid)  # mark most-recently-used
         return proxy
 
-    proxy = _PersistentReaderProxy(ReaderApi(tenancy.reader_db_path(uid)).client())
+    proxy = _PersistentReaderProxy(
+        ReaderApi(
+            tenancy.reader_db_path(uid),
+            browser_ua_provider=lambda u=uid: _browser_ua_feeds_for(u),
+        ).client()
+    )
     pool[uid] = proxy
     # Evict + close the least-recently-used handles beyond the per-thread cap.
     # Safe because the pool is thread-local and a thread serves one request at a
@@ -5615,6 +5705,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "smart_min_scale": float(_disp["smart_min_scale"]) if _disp.get("smart_min_scale") is not None else None,
             "fill_zoom": float(_disp["fill_zoom"]) if _disp.get("fill_zoom") is not None else None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
+            "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -6735,6 +6826,7 @@ feed_refresh_service = FeedRefreshService(
     refresh_debug_enabled=REFRESH_DEBUG_ENABLED,
     failed_feed_backoff_base_seconds=FAILED_FEED_BACKOFF_BASE_SECONDS,
     failed_feed_backoff_max_seconds=FAILED_FEED_BACKOFF_MAX_SECONDS,
+    on_fetch_refused=_flag_browser_ua_on_refusal,
 )
 
 websub_service: WebSubService | None = (
@@ -11863,8 +11955,9 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
 
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
+    discovery_escalated = False
     if not _is_youtube_url(url):
-        candidates = discover_feed_urls(url)
+        candidates, discovery_escalated = discover_feed_urls_ex(url)
         if not candidates:
             return RedirectResponse(
                 url=(
@@ -11882,6 +11975,14 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         message = f"Feed added (discovered from {url})."
     try:
         add_feed_to_folder(target_url, folder_id)
+        # If the feed was only reachable with a browser identity, flag it so
+        # reader's refresh fetch escalates too (otherwise it subscribes but never
+        # updates). Good-citizen: only after an honest fetch was refused.
+        if discovery_escalated:
+            with get_meta_connection() as conn:
+                flag_browser_ua_feed(conn, target_url, reason="discovery refused honest UA")
+            _invalidate_browser_ua_cache()
+            message += " (using browser identity — this site blocks default clients.)"
         # Fetch the feed's entries in the background so Add Feed returns
         # immediately. The first refresh can take 10-30s (network + parse +
         # per-entry processing); blocking on it made the dialog spin long
@@ -12983,6 +13084,21 @@ def refresh_feed_strategy_cache_route(
     return JSONResponse({"ok": True, "strategy_cache": results})
 
 
+@app.post("/feeds/browser-ua")
+def set_feed_browser_ua_route(feed_url: str = Form(...), enabled: int = Form(...)):
+    """Manually flag/unflag a feed for browser-identity fetches. Auto-set on
+    refusal; this lets the user reset a feed back to the honest identity (or force
+    it on)."""
+    feed_url = feed_url.strip()
+    with get_meta_connection() as conn:
+        if enabled:
+            flag_browser_ua_feed(conn, feed_url, reason="manual")
+        else:
+            unflag_browser_ua_feed(conn, feed_url)
+    _invalidate_browser_ua_cache()
+    return JSONResponse({"ok": True, "browser_ua": bool(enabled)})
+
+
 @app.post("/feeds/reparse")
 def reparse_feed_route(feed_url: str = Form(...)):
     """Force a full re-fetch + re-parse of one feed to backfill embeds on old
@@ -13002,7 +13118,15 @@ def reparse_feed_route(feed_url: str = Form(...)):
             # update" flag (used by its own --new=False path); private attr but
             # stable across reader 3.x.
             reader._storage.set_feed_stale(feed_url, True)
-            updated = reader.update_feed(feed_url)
+            try:
+                updated = reader.update_feed(feed_url)
+            except Exception as exc:
+                # If the host refused our honest UA, flag it for browser identity
+                # and retry once — otherwise a WAF-blocked feed can never backfill.
+                if FeedRefreshService._is_fetch_refusal(exc) and _flag_browser_ua_on_refusal(feed_url):
+                    updated = reader.update_feed(feed_url)
+                else:
+                    raise
     except Exception as exc:  # FeedNotFoundError, network/parse errors
         LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
