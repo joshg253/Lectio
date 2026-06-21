@@ -3487,6 +3487,39 @@ def entry_url_slug(url: str | None) -> str | None:
     return slug.lower() if slug else None
 
 
+def _resolve_dedup_feed_urls(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    exclude_scope_ids: str = "",
+    custom_feed_urls: set[str] | None = None,
+) -> set[str] | dict:
+    """Resolve the in-scope feed URLs for a dedup run (shared by preview + apply).
+
+    Returns the feed-URL set, or an ``{"error": ...}`` dict for an invalid scope.
+    A custom feed set (the manual compare picker) bypasses scope/exclude resolution."""
+    if custom_feed_urls is not None:
+        return custom_feed_urls
+    if scope == "global":
+        feed_urls = get_all_feed_urls(conn)
+    elif scope == "folder":
+        try:
+            fid = int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+        feed_urls = get_folder_feed_urls(conn, fid)
+    else:
+        return {"error": "deduplicate rules require global or folder scope"}
+    if exclude_scope_ids:
+        excluded: set[str] = set()
+        for fid_str in exclude_scope_ids.split(","):
+            fid_str = fid_str.strip()
+            if fid_str.isdigit():
+                excluded |= get_folder_feed_urls(conn, int(fid_str))
+        feed_urls -= excluded
+    return feed_urls
+
+
 def _dry_run_dedup(
     conn: sqlite3.Connection,
     scope: str,
@@ -3498,27 +3531,9 @@ def _dry_run_dedup(
     custom_feed_urls: set[str] | None = None,
 ) -> dict:
     """Preview which entries a deduplicate rule would mark read."""
-    if custom_feed_urls is not None:
-        feed_urls = custom_feed_urls
-    elif scope == "global":
-        feed_urls = get_all_feed_urls(conn)
-    elif scope == "folder":
-        try:
-            fid = int(scope_id)
-        except (ValueError, TypeError):
-            return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    else:
-        return {"error": "deduplicate rules require global or folder scope"}
-
-    if exclude_scope_ids and custom_feed_urls is None:
-        excluded: set[str] = set()
-        for fid_str in exclude_scope_ids.split(","):
-            fid_str = fid_str.strip()
-            if fid_str.isdigit():
-                excluded |= get_folder_feed_urls(conn, int(fid_str))
-        feed_urls -= excluded
-
+    feed_urls = _resolve_dedup_feed_urls(conn, scope, scope_id, exclude_scope_ids, custom_feed_urls)
+    if isinstance(feed_urls, dict):
+        return feed_urls  # {"error": ...}
     if len(feed_urls) < 2:
         return {
             "groups": [], "total_entries_scanned": 0, "total_would_mark_read": 0,
@@ -3792,25 +3807,9 @@ def _run_now_dedup(
 ) -> dict:
     """Execute dedup rule on unread entries. Mark newer duplicates as read."""
     global _unread_counts_generation
-    if scope == "global":
-        feed_urls = get_all_feed_urls(conn)
-    elif scope == "folder":
-        try:
-            fid = int(scope_id)
-        except (ValueError, TypeError):
-            return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    else:
-        return {"error": "deduplicate rules require global or folder scope"}
-
-    if exclude_scope_ids:
-        excluded: set[str] = set()
-        for fid_str in exclude_scope_ids.split(","):
-            fid_str = fid_str.strip()
-            if fid_str.isdigit():
-                excluded |= get_folder_feed_urls(conn, int(fid_str))
-        feed_urls -= excluded
-
+    feed_urls = _resolve_dedup_feed_urls(conn, scope, scope_id, exclude_scope_ids)
+    if isinstance(feed_urls, dict):
+        return feed_urls  # {"error": ...}
     if len(feed_urls) < 2:
         return {"count": 0, "message": "Need at least 2 feeds in scope"}
 

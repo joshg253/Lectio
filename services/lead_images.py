@@ -1580,6 +1580,25 @@ class LeadImageService:
                 attrs[key] = value
         return attrs
 
+    def _iter_acceptable_img_urls(self, attrs: dict[str, str], base_url: str, source_url: str | None = None):
+        """Yield resolved, acceptable image URLs from one ``<img>``'s attributes.
+
+        The shared candidate-acceptance inner loop of the source-page scanners
+        (preferred-image and gallery): expand lazy/srcset candidates, skip data:/SVG,
+        and apply the per-tag and per-URL acceptability checks. Callers add their own
+        outer logic (context skipping, scoring, dedup/exclude)."""
+        for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
+            if not image_url or image_url.startswith("data:"):
+                continue
+            resolved = urljoin(base_url, image_url)
+            if urlparse(resolved).path.lower().endswith(".svg"):
+                continue
+            if not self._is_source_image_tag_acceptable(attrs, resolved):
+                continue
+            if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
+                continue
+            yield resolved
+
     def _collect_img_candidate_urls(self, attrs: dict[str, str], source_url: str | None = None) -> list[str]:
         candidates: list[str] = []
         plugin_candidate_attrs = self._plugin_extra_candidate_attrs(source_url)
@@ -1806,23 +1825,9 @@ class LeadImageService:
                     continue
             if self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
-            tag = tag_match.group(0)
-            attrs = self._parse_img_attrs(tag)
+            attrs = self._parse_img_attrs(tag_match.group(0))
 
-            for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
-                if not image_url or image_url.startswith("data:"):
-                    continue
-                resolved = urljoin(base_url, image_url)
-                if not self._is_source_image_tag_acceptable(attrs, resolved):
-                    continue
-                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=source_url):
-                    continue
-                # SVG files are icons/logos/diagrams — not photographic article lead images.
-                # They slip through allow_extensionless=True because .svg is not a raster format.
-                _resolved_path = urlparse(resolved).path.lower()
-                if _resolved_path.endswith(".svg"):
-                    continue
-
+            for resolved in self._iter_acceptable_img_urls(attrs, base_url, source_url):
                 # Prefer <source type="image/webp"> from an enclosing <picture> element.
                 # The webp source is the browser's preferred format for this image and
                 # often carries a larger srcset than the fallback <img src>.
@@ -1880,17 +1885,8 @@ class LeadImageService:
             if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             attrs = self._parse_img_attrs(tag_match.group(0))
-            for image_url in self._collect_img_candidate_urls(attrs, source_url=entry_link):
-                if not image_url or image_url.startswith("data:"):
-                    continue
-                resolved = urljoin(base_url, image_url)
-                if urlparse(resolved).path.lower().endswith(".svg"):
-                    continue
+            for resolved in self._iter_acceptable_img_urls(attrs, base_url, entry_link):
                 if resolved in seen or urlparse(resolved).path in exclude_paths:
-                    continue
-                if not self._is_source_image_tag_acceptable(attrs, resolved):
-                    continue
-                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=entry_link):
                     continue
                 seen.add(resolved)
                 results.append(resolved)
