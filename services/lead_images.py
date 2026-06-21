@@ -23,6 +23,14 @@ from services.url_guard import is_safe_outbound_url
 
 LOGGER = logging.getLogger(__name__)
 
+# Last-resort browser UA for source-page fetches that an honest UA gets WAF-refused
+# (HTTP 403/503, e.g. Cloudflare-gated paizo.com). Escalated only after the honest
+# request is actually refused — never preemptively.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
 
 class LeadImageService:
     """Encapsulates entry lead-image extraction, caching, and persistence."""
@@ -117,7 +125,12 @@ class LeadImageService:
     # YouTube feeds (early-return in extract_entry_thumbnail_url lines 343-351); for all
     # other feeds they represent embedded video thumbnails, not the article's lead image.
     _SITE_CHROME_DOMAIN_PATTERNS = re.compile(
-        r"(?:resources\.blogblog\.com|www\.blogger\.com|i\.ytimg\.com|img\.youtube\.com)",
+        r"(?:resources\.blogblog\.com|www\.blogger\.com|i\.ytimg\.com|img\.youtube\.com"
+        # Badge/support-button widgets that webcomic/OG-scrape pages embed near the
+        # comic but are never the post's image: shields.io status badges
+        # (e.g. img.shields.io/twitter/follow/…) and Ko-fi tip buttons
+        # (storage.ko-fi.com/cdn/kofi3.png).
+        r"|shields\.io|ko-fi\.com)",
         re.IGNORECASE,
     )
     # Keep old name as alias so callers outside this class still work.
@@ -225,7 +238,10 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _WEBCOMIC_IMG_CLASS_RE = re.compile(
-        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic)\b',
+        # wp-post-image is WordPress's featured-image class — on a webcomic-strategy
+        # feed the featured image IS the comic panel (e.g. claycomix), so recognize
+        # it alongside the explicit comic-* classes.
+        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic|wp-post-image)\b',
         re.IGNORECASE,
     )
 
@@ -295,6 +311,12 @@ class LeadImageService:
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
         self._SOURCE_HTML_CACHE_MAX = 8
+        # Domains that WAF-refused us (403/503 even with a browser UA, e.g. a
+        # Cloudflare JS challenge like paizo.com) → time.monotonic() until which to
+        # skip re-fetching. Prevents per-open re-scrape from hammering the site
+        # (which can get our IP rate-limited and break the feed fetch too).
+        self._waf_block_until: dict[str, float] = {}
+        self._WAF_BLOCK_COOLDOWN = 6 * 3600  # seconds
         # Events signalled when queue_source_html_fetch completes; lets the first-open entry
         # render wait briefly for caption text rather than deferring to the next open.
         self._source_html_fetch_events: dict[str, threading.Event] = {}
@@ -1841,6 +1863,62 @@ class LeadImageService:
             return best_url, best_alt
         return None, None
 
+    def extract_source_gallery_urls(
+        self, entry_link: str, exclude_urls: set[str] | None = None, limit: int = 20
+    ) -> list[str]:
+        """Return all acceptable article images from a cached source page, in order.
+
+        For feeds whose body carries no inline images (e.g. paizo blog) the full
+        article's images live only on the source page. This collects them — applying
+        the same author/site-chrome/related-block/junk filters as the lead-image
+        scraper — so the caller can inject them into the entry body. Reads only the
+        already-fetched ``_source_html_cache`` (no network here); returns [] on a
+        cache miss so the caller can prime it in the background and fill in later."""
+        cached = self._source_html_cache.get(entry_link)
+        if cached is None:
+            return []
+        base_url, html_text = cached
+        html_text = self._strip_related_post_blocks(html_text)
+        exclude_paths = {urlparse(u).path for u in (exclude_urls or set()) if u}
+        results: list[str] = []
+        seen: set[str] = set()
+        for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
+            if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
+                continue
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag_match.group(0)):
+                key = attr_match.group(1).strip().lower()
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                if key and value:
+                    attrs[key] = value
+            for image_url in self._collect_img_candidate_urls(attrs, source_url=entry_link):
+                if not image_url or image_url.startswith("data:"):
+                    continue
+                resolved = urljoin(base_url, image_url)
+                if urlparse(resolved).path.lower().endswith(".svg"):
+                    continue
+                if resolved in seen or urlparse(resolved).path in exclude_paths:
+                    continue
+                if not self._is_source_image_tag_acceptable(attrs, resolved):
+                    continue
+                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=entry_link):
+                    continue
+                seen.add(resolved)
+                results.append(resolved)
+                break  # one URL per <img> tag
+            if len(results) >= limit:
+                break
+        return results
+
+    def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 1.0) -> bool:
+        """Block up to ``timeout`` for an in-flight queue_source_html_fetch to finish.
+        Returns True if the source HTML is cached afterward."""
+        event = self._source_html_fetch_events.get(entry_link)
+        if event is not None:
+            event.wait(timeout)
+        return entry_link in self._source_html_cache
+
     def _extract_css_background_image_url(self, html_text: str, base_url: str) -> str | None:
         """Return the first acceptable CSS background-image URL found in inline style attributes."""
         for m in self._CSS_BG_IMAGE_RE.finditer(html_text):
@@ -2302,23 +2380,42 @@ class LeadImageService:
         """
         _use_urllib = False
         _corp_restricted = False
+        # Respect a recent WAF refusal: don't re-hammer a domain that 403/503'd even
+        # with a browser UA (e.g. paizo's Cloudflare JS challenge). Repeated per-open
+        # scrapes would otherwise get our IP rate-limited and break the feed fetch too.
+        _domain = urlparse(url).netloc.lower()
+        if self._waf_block_until.get(_domain, 0.0) > time.monotonic():
+            return None
         try:
-            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
-            with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
-                response = url_guard.safe_get(client, url)
-                if response.status_code == 409:
-                    m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
-                    if m:
-                        cookie_str = m.group(1)
-                        if "=" in cookie_str:
-                            cname, cval = cookie_str.split("=", 1)
-                            parsed_host = urlparse(url)
-                            domain = parsed_host.netloc.lstrip("www.")
-                            client.cookies.set(cname.strip(), cval.strip(), domain=domain)
-                        response = url_guard.safe_get(client, url)
-                response.raise_for_status()
-                _corp = response.headers.get("cross-origin-resource-policy", "").lower()
-                _corp_restricted = _corp in ("same-site", "same-origin")
+            # Identify honestly by default; escalate to a browser UA only if the
+            # honest request is actually refused with a WAF status (403 Forbidden or
+            # 503, used by Cloudflare's "Just a moment" challenge — e.g. paizo.com).
+            # Never preemptive, so hosts happy to serve Lectio still see the honest UA.
+            response = None
+            for _ua in (self._user_agent, _BROWSER_USER_AGENT):
+                # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+                with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": _ua}) as client:
+                    response = url_guard.safe_get(client, url)
+                    if response.status_code == 409:
+                        m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
+                        if m:
+                            cookie_str = m.group(1)
+                            if "=" in cookie_str:
+                                cname, cval = cookie_str.split("=", 1)
+                                parsed_host = urlparse(url)
+                                domain = parsed_host.netloc.lstrip("www.")
+                                client.cookies.set(cname.strip(), cval.strip(), domain=domain)
+                            response = url_guard.safe_get(client, url)
+                    if response.status_code not in (403, 503):
+                        break  # served (or a non-WAF error) — don't escalate
+            # Still refused after escalating → the site is WAF-blocking us. Record a
+            # cooldown so we stop re-fetching it on every entry open.
+            if response is not None and response.status_code in (403, 503):
+                self._waf_block_until[_domain] = time.monotonic() + self._WAF_BLOCK_COOLDOWN
+                return None
+            response.raise_for_status()
+            _corp = response.headers.get("cross-origin-resource-policy", "").lower()
+            _corp_restricted = _corp in ("same-site", "same-origin")
         except httpx.RemoteProtocolError:
             _use_urllib = True
         except Exception:

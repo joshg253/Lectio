@@ -1716,6 +1716,8 @@
           <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
         </dl>
         <div class="feed-prop-footer">
+          <button type="button" id="feed-prop-reparse-btn" class="feed-prop-inline-btn" title="Force a full re-fetch to restore embeds (videos, players) stripped from older posts">Backfill embeds</button>
+          <span id="feed-prop-reparse-status" class="feed-prop-inline-status"></span>
           <button type="button" id="feed-prop-unsubscribe-btn" class="feed-prop-unsubscribe-btn" hidden>Unsubscribe from feed</button>
         </div>
       </div>
@@ -1767,6 +1769,10 @@
             <label class="feed-prop-toggle-row">
               <input type="checkbox" id="feed-prop-show-in-article" class="feed-prop-checkbox" />
               <span>Show image at top of article</span>
+            </label>
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-inject-source-images" class="feed-prop-checkbox" />
+              <span>Inject source-page images (for feeds with image-less bodies, e.g. paizo)</span>
             </label>
           </div>
 
@@ -3102,6 +3108,7 @@
     const feedPropStrategyHint = document.getElementById('feed-prop-strategy-hint');
     const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
     const feedPropShowInArticle = document.getElementById('feed-prop-show-in-article');
+    const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
     const feedPropCaptionAlt = document.getElementById('feed-prop-caption-alt');
@@ -3118,6 +3125,8 @@
     const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
     const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
     const feedPropUnsubscribeBtn = document.getElementById('feed-prop-unsubscribe-btn');
+    const feedPropReparseBtn = document.getElementById('feed-prop-reparse-btn');
+    const feedPropReparseStatus = document.getElementById('feed-prop-reparse-status');
     const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
@@ -4260,6 +4269,10 @@
             feedPropShowInArticle.checked = data.show_lead_image_in_article !== false;
             feedPropShowInArticle.dataset.feedUrl = feedUrl;
           }
+          if (feedPropInjectSourceImages) {
+            feedPropInjectSourceImages.checked = !!data.inject_source_images;
+            feedPropInjectSourceImages.dataset.feedUrl = feedUrl;
+          }
           if (feedPropCaptionTitle && feedPropCaptionAlt && feedPropCaptionAutoBtn) {
             const src = data.caption_source || 'auto';
             feedPropCaptionTitle.checked = src === 'title' || src === 'both';
@@ -5126,6 +5139,27 @@
       }
     });
 
+    feedPropReparseBtn?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      if (!feedUrl) return;
+      feedPropReparseBtn.disabled = true;
+      if (feedPropReparseStatus) feedPropReparseStatus.textContent = 'Re-parsing…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl });
+        const resp = await fetch('/feeds/reparse', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'Re-parse failed');
+        if (feedPropReparseStatus) {
+          feedPropReparseStatus.textContent = json.modified ? `Updated ${json.modified} post(s)` : 'No changes';
+          setTimeout(() => { feedPropReparseStatus.textContent = ''; }, 4000);
+        }
+      } catch (err) {
+        if (feedPropReparseStatus) feedPropReparseStatus.textContent = `Error: ${err.message}`;
+      } finally {
+        feedPropReparseBtn.disabled = false;
+      }
+    });
+
     feedPropStrategy?.addEventListener('change', async () => {
       const feedUrl = feedPropStrategy.dataset.feedUrl;
       const strategy = feedPropStrategy.value;
@@ -5365,6 +5399,13 @@
       if (!feedUrl) return;
       try { await saveDisplayPref(feedUrl, 'hide_shorts', feedPropHideShorts.checked ? 1 : 0); }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
+    });
+
+    feedPropInjectSourceImages?.addEventListener('change', async () => {
+      const feedUrl = feedPropInjectSourceImages.dataset.feedUrl;
+      if (!feedUrl) return;
+      try { await saveDisplayPref(feedUrl, 'inject_source_images', feedPropInjectSourceImages.checked ? 1 : 0); }
+      catch (e) { feedPropInjectSourceImages.checked = !feedPropInjectSourceImages.checked; }
     });
 
     feedPropFlushBatchBtn?.addEventListener('click', async () => {

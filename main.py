@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Sequence, cast
-from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -294,7 +294,11 @@ _CORP_DOMAIN_CACHE: dict[str, bool] = {}
 # stays correct. Add a registrable domain (matches it and any subdomain).
 # wixmp.com serves DeviantArt images behind short-lived signed (?token=) URLs;
 # proxying caches the bytes server-side so the article image survives token expiry.
-_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset({"nanolx.org", "wixmp.com"})
+# private-user-images.githubusercontent.com serves GitHub release/issue screenshots
+# behind short-lived (~5 min) JWT-signed URLs — same problem, same fix.
+_HOTLINK_IMG_HOSTS: frozenset[str] = frozenset(
+    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com"}
+)
 
 
 def _is_hotlink_img_host(netloc: str) -> bool:
@@ -2157,7 +2161,8 @@ def ensure_meta_schema() -> None:
                 show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
                 show_lead_image_as_thumb INTEGER NOT NULL DEFAULT 1,
                 show_image_caption INTEGER NOT NULL DEFAULT -1,
-                caption_source TEXT
+                caption_source TEXT,
+                inject_source_images INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -2441,6 +2446,10 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN feed_thumbnail_url TEXT")
         except Exception:
             pass
@@ -2628,8 +2637,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
+_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts", "inject_source_images"})
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -5449,6 +5458,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
@@ -5969,6 +5979,32 @@ def _fix_wp_post_footer(content_html: str) -> str:
     return str(soup)
 
 
+def _clean_qwantz_content(content_html: str) -> str:
+    """Strip Dinosaur Comics (qwantz.com) nav chrome, keep comic + commentary.
+
+    The feed wraps the comic in ``<center>`` with a nav table above the image
+    (archive / contact / merch / search / about) and another below it whose first
+    row is prev/date/next nav and whose second row is the dated author
+    commentary. Rebuild the body as just the comic ``<img>`` (its ``title`` holds
+    the secret hover text, kept for the caption) followed by that commentary, so
+    the duplicated nav and date links don't clutter the reading view."""
+    if "qwantz.com" not in content_html and 'class="comic"' not in content_html:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    img = soup.find("img", class_="comic") or soup.find("img")
+    if img is None:
+        return content_html  # not the shape we expect; leave untouched
+    # The commentary lives in the only wide (colspan=3) cell with real text.
+    commentary_html = ""
+    for td in soup.find_all("td"):
+        if str(td.get("colspan")) == "3" and td.get_text(strip=True):
+            commentary_html = "".join(str(c) for c in td.contents)
+            break
+    return str(img) + commentary_html
+
+
 _AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac")
 
 
@@ -5984,6 +6020,38 @@ def _url_has_audio_ext(url: str) -> bool:
     # Trim surrounding whitespace some feeds leave around URLs, which would
     # otherwise land in the parsed path and defeat the extension check.
     return urlparse(url.strip()).path.lower().endswith(_AUDIO_EXTS)
+
+
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg")
+
+
+def _url_has_image_ext(url: str) -> bool:
+    """True if the URL's path ends in a known image extension (query string
+    tolerated, like _url_has_audio_ext)."""
+    if not url:
+        return False
+    return urlparse(url.strip()).path.lower().endswith(_IMAGE_EXTS)
+
+
+_BUZZSPROUT_ENCLOSURE_RE = re.compile(
+    r"^(https://(?:www\.)?buzzsprout\.com/\d+/episodes/[^?#]+)\.mp3", re.IGNORECASE
+)
+
+
+def _derived_entry_link(entry) -> str | None:
+    """Best-effort page URL for entries whose feed ships no ``<link>``.
+
+    Buzzsprout podcast feeds carry only a guid + audio enclosure; the episode page
+    is the enclosure URL without the ``.mp3`` extension, so the post title can link
+    somewhere instead of being inert."""
+    if getattr(entry, "link", None):
+        return None
+    for enc in (getattr(entry, "enclosures", None) or []):
+        url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+        m = _BUZZSPROUT_ENCLOSURE_RE.match(url)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _find_entry_audio_url(entry) -> str | None:
@@ -6053,6 +6121,12 @@ def _render_entry_attachments(entry, audio_url: str | None) -> str:
         enc_type = (getattr(enc, "type", None) or "").lower()
         if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
             continue  # surfaced as the audio player
+        # Image enclosures are the post's lead/inline image (e.g. gottadeal's deal
+        # photo) — surfaced as the lead image, not a download link. Listing them
+        # here also poisoned the lead-image dedup (the URL appearing in the
+        # attachments markup made the lead look "already in content", nulling it).
+        if enc_type.startswith("image/") or _url_has_image_ext(enc_url):
+            continue
         if audio_url and enc_url == audio_url:
             continue
         seen.add(enc_url)
@@ -7039,6 +7113,46 @@ def build_readability_response(source_url: str) -> HTMLResponse:
     )
 
 
+# Blogger posts can ship an empty feed <title> while the real title lives only
+# as the first body heading and in the post URL slug (e.g. treecardgames). Recover
+# a readable title from the slug so the list/article don't show "(untitled)".
+# Scoped to Blogger so genuinely-untitled posts elsewhere (e.g. Tumblr reblogs)
+# keep their "(untitled)" label.
+_BLOGGER_FEED_RE = re.compile(r"blogspot\.com|blogger\.com|/feeds/posts/default", re.IGNORECASE)
+
+
+def _title_from_blogger_slug(link: str) -> str | None:
+    """Humanize a Blogger post URL slug into a title, or None.
+
+    e.g. ``https://x.blogspot.com/2026/06/gin-rummy-strategies-essential.html``
+    → ``Gin Rummy Strategies Essential``.
+    """
+    if not link:
+        return None
+    slug = urlparse(link).path.rsplit("/", 1)[-1]
+    slug = re.sub(r"\.html?$", "", slug, flags=re.IGNORECASE)
+    words = [w for w in slug.split("-") if w]
+    if not words:
+        return None
+    return " ".join(w.capitalize() for w in words)
+
+
+def _display_title(entry) -> str:
+    """Entry title for display, recovering Blogger empty-title posts from the slug.
+
+    Returns the feed title when present; otherwise, for Blogger feeds only, a
+    title humanized from the URL slug. Falls back to "" (template renders
+    "(untitled)") for genuinely-untitled posts on other sites."""
+    title = (getattr(entry, "title", None) or "").strip()
+    if title:
+        return title
+    feed_url = str(getattr(entry, "feed_url", "") or "")
+    link = str(getattr(entry, "link", "") or "")
+    if _BLOGGER_FEED_RE.search(feed_url) or _BLOGGER_FEED_RE.search(link):
+        return _title_from_blogger_slug(link) or ""
+    return ""
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -7252,7 +7366,7 @@ def list_entries_for_feeds(
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
 
-            title_text = entry.title
+            title_text = _display_title(entry) or entry.title
             if search_terms:
                 search_haystack = " ".join(
                     [
@@ -7295,7 +7409,7 @@ def list_entries_for_feeds(
                     "feed_url": entry.feed_url,
                     "id": entry.id,
                     "title": title_text,
-                    "link": entry.link,
+                    "link": entry.link or _derived_entry_link(entry),
                     "read": is_read,
                     "saved": is_saved,
                     sort_key: sort_value,
@@ -7676,10 +7790,37 @@ def _derive_article_lead_image(entry) -> str | None:
     feed_url = str(getattr(entry, "feed_url", "") or "")
     strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
     if strategy == "inline":
-        # extract_inline_thumb_url already includes the inline-<svg> fallback.
-        return lead_image_service.extract_inline_thumb_url(entry)
-    if strategy == "media_rss":
-        result = lead_image_service.extract_media_rss_thumb_url(entry)
+        # extract_inline_thumb_url already includes the inline-<svg> fallback, but
+        # only scans inline <img>; feeds whose image lives in an <enclosure>/media
+        # field (e.g. gottadeal) have no inline <img>, so fall back to the same
+        # enclosure-aware extractor the list thumbnail uses. Without this the
+        # article showed no image AND persisted a negative on open (poisoning the
+        # thumbnail after a re-parse). DeviantArt-style inline feeds short-circuit
+        # on the first call, so the stale-negative bypass it was added for still holds.
+        return (
+            lead_image_service.extract_inline_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
+    if strategy == "webcomic":
+        # Many webcomic feeds (e.g. claycomix) ship the FULL comic strip inline in
+        # the feed content, while the source-page scrape only finds a single-pane
+        # preview — which is fine as the small list thumbnail but wrong for the
+        # article. Prefer the inline full image here; fall back to the scraped
+        # panel only when the feed has no inline image (the classic case where the
+        # comic lives only on the source page).
+        result = (
+            lead_image_service.extract_inline_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
+    elif strategy == "media_rss":
+        # reader drops <media:content>/<media:group>, so the media extractor often
+        # returns None on the stored entry even though the image was captured (via a
+        # raw re-parse) into the lead-image cache. Fall back to the cache-consulting
+        # extractor — the same image the list thumbnail shows (e.g. paizo).
+        result = (
+            lead_image_service.extract_media_rss_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
     else:
         result = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
     # Last resort: a raw inline <svg> in the entry content (sanitized → data URI).
@@ -7897,6 +8038,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # some feeds emit. Generic across feeds.
         if isinstance(content_html, str):
             content_html = _fix_wp_post_footer(content_html)
+
+        # Dinosaur Comics (qwantz): strip the nav tables wrapping the comic and
+        # keep only the comic image + dated author commentary.
+        if isinstance(content_html, str) and "qwantz.com" in feed_url:
+            content_html = _clean_qwantz_content(content_html)
 
         # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
         # replacing them with the literal text "<strong>iframe</strong>" inside a
@@ -8505,7 +8651,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Persist off the request thread (and skip when unchanged) so an open
         # never blocks on the meta-DB writer held by the background backfill.
-        lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
+        # Skip for webcomic feeds: their cached lead is the single-pane source
+        # preview used as the list thumbnail, while the article shows the full
+        # inline strip — persisting the article's full image here would clobber
+        # the preview thumbnail. The webcomic source-scrape owns that cache.
+        _persist_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
+        if _persist_strategy != "webcomic":
+            lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the
@@ -8519,6 +8671,32 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
+
+        # Source-page image gallery — for feeds whose body carries no/few images
+        # but whose source article has several (e.g. paizo blog), inject the source
+        # page's images into the entry. Opt-in per feed (inject_source_images).
+        # Runs before the hotlink/no-referrer pass below so injected images are
+        # proxied and referrer-stripped like the rest.
+        if _disp.get("inject_source_images") and entry.link:
+            _exclude_imgs: set[str] = set()
+            if lead_image_url:
+                _exclude_imgs.add(lead_image_url)
+            for _m in re.finditer(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html or "", re.IGNORECASE):
+                _exclude_imgs.add(html.unescape(_m.group(1)))
+            _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+            if not _gallery:
+                # Prime the source HTML in the background, wait briefly, then retry —
+                # so the gallery fills on first open for fast sites, later otherwise.
+                lead_image_service.queue_source_html_fetch(entry.link)
+                lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
+                _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+            if _gallery:
+                _figs = "".join(
+                    f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" '
+                    f'referrerpolicy="no-referrer"></figure>'
+                    for u in _gallery
+                )
+                content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
 
         # Suppress the Referer on inline body images so hotlink-protected hosts
         # serve the real image instead of a placeholder, and route known
@@ -8562,7 +8740,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             image_title_text = None
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
-        _display_link = _rebase_proxy_entry_link(entry.link, feed_url, _channel_link)
+        _display_link = _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
 
         # Suppress summaries that consist entirely of img tags with no text (e.g. xkcd,
         # Deathbulge).  After the lead image is shown above the content, rendering the
@@ -8587,13 +8765,17 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         return {
             "feed_url": entry.feed_url,
             "id": entry.id,
-            "title": entry.title,
+            "title": _display_title(entry) or entry.title,
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
             "lead_image_url": _lead_image_display_url(lead_image_url),
             "show_lead_in_article": _show_lead_in_article,
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
+            # Webcomic feeds show the FULL strip in the article but keep the
+            # single-pane scraped preview as the list thumbnail — so don't let the
+            # client sync the list row's thumbnail to the article lead image on open.
+            "sync_list_thumb": _persist_strategy != "webcomic",
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
@@ -12618,6 +12800,34 @@ def refresh_feed_strategy_cache_route(
     return JSONResponse({"ok": True, "strategy_cache": results})
 
 
+@app.post("/feeds/reparse")
+def reparse_feed_route(feed_url: str = Form(...)):
+    """Force a full re-fetch + re-parse of one feed to backfill embeds on old
+    entries.
+
+    Entries stored before ingest stopped sanitizing feed HTML (see
+    services.reader_sanitize) have their iframe/SVG embeds stripped; they only
+    return when reader re-stores the entry on a content change. reader skips
+    unchanged feeds via conditional GET, so we mark the feed stale first
+    (reader's own mechanism to ignore the cached ETag/Last-Modified) and then
+    update it: the now-unsanitized re-parse yields a different content hash for
+    those old entries, so reader re-stores them with embeds intact. Read/star
+    state is preserved (reader keys on entry id, not content)."""
+    try:
+        with get_reader() as reader:
+            # set_feed_stale is reader's supported "ignore HTTP caching on next
+            # update" flag (used by its own --new=False path); private attr but
+            # stable across reader 3.x.
+            reader._storage.set_feed_stale(feed_url, True)
+            updated = reader.update_feed(feed_url)
+    except Exception as exc:  # FeedNotFoundError, network/parse errors
+        LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    modified = int(getattr(updated, "modified", 0)) if updated else 0
+    new = int(getattr(updated, "new", 0)) if updated else 0
+    return JSONResponse({"ok": True, "modified": modified, "new": new})
+
+
 @app.post("/feeds/move")
 def move_feed(
     feed_url: str = Form(...),
@@ -14172,6 +14382,31 @@ def _img_cache_store(cache_key: str, body: bytes, content_type: str) -> None:
         LOGGER.warning("[img-cache] store failed for %s", cache_key, exc_info=True)
 
 
+# Query params that are per-request signing tokens, not image identity. Stripping
+# them from the cache key lets a signed-CDN image (GitHub private-user-images JWT,
+# wixmp/S3 ?token/X-Amz-*) stay cache-resident across token rotations, so it keeps
+# loading after the original short-lived URL expires. The full URL (with token) is
+# still used for the actual fetch.
+_IMG_CACHE_VOLATILE_PARAMS = frozenset({
+    "jwt", "token", "sig", "signature", "expires", "exp",
+    "x-amz-algorithm", "x-amz-credential", "x-amz-date", "x-amz-expires",
+    "x-amz-security-token", "x-amz-signature", "x-amz-signedheaders",
+})
+
+
+def _img_cache_key_url(u: str) -> str:
+    """Normalize an image URL for the cache key by dropping volatile signing params."""
+    try:
+        parsed = urlparse(u)
+    except ValueError:
+        return u
+    kept = [
+        (k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True)
+        if k.lower() not in _IMG_CACHE_VOLATILE_PARAMS
+    ]
+    return urlunparse(parsed._replace(query=urlencode(kept)))
+
+
 @app.get("/api/img")
 async def api_img_proxy(u: str) -> Response:
     """Server-side image proxy with a content-addressed cache.
@@ -14191,7 +14426,7 @@ async def api_img_proxy(u: str) -> Response:
     """
     if urlparse(u).scheme not in ("http", "https"):
         return Response(status_code=400)
-    cache_key = hashlib.sha256(u.encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(_img_cache_key_url(u).encode("utf-8")).hexdigest()
     cached = _img_cache_get(cache_key)
     if cached is not None:
         body, content_type = cached

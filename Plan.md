@@ -235,31 +235,91 @@ Lectio now owns HTML sanitization (feedparser sanitize OFF at ingest, embeds
 kept — see ARCHITECTURE "HTML sanitization"). Surfaced during testing 2026-06-20;
 these are pre-existing feed-quality quirks, not regressions:
 
+Fixed in the 2026-06-20 browser-testing pass:
+- ~~**Sanitizer stripped `class` (regression)**~~ — the own-sanitizer allowlist
+  dropped `class`, silently breaking every class-based content cleanup (mynorthwest
+  "Related Stories" strip, NASA blocks, Ghost audio cards, embed-container, webcomic/
+  YouTube-figure detection). Now keeps `class` globally (`id` still dropped to avoid
+  colliding with the app's element IDs). Heals on re-parse. Test: `test_html_sanitize.py`.
+- ~~**Enclosure-image feeds showed no article image + backfill wiped the thumb**~~
+  (gottadeal) — the deal photo is an `<enclosure>`; it was listed as an Attachment,
+  which hid it as a download link AND made the lead-image dedup null it, and the open
+  then persisted a negative that wiped the thumbnail on backfill. Image enclosures are
+  now excluded from Attachments (`_url_has_image_ext`) and the inline strategy falls
+  back to the enclosure-aware extractor. Tests: `test_attachments.py`, repro verified.
+- ~~**Webcomic full strip in article, preview as thumb**~~ (claycomix) — the feed
+  content ships the FULL multi-panel strip while the source-scrape only finds a
+  single-pane preview. The article was showing the preview and stripping the full
+  image. `_derive_article_lead_image` now prefers the inline full image for
+  `webcomic` feeds (falling back to the scraped panel when the feed has no inline
+  image), and the article open no longer persists its lead for webcomic feeds (so
+  the scraped preview stays the list thumbnail). Tests:
+  `test_article_lead_image_strategy.py`.
+- ~~**Junk lead images from widget badges**~~ — openmw grabbed a `shields.io` follow
+  badge, claycomix the `ko-fi.com` tip button; both now rejected as site chrome.
+  Test: `test_lead_images_service.py::test_badge_and_kofi_widgets_rejected`.
+- **qwantz "alt twice" (4485)** — could not reproduce in current code (clean render);
+  was a pre-rebuild cached view.
+
+Still open from that pass (deferred — need live-render confirmation or lower priority):
+- **Music-blog embeds render tiny** — backfilled SoundCloud/Bandcamp iframes (e.g.
+  540×540) look small; needs a look at the live reading-column layout to size them
+  (width:100%/responsive) without distorting YouTube video embeds.
+- **mynorthwest source image not at top** — og_scrape feed; recheck whether the OG
+  lead image shows in-article after the class/cache fixes + a re-derive.
+- **Buzzsprout title has no page link** — the feed ships no `<link>` (only guid +
+  enclosure); derive the episode page URL from the enclosure (strip `.mp3`) so the
+  title is clickable. Needs a `_display_link` fallback used by both list and pane.
+- **selfh.st / waynocartoons load via Reader mode** — promising for the paywall spike:
+  if Readability already extracts the full article from the page, the "paywalled
+  teaser" limitation may be a non-issue for these. Confirm and wire up.
+
 - ~~**WordPress "The post … appeared first on …" footer boilerplate**~~ — DONE.
   `_strip_wp_post_footer` removes the trailing self-link footer (incl. plugin
   duplicates and the double-encoded literal-`<p>` variant). Test:
   `tests/unit/test_wp_footer.py`.
-- **Backfill embeds on old entries** — entries stored before the sanitization
-  migration still have their embeds stripped; they only return when the feed is
-  re-fetched (reader re-stores on content change). YouTube has the
-  `entry_media_video` backfill; Bandcamp/SoundCloud/etc. do not. Options: a
-  polite one-time re-parse pass over subscribed feeds (sequential, honest UA,
-  not `--all` hammering), or just let feeds self-heal as they publish. Decide
-  scope. (folder-15 music feeds were re-fetched manually as a spot fix.)
-- **qwantz (Dinosaur Comics)** — feed wraps the comic in `<center><table>` nav
-  (archive/contact/merch/search + prev/next) above and below the image, and the
-  title/alt caption shows twice. Needs a per-site strip of the nav tables and a
-  caption de-dupe.
-- **Webcomic single-image feeds (e.g. claycomix)** — feed ships only one image
-  per post; multi-panel strips would need the webcomic source-page scrape
-  strategy. Confirm whether the user wants source-scraping enabled for these.
-- **Text-only feeds — show derived lead image in article** (e.g. mynorthwest,
-  gottadeal) — these feeds carry zero inline `<img>`; the thumbnail is derived
-  from the page OG image. Optionally inject that derived lead image at the top of
-  the article body when `show_lead_image_in_article` is on.
-- **Blogger "(untitled)" posts** (e.g. treecardgames) — some Blogger entries show
-  "(untitled)" though the web post has a title. Check whether the title is
-  present in the feed/`reader` model and recover it if so.
+- ~~**Backfill embeds on old entries**~~ — DONE (decision: self-heal + manual
+  button, not a mass re-parse pass — stays a good web citizen). Entries stored
+  before the sanitization migration kept their embeds stripped; reader only
+  re-stores on a content change, which conditional GET skips for unchanged feeds.
+  Feed Properties → Info now has a **Backfill embeds** button (`/feeds/reparse`)
+  that marks the feed stale (reader's `set_feed_stale`, its own ignore-HTTP-cache
+  flag) then updates it, so the now-unsanitized re-parse re-stores those entries
+  with embeds intact; read/star state is preserved (reader keys on entry id).
+  Test: `tests/integration/test_reparse_route.py`.
+- ~~**qwantz (Dinosaur Comics)**~~ — DONE. `_clean_qwantz_content` rebuilds the
+  body as just the comic `<img>` (its `title` = secret hover text, kept for the
+  caption) plus the dated commentary cell, dropping the top archive/contact/merch
+  nav table and the bottom prev/date/next nav row. Test: `tests/unit/test_qwantz.py`.
+- **Webcomic single-image feeds (e.g. claycomix)** — investigated 2026-06-20: not
+  actually a multi-panel case. claycomix posts a single `wp-post-image` per entry;
+  the source page's extra `<img>`s are a DRM-protected early-access preview and
+  lazy-loaded (`data-src` + SVG placeholder) support badges, not comic panels. The
+  webcomic lead-image strategy already surfaces the single panel. Parked: a generic
+  "scrape all panels" feature needs a real multi-panel exemplar to design against;
+  revisit if one turns up.
+- ~~**Text-only feeds — show derived lead image in article**~~ — already handled.
+  Superseded by the background lead-image pipeline: `_derive_article_lead_image`
+  consults the cache (filled by the source-page OG scrape) and the article
+  template renders `lead_image_url` whenever `show_lead_image_in_article` is on
+  (no requirement that the image appear in content), with first-open misses covered
+  by the pending/poll path. So zero-`<img>` feeds already get the derived OG image
+  in-article. (Spot-check mynorthwest/gottadeal if it ever regresses.)
+- ~~**Inject source-page image gallery**~~ — DONE. Some feeds (e.g. paizo blog)
+  ship full text but no inline `<img>` — only a single `<media:content>` teaser —
+  while the article page has several images. New opt-in per-feed toggle
+  **Inject source-page images** (Feed Properties → Tuning) scrapes the article page
+  (background `queue_source_html_fetch`, brief wait, then fill on a later open),
+  extracts all acceptable images via `extract_source_gallery_urls` (same author/
+  site-chrome/related/junk filters as the lead scraper), dedupes against the lead +
+  existing body images, and appends them as a `.source-gallery`. Off by default;
+  pref `inject_source_images`. Tests: `tests/services/test_source_gallery.py`.
+  (Note: paizo WAF-blocks non-production IPs, so verify on the live server.)
+- ~~**Blogger "(untitled)" posts** (e.g. treecardgames)~~ — DONE. These Blogger
+  entries genuinely ship an empty feed `<title>`; the real title lives only in the
+  first body heading and the URL slug. `_display_title` recovers a humanized title
+  from the Blogger slug (scoped to Blogger so genuinely-untitled posts elsewhere —
+  e.g. Tumblr reblogs — keep "(untitled)"). Test: `tests/unit/test_blogger_title.py`.
 
 ### Ideas
 

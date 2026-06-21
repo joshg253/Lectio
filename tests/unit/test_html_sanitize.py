@@ -33,6 +33,14 @@ def test_basic_formatting_kept():
     assert 'href="https://x.test"' in out
 
 
+def test_class_kept_id_dropped():
+    # class is kept so content-cleanup passes (related-block strip, etc.) work;
+    # id is dropped to avoid colliding with the app's own element IDs.
+    out = H.sanitize_html('<div class="related alignright" id="entry-body">x</div>')
+    assert 'class="related alignright"' in out
+    assert "id=" not in out
+
+
 @pytest.mark.parametrize("host", [
     "https://www.youtube.com/embed/abc",
     "https://www.youtube-nocookie.com/embed/abc",

@@ -2992,7 +2992,44 @@ button:hover, .button-link:hover {
 }
 
 .entry-content iframe {
-  max-width: 100%;
+  /* Unify every embed (Bandcamp, SoundCloud, Spotify, etc.) to the same footprint
+     as the inline YouTube player: full column width, capped at 560px, centered.
+     A feed-supplied width="540"/"100" attribute would otherwise leave players
+     inconsistently sized or tiny. Height stays as the embed declares it (audio
+     players need their own height; forcing 16:9 would crop the controls). */
+  width: 100%;
+  max-width: 560px;
+  display: block;
+  margin: 1em auto;
+}
+/* Video embeds: width:100% would stretch the width while leaving the feed's small
+   height attr untouched, producing skinny letterbox stripes. Force 16:9. */
+.entry-content iframe[src*="youtube.com"],
+.entry-content iframe[src*="youtube-nocookie.com"],
+.entry-content iframe[src*="youtu.be"],
+.entry-content iframe[src*="vimeo.com"],
+.entry-content iframe[src*="dailymotion.com"],
+.entry-content iframe[src*="twitch.tv"] {
+  aspect-ratio: 16 / 9;
+  height: auto;
+}
+/* Bandcamp players ship with no height attr (default ~150px → empty space below
+   the player). Set the heights Bandcamp documents per size/artwork combination. */
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"] {
+  height: 470px;  /* size=large with album art */
+}
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="artwork=small"],
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="artwork=none"] {
+  height: 120px;
+}
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="size=small"] {
+  height: 42px;
+}
+/* The inline YouTube player already sits in a 560px centered container with the
+   look we're matching — keep its iframe margin/width untouched. */
+.entry-content .youtube-embed-container iframe {
+  margin: 0;
+  max-width: none;
 }
 .entry-content video {
   /* width="..." HTML attribute can override max-width; use width:100% to
