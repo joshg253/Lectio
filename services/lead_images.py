@@ -117,7 +117,12 @@ class LeadImageService:
     # YouTube feeds (early-return in extract_entry_thumbnail_url lines 343-351); for all
     # other feeds they represent embedded video thumbnails, not the article's lead image.
     _SITE_CHROME_DOMAIN_PATTERNS = re.compile(
-        r"(?:resources\.blogblog\.com|www\.blogger\.com|i\.ytimg\.com|img\.youtube\.com)",
+        r"(?:resources\.blogblog\.com|www\.blogger\.com|i\.ytimg\.com|img\.youtube\.com"
+        # Badge/support-button widgets that webcomic/OG-scrape pages embed near the
+        # comic but are never the post's image: shields.io status badges
+        # (e.g. img.shields.io/twitter/follow/…) and Ko-fi tip buttons
+        # (storage.ko-fi.com/cdn/kofi3.png).
+        r"|shields\.io|ko-fi\.com)",
         re.IGNORECASE,
     )
     # Keep old name as alias so callers outside this class still work.

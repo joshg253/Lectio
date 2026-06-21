@@ -235,6 +235,37 @@ Lectio now owns HTML sanitization (feedparser sanitize OFF at ingest, embeds
 kept — see ARCHITECTURE "HTML sanitization"). Surfaced during testing 2026-06-20;
 these are pre-existing feed-quality quirks, not regressions:
 
+Fixed in the 2026-06-20 browser-testing pass:
+- ~~**Sanitizer stripped `class` (regression)**~~ — the own-sanitizer allowlist
+  dropped `class`, silently breaking every class-based content cleanup (mynorthwest
+  "Related Stories" strip, NASA blocks, Ghost audio cards, embed-container, webcomic/
+  YouTube-figure detection). Now keeps `class` globally (`id` still dropped to avoid
+  colliding with the app's element IDs). Heals on re-parse. Test: `test_html_sanitize.py`.
+- ~~**Enclosure-image feeds showed no article image + backfill wiped the thumb**~~
+  (gottadeal) — the deal photo is an `<enclosure>`; it was listed as an Attachment,
+  which hid it as a download link AND made the lead-image dedup null it, and the open
+  then persisted a negative that wiped the thumbnail on backfill. Image enclosures are
+  now excluded from Attachments (`_url_has_image_ext`) and the inline strategy falls
+  back to the enclosure-aware extractor. Tests: `test_attachments.py`, repro verified.
+- ~~**Junk lead images from widget badges**~~ — openmw grabbed a `shields.io` follow
+  badge, claycomix the `ko-fi.com` tip button; both now rejected as site chrome.
+  Test: `test_lead_images_service.py::test_badge_and_kofi_widgets_rejected`.
+- **qwantz "alt twice" (4485)** — could not reproduce in current code (clean render);
+  was a pre-rebuild cached view.
+
+Still open from that pass (deferred — need live-render confirmation or lower priority):
+- **Music-blog embeds render tiny** — backfilled SoundCloud/Bandcamp iframes (e.g.
+  540×540) look small; needs a look at the live reading-column layout to size them
+  (width:100%/responsive) without distorting YouTube video embeds.
+- **mynorthwest source image not at top** — og_scrape feed; recheck whether the OG
+  lead image shows in-article after the class/cache fixes + a re-derive.
+- **Buzzsprout title has no page link** — the feed ships no `<link>` (only guid +
+  enclosure); derive the episode page URL from the enclosure (strip `.mp3`) so the
+  title is clickable. Needs a `_display_link` fallback used by both list and pane.
+- **selfh.st / waynocartoons load via Reader mode** — promising for the paywall spike:
+  if Readability already extracts the full article from the page, the "paywalled
+  teaser" limitation may be a non-issue for these. Confirm and wire up.
+
 - ~~**WordPress "The post … appeared first on …" footer boilerplate**~~ — DONE.
   `_strip_wp_post_footer` removes the trailing self-link footer (incl. plugin
   duplicates and the double-encoded literal-`<p>` variant). Test:
