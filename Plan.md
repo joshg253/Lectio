@@ -281,11 +281,10 @@ Still open from that pass (deferred — need live-render confirmation or lower p
   so paused feeds were still fetched on schedule. The tick now also excludes
   `reader.get_feeds(updates_enabled=False)`. (Manual refresh still fetches on explicit
   user action — pause is about *automatic* updates.)
-- **mynorthwest source image not at top** — og_scrape feed; recheck whether the OG
-  lead image shows in-article after the class/cache fixes + a re-derive.
-- **selfh.st / waynocartoons load via Reader mode** — promising for the paywall spike:
-  if Readability already extracts the full article from the page, the "paywalled
-  teaser" limitation may be a non-issue for these. Confirm and wire up.
+- ~~**mynorthwest source image not at top**~~ — RESOLVED: the OG lead image now
+  shows in-article after the class/cache fixes. (One open observation: a post took
+  several seconds to open — the synchronous source-scrape caption fetch on first
+  open for og_scrape feeds; folded into the Performance item under Later.)
 
 - ~~**WordPress "The post … appeared first on …" footer boilerplate**~~ — DONE.
   `_strip_wp_post_footer` removes the trailing self-link footer (incl. plugin
@@ -336,13 +335,7 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 
 ### Ideas
 
-- **Outbound webhooks / IFTTT / Zapier etc.** — let automation rules (or a global
-  hook) POST matching entries to an external service: a generic webhook URL plus
-  presets for IFTTT (Maker/Webhooks applet), Zapier, and similar. Lets users wire
-  Lectio into downstream automations (push notifications, Notion/Sheets, home
-  automation, reposting). Reuse the existing rule match/scope machinery; send a
-  JSON payload (title, link, feed, tags, summary). Must route through the SSRF
-  guard and be per-user in multi mode.
+- (Outbound webhooks / IFTTT / Zapier — moved to **Later**.)
 - ~~**Compare existing subscriptions**~~ — addressed: Settings → Feeds → Folders now has per-feed checkboxes and a "Compare selected" button (2–6 feeds) that calls `/feeds/compare` and renders the same chips as the Add-Feed picker.
 - ~~**Favicon fallback for feeds Google's service can't resolve**~~ — DONE. `/api/favicon` resolves icons via Google → `/favicon.ico` → SVG placeholder, with img-cache caching.
 - ~~**Email Article → contacts picker**~~ — DONE. The Email Article dialog gained a
@@ -397,22 +390,31 @@ Still open from that pass (deferred — need live-render confirmation or lower p
      network side effects, the alt-into-content injection, SMBC bonus panel, starred-
      asset rewrite) — fine to leave; the function is now readable. Call it complete
      unless it grows again.
-  2. **Consolidate the dedup routes** — `_dry_run_dedup` (198L) and `_run_now_dedup`
-     (188L) are near-duplicate (preview vs apply); factor a shared match/collect core
-     with an `apply: bool`. Behavior-sensitive (dedup correctness) → dedicated PR.
-  3. **Unify the source-image scan loops** in `lead_images.py` — `_extract_preferred_
-     source_image_data`, `extract_source_gallery_urls`, and `_extract_webcomic_panel_
-     image` all iterate `_IMG_TAG_RE` with the same author/chrome/related/junk filters
-     but different selection (best vs all vs comic-class). Extract a shared candidate
-     iterator yielding (attrs, resolved_url); callers keep their selection logic.
-  4. **Other oversized functions** — `ensure_meta_schema` (585L, mostly sequential
-     CREATEs/ALTERs — could split per-table), `home`/`list_entries_for_feeds`.
+  2. **Consolidate the dedup routes** — PARTIAL. Extracted the shared feed-URL
+     resolution prologue (`_resolve_dedup_feed_urls`, used by both `_dry_run_dedup`
+     preview and `_run_now_dedup` apply). The remaining match-method bodies (slug/
+     title/both/fuzzy/safe) still diverge by preview-vs-apply output; a full
+     shared-core-with-`apply:bool` merge is deferred — behavior-sensitive (dedup
+     correctness) and under-tested, so it needs broader characterization tests first.
+  3. ~~**Unify the source-image scan loops**~~ — DONE (the safe, shared part).
+     Extracted `_iter_acceptable_img_urls` (the per-`<img>` candidate-acceptance inner
+     loop: collect → skip data:/SVG → tag + URL acceptability), now shared by
+     `_extract_preferred_source_image_data` and `extract_source_gallery_urls`; each
+     keeps its own outer context-skip + selection (scoring vs dedup/exclude).
+     `_extract_webcomic_panel_image` stays separate (different acceptance — no
+     tag-acceptable check). Verified behavior-preserving by the 118 lead-image tests.
+  4. **Other oversized functions** — `ensure_meta_schema` (~585L): long but *linear*
+     (CREATE+per-table idempotent ALTERs), runs once at startup, low churn — not
+     duplicate code; a by-area split is cosmetic, low priority. `home`/
+     `list_entries_for_feeds` similar.
   - **Test-isolation smell (pre-existing)** — `test_refresh_routes::test_refresh_
     route_success_updates_folder_scope` passes only in the full suite: the `refresh`
     route calls the DeviantArt path → `get_setting` → `_load_app_settings_cache`,
     which queries `app_settings` (absent in the test's `:memory:` dummy meta) and
     only succeeds when a *different* test has populated the module-level settings
-    cache first. Fix: seed `app_settings` in the fixture (or guard the DA path).
+    cache first. (Note: the manual `refresh` route now guards the DA path on creds,
+    so this may already be resolved — re-check.) Fix: seed `app_settings` in the
+    fixture if it recurs.
 - ~~**WebSub hub fetches still follow redirects (SSRF)**~~ — DONE. The three httpx
   calls in `services/websub.py` followed redirects: `_discover_hub_url` now fetches
   the user-supplied `feed_url` via `url_guard.safe_get` (per-hop revalidation), and
@@ -456,13 +458,22 @@ Still open from that pass (deferred — need live-render confirmation or lower p
   secret, single subscribe/renew per feed) + a topic→subscribers map for push
   fan-out. Smaller, standalone first step toward shared-content mode; needs a
   migration of the existing per-user rows.
+- **Outbound webhooks / IFTTT / Zapier** — let automation rules (or a global hook)
+  POST matching entries to an external service: a generic webhook URL plus presets
+  for IFTTT (Maker/Webhooks), Zapier, etc. (push notifications, Notion/Sheets, home
+  automation, reposting). Reuse the rule match/scope machinery; JSON payload (title,
+  link, feed, tags, summary); SSRF-guarded; per-user in multi mode.
+- **selfh.st / paywalled-teaser reader-mode spike** — selfh.st & waynocartoons load
+  in Reader view; if Readability already extracts the full article from the page,
+  the "paywalled teaser" limitation may be moot. Confirm, then optionally a per-feed
+  "open in Reader by default" toggle.
 - **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, and
   thumb generation. Not needed for trusted users; leave hooks in the seam.
 - **Authenticated/private feeds** — none supported today, so all feed/image
   content is safe to global-cache. If added, exclude those feeds from the global
   caches.
 - **Miniflux API compatibility** — Fever and GReader are done. Miniflux API is the remaining candidate for broader client support (e.g. Fluent Reader, ReadKit). Assess multi-user requirement and implementation cost before committing.
-- **Performance investigation** — systematic baseline before enabling multi-user. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load.
+- **Performance investigation** — systematic baseline before enabling multi-user. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. Known hotspot: first-open of an og_scrape feed (e.g. mynorthwest) can take several seconds on the **synchronous source-scrape caption fetch** (`fetch_entry_image_caption` when the source HTML isn't already cached) — move it fully off the request thread / cache-first like the lead-image fetch.
 
 ## Backburner
 
