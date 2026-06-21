@@ -7770,7 +7770,18 @@ def _derive_article_lead_image(entry) -> str | None:
             lead_image_service.extract_inline_thumb_url(entry)
             or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
         )
-    if strategy == "media_rss":
+    if strategy == "webcomic":
+        # Many webcomic feeds (e.g. claycomix) ship the FULL comic strip inline in
+        # the feed content, while the source-page scrape only finds a single-pane
+        # preview — which is fine as the small list thumbnail but wrong for the
+        # article. Prefer the inline full image here; fall back to the scraped
+        # panel only when the feed has no inline image (the classic case where the
+        # comic lives only on the source page).
+        result = (
+            lead_image_service.extract_inline_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
+    elif strategy == "media_rss":
         result = lead_image_service.extract_media_rss_thumb_url(entry)
     else:
         result = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
@@ -8602,7 +8613,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         # Persist off the request thread (and skip when unchanged) so an open
         # never blocks on the meta-DB writer held by the background backfill.
-        lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
+        # Skip for webcomic feeds: their cached lead is the single-pane source
+        # preview used as the list thumbnail, while the article shows the full
+        # inline strip — persisting the article's full image here would clobber
+        # the preview thumbnail. The webcomic source-scrape owns that cache.
+        _persist_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
+        if _persist_strategy != "webcomic":
+            lead_image_service.persist_lead_image_async(str(entry.feed_url), str(entry.id), lead_image_url)
 
         # If this entry is starred and the archive worker has captured assets,
         # swap inline image URLs to the local /starred-asset route so the

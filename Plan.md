@@ -247,6 +247,14 @@ Fixed in the 2026-06-20 browser-testing pass:
   then persisted a negative that wiped the thumbnail on backfill. Image enclosures are
   now excluded from Attachments (`_url_has_image_ext`) and the inline strategy falls
   back to the enclosure-aware extractor. Tests: `test_attachments.py`, repro verified.
+- ~~**Webcomic full strip in article, preview as thumb**~~ (claycomix) — the feed
+  content ships the FULL multi-panel strip while the source-scrape only finds a
+  single-pane preview. The article was showing the preview and stripping the full
+  image. `_derive_article_lead_image` now prefers the inline full image for
+  `webcomic` feeds (falling back to the scraped panel when the feed has no inline
+  image), and the article open no longer persists its lead for webcomic feeds (so
+  the scraped preview stays the list thumbnail). Tests:
+  `test_article_lead_image_strategy.py`.
 - ~~**Junk lead images from widget badges**~~ — openmw grabbed a `shields.io` follow
   badge, claycomix the `ko-fi.com` tip button; both now rejected as site chrome.
   Test: `test_lead_images_service.py::test_badge_and_kofi_widgets_rejected`.
