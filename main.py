@@ -2161,7 +2161,8 @@ def ensure_meta_schema() -> None:
                 show_lead_image_in_article INTEGER NOT NULL DEFAULT 1,
                 show_lead_image_as_thumb INTEGER NOT NULL DEFAULT 1,
                 show_image_caption INTEGER NOT NULL DEFAULT -1,
-                caption_source TEXT
+                caption_source TEXT,
+                inject_source_images INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -2445,6 +2446,10 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN feed_thumbnail_url TEXT")
         except Exception:
             pass
@@ -2632,8 +2637,8 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts"})
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
+_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts", "inject_source_images"})
+_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -5453,6 +5458,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
             "thumb_strategy": _disp.get("thumb_strategy") or None,
@@ -8665,6 +8671,32 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     )
                 if lead_image_url and lead_image_url in asset_map:
                     lead_image_url = f"{STARRED_ASSET_URL_PREFIX}{asset_map[lead_image_url]}"
+
+        # Source-page image gallery — for feeds whose body carries no/few images
+        # but whose source article has several (e.g. paizo blog), inject the source
+        # page's images into the entry. Opt-in per feed (inject_source_images).
+        # Runs before the hotlink/no-referrer pass below so injected images are
+        # proxied and referrer-stripped like the rest.
+        if _disp.get("inject_source_images") and entry.link:
+            _exclude_imgs: set[str] = set()
+            if lead_image_url:
+                _exclude_imgs.add(lead_image_url)
+            for _m in re.finditer(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html or "", re.IGNORECASE):
+                _exclude_imgs.add(html.unescape(_m.group(1)))
+            _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+            if not _gallery:
+                # Prime the source HTML in the background, wait briefly, then retry —
+                # so the gallery fills on first open for fast sites, later otherwise.
+                lead_image_service.queue_source_html_fetch(entry.link)
+                lead_image_service.wait_for_source_html_fetch(entry.link, timeout=0.8)
+                _gallery = lead_image_service.extract_source_gallery_urls(entry.link, exclude_urls=_exclude_imgs)
+            if _gallery:
+                _figs = "".join(
+                    f'<figure><img src="{html.escape(u, quote=True)}" loading="lazy" '
+                    f'referrerpolicy="no-referrer"></figure>'
+                    for u in _gallery
+                )
+                content_html = (content_html or "") + f'<div class="source-gallery">{_figs}</div>'
 
         # Suppress the Referer on inline body images so hotlink-protected hosts
         # serve the real image instead of a placeholder, and route known
