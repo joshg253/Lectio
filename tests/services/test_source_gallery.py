@@ -65,6 +65,41 @@ def test_cache_miss_returns_empty(tmp_path):
     assert svc.extract_source_gallery_urls("https://x.test/uncached") == []
 
 
+def test_fetch_page_escalates_to_browser_ua_on_503(tmp_path, monkeypatch):
+    """paizo-style WAF: honest UA gets 503, browser UA succeeds. _fetch_page_html
+    must escalate (not give up) after the honest request is refused."""
+    import services.lead_images as li
+
+    svc = _svc(tmp_path)
+    seen_uas = []
+
+    class _Resp:
+        def __init__(self, status, text=""):
+            self.status_code = status
+            self.text = text
+            self.url = "https://paizo.test/post"
+            self.headers = {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    def fake_safe_get(client, url):
+        ua = client.headers.get("user-agent", "")
+        seen_uas.append(ua)
+        if ua == li._BROWSER_USER_AGENT:
+            return _Resp(200, "<html><body>ok</body></html>")
+        return _Resp(503)
+
+    monkeypatch.setattr(li.url_guard, "safe_get", fake_safe_get)
+    result = svc._fetch_page_html("https://paizo.test/post")
+    assert result is not None
+    assert result[0] == "<html><body>ok</body></html>"
+    # honest UA tried first, then escalated to the browser UA
+    assert seen_uas[0] == svc._user_agent
+    assert li._BROWSER_USER_AGENT in seen_uas
+
+
 def test_dedupes_repeated_images(tmp_path):
     svc = _svc(tmp_path)
     link = "https://x.test/p2"
