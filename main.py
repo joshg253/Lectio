@@ -7937,6 +7937,153 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+def _resolve_entry_content_html(entry):
+    """Resolve an entry's display HTML from its content/summary.
+
+    Extracted from get_entry_detail: prefers HTML content, falls back to BBCode
+    conversion (Nexus Mods), promotes bare-text/escaped-plaintext summaries
+    (orpheus.network) to real HTML, and repairs URL-encoded ``http%3A/`` schemes
+    the reader library mangles into relative paths. Returns the HTML or None."""
+    content = entry.get_content(prefer_summary=False)
+    content_html = None
+    if content and content.value and content.is_html:
+        content_html = content.value
+    # BBCode fallback: feeds that emit BBCode markup instead of HTML
+    # (e.g. Nexus Mods).  feedparser marks description as text/html but
+    # the value has [b]...[/b] brackets.  Also handles is_html=False text.
+    if content and content.value:
+        _cv = content_html or content.value
+        if _looks_like_bbcode(_cv):
+            content_html = _bbcode_to_html(content_html if content_html else content.value)
+
+    # Bare-text feeds (no HTML content): promote a URL/break-bearing plain-text
+    # summary to content_html so links work and breaks render, instead of the
+    # unstyled <pre> fallback. Returns None for genuinely plain prose, which
+    # keeps the <pre> path. Runs before the <br>->paragraph pipeline below so a
+    # promoted summary benefits from it too.
+    if not content_html:
+        content_html = _promote_plaintext_summary(getattr(entry, "summary", None))
+    elif _looks_like_escaped_plaintext(content_html):
+        # Some feeds (e.g. orpheus.network news) declare their content as
+        # text/html but actually ship escaped plain text — literal
+        # ``&lt;br&gt;`` breaks, bare URLs, and double-escaped ``&amp;amp;``
+        # ampersands — so it renders as inert escaped text. Promote it the
+        # same way as a bare-text summary.
+        content_html = _promote_plaintext_summary(content_html) or content_html
+
+    # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
+    # of http://).  The reader library resolves these as relative paths, producing
+    # URLs like https://example.com/path/http%3A/actual-host.com/image.png.
+    # Recover the original URL by extracting and decoding the embedded scheme.
+    if isinstance(content_html, str) and "%3A/" in content_html:
+        content_html = re.sub(
+            r'https?://[^"\'<\s]+/(https?)%3A/([^"\'<\s]+)',
+            r'\1://\2',
+            content_html,
+            flags=re.IGNORECASE,
+        )
+    return content_html
+
+
+def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
+    """Apply the per-site / generic feed-content cleanups to an entry's HTML.
+
+    Extracted from get_entry_detail; operates on content_html only (returning the
+    cleaned value) so the render path reads as a sequence of named stages. Covers:
+    NASA leading-nav strip, mynorthwest "RELATED STORIES" block, Ghost kg-audio
+    cards, the WordPress "appeared first on" footer, qwantz nav tables, sanitized
+    embed-container iframes, and recovery of stripped YouTube embeds."""
+    # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
+    # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
+    # divs by tracking div nesting depth so the article starts at actual content.
+    if isinstance(content_html, str) and re.search(r'<div[^>]*\bwp-block-nasa-blocks-', content_html[:300], re.IGNORECASE):
+        _stripped = content_html
+        while True:
+            _nm = re.match(r'\s*<div[^>]*\bwp-block-nasa-blocks-\w', _stripped, re.IGNORECASE)
+            if not _nm:
+                break
+            _depth = 0
+            _strip_end = 0
+            for _dm in re.finditer(r'<(/?)div\b[^>]*>', _stripped, re.IGNORECASE):
+                if _dm.group(1):
+                    _depth -= 1
+                    if _depth == 0:
+                        _strip_end = _dm.end()
+                        break
+                else:
+                    _depth += 1
+            if _strip_end > 0:
+                _stripped = _stripped[_strip_end:].lstrip()
+            else:
+                break
+        content_html = _stripped or None
+
+    # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
+    # after the first paragraph. It contains external article thumbnails that
+    # confuse lead-image extraction and clutter the reading view.
+    if isinstance(content_html, str) and "mynorthwest.com" in feed_url and "related" in content_html:
+        content_html = _strip_div_blocks_by_class(content_html, "related", "alignright")
+
+    # Ghost CMS embeds a JS-powered audio card that renders as a broken custom player
+    # without its scripts. Replace the entire kg-audio-card widget with a native
+    # <audio controls> element so it works in the reader.
+    if isinstance(content_html, str) and "kg-audio-card" in content_html:
+        content_html = _transform_kg_audio_cards(content_html)
+
+    # Tidy the WordPress "The post … appeared first on …" footer: keep one,
+    # drop plugin duplicates, and clean the double-encoded literal "<p>" tags
+    # some feeds emit. Generic across feeds.
+    if isinstance(content_html, str):
+        content_html = _fix_wp_post_footer(content_html)
+
+    # Dinosaur Comics (qwantz): strip the nav tables wrapping the comic and
+    # keep only the comic image + dated author commentary.
+    if isinstance(content_html, str) and "qwantz.com" in feed_url:
+        content_html = _clean_qwantz_content(content_html)
+
+    # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
+    # replacing them with the literal text "<strong>iframe</strong>" inside a
+    # class="embed-container" div, leaving an adjacent plain-text YouTube link.
+    # Convert these pairs into a proper YouTube embed.
+    if isinstance(content_html, str) and "embed-container" in content_html and "strong" in content_html:
+        def _replace_bad_iframe(m: re.Match) -> str:
+            raw_url = m.group(1)
+            vid = youtube_duration_service.extract_video_id(raw_url)
+            if not vid:
+                return ""
+            return _youtube_embed_html(vid)
+        content_html = re.sub(
+            r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
+            r'\s*<a[^>]+href=["\']'
+            r'(https?://(?:www\.)?(?:youtube\.com/watch\?[^"\'<\s]+|youtu\.be/[^"\'<\s]+))'
+            r'["\'][^>]*>[^<]*</a>',
+            _replace_bad_iframe,
+            content_html,
+            flags=re.IGNORECASE,
+        )
+
+    # Recover stripped YouTube embeds — feedparser removes the <iframe> from
+    # WordPress YouTube blocks, leaving an empty figure with the video id
+    # gone. Re-parse of the raw feed (sanitize off) caches the ids; inject
+    # the player when cached, else queue a scan so it fills in next open.
+    # Only needed for entries stored *before* feed ingest stopped stripping
+    # iframes (services.reader_sanitize) — newer entries keep the real embed,
+    # so skip recovery when an <iframe> is already present.
+    if (isinstance(content_html, str)
+            and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
+            and "<iframe" not in content_html.lower()):
+        with get_meta_connection() as _vconn:
+            _vids = _lookup_media_video(_vconn, feed_url, entry_id)
+        if _vids:
+            content_html = _inject_recovered_youtube_embeds(content_html, _vids)
+        elif _vids is None:
+            # Not scanned yet — force a scan (bypasses the audio TTL so a new
+            # post's embed isn't held back by a long no-audio backoff).
+            _queue_media_audio_scan(feed_url)
+
+    return content_html
+
+
 def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     _t0 = time.monotonic()
     with get_reader() as reader:
@@ -7950,132 +8097,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         published_dt = entry.published or entry.updated or entry.added
         author_name = (getattr(entry, "authors_str", None) or "").strip() or None
 
-        content = entry.get_content(prefer_summary=False)
-        content_html = None
-        if content and content.value and content.is_html:
-            content_html = content.value
-        # BBCode fallback: feeds that emit BBCode markup instead of HTML
-        # (e.g. Nexus Mods).  feedparser marks description as text/html but
-        # the value has [b]...[/b] brackets.  Also handles is_html=False text.
-        if content and content.value:
-            _cv = content_html or content.value
-            if _looks_like_bbcode(_cv):
-                content_html = _bbcode_to_html(content_html if content_html else content.value)
+        content_html = _resolve_entry_content_html(entry)
 
-        # Bare-text feeds (no HTML content): promote a URL/break-bearing plain-text
-        # summary to content_html so links work and breaks render, instead of the
-        # unstyled <pre> fallback. Returns None for genuinely plain prose, which
-        # keeps the <pre> path. Runs before the <br>->paragraph pipeline below so a
-        # promoted summary benefits from it too.
-        if not content_html:
-            content_html = _promote_plaintext_summary(getattr(entry, "summary", None))
-        elif _looks_like_escaped_plaintext(content_html):
-            # Some feeds (e.g. orpheus.network news) declare their content as
-            # text/html but actually ship escaped plain text — literal
-            # ``&lt;br&gt;`` breaks, bare URLs, and double-escaped ``&amp;amp;``
-            # ampersands — so it renders as inert escaped text. Promote it the
-            # same way as a bare-text summary.
-            content_html = _promote_plaintext_summary(content_html) or content_html
-
-        # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
-        # of http://).  The reader library resolves these as relative paths, producing
-        # URLs like https://example.com/path/http%3A/actual-host.com/image.png.
-        # Recover the original URL by extracting and decoding the embedded scheme.
-        if isinstance(content_html, str) and "%3A/" in content_html:
-            content_html = re.sub(
-                r'https?://[^"\'<\s]+/(https?)%3A/([^"\'<\s]+)',
-                r'\1://\2',
-                content_html,
-                flags=re.IGNORECASE,
-            )
-
-        # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
-        # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
-        # divs by tracking div nesting depth so the article starts at actual content.
-        if isinstance(content_html, str) and re.search(r'<div[^>]*\bwp-block-nasa-blocks-', content_html[:300], re.IGNORECASE):
-            _stripped = content_html
-            while True:
-                _nm = re.match(r'\s*<div[^>]*\bwp-block-nasa-blocks-\w', _stripped, re.IGNORECASE)
-                if not _nm:
-                    break
-                _depth = 0
-                _strip_end = 0
-                for _dm in re.finditer(r'<(/?)div\b[^>]*>', _stripped, re.IGNORECASE):
-                    if _dm.group(1):
-                        _depth -= 1
-                        if _depth == 0:
-                            _strip_end = _dm.end()
-                            break
-                    else:
-                        _depth += 1
-                if _strip_end > 0:
-                    _stripped = _stripped[_strip_end:].lstrip()
-                else:
-                    break
-            content_html = _stripped or None
-
-        # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
-        # after the first paragraph. It contains external article thumbnails that
-        # confuse lead-image extraction and clutter the reading view.
-        if isinstance(content_html, str) and "mynorthwest.com" in feed_url and "related" in content_html:
-            content_html = _strip_div_blocks_by_class(content_html, "related", "alignright")
-
-        # Ghost CMS embeds a JS-powered audio card that renders as a broken custom player
-        # without its scripts. Replace the entire kg-audio-card widget with a native
-        # <audio controls> element so it works in the reader.
-        if isinstance(content_html, str) and "kg-audio-card" in content_html:
-            content_html = _transform_kg_audio_cards(content_html)
-
-        # Tidy the WordPress "The post … appeared first on …" footer: keep one,
-        # drop plugin duplicates, and clean the double-encoded literal "<p>" tags
-        # some feeds emit. Generic across feeds.
-        if isinstance(content_html, str):
-            content_html = _fix_wp_post_footer(content_html)
-
-        # Dinosaur Comics (qwantz): strip the nav tables wrapping the comic and
-        # keep only the comic image + dated author commentary.
-        if isinstance(content_html, str) and "qwantz.com" in feed_url:
-            content_html = _clean_qwantz_content(content_html)
-
-        # Some feeds (e.g. Introversion Blog via feedburner) sanitize <iframe> tags by
-        # replacing them with the literal text "<strong>iframe</strong>" inside a
-        # class="embed-container" div, leaving an adjacent plain-text YouTube link.
-        # Convert these pairs into a proper YouTube embed.
-        if isinstance(content_html, str) and "embed-container" in content_html and "strong" in content_html:
-            def _replace_bad_iframe(m: re.Match) -> str:
-                raw_url = m.group(1)
-                vid = youtube_duration_service.extract_video_id(raw_url)
-                if not vid:
-                    return ""
-                return _youtube_embed_html(vid)
-            content_html = re.sub(
-                r'<div[^>]*class=["\']embed-container["\'][^>]*>\s*<strong>iframe</strong>\s*</div>'
-                r'\s*<a[^>]+href=["\']'
-                r'(https?://(?:www\.)?(?:youtube\.com/watch\?[^"\'<\s]+|youtu\.be/[^"\'<\s]+))'
-                r'["\'][^>]*>[^<]*</a>',
-                _replace_bad_iframe,
-                content_html,
-                flags=re.IGNORECASE,
-            )
-
-        # Recover stripped YouTube embeds — feedparser removes the <iframe> from
-        # WordPress YouTube blocks, leaving an empty figure with the video id
-        # gone. Re-parse of the raw feed (sanitize off) caches the ids; inject
-        # the player when cached, else queue a scan so it fills in next open.
-        # Only needed for entries stored *before* feed ingest stopped stripping
-        # iframes (services.reader_sanitize) — newer entries keep the real embed,
-        # so skip recovery when an <iframe> is already present.
-        if (isinstance(content_html, str)
-                and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
-                and "<iframe" not in content_html.lower()):
-            with get_meta_connection() as _vconn:
-                _vids = _lookup_media_video(_vconn, feed_url, entry_id)
-            if _vids:
-                content_html = _inject_recovered_youtube_embeds(content_html, _vids)
-            elif _vids is None:
-                # Not scanned yet — force a scan (bypasses the audio TTL so a new
-                # post's embed isn't held back by a long no-audio backoff).
-                _queue_media_audio_scan(feed_url)
+        # Per-site / generic feed-content cleanups (NASA nav, mynorthwest related
+        # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
+        # iframes, recovered YouTube embeds). Operates on content_html only.
+        content_html = _apply_feed_content_cleanups(content_html, feed_url, entry_id)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
