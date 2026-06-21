@@ -68,6 +68,15 @@ def test_media_rss_strategy_uses_media_extractor(monkeypatch, entry):
     assert main._derive_article_lead_image(entry) == WIXMP
 
 
+def test_media_rss_falls_back_to_cache(monkeypatch, entry):
+    # reader drops <media:content>, so the media extractor returns None even though
+    # the image is in the lead-image cache (paizo). Fall back to the cache extractor.
+    _patch_strategy(monkeypatch, "media_rss")
+    monkeypatch.setattr(main.lead_image_service, "extract_media_rss_thumb_url", lambda e: None)
+    monkeypatch.setattr(main.lead_image_service, "extract_entry_thumbnail_url", lambda *a, **k: "CACHED")
+    assert main._derive_article_lead_image(entry) == "CACHED"
+
+
 def test_other_strategy_uses_generic_extractor(monkeypatch, entry):
     _patch_strategy(monkeypatch, "og_scrape")
     monkeypatch.setattr(main.lead_image_service, "extract_entry_thumbnail_url", lambda *a, **k: "GENERIC")
