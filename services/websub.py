@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import httpx
 
+from services import tenancy
 from services.url_guard import is_safe_outbound_url, safe_get
 
 
@@ -91,6 +92,21 @@ class WebSubService:
         if hub_url:
             self.subscribe(feed_url, hub_url)
 
+    def _spawn_in_context(self, target: Callable[..., None], *args) -> None:
+        """Spawn a daemon thread that re-binds the *current* tenancy user.
+
+        Bare threading.Thread starts with the default (empty) tenant, so background
+        subscribe/discover work would write the subscription row to the wrong meta DB
+        — the verification fanout (over real users) then 404s and pushes never arrive.
+        Capture the caller's user and restore it inside the thread."""
+        uid = tenancy.current_user_id()
+
+        def _run() -> None:
+            with tenancy.user_context(uid):
+                target(*args)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def maybe_discover_hubs(self, feed_urls: list[str]) -> None:
         """Spawn background hub discovery for feeds not yet tried (or stale)."""
         if not feed_urls:
@@ -114,7 +130,7 @@ class WebSubService:
                 needs.append(url)  # previously found no hub; retry
             # skip: active subscription or pending sub (hub_url IS NOT NULL)
         for url in needs[: self._MAX_DISCOVERY_PER_BATCH]:
-            threading.Thread(target=self._discover_and_subscribe, args=(url,), daemon=True).start()
+            self._spawn_in_context(self._discover_and_subscribe, url)
 
     # ------------------------------------------------------------------ subscription
 
@@ -240,8 +256,4 @@ class WebSubService:
                 (cutoff,),
             ).fetchall()
         for row in rows:
-            threading.Thread(
-                target=self.subscribe,
-                args=(row["feed_url"], row["hub_url"]),
-                daemon=True,
-            ).start()
+            self._spawn_in_context(self.subscribe, row["feed_url"], row["hub_url"])

@@ -271,10 +271,16 @@ Fixed in the 2026-06-20 browser-testing pass:
   was a pre-rebuild cached view.
 
 Still open from that pass (deferred — need live-render confirmation or lower priority):
-- **Verify Feed Properties → "Hide Shorts"** still marks YouTube Shorts read at
-  fetch time (per-feed toggle) — confirm it works post-refactors.
-- **Verify Feed Properties → "Pause / Resume updates"** still suspends/resumes
-  automatic fetching for a feed — confirm it works post-refactors.
+- ~~**Feed Properties → "Hide Shorts"**~~ — VERIFIED working. YT feeds carry
+  `/shorts/` links (confirmed in-DB and vs Inoreader); `_is_youtube_short` matches
+  them and the post-refresh pass marks them read (0 unread Shorts across the 37
+  hide-shorts feeds, 900 total → all caught).
+- ~~**Feed Properties → "Pause / Resume updates"**~~ — FIXED. Pause sets reader's
+  `updates_enabled=0`, but the scheduled tick excluded only Lectio's `disabled_feeds`
+  table and drives per-feed `reader.update_feed()` (which ignores `updates_enabled`),
+  so paused feeds were still fetched on schedule. The tick now also excludes
+  `reader.get_feeds(updates_enabled=False)`. (Manual refresh still fetches on explicit
+  user action — pause is about *automatic* updates.)
 - **mynorthwest source image not at top** — og_scrape feed; recheck whether the OG
   lead image shows in-article after the class/cache fixes + a re-derive.
 - **selfh.st / waynocartoons load via Reader mode** — promising for the paywall spike:
@@ -440,6 +446,16 @@ Still open from that pass (deferred — need live-render confirmation or lower p
   overlays (read/star/folders/subs). Only worth building at real scale; biggest
   caching/refresh win (single refresh per feed, deduped storage). Pushes unread
   counts to an incrementally-maintained per-user table instead of live scans.
+  This is the umbrella for "a global mechanism for all non-private feeds to reduce
+  strain/storage" — fetch/parse/store each feed once, overlay per-user state.
+- **Global WebSub subscriptions** — today the callback URL is global
+  (`/websub/callback?feed=…`, no user) but subscription rows + secrets live per-user,
+  so subscribe/renew POSTs and the verify/push fanout are duplicated across users
+  (and a background thread that loses tenancy writes the row to the wrong DB — the
+  bug just fixed). Move to one shared subscription store keyed by topic (single
+  secret, single subscribe/renew per feed) + a topic→subscribers map for push
+  fan-out. Smaller, standalone first step toward shared-content mode; needs a
+  migration of the existing per-user rows.
 - **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, and
   thumb generation. Not needed for trusted users; leave hooks in the seam.
 - **Authenticated/private feeds** — none supported today, so all feed/image

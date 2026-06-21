@@ -1705,7 +1705,6 @@
           <dt>Updates</dt>
           <dd id="feed-prop-updates-row">
             <span id="feed-prop-updates-label">-</span>
-            <button type="button" id="feed-prop-toggle-updates-btn" class="feed-prop-inline-btn" hidden></button>
           </dd>
           <dt>Total posts</dt><dd id="feed-prop-total">-</dd>
           <dt>Unread posts</dt><dd id="feed-prop-unread">-</dd>
@@ -1716,8 +1715,8 @@
           <dt>Last post</dt><dd id="feed-prop-last-post">-</dd>
         </dl>
         <div class="feed-prop-footer">
-          <button type="button" id="feed-prop-reparse-btn" class="feed-prop-inline-btn" title="Force a full re-fetch to restore embeds (videos, players) stripped from older posts">Backfill embeds</button>
-          <span id="feed-prop-reparse-status" class="feed-prop-inline-status"></span>
+          <button type="button" id="feed-prop-disable-btn" class="feed-prop-inline-btn" title="Stop fetching this feed without unsubscribing"></button>
+          <span id="feed-prop-disable-status" class="feed-prop-inline-status"></span>
           <button type="button" id="feed-prop-unsubscribe-btn" class="feed-prop-unsubscribe-btn" hidden>Unsubscribe from feed</button>
         </div>
       </div>
@@ -1842,6 +1841,12 @@
                 title="Zoom multiplier for Fill crop (1.0 = tight fill; &lt;1.0 shows more image with black bars; &gt;1.0 crops more aggressively)" />
             </div>
           </div>
+        </div>
+        <!-- Maintenance: backfill embeds (re-parse) -->
+        <div id="feed-prop-maint-section">
+          <h4 class="feed-prop-section-title">Maintenance</h4>
+          <button type="button" id="feed-prop-reparse-btn" class="feed-prop-refresh-btn" title="Force a full re-fetch to restore embeds (videos, players) stripped from older posts">Backfill embeds</button>
+          <span id="feed-prop-reparse-status" class="feed-prop-strategy-hint"></span>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>
@@ -3095,7 +3100,8 @@
     const feedPropChangeUrlCancel = document.getElementById('feed-prop-change-url-cancel');
     const feedPropChangeUrlStatus = document.getElementById('feed-prop-change-url-status');
     const feedPropUpdatesLabel = document.getElementById('feed-prop-updates-label');
-    const feedPropToggleUpdatesBtn = document.getElementById('feed-prop-toggle-updates-btn');
+    const feedPropDisableBtn = document.getElementById('feed-prop-disable-btn');
+    const feedPropDisableStatus = document.getElementById('feed-prop-disable-status');
     const feedPropHealth = document.getElementById('feed-prop-health');
     const feedPropHealthDetail = document.getElementById('feed-prop-health-detail');
     const feedPropTotal = document.getElementById('feed-prop-total');
@@ -4132,8 +4138,12 @@
       if (_thumbPreview) _thumbPreview.style.display = 'none';
       const _thumbInput = document.getElementById('feed-prop-thumbnail-url');
       if (_thumbInput) _thumbInput.value = '';
-      if (feedPropYtSection) feedPropYtSection.hidden = true;
-      if (feedPropImgSection) feedPropImgSection.hidden = false;
+      // YT-ness is knowable from the URL alone, so set the tuning section now —
+      // don't wait on (or depend on) the /feeds/properties fetch, which on a hiccup
+      // would otherwise leave a YouTube feed showing the full (non-YT) tuning page.
+      const _isYoutubeFeedUrl = feedUrl.includes('youtube.com/feeds/videos.xml');
+      if (feedPropYtSection) feedPropYtSection.hidden = !_isYoutubeFeedUrl;
+      if (feedPropImgSection) feedPropImgSection.hidden = _isYoutubeFeedUrl;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
       if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
       if (feedPropUnsubscribeBtn) {
@@ -4199,12 +4209,14 @@
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
         if (feedPropChangeUrlInput) feedPropChangeUrlInput.value = '';
         if (feedPropChangeUrlStatus) feedPropChangeUrlStatus.textContent = '';
-        if (feedPropUpdatesLabel && feedPropToggleUpdatesBtn) {
+        {
           const updatesEnabled = data.updates_enabled !== false;
-          feedPropUpdatesLabel.textContent = updatesEnabled ? 'Active' : 'Paused';
-          feedPropToggleUpdatesBtn.textContent = updatesEnabled ? 'Pause' : 'Resume';
-          feedPropToggleUpdatesBtn.hidden = false;
-          feedPropToggleUpdatesBtn.dataset.updatesEnabled = updatesEnabled ? '1' : '0';
+          if (feedPropUpdatesLabel) feedPropUpdatesLabel.textContent = updatesEnabled ? 'Active' : 'Disabled';
+          if (feedPropDisableBtn) {
+            feedPropDisableBtn.textContent = updatesEnabled ? 'Disable feed' : 'Enable feed';
+            feedPropDisableBtn.dataset.updatesEnabled = updatesEnabled ? '1' : '0';
+          }
+          if (feedPropDisableStatus) feedPropDisableStatus.textContent = '';
         }
         setFeedPropText(feedPropHealth, data.health || '-');
         setFeedPropText(feedPropHealthDetail, data.health_detail || '-');
@@ -5076,25 +5088,26 @@
     });
 
     // Pause / Resume updates toggle
-    feedPropToggleUpdatesBtn?.addEventListener('click', async () => {
-      const feedUrl = feedPropToggleUpdatesBtn.closest('[data-feed-url]')?.dataset?.feedUrl
-        || feedPropStrategy?.dataset?.feedUrl;
+    feedPropDisableBtn?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
       if (!feedUrl) return;
-      const currentlyEnabled = feedPropToggleUpdatesBtn.dataset.updatesEnabled === '1';
-      const wantEnabled = !currentlyEnabled;
-      feedPropToggleUpdatesBtn.disabled = true;
+      const currentlyEnabled = feedPropDisableBtn.dataset.updatesEnabled === '1';
+      const wantEnabled = !currentlyEnabled;  // Disable→pause; Enable→resume
+      feedPropDisableBtn.disabled = true;
+      if (feedPropDisableStatus) feedPropDisableStatus.textContent = wantEnabled ? 'Enabling…' : 'Disabling…';
       try {
         const body = new URLSearchParams({ feed_url: feedUrl, enabled: wantEnabled ? '1' : '0' });
         const resp = await fetch('/feeds/toggle-updates', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
         const json = await resp.json();
         if (!json.ok) throw new Error(json.error || 'toggle failed');
-        feedPropUpdatesLabel.textContent = wantEnabled ? 'Active' : 'Paused';
-        feedPropToggleUpdatesBtn.textContent = wantEnabled ? 'Pause' : 'Resume';
-        feedPropToggleUpdatesBtn.dataset.updatesEnabled = wantEnabled ? '1' : '0';
+        if (feedPropUpdatesLabel) feedPropUpdatesLabel.textContent = wantEnabled ? 'Active' : 'Disabled';
+        feedPropDisableBtn.textContent = wantEnabled ? 'Disable feed' : 'Enable feed';
+        feedPropDisableBtn.dataset.updatesEnabled = wantEnabled ? '1' : '0';
+        if (feedPropDisableStatus) feedPropDisableStatus.textContent = '';
       } catch (err) {
-        window.alert(`Could not change update state: ${err.message}`);
+        if (feedPropDisableStatus) feedPropDisableStatus.textContent = `Error: ${err.message}`;
       } finally {
-        feedPropToggleUpdatesBtn.disabled = false;
+        feedPropDisableBtn.disabled = false;
       }
     });
 
