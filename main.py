@@ -8729,6 +8729,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "lead_image_url": _lead_image_display_url(lead_image_url),
             "show_lead_in_article": _show_lead_in_article,
             "show_as_thumb": bool(_disp.get("show_lead_image_as_thumb", 1)) and not _disp.get("feed_thumbnail_url"),
+            # Webcomic feeds show the FULL strip in the article but keep the
+            # single-pane scraped preview as the list thumbnail — so don't let the
+            # client sync the list row's thumbnail to the article lead image on open.
+            "sync_list_thumb": _persist_strategy != "webcomic",
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,

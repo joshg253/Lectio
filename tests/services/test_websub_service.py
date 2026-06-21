@@ -21,6 +21,20 @@ _HUB_URL = "https://hub.example.com/"
 _PUBLIC_URL = "https://lectio.example.com"
 
 
+def _join_new_daemon_threads(before: set, timeout: float = 1.0) -> None:
+    """Join only the daemon threads spawned since ``before`` was captured.
+
+    Joining *every* daemon thread (threading.enumerate()) scaled with the threads
+    accumulated across the whole suite — ~34 leftover daemons × the timeout made
+    each test take tens of seconds. Diffing against a pre-snapshot waits on just
+    this test's own thread."""
+    import threading
+
+    for t in threading.enumerate():
+        if t.daemon and t.name != "MainThread" and t not in before:
+            t.join(timeout=timeout)
+
+
 def _make_conn(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -263,13 +277,12 @@ def test_renew_expiring_subscriptions_spawns_thread(tmp_path):
         calls.append(feed_url)
 
     svc.subscribe = fake_subscribe  # type: ignore[method-assign]
+    import threading
+    _before = set(threading.enumerate())
     svc.renew_expiring_subscriptions()
 
-    # Threads are daemon — join briefly so the fake subscribe runs.
-    import threading
-    for t in threading.enumerate():
-        if t.daemon and t.name != "MainThread":
-            t.join(timeout=1.0)
+    # Threads are daemon — join only the one we just spawned so the fake runs.
+    _join_new_daemon_threads(_before)
 
     assert _FEED_URL in calls
 

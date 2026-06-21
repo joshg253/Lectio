@@ -10,7 +10,7 @@
         data-post-link="{{ selected_entry.link or '' }}"
         data-post-title="{{ selected_entry.title or '' }}"
         data-post-folder-id="{{ feed_to_folder.get(selected_entry.feed_url, selected_folder_id) }}"
-        data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if selected_entry.show_as_thumb else '' }}"
+        data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if (selected_entry.show_as_thumb and selected_entry.sync_list_thumb) else '' }}"
       >
         {% set _dur = selected_entry.duration_display %}
         {% set _title_text = selected_entry.title or "(untitled)" %}
