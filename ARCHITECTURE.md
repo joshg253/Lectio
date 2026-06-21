@@ -240,6 +240,19 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   Still open: the `reader` library's own feed refresh (a subscribed `http://10.x`
   host is still fetched); and full DNS-rebind closure needs connection IP-pinning
   (the validate→connect window is small but nonzero).
+- **Browser-identity fetch escalation** — feeds are fetched with an honest
+  identity (`Lectio/0.1 (+repo)`). Some hosts (WAFs returning 403/415/429/503, or
+  hanging non-browser requests) refuse it. On a *refusal* — never preemptively —
+  Lectio escalates to a full browser identity (UA + `Sec-Fetch-*`/`Accept-Language`
+  headers, since some WAFs sniff those, not just the UA). Discovery
+  (`feed_discovery._get_with_escalation`) retries inline at subscribe time and
+  flags the feed; the scheduled-refresh path (`FeedRefreshService`, via an
+  `on_fetch_refused` callback) flags + retries once; reader's own fetch applies
+  the browser identity per-feed through a request hook
+  (`reader_api.ReaderApi._make_browser_ua_request_hook`) keyed on the
+  `browser_ua_feeds` set. Per-user, manually resettable in Feed Properties. This is
+  escalation on refusal, not IP-block evasion — consistent with the good-citizen
+  policy (honest by default; don't spoof hosts happy to serve us).
 - **Subscription scheme allowlist** — user-supplied feed URLs (Add Feed, OPML
   import, discovered `<link>` candidates) are restricted to http/https via
   `_is_subscribable_feed_url`. `reader` natively fetches `file://`, so without

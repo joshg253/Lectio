@@ -32,6 +32,7 @@ class FeedRefreshService:
         refresh_debug_enabled: bool,
         failed_feed_backoff_base_seconds: int,
         failed_feed_backoff_max_seconds: int,
+        on_fetch_refused: Callable[[str], bool] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
@@ -42,6 +43,28 @@ class FeedRefreshService:
         self._refresh_debug_enabled = refresh_debug_enabled
         self._failed_feed_backoff_base_seconds = failed_feed_backoff_base_seconds
         self._failed_feed_backoff_max_seconds = failed_feed_backoff_max_seconds
+        # Called with a feed_url when an honest-UA fetch is refused (403/415/429/
+        # 503/timeout). Should flag the feed for browser-identity escalation and
+        # return True if it was newly flagged (so this cycle can retry it). Keeps
+        # the good-citizen escalation policy out of the service layer.
+        self._on_fetch_refused = on_fetch_refused
+
+    @staticmethod
+    def _is_fetch_refusal(exc: Exception) -> bool:
+        """True when an exception looks like a host refusing our honest client —
+        an HTTP 403/415/429/503 or a connection timeout/hang — i.e. something a
+        browser identity might get past. 401/404/410 are NOT refusals of this kind
+        (auth/missing/gone), so they don't escalate."""
+        status = None
+        http_info = getattr(exc, "http_info", None)
+        if http_info is not None:
+            status = getattr(http_info, "status", None)
+        if status in (403, 415, 429, 503):
+            return True
+        detail = str(exc).lower()
+        if any(code in detail for code in ("403", "415", "429", "503")):
+            return True
+        return "timed out" in detail or "timeout" in detail or "connecttimeout" in detail
 
     def compute_failed_feed_backoff_seconds(self, consecutive_failures: int) -> int:
         failures = max(1, int(consecutive_failures))
@@ -333,6 +356,51 @@ class FeedRefreshService:
                                 continue
                         except Exception:
                             pass
+
+                        # Refusal escalation: if the honest UA was refused (403/415/
+                        # 429/503/timeout) and this feed isn't already flagged, flag
+                        # it for browser identity and retry once now. Good-citizen:
+                        # only after a real refusal, never preemptively.
+                        if self._on_fetch_refused is not None and self._is_fetch_refusal(exc):
+                            try:
+                                newly_flagged = self._on_fetch_refused(feed_url)
+                            except Exception:
+                                newly_flagged = False
+                            if newly_flagged:
+                                try:
+                                    _updated = reader.update_feed(feed_url)
+                                    success_count += 1
+                                    _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                    self._logger.info(
+                                        "[refresh] browser-identity retry succeeded for %s", feed_url
+                                    )
+                                    with self._get_meta_connection() as conn:
+                                        conn.execute(
+                                            """
+                                            INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error, last_success_at)
+                                            VALUES (?, 0, NULL, NULL, ?)
+                                            ON CONFLICT(feed_url) DO UPDATE SET
+                                                consecutive_failures = 0,
+                                                next_retry_at = NULL,
+                                                last_error = NULL,
+                                                last_success_at = excluded.last_success_at,
+                                                acknowledged_at = NULL
+                                            """,
+                                            (feed_url, now_ts),
+                                        )
+                                        feed_state_map[feed_url] = {"consecutive_failures": 0, "next_retry_at": None}
+                                        self._record_fetch_history(
+                                            conn, feed_url, "ok",
+                                            new_entries=_new_entries,
+                                            duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                        )
+                                    continue
+                                except Exception:
+                                    # Retry also failed — fall through to normal
+                                    # failure bookkeeping below.
+                                    self._logger.info(
+                                        "[refresh] browser-identity retry failed for %s", feed_url
+                                    )
 
                         error_count += 1
                         raw_failures = feed_state.get("consecutive_failures")
