@@ -6023,6 +6023,27 @@ def _url_has_image_ext(url: str) -> bool:
     return urlparse(url.strip()).path.lower().endswith(_IMAGE_EXTS)
 
 
+_BUZZSPROUT_ENCLOSURE_RE = re.compile(
+    r"^(https://(?:www\.)?buzzsprout\.com/\d+/episodes/[^?#]+)\.mp3", re.IGNORECASE
+)
+
+
+def _derived_entry_link(entry) -> str | None:
+    """Best-effort page URL for entries whose feed ships no ``<link>``.
+
+    Buzzsprout podcast feeds carry only a guid + audio enclosure; the episode page
+    is the enclosure URL without the ``.mp3`` extension, so the post title can link
+    somewhere instead of being inert."""
+    if getattr(entry, "link", None):
+        return None
+    for enc in (getattr(entry, "enclosures", None) or []):
+        url = (getattr(enc, "href", None) or getattr(enc, "url", None) or "").strip()
+        m = _BUZZSPROUT_ENCLOSURE_RE.match(url)
+        if m:
+            return m.group(1)
+    return None
+
+
 def _find_entry_audio_url(entry) -> str | None:
     """Return a usable audio URL for an entry, or None.
 
@@ -7378,7 +7399,7 @@ def list_entries_for_feeds(
                     "feed_url": entry.feed_url,
                     "id": entry.id,
                     "title": title_text,
-                    "link": entry.link,
+                    "link": entry.link or _derived_entry_link(entry),
                     "read": is_read,
                     "saved": is_saved,
                     sort_key: sort_value,
@@ -8676,7 +8697,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             image_title_text = None
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
-        _display_link = _rebase_proxy_entry_link(entry.link, feed_url, _channel_link)
+        _display_link = _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
 
         # Suppress summaries that consist entirely of img tags with no text (e.g. xkcd,
         # Deathbulge).  After the lead image is shown above the content, rendering the

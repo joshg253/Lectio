@@ -415,6 +415,16 @@ def test_blogger_chrome_domain_rejected(tmp_path: Path):
     )
 
 
+def test_webcomic_class_matches_wp_post_image():
+    """On a webcomic feed the WordPress featured image (wp-post-image) is the comic
+    panel (e.g. claycomix), so the webcomic class matcher must recognize it."""
+    from services.lead_images import LeadImageService
+
+    assert LeadImageService._WEBCOMIC_IMG_CLASS_RE.search("attachment-full size-full wp-post-image")
+    assert LeadImageService._WEBCOMIC_IMG_CLASS_RE.search("comic-image")
+    assert not LeadImageService._WEBCOMIC_IMG_CLASS_RE.search("sidebar-thumb")
+
+
 def test_badge_and_kofi_widgets_rejected(tmp_path: Path):
     """shields.io status badges and Ko-fi tip buttons are widget chrome embedded
     near content (regression: openmw grabbed a shields.io follow badge, claycomix

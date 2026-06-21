@@ -230,7 +230,10 @@ class LeadImageService:
         re.IGNORECASE,
     )
     _WEBCOMIC_IMG_CLASS_RE = re.compile(
-        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic)\b',
+        # wp-post-image is WordPress's featured-image class — on a webcomic-strategy
+        # feed the featured image IS the comic panel (e.g. claycomix), so recognize
+        # it alongside the explicit comic-* classes.
+        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic|wp-post-image)\b',
         re.IGNORECASE,
     )
 
