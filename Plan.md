@@ -305,6 +305,16 @@ Still open from that pass (deferred — need live-render confirmation or lower p
   (no requirement that the image appear in content), with first-open misses covered
   by the pending/poll path. So zero-`<img>` feeds already get the derived OG image
   in-article. (Spot-check mynorthwest/gottadeal if it ever regresses.)
+- ~~**Inject source-page image gallery**~~ — DONE. Some feeds (e.g. paizo blog)
+  ship full text but no inline `<img>` — only a single `<media:content>` teaser —
+  while the article page has several images. New opt-in per-feed toggle
+  **Inject source-page images** (Feed Properties → Tuning) scrapes the article page
+  (background `queue_source_html_fetch`, brief wait, then fill on a later open),
+  extracts all acceptable images via `extract_source_gallery_urls` (same author/
+  site-chrome/related/junk filters as the lead scraper), dedupes against the lead +
+  existing body images, and appends them as a `.source-gallery`. Off by default;
+  pref `inject_source_images`. Tests: `tests/services/test_source_gallery.py`.
+  (Note: paizo WAF-blocks non-production IPs, so verify on the live server.)
 - ~~**Blogger "(untitled)" posts** (e.g. treecardgames)~~ — DONE. These Blogger
   entries genuinely ship an empty feed `<title>`; the real title lives only in the
   first body heading and the URL slug. `_display_title` recovers a humanized title

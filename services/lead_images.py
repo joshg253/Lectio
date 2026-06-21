@@ -1849,6 +1849,62 @@ class LeadImageService:
             return best_url, best_alt
         return None, None
 
+    def extract_source_gallery_urls(
+        self, entry_link: str, exclude_urls: set[str] | None = None, limit: int = 20
+    ) -> list[str]:
+        """Return all acceptable article images from a cached source page, in order.
+
+        For feeds whose body carries no inline images (e.g. paizo blog) the full
+        article's images live only on the source page. This collects them — applying
+        the same author/site-chrome/related-block/junk filters as the lead-image
+        scraper — so the caller can inject them into the entry body. Reads only the
+        already-fetched ``_source_html_cache`` (no network here); returns [] on a
+        cache miss so the caller can prime it in the background and fill in later."""
+        cached = self._source_html_cache.get(entry_link)
+        if cached is None:
+            return []
+        base_url, html_text = cached
+        html_text = self._strip_related_post_blocks(html_text)
+        exclude_paths = {urlparse(u).path for u in (exclude_urls or set()) if u}
+        results: list[str] = []
+        seen: set[str] = set()
+        for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
+            if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
+                continue
+            attrs: dict[str, str] = {}
+            for attr_match in self._IMG_ATTR_RE.finditer(tag_match.group(0)):
+                key = attr_match.group(1).strip().lower()
+                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+                if key and value:
+                    attrs[key] = value
+            for image_url in self._collect_img_candidate_urls(attrs, source_url=entry_link):
+                if not image_url or image_url.startswith("data:"):
+                    continue
+                resolved = urljoin(base_url, image_url)
+                if urlparse(resolved).path.lower().endswith(".svg"):
+                    continue
+                if resolved in seen or urlparse(resolved).path in exclude_paths:
+                    continue
+                if not self._is_source_image_tag_acceptable(attrs, resolved):
+                    continue
+                if not self._is_image_url_acceptable(resolved, None, None, allow_extensionless=True, source_url=entry_link):
+                    continue
+                seen.add(resolved)
+                results.append(resolved)
+                break  # one URL per <img> tag
+            if len(results) >= limit:
+                break
+        return results
+
+    def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 1.0) -> bool:
+        """Block up to ``timeout`` for an in-flight queue_source_html_fetch to finish.
+        Returns True if the source HTML is cached afterward."""
+        event = self._source_html_fetch_events.get(entry_link)
+        if event is not None:
+            event.wait(timeout)
+        return entry_link in self._source_html_cache
+
     def _extract_css_background_image_url(self, html_text: str, base_url: str) -> str | None:
         """Return the first acceptable CSS background-image URL found in inline style attributes."""
         for m in self._CSS_BG_IMAGE_RE.finditer(html_text):
