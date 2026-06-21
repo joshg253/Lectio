@@ -3070,6 +3070,10 @@ def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
 
 
 def disable_feed(feed_url: str) -> None:
+    """Disable a feed (no fetching) without unsubscribing. Pause and Disable are the
+    same state: this sets both Lectio's disabled_feeds row AND reader's
+    updates_enabled flag, so the Settings tree and Feed Properties agree and the
+    scheduler skips it regardless of which one is consulted."""
     feed_url = feed_url.strip()
     if not feed_url:
         return
@@ -3078,15 +3082,34 @@ def disable_feed(feed_url: str) -> None:
             "INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)",
             (feed_url,),
         )
+    try:
+        with get_reader() as reader:
+            reader.disable_feed_updates(feed_url)
+    except Exception:
+        LOGGER.debug("disable_feed: reader.disable_feed_updates failed for %s", feed_url, exc_info=True)
     invalidate_meta_structure_cache()
 
 
 def enable_feed(feed_url: str) -> None:
+    """Re-enable a disabled/paused feed: clears both flags and resets the backoff so
+    it's checked on the next cycle (the inverse of disable_feed)."""
     feed_url = feed_url.strip()
     if not feed_url:
         return
     with get_meta_connection() as conn:
         conn.execute("DELETE FROM disabled_feeds WHERE feed_url = ?", (feed_url,))
+        # Clear the backoff so the feed is checked next cycle, not after the old
+        # retry window.
+        conn.execute(
+            "UPDATE feed_failure_state SET next_retry_at = NULL WHERE feed_url = ?",
+            (feed_url,),
+        )
+    try:
+        with get_reader() as reader:
+            reader.enable_feed_updates(feed_url)
+    except Exception:
+        LOGGER.debug("enable_feed: reader.enable_feed_updates failed for %s", feed_url, exc_info=True)
+    invalidate_problematic_feeds_cache()
     invalidate_meta_structure_cache()
 
 
@@ -9501,8 +9524,13 @@ def _scheduled_refresh_tick() -> None:
     feeds_to_refresh: set[str] = set()
     folders_to_mark: list[tuple[str, str]] = []
 
+    # Feeds paused via Feed Properties set reader's updates_enabled=0. The scheduler
+    # drives per-feed reader.update_feed(), which ignores that flag, so we must
+    # exclude paused feeds here ourselves (alongside Lectio's own disabled_feeds).
+    with get_reader() as reader:
+        paused = {str(f.url) for f in reader.get_feeds(updates_enabled=False)}
     with get_meta_connection() as conn:
-        disabled = get_disabled_feed_urls(conn)
+        disabled = get_disabled_feed_urls(conn) | paused
         # Load all folders and their per-folder cadence settings.
         folder_rows = conn.execute("SELECT id, cadence_minutes FROM folders").fetchall()
         for folder in folder_rows:
@@ -12920,22 +12948,15 @@ def enable_feed_route(request: Request, folder_id: int | None = Form(default=Non
 
 @app.post("/feeds/toggle-updates")
 def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
-    """Pause or resume automatic updates for a feed."""
+    """Pause/resume = enable/disable a feed (same unified state). Delegates to
+    enable_feed/disable_feed, which set both Lectio's disabled_feeds row and
+    reader's updates_enabled flag so every surface agrees."""
     want_enabled = enabled.lower() in ("1", "true", "yes")
     try:
-        with get_reader() as reader:
-            if want_enabled:
-                reader.enable_feed_updates(feed_url)
-                # Clear the backoff so the feed is checked on the next cycle
-                # instead of waiting for the retry window to expire.
-                with get_meta_connection() as conn:
-                    conn.execute(
-                        "UPDATE feed_failure_state SET next_retry_at = NULL WHERE feed_url = ?",
-                        (feed_url,),
-                    )
-                invalidate_problematic_feeds_cache()
-            else:
-                reader.disable_feed_updates(feed_url)
+        if want_enabled:
+            enable_feed(feed_url)
+        else:
+            disable_feed(feed_url)
         return JSONResponse({"ok": True, "updates_enabled": want_enabled})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)

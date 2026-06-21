@@ -395,6 +395,33 @@ def test_maybe_discover_hubs_skips_known_active(tmp_path):
     assert discoveries == []
 
 
+def test_discover_runs_in_caller_tenancy(tmp_path):
+    # Regression: background discover/subscribe threads lost tenancy and wrote the
+    # subscription row to the default tenant → verification fanout 404'd. The thread
+    # must re-bind the user active when maybe_discover_hubs was called.
+    from services import tenancy
+
+    db = tmp_path / "meta.sqlite"
+    _make_conn(db)
+    svc = _build_service(db)
+    seen: list[str] = []
+
+    def fake_discover(url):
+        seen.append(tenancy.current_user_id())
+
+    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    import threading
+    _before = set(threading.enumerate())
+    token = tenancy.set_current_user("u_test_websub")
+    try:
+        svc.maybe_discover_hubs([_FEED_URL])
+        _join_new_daemon_threads(_before)
+    finally:
+        tenancy.reset_current_user(token)
+
+    assert seen == ["u_test_websub"]
+
+
 def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
     db = tmp_path / "meta.sqlite"
     _make_conn(db)  # empty table
