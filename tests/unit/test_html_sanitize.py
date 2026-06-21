@@ -33,6 +33,24 @@ def test_basic_formatting_kept():
     assert 'href="https://x.test"' in out
 
 
+def test_img_leadimage_attrs_kept():
+    # width/height (lead-image scorer) and data-* lazyload sources (extractor) must
+    # survive — stripping them broke lead images on inline feeds.
+    out = H.sanitize_html(
+        '<img src="ph.gif" data-src="https://x.test/real.jpg" width="800" height="600" '
+        'srcset="https://x.test/r2.jpg 2x" sizes="100vw" loading="lazy">'
+    )
+    for frag in ('width="800"', 'height="600"', 'data-src="https://x.test/real.jpg"', 'sizes="100vw"'):
+        assert frag in out, frag
+
+
+def test_img_unsafe_data_src_dropped():
+    # data-src is scheme-validated so it can't smuggle javascript: into a later src swap.
+    out = H.sanitize_html('<img src="ok.jpg" data-src="javascript:alert(1)">')
+    assert "javascript:" not in out
+    assert 'src="ok.jpg"' in out
+
+
 def test_class_kept_id_dropped():
     # class is kept so content-cleanup passes (related-block strip, etc.) work;
     # id is dropped to avoid colliding with the app's own element IDs.
