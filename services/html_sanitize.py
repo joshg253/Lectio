@@ -52,6 +52,13 @@ _ALLOWED_ATTRS = {
     "colgroup": frozenset({"span"}),
     "time": frozenset({"datetime"}),
 }
+# Attributes kept on every element. class carries no styling effect (feed CSS is
+# never loaded) but Lectio's content-cleanup passes key off it — e.g. stripping
+# "RELATED STORIES" / NASA-block / Ghost audio-card / embed-container widgets and
+# detecting webcomic/YouTube-embed figures. Dropping it silently broke those
+# cleanups on freshly-ingested (sanitized) content. (id is deliberately NOT kept:
+# a feed id could collide with the app's own element IDs the page JS looks up.)
+_GLOBAL_ALLOWED_ATTRS = frozenset({"class"})
 _URL_ATTRS = frozenset({"href", "src", "poster"})
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
 
@@ -197,7 +204,7 @@ def sanitize_html(content: str) -> str:
         allowed = _ALLOWED_ATTRS.get(name, frozenset())
         for attr_name in list(tag.attrs):
             la = attr_name.lower()
-            if la.startswith("on") or la == "style" or la not in allowed:
+            if la.startswith("on") or la == "style" or (la not in allowed and la not in _GLOBAL_ALLOWED_ATTRS):
                 del tag.attrs[attr_name]
                 continue
             if la in _URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
