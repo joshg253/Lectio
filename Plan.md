@@ -371,10 +371,14 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 
   Prioritized backlog for follow-up PRs (each its own focused change — too risky to
   bundle):
-  1. **Decompose `get_entry_detail` (851 lines)** — the single biggest function.
-     Extract cohesive stages: content-pipeline cleanups (per-site strips, footer,
-     qwantz, embeds), media/audio/attachments, lead-image resolution+dedup,
-     caption/alt. High value, needs careful test coverage of each stage.
+  1. **Decompose `get_entry_detail`** — IN PROGRESS (851 → 732 lines). Added 13
+     characterization tests (`tests/integration/test_entry_detail_characterization.py`)
+     pinning the dict output across branches, then extracted two cohesive stages:
+     `_resolve_entry_content_html` (content/BBCode/plaintext resolution) and
+     `_apply_feed_content_cleanups` (per-site strips, footer, qwantz, embeds, YT
+     recovery). Remaining stages to extract (each entangled, do under the tests):
+     media/audio + attachments, the lead-image resolution+dedup block (the hardest —
+     mutates lead_image_url and content_html together), caption/alt, source gallery.
   2. **Consolidate the dedup routes** — `_dry_run_dedup` (198L) and `_run_now_dedup`
      (188L) are near-duplicate (preview vs apply); factor a shared match/collect core
      with an `apply: bool`. Behavior-sensitive (dedup correctness) → dedicated PR.

@@ -26,6 +26,11 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(li, "wait_for_source_fetch", lambda *a, **k: False)
     monkeypatch.setattr(li, "queue_source_html_fetch", lambda *a, **k: None)
     monkeypatch.setattr(li, "wait_for_source_html_fetch", lambda *a, **k: False)
+    # No-op the async lead-image persistence: its background writer thread would
+    # otherwise race a meta-DB write into the *next* test (database is locked). The
+    # dict output we characterize doesn't depend on persistence.
+    monkeypatch.setattr(li, "persist_lead_image_async", lambda *a, **k: None)
+    monkeypatch.setattr(li, "persist_image_alt_async", lambda *a, **k: None)
     # _lead_image_display_url spawns a background CORP HEAD for unknown domains.
     import httpx
     monkeypatch.setattr(httpx, "head", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
