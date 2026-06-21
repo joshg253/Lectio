@@ -7937,6 +7937,46 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
+    """Prepend the podcast audio player and append footer attachments to an entry.
+
+    Extracted from get_entry_detail. Returns ``(content_html, audio_feed_suggestion)``:
+    - injects an ``<audio>`` player (pointed at /entries/media/audio so expired signed
+      URLs refresh server-side) when the entry has playable audio and none inline;
+    - appends a download list for non-audio/non-image enclosures;
+    - when there's no playable audio, surfaces a separate podcast-host feed to
+      subscribe to (if discovered and not already subscribed)."""
+    audio_feed_suggestion: str | None = None
+    with get_meta_connection() as _mconn:
+        audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
+        if not audio_url:
+            _sugg = _get_suggested_audio_feed(_mconn, feed_url)
+            if _sugg and not _is_feed_subscribed(_mconn, _sugg):
+                audio_feed_suggestion = _sugg
+    if audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
+        _safe_feed_url = quote_plus(feed_url)
+        _safe_entry_id = quote_plus(entry_id)
+        _media_play_url = f"/entries/media/audio?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
+        _media_dl_url = f"/entries/media/download?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
+        _audio_player = (
+            f'<div class="podcast-player" style="margin:1em 0;">'
+            f'<audio controls preload="metadata" style="width:100%" src="{_media_play_url}"></audio>'
+            f'<div style="margin-top:6px; font-size:0.85em;">'
+            f'<a href="{_media_dl_url}" download>Download audio</a>'
+            f'</div>'
+            f'</div>'
+        )
+        content_html = _audio_player + (content_html or "")
+
+    # Footer attachments — non-audio enclosures (magazine PDFs, EPUBs, etc.) that
+    # never appear in the article body. The audio enclosure, if any, is already
+    # shown as a player above, so it's excluded here.
+    _attachments_html = _render_entry_attachments(entry, audio_url)
+    if _attachments_html:
+        content_html = (content_html or "") + _attachments_html
+    return content_html, audio_feed_suggestion
+
+
 def _resolve_entry_content_html(entry):
     """Resolve an entry's display HTML from its content/summary.
 
@@ -8133,42 +8173,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(base_html))
                 content_html = embed_html + f"<div>{base_html}</div>"
 
-        # Podcast audio player — inject <audio controls> for entries with an
-        # audio enclosure when the content doesn't already have an <audio> tag.
-        # Point the player at /entries/media/audio so signed URLs that have
-        # expired are automatically refreshed server-side before redirect.
-        # _resolve_* adds the media:content fallback (cached; scans in background).
-        _audio_feed_suggestion: str | None = None
-        with get_meta_connection() as _mconn:
-            _audio_url = _resolve_entry_audio_url(_mconn, feed_url, entry_id, entry)
-            if not _audio_url:
-                # No playable audio in this feed — a separate podcast-host feed may
-                # carry it. Surface it (unless it's already subscribed) so the user
-                # can add the audio feed.
-                _sugg = _get_suggested_audio_feed(_mconn, feed_url)
-                if _sugg and not _is_feed_subscribed(_mconn, _sugg):
-                    _audio_feed_suggestion = _sugg
-        if _audio_url and (not isinstance(content_html, str) or "<audio" not in content_html.lower()):
-            _safe_feed_url = quote_plus(feed_url)
-            _safe_entry_id = quote_plus(entry_id)
-            _media_play_url = f"/entries/media/audio?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
-            _media_dl_url = f"/entries/media/download?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
-            _audio_player = (
-                f'<div class="podcast-player" style="margin:1em 0;">'
-                f'<audio controls preload="metadata" style="width:100%" src="{_media_play_url}"></audio>'
-                f'<div style="margin-top:6px; font-size:0.85em;">'
-                f'<a href="{_media_dl_url}" download>Download audio</a>'
-                f'</div>'
-                f'</div>'
-            )
-            content_html = _audio_player + (content_html or "")
-
-        # Footer attachments — non-audio enclosures (magazine PDFs, EPUBs, etc.)
-        # that never appear in the article body. The audio enclosure, if any, is
-        # already shown as a player above, so it's excluded here.
-        _attachments_html = _render_entry_attachments(entry, _audio_url)
-        if _attachments_html:
-            content_html = (content_html or "") + _attachments_html
+        # Podcast audio player + footer attachments + (when no audio) a suggestion
+        # to subscribe to a separate podcast-host feed.
+        content_html, _audio_feed_suggestion = _apply_entry_media(content_html, entry, feed_url, entry_id)
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         feed_tag_suggestions = get_feed_tag_suggestions(
