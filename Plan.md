@@ -462,7 +462,8 @@ Still open from that pass (deferred — need live-render confirmation or lower p
   POST matching entries to an external service: a generic webhook URL plus presets
   for IFTTT (Maker/Webhooks), Zapier, etc. (push notifications, Notion/Sheets, home
   automation, reposting). Reuse the rule match/scope machinery; JSON payload (title,
-  link, feed, tags, summary); SSRF-guarded; per-user in multi mode.
+  link, feed, tags, summary); SSRF-guarded; per-user in multi mode. When shipped,
+  consider a README badge (Webhooks/IFTTT) alongside the API cluster.
 - **selfh.st / paywalled-teaser reader-mode spike** — selfh.st & waynocartoons load
   in Reader view; if Readability already extracts the full article from the page,
   the "paywalled teaser" limitation may be moot. Confirm, then optionally a per-feed
