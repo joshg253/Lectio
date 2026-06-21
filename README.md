@@ -1,6 +1,11 @@
 # Lectio
 
 [![CI](https://github.com/joshg253/Lectio/actions/workflows/ci.yml/badge.svg)](https://github.com/joshg253/Lectio/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
+![No build step](https://img.shields.io/badge/frontend-no%20build%20step-success)
+![Last commit](https://img.shields.io/github/last-commit/joshg253/Lectio)
 
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
