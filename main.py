@@ -6012,6 +6012,17 @@ def _url_has_audio_ext(url: str) -> bool:
     return urlparse(url.strip()).path.lower().endswith(_AUDIO_EXTS)
 
 
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".svg")
+
+
+def _url_has_image_ext(url: str) -> bool:
+    """True if the URL's path ends in a known image extension (query string
+    tolerated, like _url_has_audio_ext)."""
+    if not url:
+        return False
+    return urlparse(url.strip()).path.lower().endswith(_IMAGE_EXTS)
+
+
 def _find_entry_audio_url(entry) -> str | None:
     """Return a usable audio URL for an entry, or None.
 
@@ -6079,6 +6090,12 @@ def _render_entry_attachments(entry, audio_url: str | None) -> str:
         enc_type = (getattr(enc, "type", None) or "").lower()
         if enc_type.startswith("audio/") or _url_has_audio_ext(enc_url):
             continue  # surfaced as the audio player
+        # Image enclosures are the post's lead/inline image (e.g. gottadeal's deal
+        # photo) — surfaced as the lead image, not a download link. Listing them
+        # here also poisoned the lead-image dedup (the URL appearing in the
+        # attachments markup made the lead look "already in content", nulling it).
+        if enc_type.startswith("image/") or _url_has_image_ext(enc_url):
+            continue
         if audio_url and enc_url == audio_url:
             continue
         seen.add(enc_url)
@@ -7742,8 +7759,17 @@ def _derive_article_lead_image(entry) -> str | None:
     feed_url = str(getattr(entry, "feed_url", "") or "")
     strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
     if strategy == "inline":
-        # extract_inline_thumb_url already includes the inline-<svg> fallback.
-        return lead_image_service.extract_inline_thumb_url(entry)
+        # extract_inline_thumb_url already includes the inline-<svg> fallback, but
+        # only scans inline <img>; feeds whose image lives in an <enclosure>/media
+        # field (e.g. gottadeal) have no inline <img>, so fall back to the same
+        # enclosure-aware extractor the list thumbnail uses. Without this the
+        # article showed no image AND persisted a negative on open (poisoning the
+        # thumbnail after a re-parse). DeviantArt-style inline feeds short-circuit
+        # on the first call, so the stale-negative bypass it was added for still holds.
+        return (
+            lead_image_service.extract_inline_thumb_url(entry)
+            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        )
     if strategy == "media_rss":
         result = lead_image_service.extract_media_rss_thumb_url(entry)
     else:

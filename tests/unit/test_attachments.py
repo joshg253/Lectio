@@ -42,6 +42,18 @@ def test_resolved_audio_url_excluded_even_without_extension():
     assert main._render_entry_attachments(e, "https://cdn.test/ep1.bin") == ""
 
 
+def test_image_enclosure_excluded_by_type():
+    # Image enclosures are the post's lead/inline image (e.g. gottadeal), not a
+    # download — surfaced as the lead image instead of an attachment link.
+    e = _entry([_enc("https://cdn.test/photo.bin", type="image/jpeg")])
+    assert main._render_entry_attachments(e, None) == ""
+
+
+def test_image_enclosure_excluded_by_extension():
+    e = _entry([_enc("https://gottadeal.s3.amazonaws.com/posts/123x250x243.jpg")])
+    assert main._render_entry_attachments(e, None) == ""
+
+
 def test_duplicate_urls_collapsed():
     e = _entry([
         _enc("https://dl.test/a.pdf", type="application/pdf"),

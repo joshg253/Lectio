@@ -415,6 +415,20 @@ def test_blogger_chrome_domain_rejected(tmp_path: Path):
     )
 
 
+def test_badge_and_kofi_widgets_rejected(tmp_path: Path):
+    """shields.io status badges and Ko-fi tip buttons are widget chrome embedded
+    near content (regression: openmw grabbed a shields.io follow badge, claycomix
+    grabbed the Ko-fi button) — never the post's lead image."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    assert not service._is_image_url_acceptable(
+        "https://img.shields.io/twitter/follow/openmw_org?style=social", None, None
+    )
+    assert not service._is_image_url_acceptable(
+        "https://storage.ko-fi.com/cdn/kofi3.png?v=3", None, None
+    )
+
+
 def test_nav_directory_icons_rejected(tmp_path: Path):
     """Images served from a /navigation/ asset directory are header/menu UI
     chrome, not article images (regression: paizo.com blog scrape returning
