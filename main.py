@@ -54,6 +54,7 @@ from services import takeout_service
 from services import tenancy
 from services import youtube_embeds
 from services import url_guard
+from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls
@@ -2315,6 +2316,14 @@ def ensure_meta_schema() -> None:
             conn.execute("UPDATE highlight_keywords SET sort_order = rowid WHERE sort_order = 0")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_url TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_format TEXT NOT NULL DEFAULT 'generic'")
+        except Exception:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS rule_run_log (
@@ -2739,7 +2748,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -2748,7 +2757,8 @@ _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order"
+        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
+        " webhook_url, webhook_format"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -2771,6 +2781,8 @@ def add_highlight_keyword(
     enabled: int = 0,
     dedup_window_hours: int = 168,
     exclude_scope_ids: str = "",
+    webhook_url: str = "",
+    webhook_format: str = "generic",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -2782,15 +2794,19 @@ def add_highlight_keyword(
         search_in = "title"
     if delivery not in _HIGHLIGHT_VALID_DELIVERY:
         delivery = "immediately"
+    if webhook_format not in WEBHOOK_VALID_FORMATS:
+        webhook_format = "generic"
     conn.execute(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
+        "  webhook_url, webhook_format)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
-         max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip()),
+         max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
+         webhook_url.strip(), webhook_format),
     )
 
 
@@ -4462,6 +4478,8 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         # Email rules run after mark_as_read/dedup to avoid re-emailing articles
         # that were just auto-marked as read.
         _run_email_rules_after_refresh(refreshed_feed_urls)
+        # Webhook rules likewise fire after mark_as_read/dedup.
+        _run_webhook_rules_after_refresh(refreshed_feed_urls)
     except Exception:
         LOGGER.exception("[automation] error running automation rules after refresh")
 
@@ -4666,6 +4684,112 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[email-auto] error processing email rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[email-auto] error in _run_email_rules_after_refresh")
+
+
+_WEBHOOK_AUTO_PER_RUN_CAP = 50  # max webhook POSTs per refresh cycle
+
+
+def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """POST webhook-rule matches for freshly-refreshed feeds (immediate delivery)."""
+    if not refreshed_feed_urls:
+        return
+
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder"
+                and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        webhook_rules = [
+            r for r in all_rules
+            if r.get("enabled") and r.get("type") == "webhook" and r.get("webhook_url")
+        ]
+        if not webhook_rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+
+        for rule in webhook_rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                webhook_url = str(rule.get("webhook_url") or "")
+                webhook_format = str(rule.get("webhook_format") or "generic")
+
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+
+                    for feed_url in refreshed_feed_urls:
+                        if scope == "global":
+                            in_scope = True
+                        elif scope == "folder":
+                            try:
+                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
+                            except (ValueError, TypeError):
+                                in_scope = False
+                        elif scope == "feed":
+                            in_scope = scope_id == feed_url
+                        else:
+                            in_scope = False
+                        if not in_scope:
+                            continue
+
+                        for entry in reader.get_entries(feed=feed_url):
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            if sent >= _WEBHOOK_AUTO_PER_RUN_CAP:
+                                continue
+
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    f = reader.get_feed(fu)
+                                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+
+                            published = getattr(entry, "published", None) or getattr(entry, "updated", None)
+                            article = {
+                                "feed_url": fu,
+                                "entry_id": str(entry.id),
+                                "title": str(entry.title or ""),
+                                "link": str(entry.link or ""),
+                                "feed_title": feed_title_cache.get(fu, fu),
+                                "excerpt": _get_entry_excerpt(entry),
+                                "published": published.isoformat() if published else "",
+                                "tags": get_manual_tags_for_entry(fu, str(entry.id)),
+                            }
+                            payload = build_webhook_payload(article, webhook_format)
+                            ok, err = send_webhook(webhook_url, payload)
+                            if ok:
+                                sent += 1
+                                with get_meta_connection() as conn:
+                                    _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
+                                        "count": 1,
+                                        "entries": [article],
+                                    })
+                            else:
+                                LOGGER.warning("[webhook-auto] POST failed: %s", err)
+            except Exception:
+                LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[webhook-auto] error in _run_webhook_rules_after_refresh")
 
 
 def _flush_email_batch_for_rule(
@@ -5281,6 +5405,7 @@ _AUTOMATION_TYPE_LABELS = {
     "mark_as_read": "Auto mark read",
     "deduplicate": "Deduplicate",
     "email_article": "Email article",
+    "webhook": "Webhook",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed"}
 
@@ -5300,6 +5425,9 @@ def _automation_rule_detail(rule: dict) -> str:
     if rule_type == "email_article":
         to = str(rule.get("email_to") or "").strip()
         return f"to {to}" if to else "email"
+    if rule_type == "webhook":
+        fmt = str(rule.get("webhook_format") or "generic")
+        return f"POST · {fmt} · matches {search_in}"
     return ""
 
 
@@ -12247,6 +12375,8 @@ def add_highlight_route(
     enabled: int = Form(0),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    webhook_url: str = Form(""),
+    webhook_format: str = Form("generic"),
 ):
     keyword = keyword.strip()
     if scope not in _HIGHLIGHT_VALID_SCOPES:
@@ -12259,17 +12389,25 @@ def add_highlight_route(
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
+    if type == "webhook":
+        webhook_url = webhook_url.strip()
+        if not webhook_url or not url_guard.is_safe_outbound_url(webhook_url):
+            return JSONResponse({"error": "a valid public webhook URL is required"}, status_code=400)
+        if webhook_format not in WEBHOOK_VALID_FORMATS:
+            return JSONResponse({"error": "invalid webhook format"}, status_code=400)
     with get_meta_connection() as conn:
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
-                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids)
+                              bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
+                              webhook_url, webhook_format)
     return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
                          "color": color, "is_regex": bool(is_regex), "type": type,
                          "search_in": search_in, "delivery": delivery,
                          "email_to": email_to, "batch_time": batch_time, "batch_count": batch_count,
                          "cc_me": bool(cc_me), "enabled": bool(enabled),
                          "dedup_window_hours": dedup_window_hours,
-                         "exclude_scope_ids": exclude_scope_ids.strip()})
+                         "exclude_scope_ids": exclude_scope_ids.strip(),
+                         "webhook_url": webhook_url.strip(), "webhook_format": webhook_format})
 
 
 @app.post("/highlights/remove")

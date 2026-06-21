@@ -5,12 +5,9 @@ this file only tracks what's still open.
 
 ## Now
 
-- **Outbound webhooks / IFTTT / Zapier** — let automation rules (or a global hook)
-  POST matching entries to an external service: a generic webhook URL plus presets
-  for IFTTT (Maker/Webhooks), Zapier, etc. Reuse the rule match/scope machinery;
-  JSON payload (title, link, feed, tags, summary); SSRF-guarded; per-user in multi
-  mode. When shipped, consider a README badge (Webhooks/IFTTT) alongside the API
-  cluster.
+- (Outbound webhooks / IFTTT / Zapier shipped — `webhook` rule type, generic JSON
+  or IFTTT Maker, SSRF-guarded, immediate delivery. Possible follow-ups: batch
+  delivery, a Run-Now/test-send button, a Webhooks README badge.)
 
 
 ## Later
