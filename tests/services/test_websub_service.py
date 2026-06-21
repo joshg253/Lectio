@@ -405,11 +405,10 @@ def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
         discoveries.append(url)
 
     svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    import threading
+    _before = set(threading.enumerate())
     svc.maybe_discover_hubs([_FEED_URL])
 
-    import threading
-    for t in threading.enumerate():
-        if t.daemon and t.name != "MainThread":
-            t.join(timeout=1.0)
+    _join_new_daemon_threads(_before)
 
     assert _FEED_URL in discoveries
