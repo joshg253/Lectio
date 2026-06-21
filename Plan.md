@@ -241,6 +241,15 @@ Fixed in the 2026-06-20 browser-testing pass:
   "Related Stories" strip, NASA blocks, Ghost audio cards, embed-container, webcomic/
   YouTube-figure detection). Now keeps `class` globally (`id` still dropped to avoid
   colliding with the app's element IDs). Heals on re-parse. Test: `test_html_sanitize.py`.
+- ~~**Sanitizer stripped lead-image `<img>` attrs (regression)**~~ — the own-sanitizer
+  `img` allowlist (`src/srcset/alt/title/loading`) dropped `width`/`height` (the
+  lead-image scorer ranks + size-filters by these) and the lazyload sources
+  `data-src`/`data-srcset`/`data-lazy-src`/`data-original`/`data-image` (read by the
+  inline extractor + lazy-media normalizer), so inline/feed-content lead-image
+  extraction broke after the migration (source-scrape strategies read raw HTML, so
+  they were unaffected). Now allowlisted (single-URL `data-*` are scheme-validated);
+  `source` keeps width/height/sizes/data-srcset too. Heals on re-parse. Test:
+  `test_html_sanitize.py`.
 - ~~**Enclosure-image feeds showed no article image + backfill wiped the thumb**~~
   (gottadeal) — the deal photo is an `<enclosure>`; it was listed as an Attachment,
   which hid it as a download link AND made the lead-image dedup null it, and the open
