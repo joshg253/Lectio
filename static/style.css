@@ -3002,8 +3002,31 @@ button:hover, .button-link:hover {
   display: block;
   margin: 1em auto;
 }
+/* Video embeds: width:100% would stretch the width while leaving the feed's small
+   height attr untouched, producing skinny letterbox stripes. Force 16:9. */
+.entry-content iframe[src*="youtube.com"],
+.entry-content iframe[src*="youtube-nocookie.com"],
+.entry-content iframe[src*="youtu.be"],
+.entry-content iframe[src*="vimeo.com"],
+.entry-content iframe[src*="dailymotion.com"],
+.entry-content iframe[src*="twitch.tv"] {
+  aspect-ratio: 16 / 9;
+  height: auto;
+}
+/* Bandcamp players ship with no height attr (default ~150px → empty space below
+   the player). Set the heights Bandcamp documents per size/artwork combination. */
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"] {
+  height: 470px;  /* size=large with album art */
+}
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="artwork=small"],
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="artwork=none"] {
+  height: 120px;
+}
+.entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="size=small"] {
+  height: 42px;
+}
 /* The inline YouTube player already sits in a 560px centered container with the
-   look we're matching — keep its iframe untouched so it renders exactly as before. */
+   look we're matching — keep its iframe margin/width untouched. */
 .entry-content .youtube-embed-container iframe {
   margin: 0;
   max-width: none;
