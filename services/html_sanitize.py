@@ -38,8 +38,16 @@ _DROP_TAGS = frozenset({
 })
 _ALLOWED_ATTRS = {
     "a": frozenset({"href", "title"}),
-    "img": frozenset({"src", "srcset", "alt", "title", "loading"}),
-    "source": frozenset({"src", "srcset", "type", "media"}),
+    # width/height feed the lead-image scorer (rank + size-filter); sizes/decoding
+    # are harmless responsive hints. data-src/data-srcset/data-lazy-src/data-original/
+    # data-image are lazyload sources the lead-image extractor (and lazy-media
+    # render normalizer) read — stripping them broke lead images on inline feeds.
+    "img": frozenset({
+        "src", "srcset", "alt", "title", "loading", "width", "height", "sizes",
+        "decoding", "data-src", "data-srcset", "data-lazy-src", "data-original",
+        "data-image",
+    }),
+    "source": frozenset({"src", "srcset", "type", "media", "width", "height", "sizes", "data-srcset"}),
     "video": frozenset({"src", "controls", "poster", "preload", "width", "height"}),
     "audio": frozenset({"src", "controls", "preload"}),
     "iframe": frozenset({
@@ -59,7 +67,11 @@ _ALLOWED_ATTRS = {
 # cleanups on freshly-ingested (sanitized) content. (id is deliberately NOT kept:
 # a feed id could collide with the app's own element IDs the page JS looks up.)
 _GLOBAL_ALLOWED_ATTRS = frozenset({"class"})
-_URL_ATTRS = frozenset({"href", "src", "poster"})
+# Single-URL attributes scheme-validated against javascript:/data:/vbscript:. The
+# lazyload data-* attrs are included so an unsafe value can't survive sanitization
+# and later be promoted into src by the lazy-media normalizer. (srcset/data-srcset
+# are multi-URL and not validated here, matching the existing srcset handling.)
+_URL_ATTRS = frozenset({"href", "src", "poster", "data-src", "data-lazy-src", "data-original", "data-image"})
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
 
 # Hosts whose <iframe> embeds are allowed. Matched against the iframe src host by
