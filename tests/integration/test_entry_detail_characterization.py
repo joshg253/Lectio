@@ -31,6 +31,10 @@ def _no_network(monkeypatch):
     # dict output we characterize doesn't depend on persistence.
     monkeypatch.setattr(li, "persist_lead_image_async", lambda *a, **k: None)
     monkeypatch.setattr(li, "persist_image_alt_async", lambda *a, **k: None)
+    # No-op the background media-audio scan: for no-audio entries get_entry_detail
+    # otherwise spawns a thread that re-parses the raw feed (network) AND writes the
+    # meta DB concurrently — the source of intermittent "database is locked".
+    monkeypatch.setattr(main, "_queue_media_audio_scan", lambda *a, **k: None)
     # _lead_image_display_url spawns a background CORP HEAD for unknown domains.
     import httpx
     monkeypatch.setattr(httpx, "head", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no net")))
@@ -60,6 +64,16 @@ def env(tmp_path):
         getattr(li, _attr).clear()
     li._webcomic_feeds = None
     li._none_strategy_feeds = None
+    # Drain any lead-image write callables queued by *other* tests: the shared write
+    # worker resolves get_meta_connection() against the current global tenancy at run
+    # time, so a stale write would land on THIS test's tmp meta DB and lock it.
+    import queue as _queue
+    while True:
+        try:
+            li._write_queue.get_nowait()
+            li._write_queue.task_done()
+        except _queue.Empty:
+            break
     try:
         yield
     finally:
