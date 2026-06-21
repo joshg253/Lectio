@@ -23,6 +23,14 @@ from services.url_guard import is_safe_outbound_url
 
 LOGGER = logging.getLogger(__name__)
 
+# Last-resort browser UA for source-page fetches that an honest UA gets WAF-refused
+# (HTTP 403/503, e.g. Cloudflare-gated paizo.com). Escalated only after the honest
+# request is actually refused — never preemptively.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
 
 class LeadImageService:
     """Encapsulates entry lead-image extraction, caching, and persistence."""
@@ -2367,22 +2375,30 @@ class LeadImageService:
         _use_urllib = False
         _corp_restricted = False
         try:
-            # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
-            with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": self._user_agent}) as client:
-                response = url_guard.safe_get(client, url)
-                if response.status_code == 409:
-                    m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
-                    if m:
-                        cookie_str = m.group(1)
-                        if "=" in cookie_str:
-                            cname, cval = cookie_str.split("=", 1)
-                            parsed_host = urlparse(url)
-                            domain = parsed_host.netloc.lstrip("www.")
-                            client.cookies.set(cname.strip(), cval.strip(), domain=domain)
-                        response = url_guard.safe_get(client, url)
-                response.raise_for_status()
-                _corp = response.headers.get("cross-origin-resource-policy", "").lower()
-                _corp_restricted = _corp in ("same-site", "same-origin")
+            # Identify honestly by default; escalate to a browser UA only if the
+            # honest request is actually refused with a WAF status (403 Forbidden or
+            # 503, used by Cloudflare's "Just a moment" challenge — e.g. paizo.com).
+            # Never preemptive, so hosts happy to serve Lectio still see the honest UA.
+            response = None
+            for _ua in (self._user_agent, _BROWSER_USER_AGENT):
+                # follow_redirects=False so url_guard.safe_get validates every hop (SSRF).
+                with httpx.Client(follow_redirects=False, timeout=15.0, headers={"User-Agent": _ua}) as client:
+                    response = url_guard.safe_get(client, url)
+                    if response.status_code == 409:
+                        m = self._JS_COOKIE_CHALLENGE_RE.search(response.text)
+                        if m:
+                            cookie_str = m.group(1)
+                            if "=" in cookie_str:
+                                cname, cval = cookie_str.split("=", 1)
+                                parsed_host = urlparse(url)
+                                domain = parsed_host.netloc.lstrip("www.")
+                                client.cookies.set(cname.strip(), cval.strip(), domain=domain)
+                            response = url_guard.safe_get(client, url)
+                    if response.status_code not in (403, 503):
+                        break  # served (or a non-WAF error) — don't escalate
+            response.raise_for_status()
+            _corp = response.headers.get("cross-origin-resource-policy", "").lower()
+            _corp_restricted = _corp in ("same-site", "same-origin")
         except httpx.RemoteProtocolError:
             _use_urllib = True
         except Exception:
