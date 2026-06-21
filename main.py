@@ -7966,6 +7966,132 @@ def _inject_source_gallery(content_html, entry, lead_image_url):
     return content_html
 
 
+_CAPTION_IMG_TAG_RE = re.compile(r'<img\b[^>]*/?>', re.IGNORECASE | re.DOTALL)
+_CAPTION_ATTR_RE = re.compile(
+    r'\b(src|title)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))', re.IGNORECASE
+)
+_TRIVIAL_ALT_TEXTS = frozenset({
+    "responsive image", "image", "photo", "picture", "img", "thumbnail", "banner",
+    "featured image", "previous", "next", "first", "last", "random", "prev",
+    "newer", "older",
+    # Social share-button / analytics-pixel alt text (AddToAny "Share", statcounter
+    # "Web Analytics") — never a real photo caption.
+    "share", "web analytics", "analytics",
+})
+_DECORATIVE_CAP_WORDS = frozenset({
+    "banner", "header", "image", "cover", "featured", "photo", "thumbnail", "logo",
+    "graphic", "artwork", "illustration",
+})
+
+
+def _initial_image_caption(content_html, entry, lead_image_url):
+    """Find an initial caption (img title/alt) before opener stripping intactness is lost.
+
+    Extracted from get_entry_detail. Prefers a ``title=`` on the img whose src matches
+    the lead image (high confidence); otherwise accepts a title from a different img
+    only when no separate lead image exists. Persisted alt/title (from a prior source
+    scrape) override the in-feed title. Returns
+    ``(image_title_text, in_feed_title_is_lead_img, persisted_alt, persisted_title)``."""
+    image_title_text: str | None = None
+    in_feed_title_is_lead_img = False
+    for _search_html in (content_html, entry.summary):
+        if not isinstance(_search_html, str):
+            continue
+        for _tag_m in _CAPTION_IMG_TAG_RE.finditer(_search_html):
+            _tag_attrs: dict[str, str] = {}
+            for _am in _CAPTION_ATTR_RE.finditer(_tag_m.group(0)):
+                _k = _am.group(1).lower()
+                _v = html.unescape((_am.group(2) or _am.group(3) or _am.group(4) or "").strip())
+                if _k and _v:
+                    _tag_attrs[_k] = _v
+            _title_val = re.sub(r"<[^>]+>", "", html.unescape(_tag_attrs.get("title", ""))).strip()
+            if not _title_val:
+                continue
+            _src_val = _tag_attrs.get("src", "")
+            _matches_lead = bool(lead_image_url and _src_val and
+                                 (_src_val in lead_image_url or lead_image_url in _src_val or
+                                  _src_val.split("?")[0].rstrip("/") == lead_image_url.split("?")[0].rstrip("/")))
+            if _matches_lead:
+                image_title_text = _title_val
+                in_feed_title_is_lead_img = True
+                break
+            if image_title_text is None and not lead_image_url:
+                # Low-confidence title from a different image — only when no separate
+                # lead image is known (else it'd belong to an unrelated inline img).
+                image_title_text = _title_val
+        if in_feed_title_is_lead_img:
+            break
+
+    # Persisted alt/title (from a prior background source-page scrape) wins over a
+    # low-confidence in-feed title.
+    persisted_alt = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
+    persisted_title = lead_image_service.get_entry_image_title(str(entry.feed_url), str(entry.id))
+    if persisted_alt or persisted_title:
+        image_title_text = persisted_title or persisted_alt  # title preferred
+    return image_title_text, in_feed_title_is_lead_img, persisted_alt, persisted_title
+
+
+def _suppress_junk_caption(image_title_text, entry):
+    """Drop captions that aren't real photo captions: trivial alt text, date-only
+    strings, or text that merely restates the article title (incl. auto-generated
+    banner captions). Extracted from get_entry_detail; returns the caption or None."""
+    if not image_title_text:
+        return image_title_text
+    if image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
+        return None
+    if _DATE_ONLY_CAP_RE.match(image_title_text):
+        return None
+    if entry.title:
+        _norm_cap = " ".join(re.sub(r"<[^>]+>", "", image_title_text).split()).lower()
+        _norm_etitle = " ".join(html.unescape(str(entry.title)).split()).lower()
+        if _norm_etitle and (
+            _norm_cap == _norm_etitle
+            or (len(_norm_etitle) > 20 and _norm_etitle in _norm_cap)
+            or (len(_norm_cap) >= 8 and _norm_etitle.endswith(_norm_cap))
+        ):
+            return None
+        # Auto-generated banner captions restate the title plus a decorative word
+        # and/or a date — strip those tokens; if the remainder is wholly in the title,
+        # the caption adds nothing. Only when the caption actually looked banner-like.
+        _cap_tokens = re.findall(r"[a-z0-9]+", _norm_cap)
+        _title_tokens = set(re.findall(r"[a-z0-9]+", _norm_etitle))
+        _looks_banner_like = any(t in _DECORATIVE_CAP_WORDS for t in _cap_tokens) or bool(
+            re.search(r"\b\d{4}\b|\b\d{1,2}[/.\-]\d{1,2}\b", _norm_cap)
+        )
+        _core_tokens = [t for t in _cap_tokens if t not in _DECORATIVE_CAP_WORDS and not t.isdigit()]
+        if _looks_banner_like and _core_tokens and all(t in _title_tokens for t in _core_tokens):
+            return None
+    return image_title_text
+
+
+def _apply_caption_source_pref(image_title_text, disp, entry, content_html):
+    """Apply the per-feed caption_source preference (which raw attr to show).
+
+    Extracted from get_entry_detail. "auto" keeps the computed caption (then runs the
+    auto-suppress heuristic); none/alt/title/both override it from the persisted alt/
+    title. Returns the final caption or None."""
+    _caption_source = str(disp.get("caption_source") or "auto")
+    _feed_url = str(entry.feed_url)
+    _entry_id = str(entry.id)
+    if _caption_source == "none":
+        return None
+    if _caption_source == "alt":
+        return lead_image_service.get_entry_image_alt(_feed_url, _entry_id)
+    if _caption_source == "title":
+        return lead_image_service.get_entry_image_title(_feed_url, _entry_id)
+    if _caption_source == "both":
+        _ct = lead_image_service.get_entry_image_title(_feed_url, _entry_id)
+        _ca = lead_image_service.get_entry_image_alt(_feed_url, _entry_id)
+        return f"{_ct} — {_ca}" if (_ct and _ca and _ct != _ca) else (_ct or _ca)
+    # "auto": keep the computed caption, but run the auto-suppress heuristic.
+    if not should_show_caption(
+        image_title_text, entry_title=entry.title, content_html=content_html,
+        pref=int(disp.get("show_image_caption", -1)),
+    ):
+        return None
+    return image_title_text
+
+
 _LEAD_IMG_OPENER_RE = re.compile(
     r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
     r"(?:<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>\s*)*"  # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>)
@@ -8486,64 +8612,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             except Exception:
                 pass
 
-        # Extract img title/alt text before opener stripping so content_html is intact.
-        # Useful for comics where the hover text is the punchline (xkcd, etc.).
-        # Checks content_html first, then entry.summary (xkcd: content is stripped away
-        # but summary still has the img with title= attribute).
-        #
-        # We prefer a title= found on the img whose src matches lead_image_url (high
-        # confidence — it IS the lead image).  A title= on a different img (e.g. a
-        # story-thumbnail in Oglaf's feed while the lead is the full comic from the
-        # source page) is stored as low-confidence: it shows on first open but is
-        # replaced by the source-page scrape which finds the real hovertext.
-        image_title_text: str | None = None
-        _in_feed_title_is_lead_img = False  # True only when title= came from the lead img
-        _img_tag_re_full = re.compile(r'<img\b[^>]*/?>',  re.IGNORECASE | re.DOTALL)
-        _attr_extract_re = re.compile(
-            r'\b(src|title)\s*=\s*(?:"([^"]*)"|\x27([^\x27]*)\x27|(\S+))',
-            re.IGNORECASE,
+        image_title_text, _in_feed_title_is_lead_img, _persisted_alt, _persisted_title = (
+            _initial_image_caption(content_html, entry, lead_image_url)
         )
-        for _search_html in [content_html, entry.summary]:
-            if not isinstance(_search_html, str):
-                continue
-            for _tag_m in _img_tag_re_full.finditer(_search_html):
-                _tag = _tag_m.group(0)
-                _tag_attrs: dict[str, str] = {}
-                for _am in _attr_extract_re.finditer(_tag):
-                    _k = _am.group(1).lower()
-                    _v = html.unescape((_am.group(2) or _am.group(3) or _am.group(4) or "").strip())
-                    if _k and _v:
-                        _tag_attrs[_k] = _v
-                _title_val = _tag_attrs.get("title", "")
-                _title_val = re.sub(r"<[^>]+>", "", html.unescape(_title_val)).strip()
-                if not _title_val:
-                    continue
-                _src_val = _tag_attrs.get("src", "")
-                _matches_lead = bool(lead_image_url and _src_val and
-                                     (_src_val in lead_image_url or lead_image_url in _src_val or
-                                      _src_val.split("?")[0].rstrip("/") == lead_image_url.split("?")[0].rstrip("/")))
-                if _matches_lead:
-                    image_title_text = _title_val
-                    _in_feed_title_is_lead_img = True
-                    break
-                if image_title_text is None and not lead_image_url:
-                    # Only accept a low-confidence title (from a different image) when
-                    # there is no separate lead_image_url already determined.  With a
-                    # known lead image (e.g. OG) the in-feed title would belong to an
-                    # unrelated inline image and would show the wrong text.
-                    image_title_text = _title_val
-            if _in_feed_title_is_lead_img:
-                break
-
-        # Check persisted alt/title text (from a previous background HTML fetch).
-        # Always prefer persisted (from source-page scrape) over a low-confidence
-        # in-feed title that came from a different image.
-        _persisted_alt = lead_image_service.get_entry_image_alt(str(entry.feed_url), str(entry.id))
-        _persisted_title = lead_image_service.get_entry_image_title(str(entry.feed_url), str(entry.id))
-        if _persisted_alt or _persisted_title:
-            image_title_text = _persisted_title or _persisted_alt  # title preferred
-        elif image_title_text is None:
-            pass  # stays None; source-page scrape below will attempt to fill it
 
         # Strip the opener thumbnail and dedup against the remaining content.
         # Only when we will actually display the lead image at the top — if
@@ -8595,59 +8666,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # Drop trivially generic alt texts that add no information (e.g. Bootstrap
         # class names used as alt values, single-word placeholders, or navigation
         # labels from wrongly-selected nav thumbnails like "Previous" / "Next").
-        _TRIVIAL_ALT_TEXTS = frozenset({"responsive image", "image", "photo", "picture",
-                                         "img", "thumbnail", "banner", "featured image",
-                                         "previous", "next", "first", "last", "random",
-                                         "prev", "newer", "older",
-                                         # Social share-button and analytics-pixel alt text
-                                         # (AddToAny "Share", statcounter "Web Analytics") —
-                                         # never a real photo caption.
-                                         "share", "web analytics", "analytics"})
-        if image_title_text and image_title_text.lower() in _TRIVIAL_ALT_TEXTS:
-            image_title_text = None
-
-        # Drop date-only captions (e.g. "June 12, 2026") — pure dates carry no comic/article content.
-        if image_title_text and _DATE_ONLY_CAP_RE.match(image_title_text):
-            image_title_text = None
-
-        # Drop captions that merely restate the article title (or a tail portion of it) — not
-        # useful as a photo caption (e.g. WordPress hero images, comic alt=page-title suffix).
-        if image_title_text and entry.title:
-            _norm_cap = " ".join(re.sub(r"<[^>]+>", "", image_title_text).split()).lower()
-            _norm_etitle = " ".join(html.unescape(str(entry.title)).split()).lower()
-            if _norm_etitle and (
-                _norm_cap == _norm_etitle
-                or (len(_norm_etitle) > 20 and _norm_etitle in _norm_cap)
-                or (len(_norm_cap) >= 8 and _norm_etitle.endswith(_norm_cap))
-            ):
-                image_title_text = None
-            else:
-                # Auto-generated banner captions restate the title plus a decorative
-                # word and/or a date (e.g. "Progress Update Banner 2026-06-06" for a
-                # post titled "Progress Update 6/06/2026"). Strip decorative words and
-                # date/number tokens; if the remainder is wholly contained in the title,
-                # the caption adds nothing. Only applied when the caption actually looked
-                # banner-like (had a decorative word or a date) to avoid dropping short
-                # but meaningful captions that merely share words with the title.
-                _DECORATIVE_CAP_WORDS = {
-                    "banner", "header", "image", "cover", "featured", "photo",
-                    "thumbnail", "logo", "graphic", "artwork", "illustration",
-                }
-                _cap_tokens = re.findall(r"[a-z0-9]+", _norm_cap)
-                _title_tokens = set(re.findall(r"[a-z0-9]+", _norm_etitle))
-                _looks_banner_like = any(t in _DECORATIVE_CAP_WORDS for t in _cap_tokens) or bool(
-                    re.search(r"\b\d{4}\b|\b\d{1,2}[/.\-]\d{1,2}\b", _norm_cap)
-                )
-                _core_tokens = [
-                    t for t in _cap_tokens
-                    if t not in _DECORATIVE_CAP_WORDS and not t.isdigit()
-                ]
-                if (
-                    _looks_banner_like
-                    and _core_tokens
-                    and all(t in _title_tokens for t in _core_tokens)
-                ):
-                    image_title_text = None
+        image_title_text = _suppress_junk_caption(image_title_text, entry)
 
         # Inject image_title_text as alt attribute on the first <img> in content_html
         # and insert a caption <p> immediately after it so it appears inline under
@@ -8736,34 +8755,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if not _show_lead_in_article:
             lead_image_url = None
 
-        # Apply caption_source preference (which raw attribute(s) to use).
-        # "auto" (default) keeps whatever was computed above (title-preferred combined).
-        _caption_source = str(_disp.get("caption_source") or "auto")
-        _entry_feed_url = str(entry.feed_url)
-        _entry_id = str(entry.id)
-        if _caption_source == "none":
-            image_title_text = None
-        elif _caption_source == "alt":
-            image_title_text = lead_image_service.get_entry_image_alt(_entry_feed_url, _entry_id)
-        elif _caption_source == "title":
-            image_title_text = lead_image_service.get_entry_image_title(_entry_feed_url, _entry_id)
-        elif _caption_source == "both":
-            _ct = lead_image_service.get_entry_image_title(_entry_feed_url, _entry_id)
-            _ca = lead_image_service.get_entry_image_alt(_entry_feed_url, _entry_id)
-            if _ct and _ca and _ct != _ca:
-                image_title_text = f"{_ct} — {_ca}"
-            else:
-                image_title_text = _ct or _ca
-        # else "auto": keep image_title_text as already computed
-
-        # Explicit source (alt/title/both) = always show; only run auto-suppress for "auto".
-        if _caption_source == "auto" and not should_show_caption(
-            image_title_text,
-            entry_title=entry.title,
-            content_html=content_html,
-            pref=int(_disp.get("show_image_caption", -1)),
-        ):
-            image_title_text = None
+        image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
         _display_link = _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
