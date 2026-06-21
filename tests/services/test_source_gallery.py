@@ -100,6 +100,36 @@ def test_fetch_page_escalates_to_browser_ua_on_503(tmp_path, monkeypatch):
     assert li._BROWSER_USER_AGENT in seen_uas
 
 
+def test_waf_block_backs_off_after_double_refusal(tmp_path, monkeypatch):
+    """When a site (paizo) WAF-refuses both UAs, record a cooldown and stop
+    re-fetching so we don't hammer it / get the IP rate-limited."""
+    import services.lead_images as li
+
+    svc = _svc(tmp_path)
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 503
+        text = ""
+        url = "https://paizo.test/post"
+        headers: dict = {}
+
+        def raise_for_status(self):
+            raise RuntimeError("503")
+
+    def fake_safe_get(client, url):
+        calls["n"] += 1
+        return _Resp()
+
+    monkeypatch.setattr(li.url_guard, "safe_get", fake_safe_get)
+    assert svc._fetch_page_html("https://paizo.test/post") is None
+    first = calls["n"]
+    assert first == 2  # tried honest + browser UA once
+    # second fetch is short-circuited by the cooldown — no new requests
+    assert svc._fetch_page_html("https://paizo.test/post2") is None
+    assert calls["n"] == first
+
+
 def test_dedupes_repeated_images(tmp_path):
     svc = _svc(tmp_path)
     link = "https://x.test/p2"

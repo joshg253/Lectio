@@ -311,6 +311,12 @@ class LeadImageService:
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
         self._SOURCE_HTML_CACHE_MAX = 8
+        # Domains that WAF-refused us (403/503 even with a browser UA, e.g. a
+        # Cloudflare JS challenge like paizo.com) → time.monotonic() until which to
+        # skip re-fetching. Prevents per-open re-scrape from hammering the site
+        # (which can get our IP rate-limited and break the feed fetch too).
+        self._waf_block_until: dict[str, float] = {}
+        self._WAF_BLOCK_COOLDOWN = 6 * 3600  # seconds
         # Events signalled when queue_source_html_fetch completes; lets the first-open entry
         # render wait briefly for caption text rather than deferring to the next open.
         self._source_html_fetch_events: dict[str, threading.Event] = {}
@@ -2374,6 +2380,12 @@ class LeadImageService:
         """
         _use_urllib = False
         _corp_restricted = False
+        # Respect a recent WAF refusal: don't re-hammer a domain that 403/503'd even
+        # with a browser UA (e.g. paizo's Cloudflare JS challenge). Repeated per-open
+        # scrapes would otherwise get our IP rate-limited and break the feed fetch too.
+        _domain = urlparse(url).netloc.lower()
+        if self._waf_block_until.get(_domain, 0.0) > time.monotonic():
+            return None
         try:
             # Identify honestly by default; escalate to a browser UA only if the
             # honest request is actually refused with a WAF status (403 Forbidden or
@@ -2396,6 +2408,11 @@ class LeadImageService:
                             response = url_guard.safe_get(client, url)
                     if response.status_code not in (403, 503):
                         break  # served (or a non-WAF error) — don't escalate
+            # Still refused after escalating → the site is WAF-blocking us. Record a
+            # cooldown so we stop re-fetching it on every entry open.
+            if response is not None and response.status_code in (403, 503):
+                self._waf_block_until[_domain] = time.monotonic() + self._WAF_BLOCK_COOLDOWN
+                return None
             response.raise_for_status()
             _corp = response.headers.get("cross-origin-resource-policy", "").lower()
             _corp_restricted = _corp in ("same-site", "same-origin")
