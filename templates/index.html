@@ -4132,8 +4132,12 @@
       if (_thumbPreview) _thumbPreview.style.display = 'none';
       const _thumbInput = document.getElementById('feed-prop-thumbnail-url');
       if (_thumbInput) _thumbInput.value = '';
-      if (feedPropYtSection) feedPropYtSection.hidden = true;
-      if (feedPropImgSection) feedPropImgSection.hidden = false;
+      // YT-ness is knowable from the URL alone, so set the tuning section now —
+      // don't wait on (or depend on) the /feeds/properties fetch, which on a hiccup
+      // would otherwise leave a YouTube feed showing the full (non-YT) tuning page.
+      const _isYoutubeFeedUrl = feedUrl.includes('youtube.com/feeds/videos.xml');
+      if (feedPropYtSection) feedPropYtSection.hidden = !_isYoutubeFeedUrl;
+      if (feedPropImgSection) feedPropImgSection.hidden = _isYoutubeFeedUrl;
       if (feedPropDevSection) feedPropDevSection.hidden = true;
       if (feedPropFlushBatchStatus) feedPropFlushBatchStatus.textContent = '';
       if (feedPropUnsubscribeBtn) {
