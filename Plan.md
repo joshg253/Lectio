@@ -271,14 +271,12 @@ Fixed in the 2026-06-20 browser-testing pass:
   was a pre-rebuild cached view.
 
 Still open from that pass (deferred — need live-render confirmation or lower priority):
-- **Music-blog embeds render tiny** — backfilled SoundCloud/Bandcamp iframes (e.g.
-  540×540) look small; needs a look at the live reading-column layout to size them
-  (width:100%/responsive) without distorting YouTube video embeds.
+- **Verify Feed Properties → "Hide Shorts"** still marks YouTube Shorts read at
+  fetch time (per-feed toggle) — confirm it works post-refactors.
+- **Verify Feed Properties → "Pause / Resume updates"** still suspends/resumes
+  automatic fetching for a feed — confirm it works post-refactors.
 - **mynorthwest source image not at top** — og_scrape feed; recheck whether the OG
   lead image shows in-article after the class/cache fixes + a re-derive.
-- **Buzzsprout title has no page link** — the feed ships no `<link>` (only guid +
-  enclosure); derive the episode page URL from the enclosure (strip `.mp3`) so the
-  title is clickable. Needs a `_display_link` fallback used by both list and pane.
 - **selfh.st / waynocartoons load via Reader mode** — promising for the paywall spike:
   if Readability already extracts the full article from the page, the "paywalled
   teaser" limitation may be a non-issue for these. Confirm and wire up.
@@ -380,20 +378,19 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 
   Prioritized backlog for follow-up PRs (each its own focused change — too risky to
   bundle):
-  1. **Decompose `get_entry_detail`** — IN PROGRESS (851 → 511 lines). Added 13
-     characterization tests (`tests/integration/test_entry_detail_characterization.py`)
-     pinning the dict output across branches, then extracted cohesive stages:
-     `_resolve_entry_content_html` (content/BBCode/plaintext resolution),
-     `_apply_feed_content_cleanups` (per-site strips, footer, qwantz, embeds, YT
-     recovery), `_apply_entry_media` (audio player + attachments + audio-feed
-     suggestion), `_resolve_article_lead_image` (derive + avatar filter + source-page
-     fetch + pending), `_inject_source_gallery`, and `_strip_lead_image_opener`
-     (opener strip / mid-article suppression / artwork hoist / tumblr size-variant
-     dedup / thumbnail-wrapper strip — with 6 direct edge-case unit tests in
-     `tests/unit/test_lead_image_opener_strip.py`). Remaining: the caption/alt
-     resolution (in-feed-title scan + persisted alt/title + source-scrape caption
-     fetch + caption_source preference) — mutates image_title_text across several
-     spots; extract next under added caption tests.
+  1. **Decompose `get_entry_detail`** — LARGELY DONE (851 → 377 lines, −56%). Added
+     13 characterization tests (`tests/integration/test_entry_detail_characterization.py`)
+     pinning the dict output across branches, then extracted cohesive stages, each
+     behavior-preserving and (where pure) directly unit-tested:
+     `_resolve_entry_content_html`, `_apply_feed_content_cleanups`, `_apply_entry_media`,
+     `_resolve_article_lead_image`, `_inject_source_gallery`, `_strip_lead_image_opener`
+     (`test_lead_image_opener_strip.py`), and the caption stage —
+     `_initial_image_caption` / `_suppress_junk_caption` / `_apply_caption_source_pref`
+     (`test_caption_resolution.py`). What remains inline in get_entry_detail is the
+     glue + a couple of genuinely entangled bits (source-scrape caption fetch with
+     network side effects, the alt-into-content injection, SMBC bonus panel, starred-
+     asset rewrite) — fine to leave; the function is now readable. Call it complete
+     unless it grows again.
   2. **Consolidate the dedup routes** — `_dry_run_dedup` (198L) and `_run_now_dedup`
      (188L) are near-duplicate (preview vs apply); factor a shared match/collect core
      with an `apply: bool`. Behavior-sensitive (dedup correctness) → dedicated PR.
