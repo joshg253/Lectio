@@ -472,7 +472,7 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 - **Authenticated/private feeds** — none supported today, so all feed/image
   content is safe to global-cache. If added, exclude those feeds from the global
   caches.
-- **Miniflux API compatibility** — Fever and GReader are done. Miniflux API is the remaining candidate for broader client support (e.g. Fluent Reader, ReadKit). Assess multi-user requirement and implementation cost before committing.
+- **Miniflux API compatibility** — Fever and GReader are done. Miniflux API is the remaining candidate for broader client support (e.g. Fluent Reader, ReadKit). Assess multi-user requirement and implementation cost before committing. When adding this (or any new API), revisit the README API badge cluster (currently WebSub / GReader / Fever) — add/remove to keep it accurate and avoid badge soup.
 - **Performance investigation** — systematic baseline before enabling multi-user. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. Known hotspot: first-open of an og_scrape feed (e.g. mynorthwest) can take several seconds on the **synchronous source-scrape caption fetch** (`fetch_entry_image_caption` when the source HTML isn't already cached) — move it fully off the request thread / cache-first like the lead-image fetch.
 
 ## Backburner
