@@ -1483,12 +1483,7 @@ class LeadImageService:
     def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
 
             # Images with percentage-based height (e.g. height="60%") are
             # decorative dividers or CSS-sized banners, not article images.
@@ -1518,12 +1513,7 @@ class LeadImageService:
         """
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
             src = attrs.get("src", "")
             if not src or src.startswith("data:"):
                 continue
@@ -1576,6 +1566,19 @@ class LeadImageService:
 
         ranked.sort(key=lambda item: item[0], reverse=True)
         return [url for _, url in ranked]
+
+    def _parse_img_attrs(self, tag: str) -> dict[str, str]:
+        """Parse an ``<img>`` tag into a lowercased attr-name → unescaped-value dict.
+
+        Consolidates the attribute-scan loop that was copy-pasted across every
+        source/feed image extractor."""
+        attrs: dict[str, str] = {}
+        for attr_match in self._IMG_ATTR_RE.finditer(tag):
+            key = attr_match.group(1).strip().lower()
+            value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
+            if key and value:
+                attrs[key] = value
+        return attrs
 
     def _collect_img_candidate_urls(self, attrs: dict[str, str], source_url: str | None = None) -> list[str]:
         candidates: list[str] = []
@@ -1754,12 +1757,7 @@ class LeadImageService:
         """
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
             img_id = (attrs.get("id") or "").strip()
             img_class = (attrs.get("class") or "").strip()
             if not (self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id) or self._WEBCOMIC_IMG_CLASS_RE.search(img_class)):
@@ -1809,12 +1807,7 @@ class LeadImageService:
             if self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
 
             for image_url in self._collect_img_candidate_urls(attrs, source_url=source_url):
                 if not image_url or image_url.startswith("data:"):
@@ -1886,12 +1879,7 @@ class LeadImageService:
             context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
             if self._AUTHOR_CONTEXT_RE.search(context_before) or self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag_match.group(0)):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag_match.group(0))
             for image_url in self._collect_img_candidate_urls(attrs, source_url=entry_link):
                 if not image_url or image_url.startswith("data:"):
                     continue
@@ -1933,12 +1921,7 @@ class LeadImageService:
     def _extract_preloaded_image_url(self, html_text: str, base_url: str) -> str | None:
         for tag_match in self._LINK_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
 
             rel_attr = (attrs.get("rel") or "").lower()
             as_attr = (attrs.get("as") or "").lower()
@@ -2489,12 +2472,7 @@ class LeadImageService:
         # the main comic <img> itself, identified by a known webcomic id/class.
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                k = attr_match.group(1).strip().lower()
-                v = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if k and v:
-                    attrs[k] = v
+            attrs = self._parse_img_attrs(tag)
             img_id = (attrs.get("id") or "").strip()
             img_class = (attrs.get("class") or "").strip()
             if not (self._WEBCOMIC_IMG_ID_RE.fullmatch(img_id) or self._WEBCOMIC_IMG_CLASS_RE.search(img_class)):
@@ -2568,12 +2546,7 @@ class LeadImageService:
         if lead_image_url:
             for tag_match in self._IMG_TAG_RE.finditer(source_html):
                 tag = tag_match.group(0)
-                attrs: dict[str, str] = {}
-                for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                    k = attr_match.group(1).strip().lower()
-                    v = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                    if k and v:
-                        attrs[k] = v
+                attrs = self._parse_img_attrs(tag)
                 for image_url in self._collect_img_candidate_urls(attrs):
                     if not image_url or image_url.startswith("data:"):
                         continue
@@ -3220,12 +3193,7 @@ class LeadImageService:
             # "Mature Content Warning" for an age-gated comic page, etc.).
             for tag_match in self._IMG_TAG_RE.finditer(source_html):
                 tag = tag_match.group(0)
-                attrs: dict[str, str] = {}
-                for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                    key = attr_match.group(1).strip().lower()
-                    value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                    if key and value:
-                        attrs[key] = value
+                attrs = self._parse_img_attrs(tag)
                 for image_url in self._collect_img_candidate_urls(attrs):
                     if not image_url or image_url.startswith("data:"):
                         continue
@@ -3244,12 +3212,7 @@ class LeadImageService:
         # Fallback: first acceptable img on the page with non-empty alt/title.
         for tag_match in self._IMG_TAG_RE.finditer(source_html):
             tag = tag_match.group(0)
-            attrs: dict[str, str] = {}
-            for attr_match in self._IMG_ATTR_RE.finditer(tag):
-                key = attr_match.group(1).strip().lower()
-                value = html.unescape((attr_match.group(2) or attr_match.group(3) or attr_match.group(4) or "").strip())
-                if key and value:
-                    attrs[key] = value
+            attrs = self._parse_img_attrs(tag)
             for image_url in self._collect_img_candidate_urls(attrs):
                 if not image_url or image_url.startswith("data:"):
                     continue
