@@ -380,17 +380,20 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 
   Prioritized backlog for follow-up PRs (each its own focused change — too risky to
   bundle):
-  1. **Decompose `get_entry_detail`** — IN PROGRESS (851 → 628 lines). Added 13
+  1. **Decompose `get_entry_detail`** — IN PROGRESS (851 → 511 lines). Added 13
      characterization tests (`tests/integration/test_entry_detail_characterization.py`)
      pinning the dict output across branches, then extracted cohesive stages:
      `_resolve_entry_content_html` (content/BBCode/plaintext resolution),
      `_apply_feed_content_cleanups` (per-site strips, footer, qwantz, embeds, YT
      recovery), `_apply_entry_media` (audio player + attachments + audio-feed
      suggestion), `_resolve_article_lead_image` (derive + avatar filter + source-page
-     fetch + pending), and `_inject_source_gallery`. Remaining (the gnarliest, need
-     more edge-case characterization first): the lead-image opener-strip/dedup block
-     (artwork hoist, tumblr size-variant dedup) and the caption/alt resolution — both
-     mutate lead_image_url + content_html + image_title_text together.
+     fetch + pending), `_inject_source_gallery`, and `_strip_lead_image_opener`
+     (opener strip / mid-article suppression / artwork hoist / tumblr size-variant
+     dedup / thumbnail-wrapper strip — with 6 direct edge-case unit tests in
+     `tests/unit/test_lead_image_opener_strip.py`). Remaining: the caption/alt
+     resolution (in-feed-title scan + persisted alt/title + source-scrape caption
+     fetch + caption_source preference) — mutates image_title_text across several
+     spots; extract next under added caption tests.
   2. **Consolidate the dedup routes** — `_dry_run_dedup` (198L) and `_run_now_dedup`
      (188L) are near-duplicate (preview vs apply); factor a shared match/collect core
      with an `apply: bool`. Behavior-sensitive (dedup correctness) → dedicated PR.
