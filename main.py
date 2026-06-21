@@ -7966,6 +7966,115 @@ def _inject_source_gallery(content_html, entry, lead_image_url):
     return content_html
 
 
+_LEAD_IMG_OPENER_RE = re.compile(
+    r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
+    r"(?:<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>\s*)*"  # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>)
+    r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
+    r"(?:<a\b[^>]*>\s*)?"
+    r"(?:<div\b[^>]*>\s*)?"   # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
+    r"<img\b[^>]*/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
+_TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
+
+
+def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
+    """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
+
+    Extracted from get_entry_detail. When the lead image is shown at the top:
+    - if the body opens with that image, strip the opener (BS4 to remove empty
+      ancestor containers cleanly; regex fallback when the opener is a *different*
+      image, e.g. a thumbnail placeholder vs the full-size lead);
+    - if the lead image appears later in the body, drop the separate lead (show it in
+      place) — except artwork feeds, where it's hoisted to the top instead;
+    - Tumblr size-variant dedup (same media hash, different size suffix);
+    - when the lead came from source scraping and the body is just a thumbnail
+      wrapper (minimal text), strip the inline imgs."""
+    if not (show_lead_in_article and lead_image_url and isinstance(content_html, str)):
+        return content_html, lead_image_url
+
+    _m = _LEAD_IMG_OPENER_RE.match(content_html)
+    if _m:
+        # BS4 removes the opener <img> and its now-empty ancestor containers without
+        # touching sibling figures or anchored link text ("New comic!").
+        _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
+        if _bs4_stripped is not None:
+            content_html = _bs4_stripped or None
+            if content_html:
+                content_html = re.sub(
+                    r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
+                    "", content_html, flags=re.IGNORECASE,
+                ).strip() or None
+        else:
+            # lead_image_url isn't in the opener's <img> src — the opener is a
+            # different image (e.g. a comicsthumbs placeholder) while lead_image_url
+            # is the full-size source image. Raw-strip the opener; restore any
+            # anchored "New comic!" link text.
+            _matched_opener = _m.group(0)
+            content_html = content_html[_m.end():].lstrip() or None
+            _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
+            if _a_opener_m and content_html:
+                _close_m = _CLOSE_A_RE.search(content_html)
+                if _close_m:
+                    _between_text = re.sub(r"<[^>]+>", "", content_html[:_close_m.start()]).strip()
+                    if _between_text:
+                        content_html = _a_opener_m.group(0) + content_html
+                    else:
+                        content_html = content_html[_close_m.end():].lstrip() or None
+        if content_html and lead_image_url and (
+            lead_image_url in content_html or lead_image_url in html.unescape(content_html)
+        ):
+            lead_image_url = None
+    elif lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
+        _entry_strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
+        if _entry_strategy == "artwork":
+            # Artwork mode (e.g. ArtStation): the image follows the description —
+            # hoist it to the top by stripping it from its position in the content.
+            _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
+            if _bs4_stripped is not None:
+                content_html = _bs4_stripped or None
+            else:
+                lead_image_url = None
+        else:
+            # Lead URL is buried mid-article (author placed it there) — show it in
+            # its natural position, not as a separate top lead.
+            lead_image_url = None
+
+    # Tumblr CDN size-variant dedup: the cached lead (s1280x1920) and the in-content
+    # photo (s640x960) share the {media_hash}/{token} prefix but differ by size, so
+    # string equality above misses it.
+    if show_lead_in_article and lead_image_url and isinstance(content_html, str):
+        _tumblr_prefix_m = _TUMBLR_MEDIA_PREFIX_RE.match(lead_image_url)
+        if _tumblr_prefix_m:
+            _tumblr_prefix = _tumblr_prefix_m.group(1) + "/"
+            if _tumblr_prefix in content_html or _tumblr_prefix in html.unescape(content_html):
+                lead_image_url = None
+
+    # Source-scraped lead + body that's essentially just a thumbnail wrapper (minimal
+    # text) → strip the inline imgs so a small thumb doesn't sit below the full lead.
+    if show_lead_in_article and lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
+        _remaining_imgs = len(re.findall(r"<img\b", content_html, re.IGNORECASE))
+        if _remaining_imgs <= 1:
+            # Tumblr guard: a remaining image with a different media prefix is a
+            # genuine second photo — keep it.
+            _skip_strip = False
+            if _remaining_imgs == 1:
+                _tumblr_lead_m = _TUMBLR_MEDIA_PREFIX_RE.match(lead_image_url)
+                if _tumblr_lead_m:
+                    _rem_src_m = re.search(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html, re.IGNORECASE)
+                    if _rem_src_m:
+                        _tumblr_rem_m = _TUMBLR_MEDIA_PREFIX_RE.match(html.unescape(_rem_src_m.group(1)))
+                        if _tumblr_rem_m and _tumblr_rem_m.group(1) != _tumblr_lead_m.group(1):
+                            _skip_strip = True
+            if not _skip_strip:
+                _no_imgs = re.sub(r"<img\b[^>]*/?>", "", content_html, flags=re.IGNORECASE)
+                _text_only = html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", _no_imgs))).strip()
+                if len(_text_only) < 120:
+                    content_html = _no_imgs.strip() or None
+    return content_html, lead_image_url
+
+
 def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
     """Resolve the article's lead image and whether it's still pending.
 
@@ -8443,126 +8552,9 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # image URL still appears in what remains.  This prevents the case where
         # the lead image IS the opener thumbnail (e.g. comicsthumbs) from being
         # incorrectly suppressed just because it appears at the top of content.
-        _LEAD_IMG_OPENER_RE = re.compile(
-            r"^\s*(?:<!--.*?-->\s*)*"  # skip leading HTML comments (e.g. Ghost kg-card-begin)
-            r"(?:<p\b[^>]*>\s*(?:&nbsp;|\s)*</p>\s*)*"  # skip blank paragraphs (e.g. Blogger <p>&nbsp;</p>)
-            r"(?:<(?:p|figure|div)\b[^>]*>\s*){0,3}"
-            r"(?:<a\b[^>]*>\s*)?"
-            r"(?:<div\b[^>]*>\s*)?"   # allow one extra wrapper div after <a> (e.g. Substack image2-inset)
-            r"<img\b[^>]*/?>",
-            re.IGNORECASE | re.DOTALL,
+        content_html, lead_image_url = _strip_lead_image_opener(
+            content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
-        _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
-        if _show_lead_in_article and lead_image_url and isinstance(content_html, str):
-            _m = _LEAD_IMG_OPENER_RE.match(content_html)
-            if _m:
-                # Use BS4 for structurally-safe opener removal. Regex stripping
-                # leaves orphaned closing tags when the opener is nested inside a
-                # container with siblings (e.g. Tumblr npf_row with 2 figures —
-                # stripping "<div><figure><img/>" leaves "</figure></div>" which
-                # the browser uses to close .entry-content, pushing remaining
-                # images outside the constrained container). BS4 walks up and
-                # removes exactly the empty ancestor containers without touching
-                # siblings.  Anchored-link text ("New comic!") is preserved
-                # automatically: BS4 removes only the <img> (or its empty parent
-                # chain) and leaves surrounding text + <a> intact.
-                _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
-                if _bs4_stripped is not None:
-                    content_html = _bs4_stripped or None
-                    # Strip blank artifacts (empty paragraphs, lone <br>s, &nbsp;-only
-                    # paragraphs) left at the top after the image container is removed.
-                    if content_html:
-                        content_html = re.sub(
-                            r"^(?:\s*(?:<p\b[^>]*>\s*(?:&nbsp;\s*)*</p>|<br\s*/?>\s*))+",
-                            "",
-                            content_html,
-                            flags=re.IGNORECASE,
-                        ).strip() or None
-                else:
-                    # BS4 returned None — lead_image_url is not in any <img> src in
-                    # the opener.  This means the opener is a *different* image (e.g.
-                    # a comicsthumbs placeholder) while lead_image_url is the full-size
-                    # source page image.  Fall back to raw regex strip of the opener so
-                    # lead_image_url still shows at top and the thumbnail is removed.
-                    # The <a>-restoration logic preserves any "New comic!" link text.
-                    _matched_opener = _m.group(0)
-                    content_html = content_html[_m.end():].lstrip() or None
-                    _a_opener_m = re.search(r"<a\b[^>]*>", _matched_opener, re.IGNORECASE)
-                    if _a_opener_m and content_html:
-                        _close_m = _CLOSE_A_RE.search(content_html)
-                        if _close_m:
-                            _between_text = re.sub(r"<[^>]+>", "", content_html[:_close_m.start()]).strip()
-                            if _between_text:
-                                content_html = _a_opener_m.group(0) + content_html
-                            else:
-                                content_html = content_html[_close_m.end():].lstrip() or None
-                if content_html and lead_image_url and (
-                    lead_image_url in content_html or lead_image_url in html.unescape(content_html)
-                ):
-                    lead_image_url = None
-            elif lead_image_url and (lead_image_url in content_html or lead_image_url in html.unescape(content_html)):
-                _entry_strategy, _, _ = lead_image_service.get_feed_strategy(str(entry.feed_url))
-                if _entry_strategy == "artwork":
-                    # Artwork mode: the image appears after the description (e.g. ArtStation).
-                    # Hoist it to the top by stripping it from its position in the content.
-                    _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
-                    if _bs4_stripped is not None:
-                        content_html = _bs4_stripped or None
-                    else:
-                        lead_image_url = None
-                else:
-                    # Lead URL is buried in the content (not at the opener position).
-                    # The image was intentionally placed mid-article by the author —
-                    # don't move it. Show it in its natural position only.
-                    lead_image_url = None
-
-        # Tumblr CDN size-variant dedup: the background job may cache a s1280x1920 lead
-        # while the feed content has the same photo at s640x960.  String equality misses
-        # this so the normal dedup above doesn't fire.  Check by the shared
-        # {media_hash}/{token} URL prefix — if that prefix is still present in the
-        # (possibly BS4-stripped) content the photo was NOT removed from the article,
-        # so showing it again as a separate lead image would be a duplicate.
-        if _show_lead_in_article and lead_image_url and isinstance(content_html, str):
-            _tumblr_prefix_m = re.match(
-                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", lead_image_url, re.IGNORECASE
-            )
-            if _tumblr_prefix_m:
-                _tumblr_prefix = _tumblr_prefix_m.group(1) + "/"
-                if _tumblr_prefix in content_html or _tumblr_prefix in html.unescape(content_html):
-                    lead_image_url = None
-
-        # If lead_image_url came from source scraping and the remaining content
-        # is essentially just a thumbnail wrapper (minimal text after stripping
-        # all imgs), strip the inline img tags so thumbnails don't appear below
-        # the full-size lead image.
-        if _show_lead_in_article and lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
-            _remaining_imgs = len(re.findall(r"<img\b", content_html, re.IGNORECASE))
-            if _remaining_imgs <= 1:
-                # Tumblr guard: a remaining image with a different media hash/token
-                # prefix than the lead image is a genuine second photo — keep it.
-                _skip_strip = False
-                if _remaining_imgs == 1 and lead_image_url:
-                    _tumblr_lead_m = re.match(
-                        r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/",
-                        lead_image_url, re.IGNORECASE,
-                    )
-                    if _tumblr_lead_m:
-                        _lead_pfx = _tumblr_lead_m.group(1)
-                        _rem_src_m = re.search(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', content_html, re.IGNORECASE)
-                        if _rem_src_m:
-                            _rem_url = html.unescape(_rem_src_m.group(1))
-                            _tumblr_rem_m = re.match(
-                                r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/",
-                                _rem_url, re.IGNORECASE,
-                            )
-                            if _tumblr_rem_m and _tumblr_rem_m.group(1) != _lead_pfx:
-                                _skip_strip = True
-                if not _skip_strip:
-                    _no_imgs = re.sub(r"<img\b[^>]*/?>", "", content_html, flags=re.IGNORECASE)
-                    _text_only = re.sub(r"<[^>]+>", " ", _no_imgs)
-                    _text_only = html.unescape(re.sub(r"\s+", " ", _text_only)).strip()
-                    if len(_text_only) < 120:
-                        content_html = _no_imgs.strip() or None
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
