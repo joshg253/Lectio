@@ -1,10 +1,10 @@
 # Lectio
 
 [![CI](https://github.com/joshg253/Lectio/actions/workflows/ci.yml/badge.svg)](https://github.com/joshg253/Lectio/actions/workflows/ci.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 ![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
-![No build step](https://img.shields.io/badge/frontend-no%20build%20step-success)
+![WebSub](https://img.shields.io/badge/realtime-WebSub-FF5700)
 ![GReader API](https://img.shields.io/badge/API-Google%20Reader-FF5700)
 ![Fever API](https://img.shields.io/badge/API-Fever-FF5700)
 ![Last commit](https://img.shields.io/github/last-commit/joshg253/Lectio)
