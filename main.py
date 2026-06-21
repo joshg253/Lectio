@@ -6509,6 +6509,15 @@ def normalize_proxy_lazy_media(content: str) -> str:
     return re.sub(r"<(?:img|source)\b[^>]*>", _normalize_tag, content, flags=re.IGNORECASE)
 
 
+def _entry_query_suffix(feed_url: str, entry_id: str | None, include: bool = True) -> str:
+    """Build the ``&feed_url=…&entry_id=…`` suffix used to re-select an entry after a
+    redirect, or ``""`` when no entry should be selected. Centralizes the
+    quote_plus pair that was repeated across the mark-read / range routes."""
+    if not include or not entry_id:
+        return ""
+    return f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
+
+
 def add_no_referrer_to_images(content: str) -> str:
     """Add referrerpolicy="no-referrer" to inline <img> tags that lack it.
 
@@ -7789,42 +7798,26 @@ def _derive_article_lead_image(entry) -> str | None:
     showed the inline thumbnail. Routing by strategy keeps the two consistent."""
     feed_url = str(getattr(entry, "feed_url", "") or "")
     strategy, _, _ = lead_image_service.get_feed_strategy(feed_url)
-    if strategy == "inline":
-        # extract_inline_thumb_url already includes the inline-<svg> fallback, but
-        # only scans inline <img>; feeds whose image lives in an <enclosure>/media
-        # field (e.g. gottadeal) have no inline <img>, so fall back to the same
-        # enclosure-aware extractor the list thumbnail uses. Without this the
-        # article showed no image AND persisted a negative on open (poisoning the
-        # thumbnail after a re-parse). DeviantArt-style inline feeds short-circuit
-        # on the first call, so the stale-negative bypass it was added for still holds.
-        return (
-            lead_image_service.extract_inline_thumb_url(entry)
-            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
-        )
-    if strategy == "webcomic":
-        # Many webcomic feeds (e.g. claycomix) ship the FULL comic strip inline in
-        # the feed content, while the source-page scrape only finds a single-pane
-        # preview — which is fine as the small list thumbnail but wrong for the
-        # article. Prefer the inline full image here; fall back to the scraped
-        # panel only when the feed has no inline image (the classic case where the
-        # comic lives only on the source page).
-        result = (
-            lead_image_service.extract_inline_thumb_url(entry)
-            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
-        )
+    # Each strategy has a primary extractor that bypasses the lead-image cache
+    # (so the article matches the list thumbnail's own logic):
+    #   inline / webcomic → inline <img> (claycomix ships the full strip inline;
+    #                       DeviantArt galleries dodge a stale negative cache)
+    #   media_rss         → <media:content> (reader keeps media:thumbnail/enclosure)
+    # Every strategy then falls back to the cache-consulting extractor — covering
+    # feeds whose image lives in an <enclosure>/media field reader dropped (gottadeal,
+    # paizo) — and finally to a raw inline <svg>. Without the cache fallback the
+    # article showed no image AND persisted a negative on open, poisoning the thumb.
+    if strategy in ("inline", "webcomic"):
+        primary = lead_image_service.extract_inline_thumb_url(entry)
     elif strategy == "media_rss":
-        # reader drops <media:content>/<media:group>, so the media extractor often
-        # returns None on the stored entry even though the image was captured (via a
-        # raw re-parse) into the lead-image cache. Fall back to the cache-consulting
-        # extractor — the same image the list thumbnail shows (e.g. paizo).
-        result = (
-            lead_image_service.extract_media_rss_thumb_url(entry)
-            or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
-        )
+        primary = lead_image_service.extract_media_rss_thumb_url(entry)
     else:
-        result = lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
-    # Last resort: a raw inline <svg> in the entry content (sanitized → data URI).
-    return result or lead_image_service.extract_inline_svg_thumb_url(entry)
+        primary = None
+    return (
+        primary
+        or lead_image_service.extract_entry_thumbnail_url(entry, include_source_lookup=False)
+        or lead_image_service.extract_inline_svg_thumb_url(entry)
+    )
 _PLAINTEXT_PROMOTE_RE = re.compile(r"https?://|&lt;br|<br", re.IGNORECASE)
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 # A bare URL that points straight at an image — rendered inline as <img> rather
@@ -13323,7 +13316,7 @@ def refresh(
     )
     entry_query = ""
     if feed_url and entry_id:
-        entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
+        entry_query = _entry_query_suffix(feed_url, entry_id)
     retry_after_seconds = check_and_mark_manual_refresh()
     if retry_after_seconds > 0:
         return RedirectResponse(
@@ -13346,8 +13339,11 @@ def refresh(
         )
     with get_meta_connection() as conn:
         scraper_service.refresh_all_scraped_feeds(conn)
+        # Only touch DeviantArt when it's actually configured — avoids needless work
+        # (and the access-token settings lookup) for the common no-DA setup.
         _da_cid, _da_secret = get_deviantart_credentials()
-        deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
+        if _da_cid and _da_secret:
+            deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
     feed_refresh_service.update_feeds(feed_urls)
     _run_automation_after_refresh(feed_urls)
     return RedirectResponse(
@@ -13380,7 +13376,7 @@ def refresh_feed(
         + build_star_only_query(star_only)
         + build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     )
-    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if entry_id else ""
+    entry_query = _entry_query_suffix(feed_url, entry_id)
     if retry_after_seconds > 0:
         return RedirectResponse(
             url=(
@@ -13583,7 +13579,7 @@ def mark_entry_read(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_er)
 
-    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
+    entry_query = _entry_query_suffix(feed_url, entry_id, include=bool(select_entry))
 
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
@@ -13646,7 +13642,7 @@ def toggle_entry_saved(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_es)
 
-    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
+    entry_query = _entry_query_suffix(feed_url, entry_id, include=bool(select_entry))
 
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
@@ -13697,7 +13693,7 @@ def set_entry_manual_tags(
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_et)
 
-    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}" if select_entry else ""
+    entry_query = _entry_query_suffix(feed_url, entry_id, include=bool(select_entry))
     message = "Tags updated." if tags else "Tags cleared."
 
     if request.headers.get("X-Requested-With") == "lectio-ajax":
@@ -13837,7 +13833,7 @@ def mark_entries_range_read(
     read_filter_query = build_read_filter_query(read_filter)
     star_only_query = build_star_only_query(normalized_star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
-    entry_query = f"&feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}"
+    entry_query = _entry_query_suffix(feed_url, entry_id)
 
     if is_async_action_request(request, "lectio-post-range-read"):
         return JSONResponse({"ok": True, "message": message, "feed_url": feed_url, "entry_id": entry_id, "direction": direction})

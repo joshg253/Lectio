@@ -360,13 +360,37 @@ Still open from that pass (deferred — need live-render confirmation or lower p
 
 ### Code health
 
-- **Serious duplicate-code / code-smell deep dive** — a fresh, thorough pass over
-  the whole codebase (beyond the earlier feed-removal consolidation): hunt
-  copy-pasted/near-duplicate blocks, oversized functions in `main.py`, leaky
-  layering (UI/service/storage), dead code, inconsistent error handling, and
-  repeated SQL/connection boilerplate. Goal is a prioritized refactor list, then
-  consolidate behind the existing service seams without changing behavior. Keep
-  each refactor test-backed.
+- **Serious duplicate-code / code-smell deep dive** — IN PROGRESS. First pass
+  applied the safe, mechanical consolidations (behavior-preserving, test-backed):
+  - `LeadImageService._parse_img_attrs` — collapsed the `<img>` attribute-scan loop
+    that was copy-pasted across 10 source/feed extractors.
+  - `_derive_article_lead_image` — collapsed 4 near-identical strategy branches
+    (each `extract_X or extract_entry_thumbnail_url or svg`) into one dispatch.
+  - `_entry_query_suffix` — centralized the `&feed_url=…&entry_id=…` redirect suffix
+    repeated across 6 mark-read/range routes.
+
+  Prioritized backlog for follow-up PRs (each its own focused change — too risky to
+  bundle):
+  1. **Decompose `get_entry_detail` (851 lines)** — the single biggest function.
+     Extract cohesive stages: content-pipeline cleanups (per-site strips, footer,
+     qwantz, embeds), media/audio/attachments, lead-image resolution+dedup,
+     caption/alt. High value, needs careful test coverage of each stage.
+  2. **Consolidate the dedup routes** — `_dry_run_dedup` (198L) and `_run_now_dedup`
+     (188L) are near-duplicate (preview vs apply); factor a shared match/collect core
+     with an `apply: bool`. Behavior-sensitive (dedup correctness) → dedicated PR.
+  3. **Unify the source-image scan loops** in `lead_images.py` — `_extract_preferred_
+     source_image_data`, `extract_source_gallery_urls`, and `_extract_webcomic_panel_
+     image` all iterate `_IMG_TAG_RE` with the same author/chrome/related/junk filters
+     but different selection (best vs all vs comic-class). Extract a shared candidate
+     iterator yielding (attrs, resolved_url); callers keep their selection logic.
+  4. **Other oversized functions** — `ensure_meta_schema` (585L, mostly sequential
+     CREATEs/ALTERs — could split per-table), `home`/`list_entries_for_feeds`.
+  - **Test-isolation smell (pre-existing)** — `test_refresh_routes::test_refresh_
+    route_success_updates_folder_scope` passes only in the full suite: the `refresh`
+    route calls the DeviantArt path → `get_setting` → `_load_app_settings_cache`,
+    which queries `app_settings` (absent in the test's `:memory:` dummy meta) and
+    only succeeds when a *different* test has populated the module-level settings
+    cache first. Fix: seed `app_settings` in the fixture (or guard the DA path).
 - ~~**WebSub hub fetches still follow redirects (SSRF)**~~ — DONE. The three httpx
   calls in `services/websub.py` followed redirects: `_discover_hub_url` now fetches
   the user-supplied `feed_url` via `url_guard.safe_get` (per-hop revalidation), and
