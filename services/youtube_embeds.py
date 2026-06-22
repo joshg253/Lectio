@@ -24,6 +24,7 @@ _YT_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"youtube\.com/watch\?(?:[^\"'<>\s]*&)?v=" + _VIDEO_ID, re.I),
     re.compile(r"youtu\.be/" + _VIDEO_ID, re.I),
     re.compile(r"youtube\.com/v/" + _VIDEO_ID, re.I),
+    re.compile(r"youtube\.com/shorts/" + _VIDEO_ID, re.I),
 )
 # Signals that an entry *intended* a YouTube embed even if no id is recoverable
 # (so the app can record a negative result and stop re-scanning).
@@ -41,7 +42,7 @@ def _video_ids(blob: str) -> list[str]:
     seen: set[str] = set()
     ids: list[str] = []
     for m in re.finditer(
-        r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?[^\"'<>\s]*v=|v/)|youtu\.be/)"
+        r"(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?[^\"'<>\s]*v=|v/|shorts/)|youtu\.be/)"
         + _VIDEO_ID,
         blob,
         re.I,
@@ -51,6 +52,13 @@ def _video_ids(blob: str) -> list[str]:
             seen.add(vid)
             ids.append(vid)
     return ids
+
+
+def video_ids_in_text(*texts: str) -> list[str]:
+    """Ordered, de-duplicated YouTube video ids found across the given text blobs
+    (entry link, content HTML, summary). Public wrapper around the internal scanner
+    used by the auto-add-to-playlist automation."""
+    return _video_ids("\n".join(t for t in texts if t))
 
 
 def extract_youtube_embeds(raw: bytes | str) -> dict[str, list[str]]:

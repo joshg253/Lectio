@@ -11,11 +11,12 @@ this file only tracks what's still open.
 
 ## Later
 
-- **YouTube as a first-class "special" area** (manual Add-to-playlist already
-  shipped in PR #61: per-user OAuth in Settings → Integrations + an "Add to
-  playlist" control beneath each embed, via `services/youtube_oauth.py`). Next:
-  treat the YouTube folder as a real integration surface with its own settings and
-  automations, instead of a folder that merely *starts with* "YouTube".
+- **YouTube as a first-class "special" area.** Shipped so far: manual Add-to-playlist
+  (PR #61: per-user OAuth + the per-embed control, `services/youtube_oauth.py`) and the
+  **`youtube_playlist` automation rule** (auto-adds new entries' videos — incl. those
+  embedded in any feed's article — to a chosen playlist; include-Shorts + mark-read
+  options; per-run quota cap + non-idempotent dedup guard via `youtube_playlist_added`;
+  gated on a connected account). **Still to do** (the remaining YT-area pieces below):
 
   Background — what exists today:
   - The "YouTube folder" is detected loosely by name (`contextFolderName
@@ -45,37 +46,16 @@ this file only tracks what's still open.
      `hide_shorts=1` on every YT feed + on sync of new ones. Prefer the area-level
      setting (one source of truth; no drift when feeds come and go).
 
-  3. **"Auto add to playlist" automation** (the headline ask). A general automation
-     rule — **available for any feed/folder, not just the YT area** — because a
-     YouTube video can be embedded in any feed's article, and an article can contain
-     **multiple** videos.
-     - **Choose a playlist** (dropdown from `/api/youtube/playlists`; allow "create
-       new").
-     - **Scope** like any other rule: a specific feed, a folder, or all feeds (reuse
-       the existing rule-scope picker — no YT-only feed selector).
-     - Options: **include Shorts** (default off — pairs with the global skip), and
-       **mark post read after add** (default on).
-     - Engine: new `youtube_playlist` rule type + `_run_youtube_playlist_rules_after
-       _refresh`, modeled on the webhook runner. For each new matching entry:
-       **extract *all* YouTube video ids from the entry** — not just the entry link.
-       For YT-feed entries the link is the watch URL; for general feeds, scan the
-       article content for embedded YT iframes / `youtu.be` / `watch?v=` links (reuse
-       `services/youtube_embeds.py`, which already pulls video ids from entry HTML).
-       Dedupe within the entry, then `playlistItems.insert` each (counts against the
-       per-run cap and quota individually) → if "mark read", mark the post once after
-       all its videos are added.
-     - **UI placement:** appears in the **general Automations rule-builder** as a
-       normal rule type (so the earlier "YT-area only" placement is dropped for this
-       rule). The YT special area still owns the YT-only settings — sync + global
-       skip-Shorts (items 1–2) — but the auto-add rule is general.
+  3. **"Auto add to playlist" automation** — ✅ **SHIPPED.** General `youtube_playlist`
+     rule (any feed/folder), extracts all video ids per entry (incl. embedded + Shorts),
+     include-Shorts + mark-read options, per-run quota cap, `youtube_playlist_added`
+     dedup guard, rule-type gated on a connected account. (Remaining YT-area work is
+     items 1, 2, and the quota meter below.)
 
-  4. **Connection gating.** YT-dependent surfaces only render when the user has
-     connected YouTube (`yt_oauth_connected`): the YT special-area panel, the
-     per-embed "Add to playlist" control (already shipped), and — in the general
-     rule-builder — the **`youtube_playlist` rule type option** (hidden/disabled when
-     not connected, so it can't be created without a token). Not connected → these
-     don't show; the YT area surfaces a single "Connect YouTube account" prompt. Gate
-     server-side, not just CSS.
+  4. **Connection gating** — partially done: the `youtube_playlist` rule-type option
+     and the per-embed control are gated on `yt_oauth_connected`. Still to do once the
+     **YT special-area panel** (items 1–2) exists: gate that panel too and surface a
+     single "Connect YouTube account" prompt when not connected. Gate server-side.
 
   5. **Quota meter — "tokens left" with low alerts.** Show estimated remaining daily
      quota somewhere visible (YT-area header, near the Add-to-playlist controls, and

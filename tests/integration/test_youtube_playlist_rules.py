@@ -1,0 +1,142 @@
+"""youtube_playlist automation rule: persistence + the auto-add fire path.
+
+The rule adds the YouTube video(s) in a freshly-refreshed matching entry to a
+target playlist, optionally marking the post read, and must never add the same
+video twice (playlistItems.insert isn't idempotent).
+"""
+from __future__ import annotations
+
+import datetime as dt
+
+import pytest
+
+import main
+from services import tenancy
+from services import youtube_oauth as yt
+
+FEED = "https://www.youtube.com/feeds/videos.xml?channel_id=UCABC"
+VID = "dQw4w9WgXcQ"
+
+
+def _reset_pools():
+    main._reader_thread_local.pool = None
+    main._meta_conn_local.pool = None
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    saved = tenancy._layout
+    _reset_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    main.ensure_meta_schema()
+    # A connected account by default; tests can override.
+    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "tok")
+    try:
+        yield
+    finally:
+        _reset_pools()
+        tenancy._layout = saved
+
+
+def _add_entry(entry_id="e1", link=f"https://www.youtube.com/watch?v={VID}", title="Vid"):
+    reader = main.get_reader()
+    try:
+        reader.add_feed(FEED, allow_invalid_url=True)
+    except Exception:
+        pass
+    reader.add_entry({
+        "feed_url": FEED, "id": entry_id, "title": title, "link": link,
+        "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+    })
+    return entry_id
+
+
+def _add_rule(*, keyword="", playlist="PL1", include_shorts=False, mark_read=True):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(
+            conn, "global", "", keyword, "yellow", rule_type="youtube_playlist",
+            enabled=1, yt_playlist_id=playlist, yt_playlist_title="My PL",
+            yt_include_shorts=include_shorts, yt_mark_read=mark_read,
+        )
+
+
+def test_rule_persists_fields(env):
+    _add_rule(playlist="PLxyz", include_shorts=True, mark_read=False)
+    with main.get_meta_connection() as conn:
+        r = main.get_highlight_keywords(conn)[0]
+    assert r["type"] == "youtube_playlist"
+    assert r["yt_playlist_id"] == "PLxyz"
+    assert r["yt_include_shorts"] == 1
+    assert r["yt_mark_read"] == 0
+
+
+def test_auto_add_inserts_and_marks_read(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append((tok, pl, vid)))
+    _add_entry()
+    _add_rule(mark_read=True)
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert calls == [("tok", "PL1", VID)]
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED, "e1")).read is True
+
+
+def test_no_double_add_on_second_run(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    main._run_youtube_playlist_rules_after_refresh({FEED})  # dedup guard
+    assert calls == [VID]
+
+
+def test_shorts_excluded_by_default(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: calls.append(a))
+    _add_entry(link=f"https://www.youtube.com/shorts/{VID}")
+    _add_rule(include_shorts=False)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []
+
+
+def test_shorts_included_when_opted_in(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry(link=f"https://www.youtube.com/shorts/{VID}")
+    _add_rule(include_shorts=True)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == [VID]
+
+
+def test_not_connected_is_noop(env, monkeypatch):
+    monkeypatch.setattr(main, "get_youtube_oauth_token", lambda: "")
+    called = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: called.append(a))
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert called == []
+
+
+def test_quota_exceeded_releases_claim_for_retry(env, monkeypatch):
+    def _boom(tok, pl, vid):
+        raise yt.QuotaExceeded("quota")
+    monkeypatch.setattr(yt, "add_video_to_playlist", _boom)
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    # The claim row must have been rolled back so a later run (after reset) retries.
+    with main.get_meta_connection() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM youtube_playlist_added").fetchone()[0]
+    assert n == 0
+    # Entry not marked read since nothing was added.
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED, "e1")).read in (False, None)
