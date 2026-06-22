@@ -47,10 +47,10 @@ this file only tracks what's still open.
 
   2. **Global "skip Shorts" toggle** for the YT area — one switch that applies the
      existing `hide_shorts` behavior across all YT feeds (and to feeds added later by
-     sync), instead of toggling each feed. Implement as an area-level setting the
-     hide-shorts pass consults, OR as a bulk-apply that sets `hide_shorts=1` on every
-     YT feed + on sync of new ones. Prefer the area-level setting (one source of
-     truth; no drift when feeds come and go).
+     sync), instead of toggling each feed. **Default: off.** Implement as an
+     area-level setting the hide-shorts pass consults, OR as a bulk-apply that sets
+     `hide_shorts=1` on every YT feed + on sync of new ones. Prefer the area-level
+     setting (one source of truth; no drift when feeds come and go).
 
   3. **"Auto add to playlist" automation** (the headline ask). A YT-specific rule:
      - **Choose a playlist** (dropdown from `/api/youtube/playlists`; allow "create
