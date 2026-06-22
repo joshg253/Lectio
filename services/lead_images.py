@@ -115,7 +115,13 @@ class LeadImageService:
         # "sidebar" catches CMS sidebar images (e.g. cad-comic.com/wp-content/uploads/.../sidebar.png).
         # "opengraph" catches brand og:image files stored under a predictable URL
         # (e.g. logo_opengraph.jpg) that slip through the logo-pattern check.
-        r"|sidebar|opengraph",
+        r"|sidebar|opengraph"
+        # "podcast-title-small" is a show-title branding graphic (e.g. techdirt's
+        # ii.techdirt.com/s/t/i/podcast-title-small.png) that og:scrape falls back
+        # to on a post with no real featured image (e.g. a WP preview entry). Keep
+        # the "-small" suffix so per-episode artwork like "E_293_Podcast_Title.jpg"
+        # (Real Python) is NOT rejected.
+        r"|podcast[-_]title[-_]small",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
@@ -249,6 +255,13 @@ class LeadImageService:
         r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic|wp-post-image)\b',
         re.IGNORECASE,
     )
+
+    # ComicControl CMS (atomic-robo.com, everblue-comic.com, many others) ships a
+    # small /comicsthumbs/<file> image in its RSS enclosure while the full-resolution
+    # panel lives at /comics/<same-file> on the page (id="cc-comic"). The thumb and
+    # full image share a filename, so we can promote the URL directly — no extra
+    # source fetch needed to get the readable comic.
+    _COMICCONTROL_THUMB_RE = re.compile(r'(?<=/)comicsthumbs(?=/)', re.IGNORECASE)
 
     _LEAD_IMAGE_MIN_WIDTH = 200
     _LEAD_IMAGE_MIN_HEIGHT = 100
@@ -791,9 +804,23 @@ class LeadImageService:
             return None
         if not self._is_image_url_acceptable(cached, None, None, allow_extensionless=True, skip_logo_patterns=True):
             return None
-        return cached
+        return self._promote_known_thumbnail(cached)
+
+    def _promote_known_thumbnail(self, url: str | None) -> str | None:
+        """Promote a known small-thumbnail URL to its full-resolution equivalent.
+
+        Currently handles the ComicControl /comicsthumbs/ → /comics/ convention.
+        Idempotent and a no-op for unrelated URLs."""
+        if not url or "comicsthumbs" not in url.lower():
+            return url
+        return self._COMICCONTROL_THUMB_RE.sub("comics", url)
 
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
+        return self._promote_known_thumbnail(
+            self._extract_entry_thumbnail_url_inner(entry, include_source_lookup, fast_only)
+        )
+
+    def _extract_entry_thumbnail_url_inner(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         entry_link = str(getattr(entry, "link", "") or "")
         feed_url = str(getattr(entry, "feed_url", "") or "")
 
@@ -997,7 +1024,7 @@ class LeadImageService:
                 and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
             ):
-                return inline_image
+                return self._promote_known_thumbnail(inline_image)
         # No raster image — fall back to a raw inline <svg> (sanitized → data URI).
         for html_candidate in prepared:
             svg_uri = self._extract_inline_svg_data_uri(html_candidate)
