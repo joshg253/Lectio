@@ -5991,3 +5991,25 @@ textarea.hl-draft-pattern {
 .lectio-yt-pl-new { border-top: 1px solid var(--border); margin-top: 0.25rem; color: var(--accent); }
 .lectio-yt-pl-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
 .lectio-yt-pl-status { color: var(--muted); font-size: 0.8rem; }
+
+/* Pin the Save / action footer to the bottom of the scrolling settings panel so
+   it's always reachable without scrolling to the end of a long tab. */
+.settings-tab-panel .settings-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  background: var(--elevated-bg);
+  border-top: 1px solid var(--line);
+  padding-bottom: 0.4rem;
+  z-index: 5;
+}
+/* Automation: pin "+ Add Rule" to the bottom, and actually hide it when a draft
+   row is open (the JS sets [hidden], but `.hl-add-rule-btn{display:block}` was
+   overriding the attribute, so the button never disappeared). */
+#settings-tab-automation .hl-add-rule-btn {
+  position: sticky;
+  bottom: 0;
+  background: var(--elevated-bg);
+  z-index: 5;
+}
+.hl-add-rule-btn[hidden] { display: none; }

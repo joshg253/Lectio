@@ -111,9 +111,46 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
                 "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
             })
             assert r2.status_code == 400
+            # Editing a blank-keyword YT rule = remove + add; both must accept "".
+            rem = client.post("/highlights/remove", data={
+                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
+            })
+            assert rem.status_code == 200, rem.text
+            tog = client.post("/highlights/toggle", data={
+                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "", "enabled": "1",
+            })
+            assert tog.status_code == 200, tog.text
     finally:
         _reset_pools()
         tenancy._layout = saved
+
+
+def test_dry_run_blank_keyword_matches_all_in_scope(env):
+    # The Test (dry-run) button on a blank-keyword youtube_playlist rule must
+    # preview every entry in scope (regression: it errored "unknown rule type",
+    # and a blank keyword previewed nothing).
+    _add_entry()
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True)
+    assert res["total_matches"] >= 1
+    # Without the flag (other rule types), a blank keyword still matches nothing.
+    with main.get_meta_connection() as conn:
+        res0 = main._dry_run_pattern(conn, "feed", FEED, "", False, "title")
+    assert res0["total_matches"] == 0
+
+
+def test_dry_run_excludes_shorts_when_opted_out(env):
+    # The dry-run must mirror the rule: with Include-Shorts off, Shorts are excluded
+    # from the preview (regression: they showed up).
+    _add_entry(entry_id="vid", link=f"https://www.youtube.com/watch?v={VID}")
+    _add_entry(entry_id="short", link=f"https://www.youtube.com/shorts/{VID}")
+    with main.get_meta_connection() as conn:
+        excl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title",
+                                     match_all_if_empty=True, exclude_shorts=True)
+        incl = main._dry_run_pattern(conn, "feed", FEED, "", False, "title",
+                                     match_all_if_empty=True, exclude_shorts=False)
+    assert excl["total_matches"] == 1   # the Short is dropped
+    assert incl["total_matches"] == 2   # both included
 
 
 def test_rule_persists_fields(env):
