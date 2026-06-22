@@ -223,10 +223,10 @@ this file only tracks what's still open.
   403 on every server request, honest *and* browser UA, persistent over hours) — the
   feed itself fetches, but server-side image ops (the `/thumb` list thumbnails and
   source-page scrape) are blocked at the IP/ASN level. We don't evade IP blocks
-  (good-citizen policy). Article lead images still render: they're served *direct* to
-  the browser, which loads them from the user's own IP. Only the server-generated
-  list thumbnails are missing. A future graceful fallback could let the list `<img>`
-  load the direct image when `/thumb` fails.
+  (good-citizen policy). Article lead images render direct to the browser (user's own
+  IP), and **list thumbnails now fall back to a direct browser load when `/thumb`
+  fails** (`thumbImgFallback`), so they render too. Only the server-side source-page
+  *scrape* (e.g. caption sourcing) remains blocked for such hosts.
 - **Webcomic single-image feeds** (e.g. claycomix) — investigated: not multi-panel.
   A single `wp-post-image` per entry; the source page's extra `<img>`s are DRM'd
   early-access previews + support badges. The webcomic strategy already surfaces the
