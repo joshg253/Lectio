@@ -65,6 +65,45 @@ def _add_rule(*, keyword="", playlist="PL1", include_shorts=False, mark_read=Tru
         )
 
 
+def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
+    """A youtube_playlist rule has an OPTIONAL keyword (blank = all videos). The
+    /highlights/add form must not reject a blank keyword with a 422 (regression:
+    `keyword` was a required Form field). Other rule types still 400 cleanly."""
+    import base64
+    import json as _json
+
+    from fastapi.testclient import TestClient
+    from itsdangerous import TimestampSigner
+
+    monkeypatch.setattr(main, "META_DB_PATH", tmp_path / "meta.sqlite3")
+    monkeypatch.setattr(main, "THUMB_DB_PATH", tmp_path / "thumb.sqlite")
+    monkeypatch.setattr(main, "STARRED_ARCHIVE_DB_PATH", tmp_path / "archive.sqlite")
+    main.ensure_meta_schema()
+    main.ensure_thumb_schema()
+    main.ensure_starred_archive_schema()
+    monkeypatch.setattr(main, "AUTH_ENABLED", False)
+    with main.get_meta_connection() as c:
+        main.set_setting(c, main.SETTING_YT_OAUTH_REFRESH_TOKEN, "fake")
+
+    with TestClient(main.app) as client:
+        client.get("/healthz")
+        cookie = client.cookies.get("session")
+        tok = _json.loads(base64.b64decode(
+            TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
+        ))["csrf_token"]
+        r = client.post("/highlights/add", data={
+            "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
+            "type": "youtube_playlist", "yt_playlist_id": "PL1", "yt_playlist_title": "My PL",
+            "yt_include_shorts": "0", "yt_mark_read": "1", "enabled": "0",
+        })
+        assert r.status_code == 200, r.text
+        # A non-YT type with a blank keyword is still rejected — cleanly (400, not 422).
+        r2 = client.post("/highlights/add", data={
+            "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
+        })
+        assert r2.status_code == 400
+
+
 def test_rule_persists_fields(env):
     _add_rule(playlist="PLxyz", include_shorts=True, mark_read=False)
     with main.get_meta_connection() as conn:
