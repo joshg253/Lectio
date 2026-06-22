@@ -51,6 +51,14 @@ this file only tracks what's still open.
   so even the browser-identity escalation can't fetch them. Lectio escalates on
   refusal (403/415/429/503/timeout) but won't run a headless browser; these feeds
   stay unsubscribable. Surfaced as a "site is blocking automated access" message.
+- **Network/IP-level image blocks** (e.g. washingtonstatestandard.com — Cloudflare
+  403 on every server request, honest *and* browser UA, persistent over hours) — the
+  feed itself fetches, but server-side image ops (the `/thumb` list thumbnails and
+  source-page scrape) are blocked at the IP/ASN level. We don't evade IP blocks
+  (good-citizen policy). Article lead images still render: they're served *direct* to
+  the browser, which loads them from the user's own IP. Only the server-generated
+  list thumbnails are missing. A future graceful fallback could let the list `<img>`
+  load the direct image when `/thumb` fails.
 - **Webcomic single-image feeds** (e.g. claycomix) — investigated: not multi-panel.
   A single `wp-post-image` per entry; the source page's extra `<img>`s are DRM'd
   early-access previews + support badges. The webcomic strategy already surfaces the
