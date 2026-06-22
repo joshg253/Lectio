@@ -53,7 +53,9 @@ The short version:
   beneath each video embed (lists your playlists, creates new ones).
 - **Lead images** — per-feed extraction strategies with side-by-side comparison,
   smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
-  and full-resolution webcomic panels (ComicControl thumb→full promotion).
+  and full-resolution webcomic panels (ComicControl thumb→full promotion). List
+  thumbnails fall back to a direct browser load when the server-side image proxy
+  is refused (some hosts IP-block the server but serve your own IP fine).
 - **Automation** — highlight, mark-as-read, deduplicate, email-article, and
   outbound-webhook rules (generic JSON or IFTTT Maker; SSRF-guarded); all fire at
   refresh time with a manual "Run Now".
