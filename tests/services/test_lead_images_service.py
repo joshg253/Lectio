@@ -1239,3 +1239,34 @@ def test_write_worker_drains_queue(tmp_path):
             "SELECT image_url FROM entry_lead_images WHERE entry_id = ?", ("e9",)
         ).fetchone()
     assert row is not None and row["image_url"] == "https://img/z.jpg"
+
+
+def test_og_image_beats_preload_hint(tmp_path: Path, monkeypatch):
+    """A <link rel=preload as=image> is a perf hint (often an above-the-fold widget
+    chart, e.g. usafacts.org's answer-page-card) and must NOT override the
+    publisher's curated og:image. Regression for wrong lead images on usafacts."""
+    import services.lead_images as li_mod
+    monkeypatch.setattr(li_mod, "is_safe_outbound_url", lambda *a, **k: True)
+    service = _build_service(tmp_path / "m.sqlite", [])
+    html = (
+        '<html><head>'
+        '<link rel="preload" as="image" href="https://cdn.example.com/widget-chart.png">'
+        '<meta property="og:image" content="https://cdn.example.com/real-hero.jpg">'
+        '</head><body><p>article</p></body></html>'
+    )
+    service._fetch_page_html = lambda link, **kw: (html, "https://site.test/a", False)
+    assert service._fetch_source_lead_image("https://site.test/a") == "https://cdn.example.com/real-hero.jpg"
+
+
+def test_preload_used_when_no_og_image(tmp_path: Path, monkeypatch):
+    """With no og:image, the preload hint is still a valid fallback."""
+    import services.lead_images as li_mod
+    monkeypatch.setattr(li_mod, "is_safe_outbound_url", lambda *a, **k: True)
+    service = _build_service(tmp_path / "m.sqlite", [])
+    html = (
+        '<html><head>'
+        '<link rel="preload" as="image" href="https://cdn.example.com/hero.jpg">'
+        '</head><body><p>article</p></body></html>'
+    )
+    service._fetch_page_html = lambda link, **kw: (html, "https://site.test/a", False)
+    assert service._fetch_source_lead_image("https://site.test/a") == "https://cdn.example.com/hero.jpg"
