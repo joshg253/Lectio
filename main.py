@@ -3916,22 +3916,31 @@ def _dry_run_pattern(
     search_in: str,
     max_entries: int = 1000,
     result_limit: int = 20,
+    match_all_if_empty: bool = False,
+    exclude_shorts: bool = False,
 ) -> dict:
-    """Preview which entries a pattern-based rule would affect (read + unread, newest first)."""
+    """Preview which entries a pattern-based rule would affect (read + unread, newest first).
+
+    ``match_all_if_empty`` supports rules whose keyword is an optional filter (e.g.
+    youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
+    drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
+    with Include-Shorts off would actually add."""
     import re as _re
 
     if not keyword:
-        return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
-
-    try:
-        if is_regex:
-            pattern = _re.compile(keyword, _re.IGNORECASE)
-            match_fn = lambda text: bool(pattern.search(text)) if text else False
-        else:
-            kw_lower = keyword.lower()
-            match_fn = lambda text: kw_lower in (text or "").lower()
-    except _re.error as e:
-        return {"error": f"Invalid regex: {e}"}
+        if not match_all_if_empty:
+            return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
+        match_fn = lambda text: True
+    else:
+        try:
+            if is_regex:
+                pattern = _re.compile(keyword, _re.IGNORECASE)
+                match_fn = lambda text: bool(pattern.search(text)) if text else False
+            else:
+                kw_lower = keyword.lower()
+                match_fn = lambda text: kw_lower in (text or "").lower()
+        except _re.error as e:
+            return {"error": f"Invalid regex: {e}"}
 
     if scope == "global":
         feed_urls: set[str] | None = None
@@ -3966,6 +3975,8 @@ def _dry_run_pattern(
         for entry in iter_entries():
             if total_scanned >= max_entries:
                 break
+            if exclude_shorts and _is_youtube_short(entry):
+                continue
             total_scanned += 1
             title_text = str(entry.title or "")
             body_text = ""
@@ -12995,7 +13006,9 @@ def add_highlight_route(
 def remove_highlight_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
-    keyword: str = Form(...),
+    # Optional: youtube_playlist rules can have a blank keyword ("all videos"), so
+    # remove/toggle (and the edit flow, which is remove+add) must accept "".
+    keyword: str = Form(""),
 ):
     with get_meta_connection() as conn:
         remove_highlight_keyword(conn, scope, scope_id, keyword)
@@ -13006,7 +13019,7 @@ def remove_highlight_route(
 def toggle_highlight_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
-    keyword: str = Form(...),
+    keyword: str = Form(""),
     enabled: int = Form(...),
 ):
     with get_meta_connection() as conn:
@@ -13057,6 +13070,7 @@ def rules_dry_run_route(
     dedup_window_hours: int = Query(168),
     exclude_scope_ids: str = Query(""),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
+    yt_include_shorts: int = Query(1),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -13066,8 +13080,13 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook"):
-            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist"):
+            # youtube_playlist's keyword is an optional filter — a blank keyword
+            # previews every entry in scope (all videos); Shorts are excluded unless
+            # the rule opts in, matching what the rule would actually add.
+            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
+                                      match_all_if_empty=(type == "youtube_playlist"),
+                                      exclude_shorts=(type == "youtube_playlist" and not yt_include_shorts))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
