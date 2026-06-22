@@ -280,6 +280,17 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **YouTube embed host (per-user)** — both `youtube.com` and `youtube-nocookie.com`
+  are allowlisted; which one a YouTube *embed* uses is the viewer's choice, applied
+  at **render** (not ingest, since sanitization bakes content into each user's
+  reader DB). `youtube_embed_host()` reads the per-user `yt_embed_account_features`
+  setting (default off → privacy-enhanced `youtube-nocookie.com`). The recovered/
+  injected player (`_youtube_embed_html`) builds with that host directly;
+  feed-native embeds are rewritten by `_apply_youtube_embed_host` in the entry-detail
+  pipeline (iframe `/embed/` URLs only — plain watch links are untouched). Opting in
+  (Integrations → YouTube) switches to the standard host so the player exposes Share /
+  Watch Later, which need the viewer's signed-in YouTube cookies that `-nocookie`
+  blocks. Render-time application makes the toggle instant and retroactive.
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
   and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping
