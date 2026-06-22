@@ -826,6 +826,7 @@ async def lifespan(app: FastAPI):
     ensure_img_cache_schema()
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
+    ensure_reader_indexes()
     bootstrap_admin()
 
     # Bring every existing user's meta/starred schema up to current.  The bare
@@ -837,6 +838,7 @@ async def lifespan(app: FastAPI):
     def _ensure_user_schema() -> None:
         ensure_meta_schema()
         ensure_starred_archive_schema()
+        ensure_reader_indexes()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
     with get_meta_connection() as conn:
@@ -1901,6 +1903,33 @@ def ensure_starred_archive_schema() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_asset_link_hash ON archived_asset_link (asset_hash)")
 
 
+def ensure_reader_indexes() -> None:
+    """Add Lectio-owned performance indexes to the current tenant's reader DB.
+
+    reader manages the `entries` table; we add a partial index it doesn't ship.
+    The per-feed unread-count query (`WHERE read=0 GROUP BY feed`) otherwise scans
+    the whole entries table (75k+ rows at scale) on each cache refresh, which under
+    refresh write-contention stretched to several seconds and made the UI sluggish.
+    A partial covering index over only the unread rows makes it a ~1k-row scan.
+    Idempotent and safe (an extra index reader never drops)."""
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5)
+        try:
+            has_entries = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entries'"
+            ).fetchone()
+            if has_entries:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS entries_unread_by_feed "
+                    "ON entries(feed) WHERE read=0"
+                )
+                conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.debug("ensure_reader_indexes failed", exc_info=True)
+
+
 def provision_user_storage(user_id: str) -> None:
     """Create and schema-init a user's isolated databases (keyed by stable
     user_id).
@@ -1916,6 +1945,7 @@ def provision_user_storage(user_id: str) -> None:
         # reader builds its own schema on first client(); opening provisions it.
         with get_reader():
             pass
+        ensure_reader_indexes()
 
 
 def delete_user_storage(user_id: str) -> None:
