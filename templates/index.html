@@ -77,6 +77,21 @@
   </script>
   <script>
     document.write(`<link id="theme-stylesheet" rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v=${window.STATIC_ASSET_VERSION}" />`);
+    // List-thumbnail fallback: /thumb proxies images server-side, but some hosts
+    // IP-block our server (e.g. Cloudflare 403) while serving the browser's own IP
+    // fine. On /thumb failure, retry once with the direct image URL so the
+    // thumbnail still loads (CSS object-fit:cover sizes the un-resized image).
+    // Defined here (global, pre-body) so it exists before any onerror fires.
+    window.thumbImgFallback = function (img) {
+      const direct = img.dataset.direct || '';
+      if (direct && !img.dataset.triedDirect && /^https?:\/\//i.test(direct)) {
+        img.dataset.triedDirect = '1';
+        img.src = direct;
+        return;
+      }
+      img.parentElement.classList.add('is-empty');
+      img.style.display = 'none';
+    };
   </script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
@@ -493,8 +508,11 @@
             <img class="post-thumbnail-image" src="{{ post.thumbnail_url }}" alt=""
               onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
             {% elif post.thumbnail_url %}
+            {# data-direct: if /thumb fails (e.g. the image host IP-blocks our server
+               but serves the browser's own IP fine), fall back to the direct URL so
+               the thumbnail still loads. CSS object-fit:cover sizes the un-resized image. #}
             <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}{% if post.fill_zoom and post.fill_zoom != 1.0 and post.thumb_crop != 'smart' and post.thumb_crop != 'contain' %}&fz={{ post.fill_zoom }}{% endif %}" alt=""
-              onerror="this.parentElement.classList.add('is-empty'); this.style.display='none'" />
+              data-direct="{{ post.thumbnail_url }}" onerror="thumbImgFallback(this)" />
             {% endif %}
           </div>
           <div class="post-item-card">
@@ -3836,11 +3854,9 @@
         const image = document.createElement('img');
         image.className = 'post-thumbnail-image';
         image.alt = '';
+        image.dataset.direct = leadImageUrl;  // /thumb fail → load the image direct
         image.src = thumbedLeadUrl;
-        image.onerror = () => {
-          thumbnail.classList.add('is-empty');
-          image.style.display = 'none';
-        };
+        image.onerror = () => window.thumbImgFallback(image);
         thumbnail.insertBefore(image, thumbnail.firstChild);
       }
 
