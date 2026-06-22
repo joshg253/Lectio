@@ -11464,6 +11464,40 @@ _THUMB_COVER_POS: dict[str, tuple[float, float]] = {
 }
 
 
+# Short-lived negative cache for /thumb fetches that failed (timeout, 5xx, blocked).
+# A folder full of server-blocked images (e.g. Cloudflare-403 washingtonstatestandard)
+# would otherwise re-hit every dead host on every page load, each tying up a worker
+# thread. Keyed by the source image URL; brief TTL so transient failures recover.
+_THUMB_FETCH_FAIL_CACHE: dict[str, float] = {}
+_THUMB_FETCH_FAIL_LOCK = threading.Lock()
+_THUMB_FETCH_FAIL_TTL = 10 * 60  # seconds
+# Cap total time per /thumb fetch so one hanging host can't block a worker ~24s
+# (httpx's float timeout applies per-phase, so 12.0 could mean connect+read = 24s).
+_THUMB_FETCH_TIMEOUT = httpx.Timeout(6.0, connect=4.0)
+
+
+def _thumb_fetch_recently_failed(url: str) -> bool:
+    now = time.monotonic()
+    with _THUMB_FETCH_FAIL_LOCK:
+        exp = _THUMB_FETCH_FAIL_CACHE.get(url)
+        if exp is None:
+            return False
+        if exp < now:
+            _THUMB_FETCH_FAIL_CACHE.pop(url, None)
+            return False
+        return True
+
+
+def _mark_thumb_fetch_failed(url: str) -> None:
+    with _THUMB_FETCH_FAIL_LOCK:
+        # Opportunistic prune so the dict can't grow unbounded.
+        if len(_THUMB_FETCH_FAIL_CACHE) > 2000:
+            now = time.monotonic()
+            for k in [k for k, v in _THUMB_FETCH_FAIL_CACHE.items() if v < now]:
+                _THUMB_FETCH_FAIL_CACHE.pop(k, None)
+        _THUMB_FETCH_FAIL_CACHE[url] = time.monotonic() + _THUMB_FETCH_FAIL_TTL
+
+
 @app.get("/thumb")
 def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), ms: str = Query(default=""), fz: str = Query(default="")) -> Response:
     """Fetch a remote image, resize it to thumbnail dimensions with LANCZOS, and
@@ -11541,10 +11575,15 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 pass
             return Response(content=jpeg_bytes, media_type="image/jpeg", headers=cached_headers)
 
+    # Short-circuit hosts that just failed: avoids re-hitting (and blocking a worker
+    # on) a folder full of server-blocked images on every page load.
+    if _thumb_fetch_recently_failed(url):
+        return Response(status_code=502)
+
     try:
         # follow_redirects=False so url_guard.safe_get validates every hop
         # (SSRF: a public thumbnail URL must not redirect to an internal target).
-        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with httpx.Client(follow_redirects=False, timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
             if resp.status_code in (404, 410):
                 # Image is permanently gone — null it out so it isn't re-attempted
@@ -11555,6 +11594,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     except url_guard.UnsafeURLError:
         return Response(status_code=403)
     except Exception:
+        _mark_thumb_fetch_failed(url)
         return Response(status_code=502)
 
     try:
