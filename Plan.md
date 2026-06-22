@@ -18,51 +18,15 @@ this file only tracks what's still open.
 
 ## Later
 
-- **YouTube "Add to Playlist" for video embeds** — wanted: an in-app
-  "Add to playlist ▾" control on each YouTube embed that lists the user's
-  playlists and adds the video on click. Core workflow this serves: triage YT-feed
-  entries, either hit Watch Later in-player (already works since the standard-host
-  switch, PR #57) or batch them into topic playlists for TV viewing (currently done
-  by middle-click → open on youtube.com → manual add).
-
-  Why it's a real integration (not a player parameter): YouTube's **iframe embed
-  player only exposes Watch Later** — the full Save→playlist picker is not available
-  in embeds by design. So a playlist dropdown must be built against the **YouTube
-  Data API v3**, which needs **OAuth** (write scope), unlike today's read-only
-  `YOUTUBE_API_KEY` (durations, public sub-sync). Size: comparable to the DeviantArt
-  OAuth integration.
-
-  Google-side setup (one-time, by the user):
-  - Reuse the existing Google Cloud project (the one the API key lives in); YouTube
-    Data API v3 already enabled.
-  - Create an **OAuth 2.0 Client ID** (type "Web application") with redirect URI
-    `https://<host>/youtube/oauth/callback`. Client id + secret → `.env`
-    (mirror to `.env.example`), same pattern as DeviantArt.
-  - Consent screen: scope `https://www.googleapis.com/auth/youtube` (or
-    `youtube.force-ssl`) is **sensitive/restricted**. Keep the app in **Testing
-    mode** — add own Google account as a test user, no Google verification needed.
-    Tradeoff: testing-mode refresh tokens nominally expire ~7 days (mitigated by
-    refreshing before expiry; worst case occasional re-consent). **Publishing**
-    (to drop the 7-day churn) triggers Google app verification — overkill for a
-    personal self-hosted app, so don't.
-
-  App-side build:
-  - OAuth flow: "Connect YouTube account" → consent → callback stores the
-    **refresh token per-user** (encrypted at rest, multi-user aware, like the
-    DeviantArt tokens). On-demand access-token refresh; handle expiry/revocation.
-  - `playlists.list?mine=true` to populate the dropdown (cached; ~1 quota unit).
-  - `playlistItems.insert` on click (**50 quota units each**). Include a
-    "New playlist…" option (`playlists.insert`).
-  - UI: "Add to playlist ▾" near each YT embed + success/error toasts. When no
-    account is connected, the control instead deep-links to "Save on YouTube".
-  - **Quota handling**: default 10,000 units/day ≈ **~200 adds/day**, shared with
-    the existing `videos.list` duration lookups (1 unit each) and sub-sync. On
-    `quotaExceeded`, toast + fall back to opening the video on youtube.com (the
-    current manual op). Quota resets midnight Pacific; higher quota is requestable
-    via Google's free form if ever needed. (Expected real usage: a few batches of
-    ~9/day, far under the cap.)
-  - Scope caveat: `youtube.force-ssl` is broad (consent screen shows full access);
-    we only ever call list/insert.
+- **YouTube Add-to-Playlist follow-ups** (shipped: per-user OAuth connect in
+  Settings → Integrations + "Add to playlist ▾" beneath each embed, via YouTube
+  Data API v3 `playlists.list`/`playlistItems.insert`/`playlists.insert`). Possible
+  refinements: cache playlists across pane loads with a TTL/refresh affordance;
+  success/error toasts instead of inline status text; batch "add all on page";
+  surface remaining daily quota. Note: the Google OAuth app is in **Testing** mode,
+  so refresh tokens expire ~7 days → occasional reconnect. Publishing to Production
+  (no formal verification needed under the user cap, just clicks through an
+  "unverified app" screen) would drop the 7-day churn if it becomes annoying.
 
 - **Convert bare media links into embedded players** — some feeds ship only a
   Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,

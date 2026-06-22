@@ -291,6 +291,24 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   (Integrations → YouTube) switches to the standard host so the player exposes Share /
   Watch Later, which need the viewer's signed-in YouTube cookies that `-nocookie`
   blocks. Render-time application makes the toggle instant and retroactive.
+- **YouTube Add-to-Playlist (per-user OAuth)** — the embed player only exposes
+  Watch Later, so a real playlist picker needs the **YouTube Data API v3** with a
+  write scope (`auth/youtube`), separate from the read-only `YOUTUBE_API_KEY`
+  (durations, sub-sync). `services/youtube_oauth.py` speaks HTTP to Google
+  (authorize / token exchange / refresh, `playlists.list`, `playlistItems.insert`,
+  `playlists.insert`); main.py owns the flow (`/integrations/youtube/oauth/{connect,
+  callback,disconnect}`) and stores the **refresh token per-user** in app-settings
+  (`get_youtube_oauth_token()` refreshes on demand, returns "" → reconnect prompt on
+  failure). The OAuth *client* creds are app-level (one registered Google app, read
+  from env in both single and multi mode) — only the resulting tokens are per-user,
+  so accounts are never shared. The redirect URI is fixed at
+  `/integrations/youtube/oauth/callback` to match the Google client registration.
+  Client-side, `enhanceYoutubeEmbeds()` injects an "Add to playlist" control beneath
+  each YT iframe (video id parsed from the `/embed/` src); it lazily fetches
+  `/api/youtube/playlists` (cached per page session). `quotaExceeded` surfaces as a
+  distinct 429 so the UI can tell the user to fall back to manual add on youtube.com
+  (default 10k units/day ≈ 200 inserts; resets midnight Pacific). The OAuth app stays
+  in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
   and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping
