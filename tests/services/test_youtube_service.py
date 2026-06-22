@@ -113,3 +113,59 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
     assert row is not None
     assert row["duration_seconds"] == 360
     assert row["duration_display"] == "6:00"
+
+
+def test_stale_negative_is_retried_and_self_heals(tmp_path: Path, monkeypatch):
+    # A transient API failure (or a live/upcoming stream) caches (None, None). It
+    # must NOT blank the duration forever: once the cached negative goes stale, the
+    # next refresh re-fetches and fills it in.
+    db_path = tmp_path / "yt.sqlite"
+    entries = [_FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK")]
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    # Seed a STALE negative (fetched_at well beyond the retry window).
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at)"
+            " VALUES (?, NULL, NULL, datetime('now', '-2 days'))",
+            ("ABCDEFGHIJK",),
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+    )
+    monkeypatch.setattr(service, "get_video_duration", lambda _v: (95, "1:35"))
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+    assert service.cache["ABCDEFGHIJK"] == (95, "1:35")
+
+
+def test_fresh_negative_is_not_refetched(tmp_path: Path, monkeypatch):
+    # A recent negative is respected (no API re-hit every refresh for genuinely
+    # length-less videos).
+    db_path = tmp_path / "yt.sqlite"
+    entries = [_FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK")]
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at)"
+            " VALUES (?, NULL, NULL, datetime('now'))",
+            ("ABCDEFGHIJK",),
+        )
+
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+    )
+    calls = []
+    monkeypatch.setattr(service, "get_video_duration", lambda _v: calls.append(_v) or (95, "1:35"))
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+    assert calls == []  # fresh negative respected
+    assert service.cache["ABCDEFGHIJK"] == (None, None)
