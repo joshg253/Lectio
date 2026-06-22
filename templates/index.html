@@ -1393,6 +1393,12 @@
             <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
           </label>
           <p class="settings-hint" style="grid-column:1 / -1">Use the standard <code>youtube.com</code> player instead of the privacy-enhanced <code>youtube-nocookie.com</code> one, so the in-article player shows Share and Watch Later (these need your signed-in YouTube cookies). Off by default for privacy; turning it on lets YouTube set its usual cookies.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed (uses the YouTube Data API with your own OAuth grant — tokens are stored only for you).</p>
+          <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-yt-oauth-row">
+            <span id="sett-yt-oauth-status" class="settings-inline-status"></span>
+            <a id="sett-yt-oauth-connect" class="settings-inline-btn" href="/integrations/youtube/oauth/connect">Connect YouTube account</a>
+            <button type="button" id="sett-yt-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+          </div>
         </div>
         <h4 class="settings-section-title">DeviantArt</h4>
         <div class="settings-section">
@@ -3674,6 +3680,137 @@
       }
     }
 
+    // --- YouTube "Add to playlist" embed enhancement ---------------------
+    let _ytPlaylistsCache = null;        // null = not fetched; {connected, playlists, error}
+    let _ytPlaylistsPromise = null;
+
+    async function _ytFetchPlaylists(force = false) {
+      if (!force && _ytPlaylistsCache) return _ytPlaylistsCache;
+      if (_ytPlaylistsPromise) return _ytPlaylistsPromise;
+      _ytPlaylistsPromise = (async () => {
+        try {
+          const r = await fetch('/api/youtube/playlists', { credentials: 'same-origin' });
+          const d = await r.json().catch(() => ({}));
+          _ytPlaylistsCache = d || { connected: false, playlists: [] };
+        } catch {
+          _ytPlaylistsCache = { connected: false, playlists: [], error: 'network' };
+        }
+        _ytPlaylistsPromise = null;
+        return _ytPlaylistsCache;
+      })();
+      return _ytPlaylistsPromise;
+    }
+
+    function _ytVideoIdFromIframe(iframe) {
+      const src = iframe.getAttribute('src') || '';
+      const m = src.match(/youtube(?:-nocookie)?\.com\/embed\/([A-Za-z0-9_-]{11})/);
+      return m ? m[1] : '';
+    }
+
+    async function _ytAddToPlaylist(videoId, { playlistId = '', newTitle = '' } = {}) {
+      const r = await fetch('/api/youtube/playlists/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ video_id: videoId, playlist_id: playlistId, new_title: newTitle }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) {
+        const err = d.error || `HTTP ${r.status}`;
+        if (err === 'quota') throw new Error('Daily YouTube quota reached — try again tomorrow or add it on youtube.com.');
+        if (err === 'not_connected') throw new Error('YouTube account not connected.');
+        throw new Error(err);
+      }
+      // A new playlist changes the list — invalidate the cache.
+      if (newTitle) _ytPlaylistsCache = null;
+      return d;
+    }
+
+    async function _ytOpenPicker(videoId, menu, statusEl) {
+      menu.innerHTML = '<div class="lectio-yt-pl-loading">Loading playlists…</div>';
+      const data = await _ytFetchPlaylists();
+      if (!data.connected) {
+        menu.innerHTML = '<a class="lectio-yt-pl-item" href="/integrations/youtube/oauth/connect">Connect YouTube account…</a>';
+        return;
+      }
+      if (data.error === 'quota') {
+        menu.innerHTML = '<div class="lectio-yt-pl-loading">Daily quota reached.</div>';
+        return;
+      }
+      menu.innerHTML = '';
+      (data.playlists || []).forEach(pl => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'lectio-yt-pl-item';
+        item.textContent = pl.title + (pl.count != null ? ` (${pl.count})` : '');
+        item.addEventListener('click', async () => {
+          statusEl.textContent = 'Adding…';
+          menu.hidden = true;
+          try {
+            await _ytAddToPlaylist(videoId, { playlistId: pl.id });
+            statusEl.textContent = `Added to ${pl.title}.`;
+          } catch (e) { statusEl.textContent = e.message; }
+        });
+        menu.appendChild(item);
+      });
+      const newItem = document.createElement('button');
+      newItem.type = 'button';
+      newItem.className = 'lectio-yt-pl-item lectio-yt-pl-new';
+      newItem.textContent = 'New playlist…';
+      newItem.addEventListener('click', async () => {
+        const title = window.prompt('New playlist name:');
+        if (!title) return;
+        statusEl.textContent = 'Creating…';
+        menu.hidden = true;
+        try {
+          await _ytAddToPlaylist(videoId, { newTitle: title.trim() });
+          statusEl.textContent = `Added to ${title.trim()}.`;
+        } catch (e) { statusEl.textContent = e.message; }
+      });
+      menu.appendChild(newItem);
+    }
+
+    function enhanceYoutubeEmbeds(root) {
+      if (!root) return;
+      const iframes = root.querySelectorAll('iframe[src*="/embed/"]');
+      iframes.forEach(iframe => {
+        const videoId = _ytVideoIdFromIframe(iframe);
+        if (!videoId) return;
+        // Avoid double-injecting if the pane is re-enhanced.
+        if (iframe.dataset.ytEnhanced === '1') return;
+        iframe.dataset.ytEnhanced = '1';
+
+        const bar = document.createElement('div');
+        bar.className = 'lectio-yt-actions';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lectio-yt-pl-btn';
+        btn.textContent = '+ Add to playlist ▾';
+        const menu = document.createElement('div');
+        menu.className = 'lectio-yt-pl-menu';
+        menu.hidden = true;
+        const status = document.createElement('span');
+        status.className = 'lectio-yt-pl-status';
+
+        btn.addEventListener('click', async () => {
+          if (!menu.hidden) { menu.hidden = true; return; }
+          menu.hidden = false;
+          await _ytOpenPicker(videoId, menu, status);
+        });
+        // Close on outside click.
+        document.addEventListener('click', (e) => {
+          if (!bar.contains(e.target)) menu.hidden = true;
+        });
+
+        bar.appendChild(btn);
+        bar.appendChild(menu);
+        bar.appendChild(status);
+        // Place the control directly after the iframe (or its wrapper <p>).
+        const anchor = iframe.closest('p.lectio-embed') || iframe;
+        anchor.insertAdjacentElement('afterend', bar);
+      });
+    }
+
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
       const token = ++entryPaneRequestToken;
       let currentUrlHasEntry = false;
@@ -3727,6 +3864,7 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
+        enhanceYoutubeEmbeds(nextPane);
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
         }
@@ -6044,6 +6182,7 @@
     }
 
     bindEntryPaneInteractions();
+    try { enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
 
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
@@ -8802,6 +8941,19 @@
         v('sett-yt-channel', d.yt_channel_id);
         v('sett-yt-folder', d.yt_folder_name);
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
+        // YouTube account (OAuth) connection status for Add-to-playlist.
+        {
+          const ytConfigured = !!d.yt_oauth_configured;
+          const ytConnected = !!d.yt_oauth_connected;
+          const row = document.getElementById('sett-yt-oauth-row');
+          const status = document.getElementById('sett-yt-oauth-status');
+          const connect = document.getElementById('sett-yt-oauth-connect');
+          const disconnect = document.getElementById('sett-yt-oauth-disconnect');
+          if (row) row.hidden = !ytConfigured;
+          if (status) status.textContent = ytConnected ? 'Connected.' : 'Not connected.';
+          if (connect) connect.hidden = ytConnected;
+          if (disconnect) disconnect.hidden = !ytConnected;
+        }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
         v('sett-da-id', d.deviantart_client_id);
@@ -8996,6 +9148,10 @@
         _daAction('/deviantart/add-watch-feed', 'Adding…', d => d.message || 'Added.'));
       document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
+      });
+      document.getElementById('sett-yt-oauth-disconnect')?.addEventListener('click', async () => {
+        await fetch('/integrations/youtube/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
 
