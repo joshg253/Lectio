@@ -12925,7 +12925,9 @@ def get_highlights_route():
 def add_highlight_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
-    keyword: str = Form(...),
+    # Optional at the form layer (a youtube_playlist rule allows a blank keyword =
+    # "all videos"); per-type validation below still requires it for other types.
+    keyword: str = Form(""),
     color: str = Form("yellow"),
     is_regex: int = Form(0),
     type: str = Form("highlight"),
