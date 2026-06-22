@@ -18,51 +18,69 @@ this file only tracks what's still open.
 
 ## Later
 
-- **YouTube "Add to Playlist" for video embeds** — wanted: an in-app
-  "Add to playlist ▾" control on each YouTube embed that lists the user's
-  playlists and adds the video on click. Core workflow this serves: triage YT-feed
-  entries, either hit Watch Later in-player (already works since the standard-host
-  switch, PR #57) or batch them into topic playlists for TV viewing (currently done
-  by middle-click → open on youtube.com → manual add).
+- **YouTube as a first-class "special" area** (manual Add-to-playlist already
+  shipped in PR #61: per-user OAuth in Settings → Integrations + an "Add to
+  playlist" control beneath each embed, via `services/youtube_oauth.py`). Next:
+  treat the YouTube folder as a real integration surface with its own settings and
+  automations, instead of a folder that merely *starts with* "YouTube".
 
-  Why it's a real integration (not a player parameter): YouTube's **iframe embed
-  player only exposes Watch Later** — the full Save→playlist picker is not available
-  in embeds by design. So a playlist dropdown must be built against the **YouTube
-  Data API v3**, which needs **OAuth** (write scope), unlike today's read-only
-  `YOUTUBE_API_KEY` (durations, public sub-sync). Size: comparable to the DeviantArt
-  OAuth integration.
+  Background — what exists today:
+  - The "YouTube folder" is detected loosely by name (`contextFolderName
+    .startsWith('YouTube')`, index.html) — that's how right-click "Sync
+    Subscriptions" appears. Not robust (rename breaks it).
+  - YT feeds are flagged per-feed by URL (`is_youtube_feed` = URL contains
+    `youtube.com/feeds/videos.xml`).
+  - **Shorts** are handled per-feed: a `hide_shorts` display pref auto-marks Shorts
+    read on refresh (`_run_automation_after_refresh`, main.py ~4508); a Short is
+    detected by `/shorts/` in the entry link (`_is_youtube_short`). No global toggle.
+  - Automation rules live in one table (`highlight_keywords`, `type` column;
+    `_HIGHLIGHT_VALID_TYPES`), scoped per feed/folder, fired after refresh. The
+    **webhook** runner (`_run_webhook_rules_after_refresh`, per-run cap of 50) is the
+    closest template for a new YT action.
 
-  Google-side setup (one-time, by the user):
-  - Reuse the existing Google Cloud project (the one the API key lives in); YouTube
-    Data API v3 already enabled.
-  - Create an **OAuth 2.0 Client ID** (type "Web application") with redirect URI
-    `https://<host>/youtube/oauth/callback`. Client id + secret → `.env`
-    (mirror to `.env.example`), same pattern as DeviantArt.
-  - Consent screen: scope `https://www.googleapis.com/auth/youtube` (or
-    `youtube.force-ssl`) is **sensitive/restricted**. Keep the app in **Testing
-    mode** — add own Google account as a test user, no Google verification needed.
-    Tradeoff: testing-mode refresh tokens nominally expire ~7 days (mitigated by
-    refreshing before expiry; worst case occasional re-consent). **Publishing**
-    (to drop the 7-day churn) triggers Google app verification — overkill for a
-    personal self-hosted app, so don't.
+  Planned pieces:
 
-  App-side build:
-  - OAuth flow: "Connect YouTube account" → consent → callback stores the
-    **refresh token per-user** (encrypted at rest, multi-user aware, like the
-    DeviantArt tokens). On-demand access-token refresh; handle expiry/revocation.
-  - `playlists.list?mine=true` to populate the dropdown (cached; ~1 quota unit).
-  - `playlistItems.insert` on click (**50 quota units each**). Include a
-    "New playlist…" option (`playlists.insert`).
-  - UI: "Add to playlist ▾" near each YT embed + success/error toasts. When no
-    account is connected, the control instead deep-links to "Save on YouTube".
-  - **Quota handling**: default 10,000 units/day ≈ **~200 adds/day**, shared with
-    the existing `videos.list` duration lookups (1 unit each) and sub-sync. On
-    `quotaExceeded`, toast + fall back to opening the video on youtube.com (the
-    current manual op). Quota resets midnight Pacific; higher quota is requestable
-    via Google's free form if ever needed. (Expected real usage: a few batches of
-    ~9/day, far under the cap.)
-  - Scope caveat: `youtube.force-ssl` is broad (consent screen shows full access);
-    we only ever call list/insert.
+  1. **Robust YT-folder identity.** Stop relying on the folder name. Mark the synced
+     folder (the one `sync_youtube_folder` populates) as the canonical YouTube area,
+     or derive "YT area" = any folder whose feeds are all `is_youtube_feed`. Drives
+     where the special settings/automation panel shows up.
+
+  2. **Global "skip Shorts" toggle** for the YT area — one switch that applies the
+     existing `hide_shorts` behavior across all YT feeds (and to feeds added later by
+     sync), instead of toggling each feed. Implement as an area-level setting the
+     hide-shorts pass consults, OR as a bulk-apply that sets `hide_shorts=1` on every
+     YT feed + on sync of new ones. Prefer the area-level setting (one source of
+     truth; no drift when feeds come and go).
+
+  3. **"Auto add to playlist" automation** (the headline ask). A YT-specific rule:
+     - **Choose a playlist** (dropdown from `/api/youtube/playlists`; allow "create
+       new").
+     - **Select which feed(s)** it applies to (multi-select within the YT area; or
+       "all YT feeds").
+     - Options: **include Shorts** (default off — pairs with the global skip), and
+       **mark post read after add** (default on).
+     - Engine: new `youtube_playlist` rule type + `_run_youtube_playlist_rules_after
+       _refresh`, modeled on the webhook runner. For each new matching entry: parse
+       the video id from the entry link → `playlistItems.insert` → if "mark read",
+       mark it. Needs the per-user token at refresh time (background tenancy: wrap in
+       `_run_in_user_context`, like other bg work).
+
+  Caveats to design around:
+  - **Quota**: each add is **50 units**; 10k/day default ≈ **~200 auto-adds/day**,
+    shared with duration lookups + sub-sync. Add a conservative per-run cap (like
+    webhooks' 50). On `quotaExceeded`: skip-and-log, retry leftovers next refresh.
+  - **No double-adds**: `playlistItems.insert` is **not idempotent** (re-adding
+    dupes). "Mark read after add" mostly prevents re-fire (rule matches unread only),
+    but also record added entry IDs per rule as a guard.
+  - **Token expiry**: testing-mode refresh tokens die ~7 days → auto-add silently
+    stops. Surface failures in the automation run log (and as a nudge to publish the
+    OAuth app to Production, which removes the 7-day churn — no formal verification
+    needed at single-user scale, just clicking through an "unverified app" screen).
+  - **Schema**: a new rule type / columns needs the startup per-user meta migration
+    (existing tenants 500 otherwise).
+
+  Size: medium. Schema migration + the rule-engine runner + the YT-area settings/
+  rule-builder UI. Reuses the shipped `youtube_oauth` service and playlists endpoint.
 
 - **Convert bare media links into embedded players** — some feeds ship only a
   Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
