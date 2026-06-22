@@ -7278,7 +7278,7 @@
             return;
           }
           const { folderNames, feedTitles } = hlScopeData();
-          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', highlight: 'Highlight' };
+          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', highlight: 'Highlight' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
             const el = document.createElement('div');
@@ -7335,8 +7335,8 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article' };
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -7507,6 +7507,22 @@
                 ccBadge.className = 'hl-rule-cc-badge';
                 ccBadge.textContent = 'Cc me';
                 row.appendChild(ccBadge);
+              }
+            }
+
+            if (ruleType === 'webhook') {
+              const fmtBadge = document.createElement('span');
+              fmtBadge.className = 'hl-rule-delivery-badge';
+              fmtBadge.textContent = (rule.webhook_format === 'ifttt') ? 'IFTTT' : 'JSON';
+              row.appendChild(fmtBadge);
+              if (rule.webhook_url) {
+                const toSpan = document.createElement('span');
+                toSpan.className = 'hl-rule-email-to';
+                let host = rule.webhook_url;
+                try { host = new URL(rule.webhook_url).host; } catch {}
+                toSpan.textContent = '→ ' + host;
+                toSpan.title = rule.webhook_url;
+                row.appendChild(toSpan);
               }
             }
           }
@@ -7977,7 +7993,7 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
           const opt = document.createElement('option');
           opt.value = val;
@@ -8390,11 +8406,48 @@
 
         draft.appendChild(batchRow);
 
+        // ── Webhook sub-row: URL + format (Webhook only) ───────────────
+        const webhookRow = document.createElement('div');
+        webhookRow.className = 'hl-draft-form-subrow hl-draft-webhook-row';
+
+        const whUrlLabel = document.createElement('span');
+        whUrlLabel.className = 'hl-draft-field-label';
+        whUrlLabel.textContent = 'POST to:';
+        webhookRow.appendChild(whUrlLabel);
+
+        const webhookUrlInput = document.createElement('input');
+        webhookUrlInput.type = 'url';
+        webhookUrlInput.className = 'hl-draft-pattern hl-draft-webhook-url';
+        webhookUrlInput.placeholder = 'https://maker.ifttt.com/trigger/…  or  https://hooks.zapier.com/…';
+        webhookUrlInput.maxLength = 2000;
+        webhookUrlInput.autocomplete = 'off';
+        webhookUrlInput.value = prefill.webhook_url || '';
+        webhookRow.appendChild(webhookUrlInput);
+
+        const whFmtLabel = document.createElement('span');
+        whFmtLabel.className = 'hl-draft-field-label';
+        whFmtLabel.textContent = 'as';
+        webhookRow.appendChild(whFmtLabel);
+
+        const webhookFormatSel = document.createElement('select');
+        webhookFormatSel.className = 'hl-draft-select hl-webhook-format-select';
+        for (const [val, label] of [['generic','Generic JSON'],['ifttt','IFTTT (value1/2/3)']]) {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = label;
+          webhookFormatSel.appendChild(opt);
+        }
+        webhookFormatSel.value = prefill.webhook_format || 'generic';
+        webhookRow.appendChild(webhookFormatSel);
+
+        draft.appendChild(webhookRow);
+
         // ── Sync visibility ───────────────────────────────────────────
         function syncTypeControls() {
           const t = typeSel.value;
           const isEmail = t === 'email_article';
           const isDedup = t === 'deduplicate';
+          const isWebhook = t === 'webhook';
           const isBatch = isEmail && deliverySel.value === 'batch';
           const dedupNeedsWindow = isDedup && !['slug', 'safe'].includes(matchMethodSel.value);
           const isGlobalDedup = isDedup && !folderSel.value;
@@ -8411,6 +8464,7 @@
           matchMethodSel.style.display = isDedup ? '' : 'none';
           windowHoursWrap.style.display = dedupNeedsWindow ? '' : 'none';
           excludeRow.style.display = isGlobalDedup ? '' : 'none';
+          webhookRow.style.display = isWebhook ? '' : 'none';
           if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
           else { populateFeeds(folderSel.value); }
         }
@@ -8447,6 +8501,8 @@
           const pattern = patInput.value.trim();
           if (!pattern) { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
+          const webhookUrl = webhookUrlInput.value.trim();
+          if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
           const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
           const feedUrl  = feedSel.value || '';
           const color    = colorSel.value || 'yellow';
@@ -8456,6 +8512,7 @@
           const batchTime  = batchTimeInput.value || '';
           const batchCount = parseInt(batchCountInput.value || '0', 10) || 0;
           const ccMe = ccMeCheck.checked ? 1 : 0;
+          const webhookFormat = webhookFormatSel.value || 'generic';
           let scope, scopeId;
           if (!folderId)     { scope = 'global'; scopeId = ''; }
           else if (!feedUrl) { scope = 'folder'; scopeId = folderId; }
@@ -8463,7 +8520,7 @@
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
                          email_to: emailTo, batch_time: batchTime, batch_count: batchCount, cc_me: ccMe,
-                         dedup_window_hours: 24 });
+                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat });
         });
 
         return draft;
@@ -8480,6 +8537,7 @@
           enabled: r.enabled !== undefined ? r.enabled : 0,
           dedup_window_hours: r.dedup_window_hours || 168,
           exclude_scope_ids: r.exclude_scope_ids || '',
+          webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic',
         });
       }
 

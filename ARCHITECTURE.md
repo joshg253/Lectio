@@ -233,6 +233,10 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   redirect-to-internal bypass. HEAD probes (image-fetchability / comic-URL checks)
   go through `url_guard.safe_head`, which validates the target and fetches
   `follow_redirects=False` (HEAD has no per-hop counterpart to `safe_get`).
+  Outbound **webhook** automation rules (`services/webhooks.py`) POST to a
+  user-supplied URL, so they validate with `is_safe_outbound_url` and POST with
+  `follow_redirects=False` (no GET helper for POST) — same outbound policy as the
+  image proxy and WebSub.
   Still open: the `reader` library's own feed refresh (a subscribed `http://10.x`
   host is still fetched); and full DNS-rebind closure needs connection IP-pinning
   (the validate→connect window is small but nonzero).
