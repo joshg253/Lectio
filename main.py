@@ -12537,6 +12537,35 @@ def toggle_highlight_route(
     return JSONResponse({"ok": True, "enabled": bool(enabled)})
 
 
+@app.post("/rules/webhook-test")
+def webhook_test_route(
+    webhook_url: str = Form(...),
+    webhook_format: str = Form("generic"),
+):
+    """Send a sample payload to a webhook URL so the user can verify the endpoint
+    (IFTTT applet, Zapier hook, etc.) without waiting for a matching entry at the
+    next refresh. SSRF-guarded by send_webhook."""
+    webhook_url = webhook_url.strip()
+    if not webhook_url or not url_guard.is_safe_outbound_url(webhook_url):
+        return JSONResponse({"ok": False, "error": "a valid public webhook URL is required"}, status_code=400)
+    if webhook_format not in WEBHOOK_VALID_FORMATS:
+        webhook_format = "generic"
+    sample = {
+        "feed_url": "https://example.com/feed",
+        "entry_id": "lectio-webhook-test",
+        "title": "Lectio webhook test",
+        "link": "https://example.com/test-article",
+        "feed_title": "Lectio Test Feed",
+        "excerpt": "This is a test payload sent from Lectio to verify your webhook.",
+        "published": datetime.now().isoformat(),
+        "tags": ["lectio", "test"],
+    }
+    ok, err = send_webhook(webhook_url, build_webhook_payload(sample, webhook_format))
+    if ok:
+        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": False, "error": err or "send failed"}, status_code=400)
+
+
 @app.get("/rules/dry-run")
 def rules_dry_run_route(
     type: str = Query("highlight"),
@@ -12557,7 +12586,7 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article"):
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook"):
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
