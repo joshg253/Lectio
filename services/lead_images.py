@@ -217,7 +217,12 @@ class LeadImageService:
     _RELATED_BLOCK_OPEN_RE = re.compile(
         r'<(div|section|aside|nav|ul)\b[^>]*\bclass=["\'][^"\']*'
         r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
-        r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav)'
+        r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|'
+        # WordPress "Megaphone" podcast theme (e.g. se-radio.net): the
+        # recent/related-episode widget is `megaphone-items megaphone-posts`,
+        # whose thumbnails belong to OTHER episodes. The article's own featured
+        # image lives in `megaphone-section`, which does NOT match these tokens.
+        r'megaphone[-_]posts|megaphone[-_]items)'
         r'[^"\']*["\'][^>]*>',
         re.IGNORECASE,
     )
@@ -1698,8 +1703,13 @@ class LeadImageService:
             return False
         # Square images at small scales are almost always author headshots.
         # Article lead images are virtually never 1:1 aspect ratio at ≤400 px.
+        # Exception: WordPress's featured image (wp-post-image) IS the post's own
+        # designated image even when square — many podcasts (e.g. se-radio.net) use a
+        # square guest photo as the episode featured image.
+        _is_featured = bool(self._WEBCOMIC_IMG_CLASS_RE.search(attrs.get("class", "")))
         if (
-            width_attr is not None
+            not _is_featured
+            and width_attr is not None
             and height_attr is not None
             and width_attr == height_attr
             and width_attr <= 400
@@ -1806,11 +1816,17 @@ class LeadImageService:
         _found_first = False  # tracks whether the first valid candidate has been scored
 
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
+            attrs = self._parse_img_attrs(tag_match.group(0))
+            # WordPress's featured image (wp-post-image) IS the article's own image
+            # by definition, so trust it even when it sits next to site chrome — some
+            # themes (e.g. se-radio.net's Megaphone) render the featured image right
+            # after the nav menu, which would otherwise trip the chrome skip below.
+            _is_featured = bool(self._WEBCOMIC_IMG_CLASS_RE.search(attrs.get("class", "")))
             # Skip images inside author/speaker/bio sections — they are headshots.
             # Skip images inside site-chrome branding elements (logo, nav header).
             context_before = html_text[max(0, tag_match.start() - 500):tag_match.start()]
             _am = self._AUTHOR_CONTEXT_RE.search(context_before)
-            if _am:
+            if _am and not _is_featured:
                 # If the matched element was an <address> that closed before reaching
                 # this img, the img is in a sibling element — don't skip it.
                 # (e.g. <address class="article-author">...</address> followed by
@@ -1823,9 +1839,8 @@ class LeadImageService:
                 _after = context_before[_am.end():]
                 if not (_in_address and re.search(r'</address\b', _after, re.IGNORECASE)):
                     continue
-            if self._SITE_CHROME_CONTEXT_RE.search(context_before):
+            if not _is_featured and self._SITE_CHROME_CONTEXT_RE.search(context_before):
                 continue
-            attrs = self._parse_img_attrs(tag_match.group(0))
 
             for resolved in self._iter_acceptable_img_urls(attrs, base_url, source_url):
                 # Prefer <source type="image/webp"> from an enclosing <picture> element.

@@ -568,6 +568,37 @@ def test_source_scan_skips_share_button(tmp_path: Path):
     assert alt is None
 
 
+def test_megaphone_featured_image_beats_recent_episodes_widget(tmp_path: Path):
+    """SE Radio (WordPress 'Megaphone' podcast theme) has no og:image; the page's
+    own featured image is a square `wp-post-image` rendered right after the nav menu,
+    while a `megaphone-items megaphone-posts` widget lists OTHER episodes' square
+    thumbnails. Regression: every episode showed the newest episode's thumbnail.
+
+    The fix must (a) strip the recent-episodes widget and (b) accept the square
+    featured image despite the headshot/site-chrome heuristics."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = (
+        "https://se-radio.net/2026/06/se-radio-725-danny-yang-and-sam-goldman/"
+    )
+    html = (
+        "<html><body>"
+        '<nav class="navbar"><ul><li><a href="#">Menu</a></li></ul></nav>'
+        '<div class="megaphone-section single-layout-5"><div class="entry-media entry-media-rounded">'
+        '<img width="300" height="300" class="size-megaphone-single-podcast-5 wp-post-image" '
+        'alt="SE Radio Guests Danny Yang and Sam Goldman" '
+        'src="https://se-radio.net/wp-content/uploads/2026/06/danny-yang-sam-goldman.png"></div></div>'
+        '<div class="row megaphone-items megaphone-posts">'
+        '<article class="megaphone-item megaphone-post"><div class="entry-media">'
+        '<a href="/2026/06/se-radio-724-jure-leskovec/"><img width="300" height="188" '
+        'src="https://se-radio.net/wp-content/uploads/2026/06/jure-leskovec-300x188.png"></a>'
+        "</div></article></div>"
+        "</body></html>"
+    )
+    url, alt = service._extract_preferred_source_image_data(html, page, page)
+    assert url == "https://se-radio.net/wp-content/uploads/2026/06/danny-yang-sam-goldman.png"
+    assert alt == "SE Radio Guests Danny Yang and Sam Goldman"
+
+
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
     """The hover-text punchline on the main comic <img title="..."> must win over
     og:description, which on SMBC is just the post title (regression: SMBC)."""
