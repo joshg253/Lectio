@@ -149,6 +149,14 @@ def _sanitize_iframe(tag) -> bool:
     src = str(tag.attrs.get("src", "")).strip()
     if not _embed_host_allowed(src):
         return False
+    # Normalize the privacy-enhanced YouTube host to the standard one so the
+    # player exposes the Share / Watch Later controls (which need the viewer's
+    # signed-in YouTube cookies that youtube-nocookie.com blocks).
+    if "youtube-nocookie.com/embed/" in src:
+        src = src.replace("www.youtube-nocookie.com", "www.youtube.com").replace(
+            "youtube-nocookie.com", "www.youtube.com"
+        )
+        tag.attrs["src"] = src
     allowed = _ALLOWED_ATTRS["iframe"]
     for attr_name in list(tag.attrs):
         if attr_name.lower() not in allowed:

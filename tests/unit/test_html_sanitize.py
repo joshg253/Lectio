@@ -61,7 +61,6 @@ def test_class_kept_id_dropped():
 
 @pytest.mark.parametrize("host", [
     "https://www.youtube.com/embed/abc",
-    "https://www.youtube-nocookie.com/embed/abc",
     "https://player.vimeo.com/video/123",
     "https://w.soundcloud.com/player/?url=x",
     "https://bandcamp.com/EmbeddedPlayer/album=1",
@@ -73,6 +72,15 @@ def test_trusted_embeds_kept_and_sandboxed(host):
     assert host in out
     assert "sandbox=" in out
     assert "referrerpolicy=" in out
+
+
+def test_youtube_nocookie_normalized_to_standard_host():
+    # The privacy-enhanced host is allowlisted but rewritten to the standard host
+    # so the player exposes Share / Watch Later (which need the viewer's cookies).
+    out = H.sanitize_html('<iframe src="https://www.youtube-nocookie.com/embed/abc?rel=0"></iframe>')
+    assert "<iframe" in out.lower()
+    assert "youtube-nocookie.com" not in out
+    assert "https://www.youtube.com/embed/abc?rel=0" in out
 
 
 @pytest.mark.parametrize("host", [

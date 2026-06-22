@@ -1,7 +1,8 @@
 """The inline YouTube player stopped playing because the embed set
 ``enablejsapi=1`` without an ``origin=`` parameter; YouTube now refuses playback
-in that configuration. The app never drives the IFrame JS API, so the embed must
-use YouTube's canonical markup (nocookie host, referrerpolicy, no enablejsapi).
+in that configuration. The app never drives the IFrame JS API, so the embed uses
+referrerpolicy (no enablejsapi). It uses the standard ``www.youtube.com`` host
+(not ``-nocookie``) so the player exposes Share / Watch Later.
 """
 from __future__ import annotations
 
@@ -22,9 +23,9 @@ def test_embed_markup_is_playable():
     html = main._youtube_embed_html(VIDEO_ID)
     # The bug: enablejsapi=1 without origin= blocks playback.
     assert "enablejsapi" not in html
-    # Canonical YouTube embed: privacy host + referrerpolicy (authorizes the
-    # embedding origin without the JS API).
-    assert f"https://www.youtube-nocookie.com/embed/{VIDEO_ID}" in html
+    # Standard YouTube embed host + referrerpolicy (authorizes the embedding
+    # origin without the JS API); standard host enables Share / Watch Later.
+    assert f"https://www.youtube.com/embed/{VIDEO_ID}" in html
     assert "?rel=0" in html
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in html
     assert 'title="YouTube video player"' in html
@@ -36,7 +37,7 @@ def test_embed_escapes_video_id():
     # weakened upstream extractor can't break out of the src attribute.
     out = main._youtube_embed_html('abc"><script>alert(1)</script>')
     assert "<script>" not in out
-    assert 'src="https://www.youtube-nocookie.com/embed/abc&quot;' in out
+    assert 'src="https://www.youtube.com/embed/abc&quot;' in out
 
 
 def _reset_reader_pool():
@@ -78,5 +79,5 @@ def test_youtube_feed_entry_gets_playable_embed(youtube_entry):
     detail = main.get_entry_detail(YT_FEED, ENTRY_ID)
     assert detail is not None
     content_html = detail["content_html"]
-    assert f"youtube-nocookie.com/embed/{VIDEO_ID}" in content_html
+    assert f"www.youtube.com/embed/{VIDEO_ID}" in content_html
     assert "enablejsapi" not in content_html

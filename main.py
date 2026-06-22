@@ -8235,8 +8235,10 @@ def _promote_plaintext_summary(summary: str | None) -> str | None:
 def _youtube_embed_html(video_id: str) -> str:
     """Inline YouTube player markup for a video id.
 
-    Matches YouTube's current canonical embed: the privacy-enhanced
-    ``youtube-nocookie.com`` host and ``referrerpolicy`` rather than the JS API.
+    Uses the standard ``www.youtube.com`` embed host (not the privacy-enhanced
+    ``youtube-nocookie.com`` one) so the player exposes account-based controls —
+    notably the Share and Watch Later buttons — which require access to the
+    viewer's signed-in YouTube cookies that ``-nocookie`` deliberately blocks.
     We deliberately omit ``enablejsapi=1`` — nothing in the app drives the IFrame
     JS API, and YouTube refuses playback when it is set without a matching
     ``origin=`` parameter, which silently broke the inline player.
@@ -8246,7 +8248,7 @@ def _youtube_embed_html(video_id: str) -> str:
     upstream extractor's validation is ever loosened (the id is otherwise always
     ``[A-Za-z0-9_-]``)."""
     safe_id = html.escape(video_id, quote=True)
-    src = f"https://www.youtube-nocookie.com/embed/{safe_id}?rel=0"
+    src = f"https://www.youtube.com/embed/{safe_id}?rel=0"
     return (
         '<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
         f'<iframe width="100%" height="315" src="{src}" title="YouTube video player" '

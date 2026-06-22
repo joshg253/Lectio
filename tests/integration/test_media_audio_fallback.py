@@ -196,7 +196,7 @@ def test_inject_recovered_youtube_embeds_rebuilds_player():
     stored = ('<p>x</p><figure class="wp-block-embed is-provider-youtube">'
               '<div class="wp-block-embed__wrapper"></div></figure>')
     out = main._inject_recovered_youtube_embeds(stored, ["weFUWLfaP28"])
-    assert "youtube-nocookie.com/embed/weFUWLfaP28" in out
+    assert "www.youtube.com/embed/weFUWLfaP28" in out
     assert "wp-block-embed__wrapper" not in out
     # No ids -> content unchanged.
     assert main._inject_recovered_youtube_embeds(stored, []) == stored
