@@ -132,6 +132,28 @@ def add_video_to_playlist(access_token: str, playlist_id: str, video_id: str) ->
     return resp.json()
 
 
+def rate_video(access_token: str, video_id: str, rating: str) -> None:
+    """Like / dislike / clear the rating on a video. ``rating`` is one of
+    ``like``, ``dislike``, ``none``. Costs 50 quota units; returns 204."""
+    if rating not in ("like", "dislike", "none"):
+        raise ValueError(f"invalid rating: {rating!r}")
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        resp = client.post(f"{_API_BASE}/videos/rate", params={"id": video_id, "rating": rating})
+    if resp.status_code in (200, 204):
+        return
+    _raise_for_quota(resp, "videos.rate")
+
+
+def get_video_rating(access_token: str, video_id: str) -> str:
+    """Return the current user's rating for a video (``like``/``dislike``/``none``).
+    Costs 1 quota unit."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        resp = client.get(f"{_API_BASE}/videos/getRating", params={"id": video_id})
+    _raise_for_quota(resp, "videos.getRating")
+    items = resp.json().get("items", [])
+    return items[0].get("rating", "none") if items else "none"
+
+
 def create_playlist(access_token: str, title: str, privacy: str = "private") -> dict:
     """Create a new playlist; returns ``{id, title, count}``. Costs 50 quota units."""
     body = {"snippet": {"title": title}, "status": {"privacyStatus": privacy}}

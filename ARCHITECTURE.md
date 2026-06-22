@@ -303,9 +303,13 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   from env in both single and multi mode) — only the resulting tokens are per-user,
   so accounts are never shared. The redirect URI is fixed at
   `/integrations/youtube/oauth/callback` to match the Google client registration.
-  Client-side, `enhanceYoutubeEmbeds()` injects an "Add to playlist" control beneath
-  each YT iframe (video id parsed from the `/embed/` src); it lazily fetches
-  `/api/youtube/playlists` (cached per page session). `quotaExceeded` surfaces as a
+  Client-side, `enhanceYoutubeEmbeds()` injects "Add to playlist" + like/dislike
+  controls beneath each YT iframe (video id parsed from the `/embed/` src); it lazily
+  fetches `/api/youtube/playlists` (cached per page session). Like/dislike use
+  `videos.rate` via `/api/youtube/rate` (clicking an active rating clears it; current
+  state is not pre-fetched, to save the 1-unit `getRating` call per embed). The
+  playlist menu is positioned `fixed` at open so it escapes the article pane's
+  `overflow:auto` clipping, flipping upward near the viewport bottom. `quotaExceeded` surfaces as a
   distinct 429 so the UI can tell the user to fall back to manual add on youtube.com
   (default 10k units/day ≈ 200 inserts; resets midnight Pacific). The OAuth app stays
   in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).

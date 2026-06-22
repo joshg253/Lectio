@@ -13163,6 +13163,41 @@ async def youtube_playlist_add_route(request: Request):
     return JSONResponse({"ok": True, "playlist_id": playlist_id})
 
 
+@app.get("/api/youtube/rating")
+def youtube_rating_route(video_id: str):
+    """Return the connected user's like/dislike state for a video."""
+    token = get_youtube_oauth_token()
+    if not token:
+        return JSONResponse({"connected": False, "rating": "none"})
+    try:
+        rating = youtube_oauth_service.get_video_rating(token, video_id.strip())
+    except youtube_oauth_service.QuotaExceeded:
+        return JSONResponse({"connected": True, "error": "quota", "rating": "none"}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"connected": True, "error": str(exc), "rating": "none"}, status_code=502)
+    return JSONResponse({"connected": True, "rating": rating})
+
+
+@app.post("/api/youtube/rate")
+async def youtube_rate_route(request: Request):
+    """Like / dislike / clear a video. Body: {video_id, rating}."""
+    body = await request.json()
+    video_id = (body.get("video_id") or "").strip()
+    rating = (body.get("rating") or "").strip()
+    if not video_id or rating not in ("like", "dislike", "none"):
+        return JSONResponse({"ok": False, "error": "video_id and rating (like/dislike/none) required"}, status_code=400)
+    token = get_youtube_oauth_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "not_connected"}, status_code=401)
+    try:
+        youtube_oauth_service.rate_video(token, video_id, rating)
+    except youtube_oauth_service.QuotaExceeded:
+        return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    return JSONResponse({"ok": True, "rating": rating})
+
+
 @app.post("/deviantart/disconnect")
 def deviantart_disconnect():
     with get_meta_connection() as conn:
