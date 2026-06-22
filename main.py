@@ -45,6 +45,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import deviantart as deviantart_service
+from services import youtube_oauth as youtube_oauth_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
@@ -264,6 +265,10 @@ SETTING_DEVIANTART_OAUTH_STATE = "deviantart_oauth_state"
 SETTING_DEVIANTART_OAUTH_VERIFIER = "deviantart_oauth_verifier"
 SETTING_DEVIANTART_FOLDER_NAME = "deviantart_folder_name"
 SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
+SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
+SETTING_YT_OAUTH_REFRESH_TOKEN = "yt_oauth_refresh_token"
+SETTING_YT_OAUTH_TOKEN_EXPIRES_AT = "yt_oauth_token_expires_at"
+SETTING_YT_OAUTH_STATE = "yt_oauth_state"
 AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -385,6 +390,11 @@ _ENV_YT_FOLDER_NAME = (os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube 
 # DeviantArt API creds — per-user DB settings take precedence; env is single-user fallback.
 _ENV_DEVIANTART_CLIENT_ID = os.getenv("DEVIANTART_CLIENT_ID", "").strip()
 _ENV_DEVIANTART_CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "").strip()
+# YouTube OAuth client creds are app-level (one registered Google app), not
+# per-user — only the resulting tokens are per-user. So these are read straight
+# from env in both single and multi mode (sharing the app, never the tokens).
+_ENV_YT_OAUTH_CLIENT_ID = os.getenv("YOUTUBE_OAUTH_CLIENT_ID", "").strip()
+_ENV_YT_OAUTH_CLIENT_SECRET = os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip()
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
 _ENV_MAINTENANCE_HOUR: int | None = None
 if _yt_sync_hour_raw:
@@ -426,6 +436,49 @@ def youtube_embed_account_features_enabled() -> bool:
 def youtube_embed_host() -> str:
     """The YouTube embed host for the current user's privacy/features preference."""
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
+
+
+def get_youtube_oauth_credentials() -> tuple[str, str]:
+    """App-level YouTube OAuth client (client_id, client_secret) from env."""
+    return _ENV_YT_OAUTH_CLIENT_ID, _ENV_YT_OAUTH_CLIENT_SECRET
+
+
+def youtube_oauth_connected() -> bool:
+    """True if the current user has connected their YouTube account."""
+    with get_meta_connection() as conn:
+        return bool(get_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN))
+
+
+def get_youtube_oauth_token() -> str:
+    """Return a valid user access token for playlist writes, refreshing if needed.
+
+    Empty string if the user hasn't connected their YouTube account or the
+    refresh failed (revoked / testing-mode 7-day expiry) — caller must prompt a
+    reconnect.
+    """
+    with get_meta_connection() as conn:
+        access = get_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN) or ""
+        refresh = get_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN) or ""
+        try:
+            expires_at = float(get_setting(conn, SETTING_YT_OAUTH_TOKEN_EXPIRES_AT) or 0)
+        except (TypeError, ValueError):
+            expires_at = 0.0
+    if not refresh:
+        return ""
+    if access and time.time() < expires_at - 60:
+        return access
+    cid, secret = get_youtube_oauth_credentials()
+    try:
+        data = youtube_oauth_service.refresh_access_token(cid, secret, refresh)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[youtube-oauth] token refresh failed; reconnect required: %s", exc)
+        return ""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_YT_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+    return data["access_token"]
 
 
 def get_deviantart_credentials() -> tuple[str, str]:
@@ -13017,6 +13070,99 @@ def deviantart_callback(request: Request, code: str | None = None, state: str | 
     return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connected as {username}."), status_code=303)
 
 
+def _youtube_oauth_redirect_uri(request: Request) -> str:
+    """Callback URL Google redirects back to — MUST exactly match the URI
+    registered on the OAuth client in Google Cloud."""
+    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    if base:
+        return f"{base}/integrations/youtube/oauth/callback"
+    return str(request.url_for("youtube_oauth_callback"))
+
+
+@app.get("/integrations/youtube/oauth/connect")
+def youtube_oauth_connect(request: Request):
+    """Kick off the YouTube OAuth flow → redirect to Google's consent page."""
+    cid, secret = get_youtube_oauth_credentials()
+    if not cid or not secret:
+        return RedirectResponse(url="/?message=" + quote_plus("YouTube OAuth client is not configured (set YOUTUBE_OAUTH_CLIENT_ID/SECRET)."), status_code=303)
+    state = secrets.token_urlsafe(24)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_YT_OAUTH_STATE, state)
+    url = youtube_oauth_service.authorize_url(cid, _youtube_oauth_redirect_uri(request), state)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/integrations/youtube/oauth/callback")
+def youtube_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    """OAuth redirect target: exchange the code for tokens and store them per-user."""
+    if error:
+        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube authorization failed: {error}"), status_code=303)
+    with get_meta_connection() as conn:
+        expected = get_setting(conn, SETTING_YT_OAUTH_STATE) or ""
+    if not code or not state or state != expected:
+        return RedirectResponse(url="/?message=" + quote_plus("YouTube authorization failed (bad state)."), status_code=303)
+    cid, secret = get_youtube_oauth_credentials()
+    try:
+        data = youtube_oauth_service.exchange_code(cid, secret, code, _youtube_oauth_redirect_uri(request))
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube connect failed: {exc}"), status_code=303)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_YT_OAUTH_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_YT_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+        delete_setting(conn, SETTING_YT_OAUTH_STATE)
+    return RedirectResponse(url="/?message=" + quote_plus("YouTube account connected."), status_code=303)
+
+
+@app.post("/integrations/youtube/oauth/disconnect")
+def youtube_oauth_disconnect():
+    with get_meta_connection() as conn:
+        for key in (SETTING_YT_OAUTH_ACCESS_TOKEN, SETTING_YT_OAUTH_REFRESH_TOKEN,
+                    SETTING_YT_OAUTH_TOKEN_EXPIRES_AT, SETTING_YT_OAUTH_STATE):
+            delete_setting(conn, key)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/youtube/playlists")
+def youtube_playlists_route():
+    """List the connected user's playlists for the Add-to-playlist dropdown."""
+    token = get_youtube_oauth_token()
+    if not token:
+        return JSONResponse({"connected": False, "playlists": []})
+    try:
+        playlists = youtube_oauth_service.list_playlists(token)
+    except youtube_oauth_service.QuotaExceeded:
+        return JSONResponse({"connected": True, "error": "quota", "playlists": []}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"connected": True, "error": str(exc), "playlists": []}, status_code=502)
+    return JSONResponse({"connected": True, "playlists": playlists})
+
+
+@app.post("/api/youtube/playlists/add")
+async def youtube_playlist_add_route(request: Request):
+    """Add a video to a playlist (or a new one). Body: {video_id, playlist_id?, new_title?}."""
+    body = await request.json()
+    video_id = (body.get("video_id") or "").strip()
+    playlist_id = (body.get("playlist_id") or "").strip()
+    new_title = (body.get("new_title") or "").strip()
+    if not video_id or (not playlist_id and not new_title):
+        return JSONResponse({"ok": False, "error": "video_id and playlist_id or new_title required"}, status_code=400)
+    token = get_youtube_oauth_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "not_connected"}, status_code=401)
+    try:
+        if not playlist_id:
+            created = youtube_oauth_service.create_playlist(token, new_title)
+            playlist_id = created["id"]
+        youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
+    except youtube_oauth_service.QuotaExceeded:
+        return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    return JSONResponse({"ok": True, "playlist_id": playlist_id})
+
+
 @app.post("/deviantart/disconnect")
 def deviantart_disconnect():
     with get_meta_connection() as conn:
@@ -13123,6 +13269,8 @@ def get_all_settings():
         "yt_channel_id": get_yt_channel_id(),
         "yt_folder_name": get_yt_folder_name(),
         "yt_embed_account_features": youtube_embed_account_features_enabled(),
+        "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
+        "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
         "resend_api_key_set": bool(resend_key),
         "resend_api_key_masked": _masked(resend_key),
         "email_from": get_resend_from(),
