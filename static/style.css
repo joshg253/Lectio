@@ -5985,7 +5985,10 @@ textarea.hl-draft-pattern {
 .lectio-yt-actions { position: relative; display: flex; align-items: center; gap: 0.5rem; margin: 0.35rem 0 1rem; flex-wrap: wrap; }
 .lectio-yt-pl-btn { background: var(--field-bg); color: var(--fg); border: 1px solid var(--field-border); border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.85rem; cursor: pointer; }
 .lectio-yt-pl-btn:hover { border-color: var(--accent); color: var(--accent); }
-.lectio-yt-pl-menu { position: absolute; top: 100%; left: 0; z-index: 50; margin-top: 0.25rem; min-width: 220px; max-height: 320px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+.lectio-yt-pl-menu { position: fixed; z-index: 1000; min-width: 220px; max-height: 320px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+.lectio-yt-rate-btn { background: var(--field-bg); color: var(--fg); border: 1px solid var(--field-border); border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.95rem; line-height: 1; cursor: pointer; }
+.lectio-yt-rate-btn:hover { border-color: var(--accent); }
+.lectio-yt-rate-btn.is-active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .lectio-yt-pl-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; text-decoration: none; }
 .lectio-yt-pl-item:hover { background: var(--hover-bg); }
 .lectio-yt-pl-new { border-top: 1px solid var(--border); margin-top: 0.25rem; color: var(--accent); }

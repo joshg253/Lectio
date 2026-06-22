@@ -83,6 +83,33 @@ def test_quota_exceeded_raises_distinct_error(monkeypatch):
         yt.add_video_to_playlist("tok", "PL1", "vid12345678")
 
 
+def test_rate_video_posts_rating(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["id"] = request.url.params.get("id")
+        seen["rating"] = request.url.params.get("rating")
+        return httpx.Response(204)
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    yt.rate_video("tok", "vid12345678", "like")
+    assert seen == {"id": "vid12345678", "rating": "like"}
+
+
+def test_rate_video_rejects_bad_rating():
+    with pytest.raises(ValueError):
+        yt.rate_video("tok", "vid12345678", "love")
+
+
+def test_get_video_rating_reads_items(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": [{"rating": "dislike"}]},
+                              headers={"content-type": "application/json"})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.get_video_rating("tok", "vid12345678") == "dislike"
+
+
 def test_create_playlist_returns_normalized(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": "PLnew", "snippet": {"title": "TV"}},

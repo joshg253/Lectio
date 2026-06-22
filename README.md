@@ -49,8 +49,8 @@ The short version:
   extractor would otherwise strip, and de-duplicates a repeated lead image.
   YouTube embeds default to the privacy-enhanced host; a per-user Integrations
   setting switches them to the standard host so Share / Watch Later work, and
-  connecting a YouTube account (per-user OAuth) adds an **Add to playlist** button
-  beneath each video embed (lists your playlists, creates new ones).
+  connecting a YouTube account (per-user OAuth) adds **Add to playlist** and
+  **like / dislike** controls beneath each video embed.
 - **Lead images** — per-feed extraction strategies with side-by-side comparison,
   smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
   and full-resolution webcomic panels (ComicControl thumb→full promotion).
