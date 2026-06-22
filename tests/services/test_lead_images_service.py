@@ -115,6 +115,32 @@ def test_extract_thumbnail_uses_youtube_thumbnail(tmp_path: Path):
     assert thumb == "https://i.ytimg.com/vi/ABCDEFGHIJK/hqdefault.jpg"
 
 
+def test_comiccontrol_thumb_promoted_to_full_res(tmp_path: Path):
+    # ComicControl feeds (atomic-robo, everblue) ship a small /comicsthumbs/
+    # image; the full panel is the same filename under /comics/.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://www.atomic-robo.com/atomicrobo/rss",
+        entry_id="ar-1",
+        link="https://www.atomic-robo.com/atomicrobo/17ch1-page-1",
+        content_html='<p>x</p><img src="https://www.atomic-robo.com/comicsthumbs/1781025836-ARV1701_01.jpg" />',
+    )
+
+    thumb = service.extract_entry_thumbnail_url(entry)
+
+    assert thumb == "https://www.atomic-robo.com/comics/1781025836-ARV1701_01.jpg"
+
+
+def test_promote_known_thumbnail_is_noop_for_other_urls(tmp_path: Path):
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    # Substring-but-not-segment must not be rewritten.
+    assert (
+        service._promote_known_thumbnail("https://x/comicsthumbsfoo/a.jpg")
+        == "https://x/comicsthumbsfoo/a.jpg"
+    )
+    assert service._promote_known_thumbnail(None) is None
+
+
 def test_extract_thumbnail_reads_lazy_loaded_img(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(

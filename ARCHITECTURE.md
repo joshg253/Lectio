@@ -287,6 +287,14 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   handler, all `href`/`xlink:href`, and any non-`url(#fragment)` reference, then
   serves it as a `data:image/svg+xml` URI (kept vector — no rasterization, no
   outbound fetch).
+- **Reader-view embed re-injection** — `python-readability`'s `.summary()` strips
+  *every* `<iframe>` during extraction (and sometimes keeps the lead image twice),
+  so allowlisted players would vanish from Reader view. `build_readability_response`
+  pulls the allowlisted embeds out of the raw page (`_reinject_readability_embeds`,
+  reusing `_embed_host_allowed`) and appends any the extracted article is missing
+  *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
+  `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
+  sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 
@@ -351,6 +359,8 @@ All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explici
 4. **Inline feed content** — images embedded in `<content>` or `<summary>` elements. The render-triggered chunk backfill (`_do_backfill_entry_list`) does source-page fetches for `og_scrape`/`webcomic`/`unknown` feeds; when that fetch yields nothing it falls back via `_inline_from_reader` to the entry's own inline image rather than caching a blank. This rescues feeds whose pages are JS-only SPAs with no `og:image` (e.g. ArtStation) but which embed the artwork directly in the feed.
 
 At render time, a feed pinned to `inline`/`media_rss` thumb strategy that extracts nothing also falls back to the cached lead image (`list_entries` in main.py) instead of showing a blank — important for feeds whose `thumb_strategy` was auto-detected as `media_rss` but whose reader `Entry` objects carry no `media:*` fields.
+
+**ComicControl thumb→full promotion**: many ComicControl-CMS webcomics (e.g. atomic-robo.com, everblue-comic.com) ship only a small `/comicsthumbs/<file>` image in the RSS enclosure while the full-resolution panel is the same filename under `/comics/<file>` (page `id="cc-comic"`). These feeds auto-detect as `inline`, so they never reach the webcomic source fetch. `LeadImageService._promote_known_thumbnail` rewrites the `/comicsthumbs/` path segment to `/comics/` (exact-segment lookbehind/lookahead, idempotent) on every thumbnail return and cached-only read, and `_apply_feed_content_cleanups` applies the same rewrite to inline body images — so both the list thumbnail and the in-article image show the readable full panel without an extra fetch.
 
 The in-memory cache is warmed at startup **per enabled user** (`_for_each_background_user("lead-image cache warm", ...)`): lead images live in each tenant's own `entry_lead_images` table, and the render path consults only the shared in-memory cache (no per-user DB read), so warming bare against the default tenant would leave every other user's thumbnails blank until the rate-limited background backfill caught up after each restart.
 
