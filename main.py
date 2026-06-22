@@ -13006,7 +13006,9 @@ def add_highlight_route(
 def remove_highlight_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
-    keyword: str = Form(...),
+    # Optional: youtube_playlist rules can have a blank keyword ("all videos"), so
+    # remove/toggle (and the edit flow, which is remove+add) must accept "".
+    keyword: str = Form(""),
 ):
     with get_meta_connection() as conn:
         remove_highlight_keyword(conn, scope, scope_id, keyword)
@@ -13017,7 +13019,7 @@ def remove_highlight_route(
 def toggle_highlight_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
-    keyword: str = Form(...),
+    keyword: str = Form(""),
     enabled: int = Form(...),
 ):
     with get_meta_connection() as conn:

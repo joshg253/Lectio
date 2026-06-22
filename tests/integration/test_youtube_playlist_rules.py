@@ -111,6 +111,15 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
                 "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
             })
             assert r2.status_code == 400
+            # Editing a blank-keyword YT rule = remove + add; both must accept "".
+            rem = client.post("/highlights/remove", data={
+                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
+            })
+            assert rem.status_code == 200, rem.text
+            tog = client.post("/highlights/toggle", data={
+                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "", "enabled": "1",
+            })
+            assert tog.status_code == 200, tog.text
     finally:
         _reset_pools()
         tenancy._layout = saved
