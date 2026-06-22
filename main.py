@@ -9095,19 +9095,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     image_title_text = _ft or _fa  # title preferred for auto display
                     lead_image_service.persist_image_alt_async(str(entry.feed_url), str(entry.id), _fa, title_text=_ft)
             else:
+                # Source HTML isn't cached — fetching it is a slow network GET (several
+                # seconds for some og_scrape hosts, e.g. mynorthwest). Do it fully in
+                # the background: queue_source_html_fetch (given feed_url/entry_id/
+                # lead_image_url) fetches the page AND extracts + persists the caption,
+                # so it appears on the next open from the DB. Previously the render
+                # thread blocked up to 3s here waiting for that fetch just to maybe show
+                # the caption on this first open — a big first-open stall for no durable
+                # benefit. Cache-first / defer, matching the async lead-image fetch.
                 lead_image_service.queue_source_html_fetch(
                     entry.link,
                     feed_url=str(entry.feed_url),
                     entry_id=str(entry.id),
                     lead_image_url=lead_image_url,
                 )
-                lead_image_service.wait_for_source_html_fetch(entry.link, 3.0)
-                if entry.link in lead_image_service._source_html_cache:
-                    _fa, _ft = lead_image_service.fetch_entry_image_caption(entry.link, lead_image_url=lead_image_url, is_webcomic=_is_wc_feed)
-                    _fa = (re.sub(r"<[^>]+>", "", _fa).strip() or None) if _fa else None
-                    _ft = (re.sub(r"<[^>]+>", "", _ft).strip() or None) if _ft else None
-                    if _fa or _ft:
-                        image_title_text = _ft or _fa
 
         # Drop trivially generic alt texts that add no information (e.g. Bootstrap
         # class names used as alt values, single-word placeholders, or navigation

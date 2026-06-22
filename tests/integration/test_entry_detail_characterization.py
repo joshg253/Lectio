@@ -181,6 +181,31 @@ def test_image_enclosure_not_attachment_but_lead(env):
     assert d["lead_image_url"] and "deal.jpg" in d["lead_image_url"]
 
 
+# --- caption source-scrape is non-blocking --------------------------------
+
+def test_caption_source_scrape_queues_without_blocking(env, monkeypatch):
+    # An image enclosure gives a lead image with no in-feed/persisted caption, so the
+    # render wants a source-page scrape for alt/title text. With the source HTML
+    # uncached, it must QUEUE a background fetch (which persists the caption for the
+    # next open) and must NOT block the render waiting on that slow network GET.
+    calls = {"queued": 0, "waited": 0}
+    li = main.lead_image_service
+    monkeypatch.setattr(li, "queue_source_html_fetch",
+                        lambda *a, **k: calls.__setitem__("queued", calls["queued"] + 1))
+
+    def _should_not_be_called(*a, **k):
+        calls["waited"] += 1
+        return False
+    monkeypatch.setattr(li, "wait_for_source_html_fetch", _should_not_be_called)
+
+    _add(content="<p>deal</p>",
+         enclosures=[{"href": "https://cdn.test/deal.jpg", "type": "image/jpeg", "length": 200000}])
+    d = _detail()
+    assert d is not None and d["lead_image_url"]
+    assert calls["queued"] >= 1, "expected a background source-html fetch to be queued"
+    assert calls["waited"] == 0, "render must not block waiting for the source-html fetch"
+
+
 # --- sync flag -------------------------------------------------------------
 
 def test_sync_list_thumb_true_for_normal_feed(env):
