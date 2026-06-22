@@ -54,7 +54,8 @@ The short version:
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
-  suppression, WebSub real-time push, and WAL-mode SQLite.
+  suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
+  fetch fallback for feeds whose servers refuse the default client.
 - **Optional multi-user** — isolated per-user databases with shared content caches;
   **GReader** and **Fever** API compatibility; Instapaper & email integrations.
 - **Data portability** — Takeout-style ZIP export/import and online-safe backups.
