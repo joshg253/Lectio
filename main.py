@@ -246,6 +246,10 @@ SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
 SETTING_YT_API_KEY = "yt_api_key"
 SETTING_YT_CHANNEL_ID = "yt_channel_id"
 SETTING_YT_FOLDER_NAME = "yt_folder_name"
+# Per-user: use the standard youtube.com embed host (account features — Share /
+# Watch Later — work) instead of the privacy-enhanced youtube-nocookie.com. Off
+# (privacy) by default; the standard host sets YouTube cookies. "1"/"0".
+SETTING_YT_EMBED_ACCOUNT_FEATURES = "yt_embed_account_features"
 SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
@@ -410,6 +414,18 @@ def get_yt_channel_id() -> str:
 
 def get_yt_folder_name() -> str:
     return get_runtime_setting(SETTING_YT_FOLDER_NAME, _env_yt_fallback(_ENV_YT_FOLDER_NAME)) or "YouTube Subscriptions"
+
+
+def youtube_embed_account_features_enabled() -> bool:
+    """Per-user: True if YouTube embeds should use the standard youtube.com host
+    (Share / Watch Later) instead of the privacy-enhanced -nocookie host.
+    Privacy-enhanced is the default."""
+    return get_runtime_setting(SETTING_YT_EMBED_ACCOUNT_FEATURES, "0") == "1"
+
+
+def youtube_embed_host() -> str:
+    """The YouTube embed host for the current user's privacy/features preference."""
+    return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
 def get_deviantart_credentials() -> tuple[str, str]:
@@ -8235,18 +8251,20 @@ def _promote_plaintext_summary(summary: str | None) -> str | None:
 def _youtube_embed_html(video_id: str) -> str:
     """Inline YouTube player markup for a video id.
 
-    Matches YouTube's current canonical embed: the privacy-enhanced
-    ``youtube-nocookie.com`` host and ``referrerpolicy`` rather than the JS API.
-    We deliberately omit ``enablejsapi=1`` — nothing in the app drives the IFrame
-    JS API, and YouTube refuses playback when it is set without a matching
-    ``origin=`` parameter, which silently broke the inline player.
+    Host follows the per-user privacy/features preference (``youtube_embed_host``):
+    privacy-enhanced ``youtube-nocookie.com`` by default, or the standard
+    ``www.youtube.com`` (Share / Watch Later) when the user opts in. Uses
+    ``referrerpolicy`` rather than the JS API. We deliberately omit
+    ``enablejsapi=1`` — nothing in the app drives the IFrame JS API, and YouTube
+    refuses playback when it is set without a matching ``origin=`` parameter,
+    which silently broke the inline player.
 
     The result is injected into content_html (rendered with ``| safe``), so the
     video id is HTML-escaped before interpolation — defense in depth in case the
     upstream extractor's validation is ever loosened (the id is otherwise always
     ``[A-Za-z0-9_-]``)."""
     safe_id = html.escape(video_id, quote=True)
-    src = f"https://www.youtube-nocookie.com/embed/{safe_id}?rel=0"
+    src = f"https://{youtube_embed_host()}/embed/{safe_id}?rel=0"
     return (
         '<div class="youtube-embed-container" style="max-width:560px;margin:1em auto;">'
         f'<iframe width="100%" height="315" src="{src}" title="YouTube video player" '
@@ -8255,6 +8273,24 @@ def _youtube_embed_html(video_id: str) -> str:
         'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"'
         "></iframe></div>"
     )
+
+
+_YT_EMBED_SRC_HOST_RE = re.compile(
+    r'(?P<pre><iframe\b[^>]*\bsrc=["\']https://)'
+    r'(?:www\.)?youtube(?:-nocookie)?\.com'
+    r'(?P<post>/embed/)',
+    re.IGNORECASE,
+)
+
+
+def _apply_youtube_embed_host(content_html: str) -> str:
+    """Rewrite feed-native YouTube embed iframe hosts to the current user's
+    privacy/features preference (youtube.com vs youtube-nocookie.com). Only
+    touches iframe /embed/ URLs, not plain youtube.com watch links."""
+    if not isinstance(content_html, str) or "/embed/" not in content_html:
+        return content_html
+    host = youtube_embed_host()
+    return _YT_EMBED_SRC_HOST_RE.sub(rf'\g<pre>{host}\g<post>', content_html)
 
 
 _YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
@@ -8786,6 +8822,10 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # readable comic, not the thumbnail.
     if isinstance(content_html, str) and "comicsthumbs" in content_html.lower():
         content_html = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", content_html, flags=re.IGNORECASE)
+
+    # Apply the per-user YouTube embed-host preference to feed-native players
+    # (the recovered/injected player above already uses youtube_embed_host()).
+    content_html = _apply_youtube_embed_host(content_html)
 
     return content_html
 
@@ -13082,6 +13122,7 @@ def get_all_settings():
         "yt_api_key_masked": _masked(yt_api_key),
         "yt_channel_id": get_yt_channel_id(),
         "yt_folder_name": get_yt_folder_name(),
+        "yt_embed_account_features": youtube_embed_account_features_enabled(),
         "resend_api_key_set": bool(resend_key),
         "resend_api_key_masked": _masked(resend_key),
         "email_from": get_resend_from(),
@@ -13123,6 +13164,7 @@ async def save_all_settings(request: Request):
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
+        SETTING_YT_EMBED_ACCOUNT_FEATURES,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
