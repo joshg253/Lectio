@@ -75,33 +75,45 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from itsdangerous import TimestampSigner
 
-    monkeypatch.setattr(main, "META_DB_PATH", tmp_path / "meta.sqlite3")
+    # Route get_meta_connection() through tenancy at the tmp dir so the token we
+    # write here and the token the request handler reads hit the SAME DB (patching
+    # main.META_DB_PATH alone doesn't redirect the tenancy resolver).
+    saved = tenancy._layout
+    _reset_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
     monkeypatch.setattr(main, "THUMB_DB_PATH", tmp_path / "thumb.sqlite")
-    monkeypatch.setattr(main, "STARRED_ARCHIVE_DB_PATH", tmp_path / "archive.sqlite")
     main.ensure_meta_schema()
     main.ensure_thumb_schema()
-    main.ensure_starred_archive_schema()
     monkeypatch.setattr(main, "AUTH_ENABLED", False)
     with main.get_meta_connection() as c:
         main.set_setting(c, main.SETTING_YT_OAUTH_REFRESH_TOKEN, "fake")
 
-    with TestClient(main.app) as client:
-        client.get("/healthz")
-        cookie = client.cookies.get("session")
-        tok = _json.loads(base64.b64decode(
-            TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
-        ))["csrf_token"]
-        r = client.post("/highlights/add", data={
-            "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
-            "type": "youtube_playlist", "yt_playlist_id": "PL1", "yt_playlist_title": "My PL",
-            "yt_include_shorts": "0", "yt_mark_read": "1", "enabled": "0",
-        })
-        assert r.status_code == 200, r.text
-        # A non-YT type with a blank keyword is still rejected — cleanly (400, not 422).
-        r2 = client.post("/highlights/add", data={
-            "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
-        })
-        assert r2.status_code == 400
+    try:
+        with TestClient(main.app) as client:
+            client.get("/healthz")
+            cookie = client.cookies.get("session")
+            tok = _json.loads(base64.b64decode(
+                TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
+            ))["csrf_token"]
+            r = client.post("/highlights/add", data={
+                "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",
+                "type": "youtube_playlist", "yt_playlist_id": "PL1", "yt_playlist_title": "My PL",
+                "yt_include_shorts": "0", "yt_mark_read": "1", "enabled": "0",
+            })
+            assert r.status_code == 200, r.text
+            # A non-YT type with a blank keyword is still rejected — cleanly (400, not 422).
+            r2 = client.post("/highlights/add", data={
+                "_csrf": tok, "scope": "global", "keyword": "", "type": "highlight",
+            })
+            assert r2.status_code == 400
+    finally:
+        _reset_pools()
+        tenancy._layout = saved
 
 
 def test_rule_persists_fields(env):
