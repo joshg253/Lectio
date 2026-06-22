@@ -875,6 +875,19 @@ async def lifespan(app: FastAPI):
     # background backfill catches up after each restart.
     _for_each_background_user("lead-image cache warm", lead_image_service.warm_cache_from_db)
 
+    # Warm the per-user unread-counts cache so the first home load after a restart
+    # doesn't pay the synchronous reader-DB scan under startup contention (cold
+    # cache + concurrent first requests + a refresh kicking off was producing
+    # multi-second — occasionally ~20s — home loads right after a redeploy).
+    def _warm_unread_counts() -> None:
+        try:
+            counts = _compute_unread_counts_by_feed()
+            with unread_counts_cache_lock:
+                unread_counts_cache["unread_counts"] = (time.time(), counts)
+        except Exception:
+            LOGGER.debug("unread-counts cache warm failed", exc_info=True)
+    _for_each_background_user("unread-counts cache warm", _warm_unread_counts)
+
     # Ensure existing scraped file:// feeds have their entries imported into the
     # reader DB. Feeds may be in backoff from stale "no retriever" errors that
     # pre-date the feed_root='' fix — clear that state and force a reader sync.
@@ -6726,6 +6739,63 @@ def sanitize_source_html(content: str) -> str:
     return html_sanitize.sanitize_html(content)
 
 
+def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
+    """Recover allowlisted <iframe> embeds that Readability stripped.
+
+    `python-readability`'s `.summary()` drops *every* `<iframe>` during
+    extraction, so YouTube/Spotify/Bandcamp players vanish from Reader view.
+    Pull the allowlisted embeds out of the raw page and append any the extracted
+    article is missing. The combined HTML is sanitized by the caller, so the
+    re-injected iframes still pass through `_sanitize_iframe` (sandbox/referrer).
+    """
+    if "<iframe" not in raw_html.lower():
+        return summary_html
+    try:
+        from bs4 import BeautifulSoup
+        raw_soup = BeautifulSoup(raw_html, "html.parser")
+    except Exception:
+        return summary_html
+
+    existing = summary_html.lower()
+    seen: set[str] = set()
+    missing: list[str] = []
+    for ifr in raw_soup.find_all("iframe"):
+        src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+        if not src or not html_sanitize._embed_host_allowed(src):
+            continue
+        key = src.split("?", 1)[0].lower()
+        if key in seen or key in existing:
+            continue
+        seen.add(key)
+        missing.append(str(ifr))
+    if not missing:
+        return summary_html
+    block = "".join(f'<p class="lectio-embed">{m}</p>' for m in missing)
+    return summary_html + block
+
+
+_READABILITY_IMG_TAG_RE = re.compile(r'<img\b[^>]*>', re.IGNORECASE)
+_READABILITY_IMG_SRC_RE = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _dedupe_readability_images(article_html: str) -> str:
+    """Drop repeated <img> tags that share an src (readability sometimes keeps
+    the lead image twice — e.g. og:image plus the in-body copy)."""
+    seen: set[str] = set()
+
+    def _strip(match: re.Match[str]) -> str:
+        src_match = _READABILITY_IMG_SRC_RE.search(match.group(0))
+        if not src_match:
+            return match.group(0)
+        src = src_match.group(1).split("?", 1)[0].strip().lower()
+        if src in seen:
+            return ""
+        seen.add(src)
+        return match.group(0)
+
+    return _READABILITY_IMG_TAG_RE.sub(_strip, article_html)
+
+
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
     attr_re = re.compile(rf'\b{re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
     attr_literal = f'{attr_name}="{html.escape(value, quote=True)}"'
@@ -7330,6 +7400,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         doc = Document(raw_html)
         title = doc.short_title() or source_url
         summary = doc.summary(html_partial=True)
+        summary = _reinject_readability_embeds(summary, raw_html)
         article_html = sanitize_readability_html(summary).strip()
         _bs4_fallback_used = False
         if len(article_html) < 300:
@@ -7352,6 +7423,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
                 fallback = _bs4_content_fallback(raw_html)
                 if fallback and fallback.lower().count("<img") > art_img_count:
                     article_html = sanitize_readability_html(fallback).strip()
+        article_html = _dedupe_readability_images(article_html)
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -7381,6 +7453,8 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             "h1{margin:0;font-size:1.28rem;line-height:1.3;}"
             "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
+            "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
+            "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
@@ -8705,6 +8779,13 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
             # Not scanned yet — force a scan (bypasses the audio TTL so a new
             # post's embed isn't held back by a long no-audio backoff).
             _queue_media_audio_scan(feed_url)
+
+    # ComicControl webcomics (atomic-robo, everblue, …) embed only the small
+    # /comicsthumbs/ image in feed content; the full-resolution panel is the
+    # same filename under /comics/. Promote inline so the reader shows the
+    # readable comic, not the thumbnail.
+    if isinstance(content_html, str) and "comicsthumbs" in content_html.lower():
+        content_html = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", content_html, flags=re.IGNORECASE)
 
     return content_html
 
@@ -10370,6 +10451,8 @@ def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
             "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
             "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
+            "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
+            "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"

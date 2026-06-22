@@ -5,17 +5,6 @@ this file only tracks what's still open.
 
 ## Now
 
-- **Reader view: re-inject embeds + dedupe images** — `python-readability`'s
-  `.summary()` strips *all* `<iframe>` embeds and ~half the images during extraction,
-  before Lectio's allowlist sanitizer (which keeps YouTube/Spotify/Bandcamp iframes)
-  runs. Confirmed on nocleansinging.com: raw page has 1 Spotify iframe + 4 imgs →
-  readability output 0 iframes + 2 imgs. So in Reader view: Spotify/YouTube/Bandcamp
-  players vanish, a YouTube embed that survives renders tiny (no responsive wrapper),
-  and the lead image shows twice (prepended lead + the one readability keeps). Fix:
-  after readability runs, re-inject the allowlisted embeds (and missing images,
-  deduped against the lead) from the raw page, give iframes the responsive embed
-  wrapper, then sanitize. Build on the existing `_embed_host_allowed` allowlist and
-  the "readability stripped the images" fallback path (`build_readability_response`).
 - **List-thumbnail direct fallback for server-blocked images** — feeds whose images
   are IP-blocked server-side (e.g. washingtonstatestandard.com, Cloudflare 403 on
   `/thumb`) show no list thumbnails, though the article lead image loads direct in
