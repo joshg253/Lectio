@@ -875,6 +875,19 @@ async def lifespan(app: FastAPI):
     # background backfill catches up after each restart.
     _for_each_background_user("lead-image cache warm", lead_image_service.warm_cache_from_db)
 
+    # Warm the per-user unread-counts cache so the first home load after a restart
+    # doesn't pay the synchronous reader-DB scan under startup contention (cold
+    # cache + concurrent first requests + a refresh kicking off was producing
+    # multi-second — occasionally ~20s — home loads right after a redeploy).
+    def _warm_unread_counts() -> None:
+        try:
+            counts = _compute_unread_counts_by_feed()
+            with unread_counts_cache_lock:
+                unread_counts_cache["unread_counts"] = (time.time(), counts)
+        except Exception:
+            LOGGER.debug("unread-counts cache warm failed", exc_info=True)
+    _for_each_background_user("unread-counts cache warm", _warm_unread_counts)
+
     # Ensure existing scraped file:// feeds have their entries imported into the
     # reader DB. Feeds may be in backoff from stale "no retriever" errors that
     # pre-date the feed_root='' fix — clear that state and force a reader sync.
