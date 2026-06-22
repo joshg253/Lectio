@@ -18,15 +18,156 @@ this file only tracks what's still open.
 
 ## Later
 
-- **YouTube Add-to-Playlist follow-ups** (shipped: per-user OAuth connect in
-  Settings → Integrations + "Add to playlist ▾" beneath each embed, via YouTube
-  Data API v3 `playlists.list`/`playlistItems.insert`/`playlists.insert`). Possible
-  refinements: cache playlists across pane loads with a TTL/refresh affordance;
-  success/error toasts instead of inline status text; batch "add all on page";
-  surface remaining daily quota. Note: the Google OAuth app is in **Testing** mode,
-  so refresh tokens expire ~7 days → occasional reconnect. Publishing to Production
-  (no formal verification needed under the user cap, just clicks through an
-  "unverified app" screen) would drop the 7-day churn if it becomes annoying.
+- **YouTube as a first-class "special" area** (manual Add-to-playlist already
+  shipped in PR #61: per-user OAuth in Settings → Integrations + an "Add to
+  playlist" control beneath each embed, via `services/youtube_oauth.py`). Next:
+  treat the YouTube folder as a real integration surface with its own settings and
+  automations, instead of a folder that merely *starts with* "YouTube".
+
+  Background — what exists today:
+  - The "YouTube folder" is detected loosely by name (`contextFolderName
+    .startsWith('YouTube')`, index.html) — that's how right-click "Sync
+    Subscriptions" appears. Not robust (rename breaks it).
+  - YT feeds are flagged per-feed by URL (`is_youtube_feed` = URL contains
+    `youtube.com/feeds/videos.xml`).
+  - **Shorts** are handled per-feed: a `hide_shorts` display pref auto-marks Shorts
+    read on refresh (`_run_automation_after_refresh`, main.py ~4508); a Short is
+    detected by `/shorts/` in the entry link (`_is_youtube_short`). No global toggle.
+  - Automation rules live in one table (`highlight_keywords`, `type` column;
+    `_HIGHLIGHT_VALID_TYPES`), scoped per feed/folder, fired after refresh. The
+    **webhook** runner (`_run_webhook_rules_after_refresh`, per-run cap of 50) is the
+    closest template for a new YT action.
+
+  Planned pieces:
+
+  1. **Robust YT-folder identity.** Stop relying on the folder name. Mark the synced
+     folder (the one `sync_youtube_folder` populates) as the canonical YouTube area,
+     or derive "YT area" = any folder whose feeds are all `is_youtube_feed`. Drives
+     where the special settings/automation panel shows up.
+
+  2. **Global "skip Shorts" toggle** for the YT area — one switch that applies the
+     existing `hide_shorts` behavior across all YT feeds (and to feeds added later by
+     sync), instead of toggling each feed. **Default: off.** Implement as an
+     area-level setting the hide-shorts pass consults, OR as a bulk-apply that sets
+     `hide_shorts=1` on every YT feed + on sync of new ones. Prefer the area-level
+     setting (one source of truth; no drift when feeds come and go).
+
+  3. **"Auto add to playlist" automation** (the headline ask). A general automation
+     rule — **available for any feed/folder, not just the YT area** — because a
+     YouTube video can be embedded in any feed's article, and an article can contain
+     **multiple** videos.
+     - **Choose a playlist** (dropdown from `/api/youtube/playlists`; allow "create
+       new").
+     - **Scope** like any other rule: a specific feed, a folder, or all feeds (reuse
+       the existing rule-scope picker — no YT-only feed selector).
+     - Options: **include Shorts** (default off — pairs with the global skip), and
+       **mark post read after add** (default on).
+     - Engine: new `youtube_playlist` rule type + `_run_youtube_playlist_rules_after
+       _refresh`, modeled on the webhook runner. For each new matching entry:
+       **extract *all* YouTube video ids from the entry** — not just the entry link.
+       For YT-feed entries the link is the watch URL; for general feeds, scan the
+       article content for embedded YT iframes / `youtu.be` / `watch?v=` links (reuse
+       `services/youtube_embeds.py`, which already pulls video ids from entry HTML).
+       Dedupe within the entry, then `playlistItems.insert` each (counts against the
+       per-run cap and quota individually) → if "mark read", mark the post once after
+       all its videos are added.
+     - **UI placement:** appears in the **general Automations rule-builder** as a
+       normal rule type (so the earlier "YT-area only" placement is dropped for this
+       rule). The YT special area still owns the YT-only settings — sync + global
+       skip-Shorts (items 1–2) — but the auto-add rule is general.
+
+  4. **Connection gating.** YT-dependent surfaces only render when the user has
+     connected YouTube (`yt_oauth_connected`): the YT special-area panel, the
+     per-embed "Add to playlist" control (already shipped), and — in the general
+     rule-builder — the **`youtube_playlist` rule type option** (hidden/disabled when
+     not connected, so it can't be created without a token). Not connected → these
+     don't show; the YT area surfaces a single "Connect YouTube account" prompt. Gate
+     server-side, not just CSS.
+
+  5. **Quota meter — "tokens left" with low alerts.** Show estimated remaining daily
+     quota somewhere visible (YT-area header, near the Add-to-playlist controls, and
+     in the `youtube_playlist` rule editor), with a warning state when low and a hard
+     "exhausted" state.
+     - **Key constraint:** the YouTube Data API exposes **no endpoint to read your
+       remaining quota** — Google only enforces it server-side and returns
+       `quotaExceeded`. So we must **track spend ourselves**: a per-user daily counter
+       that increments by each call's documented cost (`playlists.list`/`getRating`
+       = 1, `playlistItems.insert`/`playlists.insert`/`videos.rate` = 50, sub-sync
+       `videos.list` = 1, etc.), displayed against the **default 10,000-unit/day** cap
+       (make the cap a setting in case Google grants more).
+     - **Reset:** counter resets at **midnight Pacific** (Google's reset), not local
+       midnight — store the spend keyed by the Pacific calendar date.
+     - Treat it as an **estimate** (other tools sharing the same Google project, or
+       quota changes, can skew it). On an actual `quotaExceeded` response, snap the
+       displayed remaining to 0 regardless of the counter.
+     - **Alerts:** visible low-quota warning (e.g. < 500 units ≈ <10 adds left) and
+       an exhausted banner; optionally an automation-run-log note when an auto-add
+       run is throttled/skipped for quota.
+
+  Caveats to design around:
+  - **Quota**: each add is **50 units**; 10k/day default ≈ **~200 auto-adds/day**,
+    shared with duration lookups + sub-sync. Add a conservative per-run cap (like
+    webhooks' 50). On `quotaExceeded`: skip-and-log, retry leftovers next refresh.
+  - **No double-adds**: `playlistItems.insert` is **not idempotent** (re-adding
+    dupes). "Mark read after add" mostly prevents re-fire (rule matches unread only),
+    but also record added entry IDs per rule as a guard.
+  - **Token expiry**: testing-mode refresh tokens die ~7 days → auto-add silently
+    stops. Surface failures in the automation run log (and as a nudge to publish the
+    OAuth app to Production, which removes the 7-day churn — no formal verification
+    needed at single-user scale, just clicking through an "unverified app" screen).
+  - **Schema**: a new rule type / columns needs the startup per-user meta migration
+    (existing tenants 500 otherwise).
+
+  Size: medium. Schema migration + the rule-engine runner + the YT-area settings/
+  rule-builder UI. Reuses the shipped `youtube_oauth` service and playlists endpoint.
+
+- **"Send to destination" automation family — reduce the need for IFTTT.** The
+  `youtube_playlist` rule above is one instance of a broader pattern: on a matching
+  new entry at refresh, push it somewhere. Lectio already has the bones —
+  `email_article` (send each match by email) and `webhook` (generic JSON / IFTTT
+  Maker) are exactly this shape, and **Instapaper** already has a manual save path
+  (`/entries/instapaper` → `instapaper.com/api/add`, configured via the Instapaper
+  username/password settings). So the work is mostly *promoting existing manual
+  integrations into automation rule types*, sharing one engine.
+
+  - **Auto add to Instapaper** (next concrete one): new `instapaper` rule type that,
+    on match, calls the existing Instapaper save with the entry URL/title. Gate the
+    rule-type option on `is_instapaper_configured()` (same gating pattern as the
+    YouTube rule on `yt_oauth_connected`). Cheap (no quota concerns like YouTube).
+  - **Other candidates** (each is "manual action → rule type"): save to the starred
+    archive / a tag, DeviantArt-style pushes, future read-later services (Pocket is
+    shutting down; Readwise/Reader, Wallabag if someone runs one). Only build the
+    ones actually wanted.
+  - **Shared design:** all send-to-destination rule types run from the same
+    after-refresh pass (today: `mark_as_read`/`deduplicate`/`email_article`, then
+    `webhook`), each with its own per-run cap, its own "configured?" gate hiding the
+    rule-type option, run-log entries, and a not-idempotent guard where the
+    destination can dupe (record sent entry ids per rule, like the YT add). Keeping
+    them as sibling rule types (one table, one engine, one rule-builder) is what
+    makes Lectio a viable IFTTT replacement for feed→destination flows.
+
+  Size: small per destination once the YouTube rule establishes the engine pattern
+  (Instapaper especially — reuses the existing save call).
+
+- **"On star, send to destination(s)" — star as a trigger.** Instead of (or
+  alongside) the keyword-matched after-refresh rules above, a much simpler trigger:
+  when the user **stars/saves** a post, automatically push it to one or more chosen
+  destinations. Star is a deliberate, single-item, user-initiated action — so this
+  is the lowest-friction "send" of all and sidesteps most of the rule machinery.
+  - **Hook point:** the existing `/entries/saved` endpoint (main.py ~14121). On a
+    star (not unstar), fan out to the enabled destinations.
+  - **Config:** a single global setting, not per-feed rules — "When I star a post,
+    also send it to: ☐ Instapaper ☐ YouTube playlist [pick] ☐ Email [to] ☐ …",
+    each row gated on that destination being configured/connected. Far simpler UI
+    than the rule-builder.
+  - **Reuses the same destination senders** as the send-to-destination family (one
+    sender per destination, two triggers: keyword-rule and on-star).
+  - **Design notes:** fire once per star (guard so re-starring doesn't re-send);
+    **one-way** — un-starring does NOT remove from the destination; do the push
+    async so the star action stays snappy; YouTube still respects the quota meter.
+    For YouTube specifically, "star → add to playlist" is a natural manual companion
+    to the per-embed control (star a watched-later candidate, it lands in the
+    playlist automatically).
 
 - **Convert bare media links into embedded players** — some feeds ship only a
   Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
