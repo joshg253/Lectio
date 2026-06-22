@@ -44,9 +44,12 @@ The short version:
   mark-as-read, manual tags, read history, search, and a Readability/web-view proxy.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
   inline podcast players (incl. audio borrowed from a separate host feed), file
-  attachments, recovered YouTube embeds, and bare-text feed cleanup.
+  attachments, recovered YouTube embeds, and bare-text feed cleanup. Reader view
+  re-injects allowlisted players (YouTube/Spotify/Bandcamp) that the readability
+  extractor would otherwise strip, and de-duplicates a repeated lead image.
 - **Lead images** — per-feed extraction strategies with side-by-side comparison,
-  smart crop/fit tuning, caption sourcing, junk-image rejection, and inline-SVG art.
+  smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
+  and full-resolution webcomic panels (ComicControl thumb→full promotion).
 - **Automation** — highlight, mark-as-read, deduplicate, email-article, and
   outbound-webhook rules (generic JSON or IFTTT Maker; SSRF-guarded); all fire at
   refresh time with a manual "Run Now".
