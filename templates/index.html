@@ -939,6 +939,21 @@
       });
     }
 
+    // Close any open toolbar dropdown (Filter / Sort / Mark As Read) when
+    // clicking outside it — native <details> stays open otherwise.
+    const TOOLBAR_DROPDOWN_SELECTOR = 'details.toolbar-dropdown, details.mark-read-menu';
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll(TOOLBAR_DROPDOWN_SELECTOR).forEach((d) => {
+        if (d.open && !d.contains(e.target)) {
+          d.removeAttribute('open');
+        }
+      });
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      document.querySelectorAll(TOOLBAR_DROPDOWN_SELECTOR).forEach((d) => d.removeAttribute('open'));
+    });
+
     // init
     updateSingleMode();
     // Ensure entry pane refs and observer are bound for initial load
