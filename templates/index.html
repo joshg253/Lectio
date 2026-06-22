@@ -12,6 +12,7 @@
     window.HIGHLIGHT_RULES = {{ highlight_rules | tojson }};
     window.EMAIL_CONTACTS = {{ email_contacts | tojson }};
     window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
+    window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
     window.PROFILE_EMAIL = {{ profile_email | tojson }};
   </script>
@@ -7495,7 +7496,7 @@
             return;
           }
           const { folderNames, feedTitles } = hlScopeData();
-          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', highlight: 'Highlight' };
+          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', highlight: 'Highlight' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
             const el = document.createElement('div');
@@ -7552,8 +7553,8 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook' };
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -7682,7 +7683,7 @@
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = rule.keyword;
+            badge.textContent = (ruleType === 'youtube_playlist' && !rule.keyword) ? 'all videos' : rule.keyword;
             row.appendChild(badge);
 
             if (rule.is_regex) {
@@ -7740,6 +7741,25 @@
                 toSpan.textContent = '→ ' + host;
                 toSpan.title = rule.webhook_url;
                 row.appendChild(toSpan);
+              }
+            }
+
+            if (ruleType === 'youtube_playlist') {
+              const toSpan = document.createElement('span');
+              toSpan.className = 'hl-rule-email-to';
+              toSpan.textContent = '▶ ' + (rule.yt_playlist_title || rule.yt_playlist_id || 'playlist');
+              row.appendChild(toSpan);
+              if (rule.yt_include_shorts) {
+                const b = document.createElement('span');
+                b.className = 'hl-rule-search-in-badge';
+                b.textContent = '+Shorts';
+                row.appendChild(b);
+              }
+              if (rule.yt_mark_read) {
+                const b = document.createElement('span');
+                b.className = 'hl-rule-delivery-badge';
+                b.textContent = 'mark read';
+                row.appendChild(b);
               }
             }
           }
@@ -8210,8 +8230,11 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
+          // YouTube playlist rule needs a connected account; hide the option until
+          // connected (unless editing an existing rule of this type).
+          if (val === 'youtube_playlist' && !window.YT_OAUTH_CONNECTED && prefill.type !== 'youtube_playlist') continue;
           const opt = document.createElement('option');
           opt.value = val;
           opt.textContent = label;
@@ -8686,12 +8709,83 @@
 
         draft.appendChild(webhookRow);
 
+        // ── YouTube playlist sub-row: playlist + options (youtube_playlist only) ─
+        const ytRow = document.createElement('div');
+        ytRow.className = 'hl-draft-form-subrow hl-draft-yt-row';
+
+        const ytPlLabel = document.createElement('span');
+        ytPlLabel.className = 'hl-draft-field-label';
+        ytPlLabel.textContent = 'Playlist:';
+        ytRow.appendChild(ytPlLabel);
+
+        const ytPlSel = document.createElement('select');
+        ytPlSel.className = 'hl-draft-select hl-yt-playlist-select';
+        const ytPlLoading = document.createElement('option');
+        ytPlLoading.value = '';
+        ytPlLoading.textContent = 'Loading…';
+        ytPlSel.appendChild(ytPlLoading);
+        ytRow.appendChild(ytPlSel);
+
+        // Populate playlists from the shared endpoint (cache on window across drafts).
+        (async () => {
+          try {
+            if (!window._ytPlaylistsForRules) {
+              const r = await fetch('/api/youtube/playlists', { credentials: 'same-origin' });
+              window._ytPlaylistsForRules = (await r.json().catch(() => ({}))).playlists || [];
+            }
+            ytPlSel.innerHTML = '';
+            const ph = document.createElement('option');
+            ph.value = ''; ph.textContent = '— select playlist —';
+            ytPlSel.appendChild(ph);
+            for (const pl of window._ytPlaylistsForRules) {
+              const opt = document.createElement('option');
+              opt.value = pl.id;
+              opt.textContent = pl.title + (pl.count != null ? ` (${pl.count})` : '');
+              opt.dataset.title = pl.title;
+              ytPlSel.appendChild(opt);
+            }
+            // If the prefilled playlist is no longer in the list (renamed/deleted),
+            // keep a stub so editing doesn't silently drop it.
+            if (prefill.yt_playlist_id && !window._ytPlaylistsForRules.some(p => p.id === prefill.yt_playlist_id)) {
+              const opt = document.createElement('option');
+              opt.value = prefill.yt_playlist_id;
+              opt.textContent = (prefill.yt_playlist_title || prefill.yt_playlist_id) + ' (unavailable)';
+              opt.dataset.title = prefill.yt_playlist_title || '';
+              ytPlSel.appendChild(opt);
+            }
+            ytPlSel.value = prefill.yt_playlist_id || '';
+          } catch {
+            ytPlSel.innerHTML = '<option value="">(failed to load playlists)</option>';
+          }
+        })();
+
+        const ytShortsWrap = document.createElement('label');
+        ytShortsWrap.className = 'hl-draft-cc-wrap';
+        const ytShortsCheck = document.createElement('input');
+        ytShortsCheck.type = 'checkbox';
+        ytShortsCheck.checked = !!prefill.yt_include_shorts;
+        ytShortsWrap.appendChild(ytShortsCheck);
+        ytShortsWrap.appendChild(document.createTextNode(' Include Shorts'));
+        ytRow.appendChild(ytShortsWrap);
+
+        const ytMarkWrap = document.createElement('label');
+        ytMarkWrap.className = 'hl-draft-cc-wrap';
+        const ytMarkCheck = document.createElement('input');
+        ytMarkCheck.type = 'checkbox';
+        ytMarkCheck.checked = prefill.yt_mark_read !== undefined ? !!prefill.yt_mark_read : true;
+        ytMarkWrap.appendChild(ytMarkCheck);
+        ytMarkWrap.appendChild(document.createTextNode(' Mark read after add'));
+        ytRow.appendChild(ytMarkWrap);
+
+        draft.appendChild(ytRow);
+
         // ── Sync visibility ───────────────────────────────────────────
         function syncTypeControls() {
           const t = typeSel.value;
           const isEmail = t === 'email_article';
           const isDedup = t === 'deduplicate';
           const isWebhook = t === 'webhook';
+          const isYtPlaylist = t === 'youtube_playlist';
           const isBatch = isEmail && deliverySel.value === 'batch';
           const dedupNeedsWindow = isDedup && !['slug', 'safe'].includes(matchMethodSel.value);
           const isGlobalDedup = isDedup && !folderSel.value;
@@ -8709,6 +8803,10 @@
           windowHoursWrap.style.display = dedupNeedsWindow ? '' : 'none';
           excludeRow.style.display = isGlobalDedup ? '' : 'none';
           webhookRow.style.display = isWebhook ? '' : 'none';
+          ytRow.style.display = isYtPlaylist ? '' : 'none';
+          // For the playlist rule the keyword is an OPTIONAL filter (empty = all
+          // new videos in scope); reflect that in the placeholder.
+          patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
           if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
           else { populateFeeds(folderSel.value); }
         }
@@ -8743,10 +8841,12 @@
           }
 
           const pattern = patInput.value.trim();
-          if (!pattern) { patInput.focus(); return; }
+          // youtube_playlist allows an empty keyword (match all videos in scope).
+          if (!pattern && ruleType !== 'youtube_playlist') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
+          if (ruleType === 'youtube_playlist' && !ytPlSel.value) { ytPlSel.focus(); return; }
           const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
           const feedUrl  = feedSel.value || '';
           const color    = colorSel.value || 'yellow';
@@ -8761,10 +8861,15 @@
           if (!folderId)     { scope = 'global'; scopeId = ''; }
           else if (!feedUrl) { scope = 'folder'; scopeId = folderId; }
           else               { scope = 'feed';   scopeId = feedUrl; }
+          const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
                          email_to: emailTo, batch_time: batchTime, batch_count: batchCount, cc_me: ccMe,
-                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat });
+                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat,
+                         yt_playlist_id: ytPlSel.value || '',
+                         yt_playlist_title: (ytPlOpt && ytPlOpt.dataset.title) || '',
+                         yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
+                         yt_mark_read: ytMarkCheck.checked ? 1 : 0 });
         });
 
         return draft;
@@ -8782,6 +8887,9 @@
           dedup_window_hours: r.dedup_window_hours || 168,
           exclude_scope_ids: r.exclude_scope_ids || '',
           webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic',
+          yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
+          yt_include_shorts: r.yt_include_shorts ? 1 : 0,
+          yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
         });
       }
 
