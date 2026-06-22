@@ -71,6 +71,10 @@ def youtube_entry(tmp_path):
         yield
     finally:
         _reset_reader_pool()
+        # The per-user app-settings cache is module-level; clear it so a setting
+        # written in one test (e.g. the embed-host opt-in) doesn't leak into others.
+        with main._app_settings_cache_lock:
+            main._app_settings_cache.clear()
         tenancy._layout = saved
 
 
@@ -78,5 +82,29 @@ def test_youtube_feed_entry_gets_playable_embed(youtube_entry):
     detail = main.get_entry_detail(YT_FEED, ENTRY_ID)
     assert detail is not None
     content_html = detail["content_html"]
+    # Default (no per-user opt-in) → privacy-enhanced host.
     assert f"youtube-nocookie.com/embed/{VIDEO_ID}" in content_html
     assert "enablejsapi" not in content_html
+
+
+def test_embed_host_follows_per_user_setting(youtube_entry):
+    # Default: privacy host.
+    assert "youtube-nocookie.com" in main._youtube_embed_html(VIDEO_ID)
+    assert main.youtube_embed_host() == "www.youtube-nocookie.com"
+    # Opt in to account features → standard host (Share / Watch Later).
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_YT_EMBED_ACCOUNT_FEATURES, "1")
+    assert main.youtube_embed_host() == "www.youtube.com"
+    out = main._youtube_embed_html(VIDEO_ID)
+    assert f"https://www.youtube.com/embed/{VIDEO_ID}" in out
+    assert "youtube-nocookie" not in out
+
+
+def test_apply_youtube_embed_host_rewrites_feed_iframes():
+    # Privacy default rewrites a feed-native standard-host embed to -nocookie.
+    src_std = '<iframe src="https://www.youtube.com/embed/abc?rel=0"></iframe>'
+    out = main._apply_youtube_embed_host(src_std)
+    assert "www.youtube-nocookie.com/embed/abc" in out
+    # A plain watch link is NOT touched (only iframe /embed/ URLs).
+    link = '<a href="https://www.youtube.com/watch?v=abc">v</a>'
+    assert main._apply_youtube_embed_host(link) == link
