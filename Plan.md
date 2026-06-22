@@ -149,6 +149,26 @@ this file only tracks what's still open.
   Size: small per destination once the YouTube rule establishes the engine pattern
   (Instapaper especially — reuses the existing save call).
 
+- **"On star, send to destination(s)" — star as a trigger.** Instead of (or
+  alongside) the keyword-matched after-refresh rules above, a much simpler trigger:
+  when the user **stars/saves** a post, automatically push it to one or more chosen
+  destinations. Star is a deliberate, single-item, user-initiated action — so this
+  is the lowest-friction "send" of all and sidesteps most of the rule machinery.
+  - **Hook point:** the existing `/entries/saved` endpoint (main.py ~14121). On a
+    star (not unstar), fan out to the enabled destinations.
+  - **Config:** a single global setting, not per-feed rules — "When I star a post,
+    also send it to: ☐ Instapaper ☐ YouTube playlist [pick] ☐ Email [to] ☐ …",
+    each row gated on that destination being configured/connected. Far simpler UI
+    than the rule-builder.
+  - **Reuses the same destination senders** as the send-to-destination family (one
+    sender per destination, two triggers: keyword-rule and on-star).
+  - **Design notes:** fire once per star (guard so re-starring doesn't re-send);
+    **one-way** — un-starring does NOT remove from the destination; do the push
+    async so the star action stays snappy; YouTube still respects the quota meter.
+    For YouTube specifically, "star → add to playlist" is a natural manual companion
+    to the per-embed control (star a watched-later candidate, it lands in the
+    playlist automatically).
+
 - **Convert bare media links into embedded players** — some feeds ship only a
   Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
   invisibleoranges.com: Bandcamp album links, 0 iframes in the feed). Detect known
