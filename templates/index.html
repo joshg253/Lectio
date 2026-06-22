@@ -8461,6 +8461,33 @@
         webhookFormatSel.value = prefill.webhook_format || 'generic';
         webhookRow.appendChild(webhookFormatSel);
 
+        const webhookTestBtn = document.createElement('button');
+        webhookTestBtn.type = 'button';
+        webhookTestBtn.className = 'feed-prop-inline-btn';
+        webhookTestBtn.textContent = 'Send test';
+        webhookTestBtn.title = 'POST a sample payload to this URL now';
+        const webhookTestStatus = document.createElement('span');
+        webhookTestStatus.className = 'feed-prop-strategy-hint';
+        webhookTestBtn.addEventListener('click', async () => {
+          const url = webhookUrlInput.value.trim();
+          if (!url) { webhookUrlInput.focus(); return; }
+          webhookTestBtn.disabled = true;
+          webhookTestStatus.textContent = 'Sending…';
+          try {
+            const body = new URLSearchParams({ webhook_url: url, webhook_format: webhookFormatSel.value || 'generic' });
+            const resp = await fetch('/rules/webhook-test', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+            const json = await resp.json();
+            webhookTestStatus.textContent = json.ok ? '✓ Sent' : `Error: ${json.error || 'failed'}`;
+          } catch (err) {
+            webhookTestStatus.textContent = `Error: ${err.message}`;
+          } finally {
+            webhookTestBtn.disabled = false;
+            setTimeout(() => { webhookTestStatus.textContent = ''; }, 5000);
+          }
+        });
+        webhookRow.appendChild(webhookTestBtn);
+        webhookRow.appendChild(webhookTestStatus);
+
         draft.appendChild(webhookRow);
 
         // ── Sync visibility ───────────────────────────────────────────
