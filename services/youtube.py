@@ -14,6 +14,12 @@ class YouTubeDurationService:
 
     _YT_VID_PATTERN = re.compile(r"[?&]v=([\w-]{11})|youtu\.be/([\w-]{11})|/shorts/([\w-]{11})")
 
+    # A "no duration" result (API error/quota, or a live/upcoming stream with no
+    # length yet) must NOT be cached forever — otherwise a transient failure
+    # permanently blanks the [duration] title prefix. Retry such negatives after
+    # this long so they self-heal once the API recovers / the stream ends.
+    _NEGATIVE_RETRY_SECONDS = 6 * 3600
+
     def __init__(
         self,
         *,
@@ -79,12 +85,20 @@ class YouTubeDurationService:
             video_id = self.extract_video_id(entry.link)
             if not video_id:
                 continue
-            if video_id in self._cache:
+            # Known positive (in memory) → done.
+            cached = self._cache.get(video_id)
+            if cached is not None and cached[0] is not None:
                 continue
 
-            db_value = self._get_duration_db(video_id)
-            if db_value is not None:
-                self._cache[video_id] = db_value
+            row = self._get_duration_row(video_id)
+            if row is not None and row[0] is not None:
+                self._cache[video_id] = (row[0], row[1])  # positive in DB
+                continue
+            # Absent, or a cached negative. Only (re)fetch when there's no row yet
+            # or the negative has gone stale — otherwise respect the recent miss so
+            # we don't re-hit the API every refresh for genuinely length-less videos.
+            if row is not None and not self._negative_is_stale(row[2]):
+                self._cache[video_id] = (None, None)
                 continue
 
             try:
@@ -146,6 +160,35 @@ class YouTubeDurationService:
         if row is None:
             return None
         return (row["duration_seconds"], row["duration_display"])
+
+    def _get_duration_row(self, video_id: str) -> tuple[int | None, str | None, str | None] | None:
+        """Like ``_get_duration_db`` but also returns ``fetched_at`` so the refresh
+        path can decide whether a cached negative is stale enough to retry."""
+        with self._get_durations_connection() as conn:
+            row = conn.execute(
+                "SELECT duration_seconds, duration_display, fetched_at"
+                " FROM youtube_video_duration WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return (row["duration_seconds"], row["duration_display"], row["fetched_at"])
+
+    def _negative_is_stale(self, fetched_at: str | None) -> bool:
+        """True if a cached no-duration row is old enough to retry (or unparseable)."""
+        if not fetched_at:
+            return True
+        import datetime as _dt
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                when = _dt.datetime.strptime(fetched_at, fmt).replace(tzinfo=_dt.timezone.utc)
+                break
+            except ValueError:
+                continue
+        else:
+            return True  # unparseable → allow a retry
+        age = (_dt.datetime.now(_dt.timezone.utc) - when).total_seconds()
+        return age >= self._NEGATIVE_RETRY_SECONDS
 
     def _upsert_duration_db(
         self,
