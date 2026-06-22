@@ -5,9 +5,15 @@ this file only tracks what's still open.
 
 ## Now
 
-- (Outbound webhooks / IFTTT / Zapier shipped — `webhook` rule type, generic JSON
-  or IFTTT Maker, SSRF-guarded, immediate delivery. Possible follow-ups: batch
-  delivery, a Run-Now/test-send button, a Webhooks README badge.)
+- **List-thumbnail direct fallback for server-blocked images** — feeds whose images
+  are IP-blocked server-side (e.g. washingtonstatestandard.com, Cloudflare 403 on
+  `/thumb`) show no list thumbnails, though the article lead image loads direct in
+  the browser. Let the list `<img>` fall back to the direct image URL when `/thumb`
+  fails (the user's own IP can fetch it). Recovers thumbnails without evading the
+  block server-side.
+- Webhook follow-ups (shipped: `webhook` rule type, generic JSON / IFTTT Maker,
+  SSRF-guarded, immediate delivery): batch/digest delivery, a Run-Now/test-send
+  button, a Webhooks README badge.
 
 
 ## Later
