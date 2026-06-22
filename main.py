@@ -3916,22 +3916,28 @@ def _dry_run_pattern(
     search_in: str,
     max_entries: int = 1000,
     result_limit: int = 20,
+    match_all_if_empty: bool = False,
 ) -> dict:
-    """Preview which entries a pattern-based rule would affect (read + unread, newest first)."""
+    """Preview which entries a pattern-based rule would affect (read + unread, newest first).
+
+    ``match_all_if_empty`` supports rules whose keyword is an optional filter (e.g.
+    youtube_playlist: a blank keyword means "every entry in scope")."""
     import re as _re
 
     if not keyword:
-        return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
-
-    try:
-        if is_regex:
-            pattern = _re.compile(keyword, _re.IGNORECASE)
-            match_fn = lambda text: bool(pattern.search(text)) if text else False
-        else:
-            kw_lower = keyword.lower()
-            match_fn = lambda text: kw_lower in (text or "").lower()
-    except _re.error as e:
-        return {"error": f"Invalid regex: {e}"}
+        if not match_all_if_empty:
+            return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
+        match_fn = lambda text: True
+    else:
+        try:
+            if is_regex:
+                pattern = _re.compile(keyword, _re.IGNORECASE)
+                match_fn = lambda text: bool(pattern.search(text)) if text else False
+            else:
+                kw_lower = keyword.lower()
+                match_fn = lambda text: kw_lower in (text or "").lower()
+        except _re.error as e:
+            return {"error": f"Invalid regex: {e}"}
 
     if scope == "global":
         feed_urls: set[str] | None = None
@@ -13066,8 +13072,11 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook"):
-            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist"):
+            # youtube_playlist's keyword is an optional filter — a blank keyword
+            # previews every entry in scope (all videos).
+            result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
+                                      match_all_if_empty=(type == "youtube_playlist"))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:

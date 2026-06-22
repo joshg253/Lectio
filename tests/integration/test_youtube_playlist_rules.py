@@ -104,6 +104,20 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
         assert r2.status_code == 400
 
 
+def test_dry_run_blank_keyword_matches_all_in_scope(env):
+    # The Test (dry-run) button on a blank-keyword youtube_playlist rule must
+    # preview every entry in scope (regression: it errored "unknown rule type",
+    # and a blank keyword previewed nothing).
+    _add_entry()
+    with main.get_meta_connection() as conn:
+        res = main._dry_run_pattern(conn, "feed", FEED, "", False, "title", match_all_if_empty=True)
+    assert res["total_matches"] >= 1
+    # Without the flag (other rule types), a blank keyword still matches nothing.
+    with main.get_meta_connection() as conn:
+        res0 = main._dry_run_pattern(conn, "feed", FEED, "", False, "title")
+    assert res0["total_matches"] == 0
+
+
 def test_rule_persists_fields(env):
     _add_rule(playlist="PLxyz", include_shorts=True, mark_read=False)
     with main.get_meta_connection() as conn:
