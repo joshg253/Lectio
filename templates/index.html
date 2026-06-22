@@ -939,6 +939,21 @@
       });
     }
 
+    // Close any open toolbar dropdown (Filter / Sort / Mark As Read) when
+    // clicking outside it — native <details> stays open otherwise.
+    const TOOLBAR_DROPDOWN_SELECTOR = 'details.toolbar-dropdown, details.mark-read-menu';
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll(TOOLBAR_DROPDOWN_SELECTOR).forEach((d) => {
+        if (d.open && !d.contains(e.target)) {
+          d.removeAttribute('open');
+        }
+      });
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      document.querySelectorAll(TOOLBAR_DROPDOWN_SELECTOR).forEach((d) => d.removeAttribute('open'));
+    });
+
     // init
     updateSingleMode();
     // Ensure entry pane refs and observer are bound for initial load
@@ -1373,6 +1388,11 @@
           <label class="settings-label" for="sett-yt-folder">Folder name</label>
           <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
           <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
+            <input type="checkbox" id="sett-yt-account-features" />
+            <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
+          </label>
+          <p class="settings-hint">Use the standard <code>youtube.com</code> player instead of the privacy-enhanced <code>youtube-nocookie.com</code> one, so the in-article player shows Share and Watch Later (these need your signed-in YouTube cookies). Off by default for privacy; turning it on lets YouTube set its usual cookies.</p>
         </div>
         <h4 class="settings-section-title">DeviantArt</h4>
         <div class="settings-section">
@@ -8781,6 +8801,7 @@
         secretField('sett-yt-key', d.yt_api_key_set, d.yt_api_key_masked);
         v('sett-yt-channel', d.yt_channel_id);
         v('sett-yt-folder', d.yt_folder_name);
+        { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
         v('sett-da-id', d.deviantart_client_id);
@@ -8908,6 +8929,7 @@
             yt_api_key: g('sett-yt-key'),
             yt_channel_id: g('sett-yt-channel'),
             yt_folder_name: g('sett-yt-folder'),
+            yt_embed_account_features: (document.getElementById('sett-yt-account-features')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             deviantart_client_id: g('sett-da-id'),
