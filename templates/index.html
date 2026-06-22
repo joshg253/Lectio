@@ -3823,49 +3823,8 @@
         window.addEventListener('resize', () => { menu.hidden = true; });
         document.addEventListener('scroll', () => { if (!menu.hidden) menu.hidden = true; }, true);
 
-        // Like / dislike buttons (videos.rate). Clicking an active rating clears it.
-        const likeBtn = document.createElement('button');
-        likeBtn.type = 'button';
-        likeBtn.className = 'lectio-yt-rate-btn';
-        likeBtn.title = 'Like';
-        likeBtn.textContent = '👍';
-        const dislikeBtn = document.createElement('button');
-        dislikeBtn.type = 'button';
-        dislikeBtn.className = 'lectio-yt-rate-btn';
-        dislikeBtn.title = 'Dislike';
-        dislikeBtn.textContent = '👎';
-        const reflectRating = (rating) => {
-          likeBtn.classList.toggle('is-active', rating === 'like');
-          dislikeBtn.classList.toggle('is-active', rating === 'dislike');
-        };
-        const sendRate = async (target) => {
-          const active = (target === 'like' ? likeBtn : dislikeBtn).classList.contains('is-active');
-          const rating = active ? 'none' : target;
-          status.textContent = 'Rating…';
-          try {
-            const r = await fetch('/api/youtube/rate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              credentials: 'same-origin',
-              body: JSON.stringify({ video_id: videoId, rating }),
-            });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok || !d.ok) {
-              if (d.error === 'not_connected') { status.textContent = 'Connect YouTube account in Settings.'; return; }
-              if (d.error === 'quota') { status.textContent = 'Daily quota reached.'; return; }
-              throw new Error(d.error || `HTTP ${r.status}`);
-            }
-            reflectRating(rating);
-            status.textContent = rating === 'none' ? 'Rating cleared.' : (rating === 'like' ? 'Liked.' : 'Disliked.');
-          } catch (e) { status.textContent = e.message; }
-        };
-        likeBtn.addEventListener('click', () => sendRate('like'));
-        dislikeBtn.addEventListener('click', () => sendRate('dislike'));
-
         bar.appendChild(btn);
         bar.appendChild(menu);
-        bar.appendChild(likeBtn);
-        bar.appendChild(dislikeBtn);
         bar.appendChild(status);
         // Place the control directly after the iframe (or its wrapper <p>).
         const anchor = iframe.closest('p.lectio-embed') || iframe;
