@@ -141,6 +141,27 @@ def test_promote_known_thumbnail_is_noop_for_other_urls(tmp_path: Path):
     assert service._promote_known_thumbnail(None) is None
 
 
+def test_inline_thumb_url_promotes_comiccontrol(tmp_path: Path):
+    # Webcomic-strategy feeds derive the article lead from the inline image; the
+    # ComicControl thumb must be promoted there too (not just the cache path).
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://www.atomic-robo.com/atomicrobo/rss",
+        entry_id="ar-2",
+        link="https://www.atomic-robo.com/atomicrobo/17ch1-page-1",
+        content_html='<a href="x"><img src="https://www.atomic-robo.com/comicsthumbs/1-ARV.jpg"/></a>',
+    )
+    assert service.extract_inline_thumb_url(entry) == "https://www.atomic-robo.com/comics/1-ARV.jpg"
+
+
+def test_podcast_title_branding_image_rejected(tmp_path: Path):
+    # og:scrape can fall back to a show-title branding graphic on a post with no
+    # real featured image; reject it even on the cached (skip_logo_patterns) path.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    url = "https://ii.techdirt.com/s/t/i/podcast-title-small.png"
+    assert service._is_image_url_acceptable(url, None, None, skip_logo_patterns=True) is False
+
+
 def test_extract_thumbnail_reads_lazy_loaded_img(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(

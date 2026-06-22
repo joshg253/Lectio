@@ -115,7 +115,11 @@ class LeadImageService:
         # "sidebar" catches CMS sidebar images (e.g. cad-comic.com/wp-content/uploads/.../sidebar.png).
         # "opengraph" catches brand og:image files stored under a predictable URL
         # (e.g. logo_opengraph.jpg) that slip through the logo-pattern check.
-        r"|sidebar|opengraph",
+        r"|sidebar|opengraph"
+        # "podcast-title" is a show-title branding graphic (e.g. techdirt's
+        # ii.techdirt.com/s/t/i/podcast-title-small.png) that og:scrape falls back
+        # to on a post with no real featured image (e.g. a WP preview entry).
+        r"|podcast[-_]title",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
@@ -1018,7 +1022,7 @@ class LeadImageService:
                 and self._is_image_url_acceptable(inline_image, None, None, allow_extensionless=True)
                 and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=inline_image)
             ):
-                return inline_image
+                return self._promote_known_thumbnail(inline_image)
         # No raster image — fall back to a raw inline <svg> (sanitized → data URI).
         for html_candidate in prepared:
             svg_uri = self._extract_inline_svg_data_uri(html_candidate)
