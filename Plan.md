@@ -5,19 +5,48 @@ this file only tracks what's still open.
 
 ## Now
 
+- **Reader view: re-inject embeds + dedupe images** — `python-readability`'s
+  `.summary()` strips *all* `<iframe>` embeds and ~half the images during extraction,
+  before Lectio's allowlist sanitizer (which keeps YouTube/Spotify/Bandcamp iframes)
+  runs. Confirmed on nocleansinging.com: raw page has 1 Spotify iframe + 4 imgs →
+  readability output 0 iframes + 2 imgs. So in Reader view: Spotify/YouTube/Bandcamp
+  players vanish, a YouTube embed that survives renders tiny (no responsive wrapper),
+  and the lead image shows twice (prepended lead + the one readability keeps). Fix:
+  after readability runs, re-inject the allowlisted embeds (and missing images,
+  deduped against the lead) from the raw page, give iframes the responsive embed
+  wrapper, then sanitize. Build on the existing `_embed_host_allowed` allowlist and
+  the "readability stripped the images" fallback path (`build_readability_response`).
 - **List-thumbnail direct fallback for server-blocked images** — feeds whose images
   are IP-blocked server-side (e.g. washingtonstatestandard.com, Cloudflare 403 on
   `/thumb`) show no list thumbnails, though the article lead image loads direct in
   the browser. Let the list `<img>` fall back to the direct image URL when `/thumb`
   fails (the user's own IP can fetch it). Recovers thumbnails without evading the
-  block server-side.
-- Webhook follow-ups (shipped: `webhook` rule type, generic JSON / IFTTT Maker,
-  SSRF-guarded, immediate delivery): batch/digest delivery, a Run-Now/test-send
-  button, a Webhooks README badge.
+  block server-side. (`/thumb` itself already hardened: capped timeout + negative
+  cache, PR #54.)
+- Webhook follow-ups (shipped: `webhook` rule type + Send-test button): batch/digest
+  delivery, a Webhooks README badge.
 
 
 ## Later
 
+- **Convert bare media links into embedded players** — some feeds ship only a
+  Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
+  invisibleoranges.com: Bandcamp album links, 0 iframes in the feed). Detect known
+  player links in entry content and convert them to the host's embed iframe (already
+  allowlisted), so the player renders. Bandcamp needs the numeric album/track id,
+  which isn't in the album URL — scrape the album page's embed `<meta>`/oEmbed once
+  and cache it. Helps both the normal article view and Reader view. Larger than the
+  Reader-view re-inject (Now) since it needs per-host link→id resolution + caching.
+- **Social embeds (Instagram, X/Twitter, etc.)** — harder subcase of the above.
+  These ship in feeds as `<blockquote class="instagram-media" / "twitter-tweet">` +
+  a platform `<script>`, not an iframe. We strip scripts (privacy/security + we don't
+  load third-party trackers), so they currently render as a plain quote. X/Twitter
+  iframes via `platform.twitter.com` ARE allowlisted, but the blockquote/widgets.js
+  form isn't an iframe; Instagram isn't allowlisted at all. To render these we'd
+  convert the blockquote/permalink to the platform's oEmbed/iframe — but Twitter and
+  Instagram oEmbed now require API auth, and IG embeds are increasingly login-walled,
+  so this may not be reliably doable without third-party scripts we don't want to
+  load. Assess feasibility before committing; may end up "won't fix" for privacy.
 - Code health (deferred — low value, no user impact):
   - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
     (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/
