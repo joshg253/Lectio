@@ -1,14 +1,33 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
-
 import sqlite3
+from collections.abc import Callable
+from pathlib import Path
 
 from reader import make_reader
 from reader._storage import Storage as _ReaderStorage
 
 from services import reader_sanitize
+
+# Honest default identity for feed fetches — names the app + links the repo.
+_HONEST_USER_AGENT = "Lectio/0.1 (+https://github.com/joshg253/Lectio)"
+# Browser identity used ONLY for feeds an honest fetch was refused on (403/415/
+# 429/503/hang). A full header set, not just the UA — some WAFs (e.g. nginx 415)
+# sniff for Sec-Fetch-*/Accept-Language, not the UA alone. Applied via a per-feed
+# request hook, never preemptively. See main.get_browser_ua_feed_urls.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+_BROWSER_HEADERS = {
+    "User-Agent": _BROWSER_USER_AGENT,
+    "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+}
 
 # Capture the original setup_db before class definition so the subclass can
 # call it even when _ReaderStorage is monkeypatched in tests.
@@ -84,8 +103,16 @@ class ReaderApi:
     from the main FastAPI module.
     """
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(
+        self,
+        db_path: Path | str,
+        browser_ua_provider: Callable[[], set[str]] | None = None,
+    ) -> None:
         self._db_path = str(db_path)
+        # Returns the set of feed URLs that should fetch with a browser identity.
+        # Called live on each request (the set changes as feeds get flagged), so
+        # it must be cheap; main caches it per-user.
+        self._browser_ua_provider = browser_ua_provider
 
     def client(self):
         # Give reader's SQLite connections a 30-second busy-wait timeout so
@@ -108,9 +135,12 @@ class ReaderApi:
                     continue
                 # FRB080/082/086: identify as Lectio, not as the underlying library.
                 if hasattr(retr, 'session'):
-                    retr.session.headers['User-Agent'] = (
-                        'Lectio/0.1 (+https://github.com/joshg253/Lectio)'
-                    )
+                    retr.session.headers['User-Agent'] = _HONEST_USER_AGENT
+                # Per-feed browser-identity escalation for feeds an honest fetch was
+                # refused on. Runs before the request is sent and only swaps headers
+                # for flagged feeds — every other feed keeps the honest UA.
+                if hasattr(retr, 'request_hooks') and self._browser_ua_provider is not None:
+                    retr.request_hooks.append(self._make_browser_ua_request_hook())
                 if hasattr(retr, 'response_hooks'):
                     retr.response_hooks.append(_fix_feed_response)
 
@@ -121,3 +151,20 @@ class ReaderApi:
         reader_sanitize.install(r)
 
         return r
+
+    def _make_browser_ua_request_hook(self):
+        """Build a reader request hook that swaps in a browser identity for feeds
+        the provider lists. reader calls hooks as ``hook(session, request,
+        **kwargs)`` and uses the returned (or mutated) request."""
+        provider = self._browser_ua_provider
+
+        def _hook(session, request, **kwargs):
+            try:
+                flagged = provider() if provider else None
+                if flagged and str(request.url) in flagged:
+                    request.headers.update(_BROWSER_HEADERS)
+            except Exception:
+                pass  # never let identity selection break a fetch
+            return request
+
+        return _hook

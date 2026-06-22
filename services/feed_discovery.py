@@ -9,16 +9,17 @@ import httpx
 from services import url_guard
 
 
-def _guarded_get(url: str, *, timeout: float) -> httpx.Response:
+def _guarded_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx.Response:
     """SSRF-safe GET: validates the initial URL and every redirect hop.
 
     Raises url_guard.UnsafeURLError for private/loopback/link-local targets.
     """
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
-        return url_guard.safe_get(client, url, headers=_HEADERS)
+    hdrs = headers or _HEADERS
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=hdrs) as client:
+        return url_guard.safe_get(client, url, headers=hdrs)
 
 
-def _guarded_head(url: str, *, timeout: float) -> httpx.Response | None:
+def _guarded_head(url: str, *, timeout: float, headers: dict | None = None) -> httpx.Response | None:
     """SSRF-safe HEAD probe. Returns None if the URL is unsafe.
 
     Redirects are not followed (follow_redirects=False) so a probe can't be
@@ -27,8 +28,51 @@ def _guarded_head(url: str, *, timeout: float) -> httpx.Response | None:
     """
     if not url_guard.is_safe_outbound_url(url):
         return None
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=_HEADERS) as client:
+    hdrs = headers or _HEADERS
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=hdrs) as client:
         return client.head(url)
+
+
+# HTTP statuses that mean "refused" — escalate to a browser identity and retry.
+_REFUSAL_STATUSES = frozenset({403, 415, 429, 503})
+# Browser identity used ONLY after an honest fetch is refused. Full header set:
+# some WAFs (nginx 415) sniff Sec-Fetch-*/Accept-Language, not just the UA.
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+}
+
+
+def _get_with_escalation(url: str, *, timeout: float) -> tuple[httpx.Response | None, bool]:
+    """GET with good-citizen escalation: honest identity first, browser identity
+    only if the honest request is *refused* (403/415/429/503) or hangs/errors.
+
+    Returns ``(response, escalated)``. ``response`` is None only when even the
+    browser retry failed to connect. ``escalated`` is True when the browser
+    identity was used (so the caller can flag the feed for reader's fetch too).
+    Re-raises url_guard.UnsafeURLError so SSRF blocks aren't masked.
+    """
+    try:
+        resp = _guarded_get(url, timeout=timeout)
+        if resp.status_code not in _REFUSAL_STATUSES:
+            return resp, False
+    except url_guard.UnsafeURLError:
+        raise
+    except Exception:
+        resp = None  # transport error / timeout — fall through to browser retry
+    try:
+        return _guarded_get(url, timeout=timeout, headers=_BROWSER_HEADERS), True
+    except url_guard.UnsafeURLError:
+        raise
+    except Exception:
+        return resp, resp is not None
 
 _LINK_RE = re.compile(r"<link\b([^>]*?)(?:/>|>)", re.IGNORECASE | re.DOTALL)
 _ATTR_RE = re.compile(
@@ -99,7 +143,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
       message: str (human-readable, empty on success)
     """
     try:
-        resp = _guarded_get(url, timeout=timeout)
+        resp, _escalated = _get_with_escalation(url, timeout=timeout)
     except url_guard.UnsafeURLError:
         return {"status": "blocked", "feeds": [], "message": "That address is not allowed (private/loopback target)."}
     except httpx.TimeoutException:
@@ -107,6 +151,9 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     except Exception as exc:
         short = str(exc).split("\n")[0][:160]
         return {"status": "error", "feeds": [], "message": f"Could not reach URL: {short}"}
+    if resp is None:
+        return {"status": "error", "feeds": [], "message": "Could not reach URL."}
+    _probe_headers = _BROWSER_HEADERS if _escalated else _HEADERS
 
     final_url = str(resp.url)
     ct = resp.headers.get("content-type", "")
@@ -164,7 +211,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for suffix in _COMMON_FEED_PATHS:
             probe = origin + prefix + suffix
             try:
-                head = _guarded_head(probe, timeout=3.0)
+                head = _guarded_head(probe, timeout=3.0, headers=_probe_headers)
                 if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
             except Exception:
@@ -178,7 +225,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         for qp in _FEED_QUERY_PARAMS:
             probe = f"{base_page}?{qp}"
             try:
-                head = _guarded_head(probe, timeout=3.0)
+                head = _guarded_head(probe, timeout=3.0, headers=_probe_headers)
                 if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if not any(f["url"] == resolved for f in qp_feeds):
@@ -197,26 +244,31 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
 
 
 def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
-    """Return RSS/Atom feed URLs reachable from url.
+    """Return RSS/Atom feed URLs reachable from url. See discover_feed_urls_ex."""
+    return discover_feed_urls_ex(url, timeout=timeout)[0]
 
-    If url itself is a feed, returns [url].
-    If url is an HTML page, parses <link rel="alternate"> tags and probes
-    common path suffixes.
-    Returns [] on network failure or when nothing is found.
+
+def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str], bool]:
+    """Like discover_feed_urls but also reports whether a browser identity was
+    needed (the honest fetch was refused). Returns ``(urls, escalated)``.
+
+    If a feed was only reachable with a browser identity, the caller should flag
+    it so reader's later refresh fetch escalates too (otherwise the feed
+    subscribes but never updates).
     """
     try:
-        resp = _guarded_get(url, timeout=timeout)
+        resp, escalated = _get_with_escalation(url, timeout=timeout)
     except Exception:
-        return []
-
-    if not resp.is_success:
-        return []
+        return [], False
+    if resp is None or not resp.is_success:
+        return [], escalated
+    probe_headers = _BROWSER_HEADERS if escalated else _HEADERS
 
     final_url = str(resp.url)
     ct = resp.headers.get("content-type", "")
 
     if _ct_is_feed(ct) or _body_is_feed(resp.text):
-        return [final_url]
+        return [final_url], escalated
 
     # Parse HTML <link rel="alternate"> tags; preserve declaration order.
     candidates: list[str] = []
@@ -231,7 +283,7 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
                 candidates.append(absolute)
 
     if candidates:
-        return candidates
+        return candidates, escalated
 
     # Probe common path suffixes: first from the site root, then relative to the page path.
     parsed = urlparse(final_url)
@@ -242,12 +294,12 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for suffix in _COMMON_FEED_PATHS:
             probe_candidate = origin + prefix + suffix
             try:
-                head = _guarded_head(probe_candidate, timeout=3.0)
+                head = _guarded_head(probe_candidate, timeout=3.0, headers=probe_headers)
                 if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
                         candidates.append(resolved)
-                    return candidates
+                    return candidates, escalated
             except Exception:
                 continue
 
@@ -257,13 +309,13 @@ def discover_feed_urls(url: str, *, timeout: float = 10.0) -> list[str]:
         for qp in _FEED_QUERY_PARAMS:
             probe_candidate = f"{base_page}?{qp}"
             try:
-                head = _guarded_head(probe_candidate, timeout=3.0)
+                head = _guarded_head(probe_candidate, timeout=3.0, headers=probe_headers)
                 if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
                     resolved = str(head.url)
                     if resolved not in candidates:
                         candidates.append(resolved)
-                    return candidates
+                    return candidates, escalated
             except Exception:
                 continue
 
-    return candidates
+    return candidates, escalated
