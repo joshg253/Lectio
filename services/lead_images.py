@@ -2715,8 +2715,13 @@ class LeadImageService:
             # Extreme aspect ratio (banner/screenshot) — fall through to body scan.
             _og_extreme_ratio = True
 
+        # A <link rel="preload" as="image"> is only a performance hint — sites often
+        # preload an above-the-fold widget/chart (e.g. usafacts.org preloads an
+        # "answer-page-card" stats image) that is NOT the article's lead image. So a
+        # preload hint must NOT trump the publisher's explicit og:image; use it only
+        # as a fallback when there's no acceptable og:image.
         preload_image = self._extract_preloaded_image_url(source_html, final_url)
-        if preload_image:
+        if preload_image and not meta_image:
             return preload_image
 
         css_bg_image = self._extract_css_background_image_url(source_html, final_url)
