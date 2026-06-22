@@ -7802,6 +7802,7 @@
                 search_in: rule.search_in || 'title',
                 dedup_window_hours: rule.dedup_window_hours || 168,
                 exclude_scope_ids: rule.exclude_scope_ids || '',
+                yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
               });
               const resp = await fetch('/rules/dry-run?' + qs.toString(), { credentials: 'same-origin' });
               const data = await resp.json();

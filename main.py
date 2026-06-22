@@ -3917,11 +3917,14 @@ def _dry_run_pattern(
     max_entries: int = 1000,
     result_limit: int = 20,
     match_all_if_empty: bool = False,
+    exclude_shorts: bool = False,
 ) -> dict:
     """Preview which entries a pattern-based rule would affect (read + unread, newest first).
 
     ``match_all_if_empty`` supports rules whose keyword is an optional filter (e.g.
-    youtube_playlist: a blank keyword means "every entry in scope")."""
+    youtube_playlist: a blank keyword means "every entry in scope"). ``exclude_shorts``
+    drops YouTube Shorts from the preview so it matches what a youtube_playlist rule
+    with Include-Shorts off would actually add."""
     import re as _re
 
     if not keyword:
@@ -3972,6 +3975,8 @@ def _dry_run_pattern(
         for entry in iter_entries():
             if total_scanned >= max_entries:
                 break
+            if exclude_shorts and _is_youtube_short(entry):
+                continue
             total_scanned += 1
             title_text = str(entry.title or "")
             body_text = ""
@@ -13063,6 +13068,7 @@ def rules_dry_run_route(
     dedup_window_hours: int = Query(168),
     exclude_scope_ids: str = Query(""),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
+    yt_include_shorts: int = Query(1),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -13074,9 +13080,11 @@ def rules_dry_run_route(
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
         elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
-            # previews every entry in scope (all videos).
+            # previews every entry in scope (all videos); Shorts are excluded unless
+            # the rule opts in, matching what the rule would actually add.
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(type == "youtube_playlist"))
+                                      match_all_if_empty=(type == "youtube_playlist"),
+                                      exclude_shorts=(type == "youtube_playlist" and not yt_include_shorts))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
