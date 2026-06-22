@@ -5,13 +5,6 @@ this file only tracks what's still open.
 
 ## Now
 
-- **List-thumbnail direct fallback for server-blocked images** — feeds whose images
-  are IP-blocked server-side (e.g. washingtonstatestandard.com, Cloudflare 403 on
-  `/thumb`) show no list thumbnails, though the article lead image loads direct in
-  the browser. Let the list `<img>` fall back to the direct image URL when `/thumb`
-  fails (the user's own IP can fetch it). Recovers thumbnails without evading the
-  block server-side. (`/thumb` itself already hardened: capped timeout + negative
-  cache, PR #54.)
 - Webhook follow-ups (shipped: `webhook` rule type + Send-test button): batch/digest
   delivery, a Webhooks README badge.
 
@@ -230,10 +223,10 @@ this file only tracks what's still open.
   403 on every server request, honest *and* browser UA, persistent over hours) — the
   feed itself fetches, but server-side image ops (the `/thumb` list thumbnails and
   source-page scrape) are blocked at the IP/ASN level. We don't evade IP blocks
-  (good-citizen policy). Article lead images still render: they're served *direct* to
-  the browser, which loads them from the user's own IP. Only the server-generated
-  list thumbnails are missing. A future graceful fallback could let the list `<img>`
-  load the direct image when `/thumb` fails.
+  (good-citizen policy). Article lead images render direct to the browser (user's own
+  IP), and **list thumbnails now fall back to a direct browser load when `/thumb`
+  fails** (`thumbImgFallback`), so they render too. Only the server-side source-page
+  *scrape* (e.g. caption sourcing) remains blocked for such hosts.
 - **Webcomic single-image feeds** (e.g. claycomix) — investigated: not multi-panel.
   A single `wp-post-image` per entry; the source page's extra `<img>`s are DRM'd
   early-access previews + support badges. The webcomic strategy already surfaces the
