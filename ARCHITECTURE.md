@@ -311,6 +311,29 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   distinct 429 so the UI can tell the user to fall back to manual add on youtube.com
   (default 10k units/day ≈ 200 inserts; resets midnight Pacific). The OAuth app stays
   in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).
+- **Auto add-to-playlist automation** (`youtube_playlist` rule type) — builds on the
+  OAuth integration above to add new entries' videos to a playlist at refresh time.
+  It's a **general** automation rule (any feed/folder scope, via the shared
+  `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
+  YouTube video can be embedded in any feed's article and an entry can carry several.
+  `_run_youtube_playlist_rules_after_refresh` runs last in `_run_automation_after_refresh`
+  (after mark_as_read so its own "mark read after add" doesn't fight an earlier rule):
+  for each new (within the 15-min cutoff) matching entry it extracts **all** video ids
+  from the entry link + content (`youtube_embeds.video_ids_in_text`, which also matches
+  `/shorts/`), inserts each via `playlistItems.insert`, and optionally marks the post
+  read. The rule's keyword is an **optional filter** — empty = every new video in
+  scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
+  `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the
+  `/shorts/` link), `yt_mark_read` (default on). Because `playlistItems.insert` is
+  **not idempotent**, a `youtube_playlist_added (scope, scope_id, keyword, entry_id,
+  video_id)` table is the dedup guard: each (rule, entry, video) row is claimed with
+  `INSERT OR IGNORE` *before* the API call (rowcount 0 → already added → skip), and
+  released on failure/quota so it retries next run. A per-run cap
+  (`_YT_PLAYLIST_AUTO_PER_RUN_CAP = 25`, ≈1250 units) keeps a burst of new uploads
+  from exhausting the daily quota; `quotaExceeded` stops the run. The rule-type option
+  is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
+  rule-builder until connected) so it can't be created without a token. Runs in the
+  per-user background context like the other after-refresh rules.
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
   and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping

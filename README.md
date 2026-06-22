@@ -56,9 +56,11 @@ The short version:
   and full-resolution webcomic panels (ComicControl thumb→full promotion). List
   thumbnails fall back to a direct browser load when the server-side image proxy
   is refused (some hosts IP-block the server but serve your own IP fine).
-- **Automation** — highlight, mark-as-read, deduplicate, email-article, and
-  outbound-webhook rules (generic JSON or IFTTT Maker; SSRF-guarded); all fire at
-  refresh time with a manual "Run Now".
+- **Automation** — highlight, mark-as-read, deduplicate, email-article,
+  outbound-webhook, and **add-to-YouTube-playlist** rules (the last auto-adds new
+  videos — including those embedded in any feed's article — to a chosen playlist,
+  with include-Shorts and mark-read options; quota-capped, no double-adds); all
+  fire at refresh time with a manual "Run Now".
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.

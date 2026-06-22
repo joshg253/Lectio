@@ -2445,6 +2445,39 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_format TEXT NOT NULL DEFAULT 'generic'")
         except Exception:
             pass
+        # youtube_playlist rule type: target playlist + behavior toggles.
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_playlist_id TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_playlist_title TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_include_shorts INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_mark_read INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
+        # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
+        # idempotent, so record each (rule, entry) we've added to avoid re-adding the
+        # same video on a later refresh (the cutoff window alone can re-match).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_playlist_added (
+                scope TEXT NOT NULL,
+                scope_id TEXT NOT NULL DEFAULT '',
+                keyword TEXT NOT NULL DEFAULT '',
+                entry_id TEXT NOT NULL,
+                video_id TEXT NOT NULL,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (scope, scope_id, keyword, entry_id, video_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS rule_run_log (
@@ -2869,7 +2902,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -2879,7 +2912,8 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
-        " webhook_url, webhook_format"
+        " webhook_url, webhook_format,"
+        " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -2904,6 +2938,10 @@ def add_highlight_keyword(
     exclude_scope_ids: str = "",
     webhook_url: str = "",
     webhook_format: str = "generic",
+    yt_playlist_id: str = "",
+    yt_playlist_title: str = "",
+    yt_include_shorts: bool = False,
+    yt_mark_read: bool = True,
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -2921,13 +2959,16 @@ def add_highlight_keyword(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
-        "  webhook_url, webhook_format)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  webhook_url, webhook_format,"
+        "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
-         webhook_url.strip(), webhook_format),
+         webhook_url.strip(), webhook_format,
+         yt_playlist_id.strip(), yt_playlist_title.strip(),
+         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0),
     )
 
 
@@ -4629,6 +4670,9 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         _run_email_rules_after_refresh(refreshed_feed_urls)
         # Webhook rules likewise fire after mark_as_read/dedup.
         _run_webhook_rules_after_refresh(refreshed_feed_urls)
+        # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
+        # add" doesn't fight an earlier rule).
+        _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls)
     except Exception:
         LOGGER.exception("[automation] error running automation rules after refresh")
 
@@ -4939,6 +4983,176 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[webhook-auto] error in _run_webhook_rules_after_refresh")
+
+
+# Each playlistItems.insert costs 50 quota units; cap a run well under the daily
+# 10k so auto-add never exhausts the quota on a burst of new uploads.
+_YT_PLAYLIST_AUTO_PER_RUN_CAP = 25
+
+
+def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Add newly-refreshed matching entries' YouTube videos to a target playlist.
+
+    A YouTube video can be embedded in any feed, so this is a general rule (any
+    feed/folder), and one entry can carry several videos. Extracts all video ids
+    from the entry link + content, inserts each into the rule's playlist, and
+    optionally marks the post read. Non-idempotent inserts are guarded by the
+    youtube_playlist_added table so a video is never added twice.
+    """
+    if not refreshed_feed_urls:
+        return
+    global _unread_counts_generation
+
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            yt_rules = [
+                r for r in all_rules
+                if r.get("enabled") and r.get("type") == "youtube_playlist" and r.get("yt_playlist_id")
+            ]
+            if not yt_rules:
+                return
+            folder_feed_map: dict[int, set[str]] = {
+                int(r["scope_id"]): get_folder_feed_urls(conn, int(r["scope_id"]))
+                for r in yt_rules
+                if r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            }
+
+        token = get_youtube_oauth_token()
+        if not token:
+            LOGGER.warning("[yt-playlist-auto] %d rule(s) enabled but no YouTube token — reconnect needed", len(yt_rules))
+            return
+
+        added_total = 0
+        now_str = datetime.now().isoformat()
+
+        for rule in yt_rules:
+            if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                break
+            scope = str(rule.get("scope", ""))
+            scope_id = str(rule.get("scope_id") or "")
+            keyword = str(rule.get("keyword", ""))
+            is_regex = bool(rule.get("is_regex"))
+            search_in = str(rule.get("search_in") or "title")
+            playlist_id = str(rule.get("yt_playlist_id") or "")
+            include_shorts = bool(rule.get("yt_include_shorts"))
+            mark_read = bool(rule.get("yt_mark_read"))
+            run_entries: list[dict] = []
+            marked: list[tuple[str, str]] = []
+            try:
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        if scope == "global":
+                            in_scope = True
+                        elif scope == "folder":
+                            try:
+                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
+                            except (ValueError, TypeError):
+                                in_scope = False
+                        elif scope == "feed":
+                            in_scope = scope_id == feed_url
+                        else:
+                            in_scope = False
+                        if not in_scope:
+                            continue
+
+                        for entry in reader.get_entries(feed=feed_url):
+                            if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            # Empty keyword = add every new video in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            if not include_shorts and _is_youtube_short(entry):
+                                continue
+                            link = str(entry.link or "")
+                            body = "".join((c.value or "") for c in (entry.content or []))
+                            body += str(entry.summary or "")
+                            vids = youtube_embeds.video_ids_in_text(link, body)
+                            if not vids:
+                                continue
+                            fu = str(entry.feed_url or "")
+                            eid = str(entry.id)
+                            entry_added_any = False
+                            for vid in vids:
+                                if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                                    break
+                                # Dedup guard: claim the (rule, entry, video) row first;
+                                # rowcount 0 means we've added it before — skip.
+                                with get_meta_connection() as conn:
+                                    cur = conn.execute(
+                                        "INSERT OR IGNORE INTO youtube_playlist_added"
+                                        " (scope, scope_id, keyword, entry_id, video_id, added_at)"
+                                        " VALUES (?,?,?,?,?,?)",
+                                        (scope, scope_id, keyword, eid, vid, now_str),
+                                    )
+                                    claimed = cur.rowcount > 0
+                                if not claimed:
+                                    continue
+                                try:
+                                    youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
+                                    added_total += 1
+                                    entry_added_any = True
+                                except youtube_oauth_service.QuotaExceeded:
+                                    # Release the claim so it retries once quota resets,
+                                    # and stop the whole run.
+                                    with get_meta_connection() as conn:
+                                        conn.execute(
+                                            "DELETE FROM youtube_playlist_added"
+                                            " WHERE scope=? AND scope_id=? AND keyword=? AND entry_id=? AND video_id=?",
+                                            (scope, scope_id, keyword, eid, vid),
+                                        )
+                                    LOGGER.warning("[yt-playlist-auto] quota exceeded; %d added this run", added_total)
+                                    raise
+                                except Exception as exc:  # noqa: BLE001
+                                    with get_meta_connection() as conn:
+                                        conn.execute(
+                                            "DELETE FROM youtube_playlist_added"
+                                            " WHERE scope=? AND scope_id=? AND keyword=? AND entry_id=? AND video_id=?",
+                                            (scope, scope_id, keyword, eid, vid),
+                                        )
+                                    LOGGER.warning("[yt-playlist-auto] add failed for %s: %s", vid, exc)
+                            if entry_added_any:
+                                if fu not in feed_title_cache:
+                                    try:
+                                        feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                    except Exception:
+                                        feed_title_cache[fu] = fu
+                                run_entries.append({
+                                    "feed_url": fu, "entry_id": eid,
+                                    "title": str(entry.title or ""), "link": link,
+                                    "feed_title": feed_title_cache.get(fu, fu),
+                                })
+                                if mark_read:
+                                    reader.mark_entry_as_read((fu, eid))
+                                    marked.append((fu, eid))
+            except youtube_oauth_service.QuotaExceeded:
+                pass  # stop processing further rules this run
+            except Exception:
+                LOGGER.exception("[yt-playlist-auto] error processing rule %s/%s", scope, keyword)
+
+            if marked:
+                when = datetime.now().isoformat()
+                with get_meta_connection() as conn:
+                    conn.executemany(
+                        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                        [(fu, eid, when) for fu, eid in marked],
+                    )
+                _unread_counts_generation += 1
+            if run_entries:
+                with get_meta_connection() as conn:
+                    _log_auto_run(conn, now_str, "youtube_playlist", scope, scope_id, keyword, {
+                        "count": len(run_entries), "entries": run_entries,
+                    })
+    except Exception:
+        LOGGER.exception("[yt-playlist-auto] error in _run_youtube_playlist_rules_after_refresh")
 
 
 def _flush_email_batch_for_rule(
@@ -11384,6 +11598,7 @@ def home(
             "selected_resume_read_filter": selected_resume_read_filter,
             "global_note": global_note,
             "email_configured": is_email_configured(),
+            "yt_oauth_connected": youtube_oauth_connected(),
             "email_to_default": email_to_default,
             "instapaper_configured": is_instapaper_configured(),
             "youtube_sync_last_at": youtube_sync_last_at,
@@ -12725,6 +12940,10 @@ def add_highlight_route(
     exclude_scope_ids: str = Form(""),
     webhook_url: str = Form(""),
     webhook_format: str = Form("generic"),
+    yt_playlist_id: str = Form(""),
+    yt_playlist_title: str = Form(""),
+    yt_include_shorts: int = Form(0),
+    yt_mark_read: int = Form(1),
 ):
     keyword = keyword.strip()
     if scope not in _HIGHLIGHT_VALID_SCOPES:
@@ -12734,6 +12953,12 @@ def add_highlight_route(
             return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
         if scope == "feed":
             return JSONResponse({"error": "deduplicate rules cannot be scoped to a single feed"}, status_code=400)
+    elif type == "youtube_playlist":
+        # Keyword is optional for this rule (empty = add every new video in scope).
+        if not yt_playlist_id.strip():
+            return JSONResponse({"error": "a target playlist is required"}, status_code=400)
+        if not youtube_oauth_connected():
+            return JSONResponse({"error": "connect a YouTube account first"}, status_code=400)
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
@@ -12747,7 +12972,9 @@ def add_highlight_route(
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
-                              webhook_url, webhook_format)
+                              webhook_url, webhook_format,
+                              yt_playlist_id, yt_playlist_title,
+                              bool(yt_include_shorts), bool(yt_mark_read))
     return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
                          "color": color, "is_regex": bool(is_regex), "type": type,
                          "search_in": search_in, "delivery": delivery,
@@ -12755,7 +12982,11 @@ def add_highlight_route(
                          "cc_me": bool(cc_me), "enabled": bool(enabled),
                          "dedup_window_hours": dedup_window_hours,
                          "exclude_scope_ids": exclude_scope_ids.strip(),
-                         "webhook_url": webhook_url.strip(), "webhook_format": webhook_format})
+                         "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
+                         "yt_playlist_id": yt_playlist_id.strip(),
+                         "yt_playlist_title": yt_playlist_title.strip(),
+                         "yt_include_shorts": bool(yt_include_shorts),
+                         "yt_mark_read": bool(yt_mark_read)})
 
 
 @app.post("/highlights/remove")
