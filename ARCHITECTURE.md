@@ -328,6 +328,11 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   (0 = no limit). The **duration filter** reuses the cached video length (the same
   store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
   video whose duration isn't cached yet is skipped that run and retried once it is.
+  Durations are fetched in **batches of 50 ids per `videos.list` call** — that endpoint
+  bills **1 quota unit per call, not per video**, so a large subscription set (10k+
+  videos) costs ~200 units instead of ~10k. (Per-video fetching previously blew the
+  10k/day quota, leaving a rotating ~13% of videos perpetually duration-less; ids the
+  API returns no item for stay NULL and are retried per the negative-retry window.)
   Because `playlistItems.insert` is
   **not idempotent**, a `youtube_playlist_added (scope, scope_id, keyword, entry_id,
   video_id)` table is the dedup guard: each (rule, entry, video) row is claimed with

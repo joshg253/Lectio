@@ -79,35 +79,69 @@ class YouTubeDurationService:
         except Exception:
             return
 
+        # Collect the video ids that still need a fetch. videos.list bills 1 quota
+        # unit PER CALL (up to 50 ids), not per video — so batching is ~50x cheaper
+        # than one call per video and avoids exhausting the daily quota on large
+        # subscription sets (which left ~13% of videos perpetually duration-less).
+        to_fetch: list[str] = []
+        seen: set[str] = set()
         for entry in entries:
             if not entry.link:
                 continue
             video_id = self.extract_video_id(entry.link)
-            if not video_id:
+            if not video_id or video_id in seen:
                 continue
-            # Known positive (in memory) → done.
+            seen.add(video_id)
             cached = self._cache.get(video_id)
             if cached is not None and cached[0] is not None:
-                continue
-
+                continue  # known positive in memory
             row = self._get_duration_row(video_id)
             if row is not None and row[0] is not None:
                 self._cache[video_id] = (row[0], row[1])  # positive in DB
                 continue
-            # Absent, or a cached negative. Only (re)fetch when there's no row yet
-            # or the negative has gone stale — otherwise respect the recent miss so
-            # we don't re-hit the API every refresh for genuinely length-less videos.
+            # Absent, or a cached negative. Refetch only when there's no row yet or
+            # the negative has gone stale (don't re-hit the API every refresh for
+            # genuinely length-less videos).
             if row is not None and not self._negative_is_stale(row[2]):
                 self._cache[video_id] = (None, None)
                 continue
+            to_fetch.append(video_id)
 
+        if not to_fetch:
+            return
+        results = self.get_video_durations_batch(to_fetch)
+        for vid in to_fetch:
+            res = results.get(vid, (None, None))
+            self._cache[vid] = res
+            self._upsert_duration_db(vid, res[0], res[1])
+
+    def get_video_durations_batch(self, video_ids: list[str]) -> dict[str, tuple[int | None, str | None]]:
+        """Fetch durations for many videos with videos.list (up to 50 ids/call, 1
+        quota unit per call). Ids the API returns no item for map to (None, None)."""
+        out: dict[str, tuple[int | None, str | None]] = {}
+        api_key = self._api_key_provider() if self._api_key_provider else os.getenv("YOUTUBE_API_KEY")
+        if not api_key:
+            return out
+        for i in range(0, len(video_ids), 50):
+            chunk = video_ids[i:i + 50]
             try:
-                result = self.get_video_duration(video_id)
+                response = httpx.get(
+                    "https://www.googleapis.com/youtube/v3/videos",
+                    params={"part": "contentDetails", "id": ",".join(chunk), "key": api_key},
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                for item in (response.json().get("items") or []):
+                    vid = item.get("id")
+                    duration_iso = (item.get("contentDetails") or {}).get("duration")
+                    seconds = self._parse_iso8601_duration_to_seconds(duration_iso) if duration_iso else None
+                    if vid:
+                        out[vid] = (seconds, self._format_seconds_hms(seconds))
             except Exception:
-                result = (None, None)
-
-            self._cache[video_id] = result
-            self._upsert_duration_db(video_id, result[0], result[1])
+                # A failed chunk (timeout/quota) just yields no entries for those ids;
+                # they stay absent and are retried next refresh.
+                continue
+        return out
 
     def upsert_duration(
         self,

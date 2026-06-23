@@ -100,7 +100,8 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
         user_agent="LectioTest/1.0",
     )
 
-    monkeypatch.setattr(service, "get_video_duration", lambda _video_id: (360, "6:00"))
+    monkeypatch.setattr(service, "get_video_durations_batch",
+                        lambda ids: {vid: (360, "6:00") for vid in ids})
 
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=test")
 
@@ -113,6 +114,42 @@ def test_fetch_and_store_durations_for_feed_persists_missing_video(tmp_path: Pat
     assert row is not None
     assert row["duration_seconds"] == 360
     assert row["duration_display"] == "6:00"
+
+
+def test_get_video_durations_batch_parses_multiple(tmp_path: Path, monkeypatch):
+    import httpx
+
+    db_path = tmp_path / "yt.sqlite"
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"items": [
+                {"id": "AAAAAAAAAAA", "contentDetails": {"duration": "PT1H2M3S"}},
+                {"id": "BBBBBBBBBBB", "contentDetails": {"duration": "PT45S"}},
+                # CCCCCCCCCCC intentionally omitted (private/deleted) → (None, None)
+            ]}
+
+    def _fake_get(url, params=None, timeout=None):
+        captured["ids"] = params["id"]
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    out = service.get_video_durations_batch(["AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC"])
+    # One batched call carried all three ids (1 quota unit, not 3).
+    assert captured["ids"] == "AAAAAAAAAAA,BBBBBBBBBBB,CCCCCCCCCCC"
+    assert out["AAAAAAAAAAA"] == (3723, "1:02:03")
+    assert out["BBBBBBBBBBB"] == (45, "0:45")
+    assert "CCCCCCCCCCC" not in out  # absent → caller stores (None, None)
 
 
 def test_stale_negative_is_retried_and_self_heals(tmp_path: Path, monkeypatch):
@@ -138,7 +175,7 @@ def test_stale_negative_is_retried_and_self_heals(tmp_path: Path, monkeypatch):
         get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
         user_agent="LectioTest/1.0",
     )
-    monkeypatch.setattr(service, "get_video_duration", lambda _v: (95, "1:35"))
+    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: {v: (95, "1:35") for v in ids})
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
     assert service.cache["ABCDEFGHIJK"] == (95, "1:35")
 
@@ -165,7 +202,8 @@ def test_fresh_negative_is_not_refetched(tmp_path: Path, monkeypatch):
         user_agent="LectioTest/1.0",
     )
     calls = []
-    monkeypatch.setattr(service, "get_video_duration", lambda _v: calls.append(_v) or (95, "1:35"))
+    monkeypatch.setattr(service, "get_video_durations_batch",
+                        lambda ids: (calls.extend(ids) or {v: (95, "1:35") for v in ids}))
     service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
     assert calls == []  # fresh negative respected
     assert service.cache["ABCDEFGHIJK"] == (None, None)
