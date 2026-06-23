@@ -3755,8 +3755,11 @@ def _resolve_dedup_feed_urls(
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
         feed_urls = get_folder_feed_urls(conn, fid)
+    elif scope == "feeds":
+        # Dedupe across an explicit set of selected feeds (>=2 needed; checked by caller).
+        feed_urls = set(parse_feeds_scope_id(scope_id))
     else:
-        return {"error": "deduplicate rules require global or folder scope"}
+        return {"error": "deduplicate rules require global, folder, or multi-feed scope"}
     if exclude_scope_ids:
         excluded: set[str] = set()
         for fid_str in exclude_scope_ids.split(","):
@@ -4674,8 +4677,10 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             in_scope = bool(refreshed_feed_urls & folder_feed_map.get(int(scope_id), set()))
                         except (ValueError, TypeError):
                             in_scope = False
+                    elif scope == "feeds":
+                        in_scope = bool(refreshed_feed_urls & set(parse_feeds_scope_id(scope_id)))
                     else:
-                        in_scope = False  # dedup requires global or folder scope
+                        in_scope = False  # dedup requires global / folder / multi-feed scope
 
                     if not in_scope:
                         continue
@@ -12959,8 +12964,10 @@ def add_highlight_route(
     if type == "deduplicate":
         if keyword not in _DEDUP_VALID_MATCH_METHODS:
             return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
-        if scope in ("feed", "feeds"):
-            return JSONResponse({"error": "deduplicate rules cannot be scoped to specific feeds"}, status_code=400)
+        if scope == "feed":
+            return JSONResponse({"error": "deduplicate needs at least two feeds — select multiple feeds or a folder"}, status_code=400)
+        if scope == "feeds" and len(parse_feeds_scope_id(scope_id)) < 2:
+            return JSONResponse({"error": "deduplicate needs at least two feeds selected"}, status_code=400)
     elif type == "youtube_playlist":
         # Keyword is optional for this rule (empty = add every new video in scope).
         if not yt_playlist_id.strip():

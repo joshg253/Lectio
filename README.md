@@ -60,7 +60,8 @@ The short version:
   outbound-webhook, and **add-to-YouTube-playlist** rules (the last auto-adds new
   videos — including those embedded in any feed's article — to a chosen playlist,
   with include-Shorts and mark-read options; quota-capped, no double-adds); scope a
-  rule to all feeds, a folder, a single feed, or **a multi-selected set of feeds**,
+  rule to all feeds, a folder, a single feed, or **a multi-selected set of feeds**
+  (deduplicate can run across a selected set of feeds, not just a whole folder),
   with a Duplicate button to clone one quickly; all fire at refresh time with a
   manual "Run Now".
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
