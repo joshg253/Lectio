@@ -191,6 +191,33 @@ this file only tracks what's still open.
   - **Authenticated/private feeds** — none supported today, so all feed/image content
     is safe to global-cache. If added, exclude those feeds from the global caches.
 
+- **Integrations to investigate** (ideas; feasibility unconfirmed):
+  - **Inoreader import (complete)** — Inoreader's own OPML/"takeout" omits *disabled*
+    feeds, tags, and other state. The user maintains
+    [InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool): OAuth 2.0
+    against the Inoreader API, backing up **tagged items per label** to JSON
+    (`backup/<label>.json` cumulative + dated batches; lowercase = tags, Title Case =
+    folders by convention). Two ways to leverage it: (a) ingest its JSON output —
+    map each label → a Lectio tag and import the items (URL/title/tags) so tags
+    survive the move; (b) go further and talk to the Inoreader API directly to also
+    recover subscriptions incl. **disabled feeds** + folder structure (OPML misses
+    the disabled ones). Likely an importer in `services/` that reads the tool's JSON
+    first (lowest effort, already have it), with a direct-API path as a follow-up.
+    Decide scope: tags-only vs full (feeds+folders+tags+read/star state).
+  - **Supernote integration** (e-ink; user has a Manta) — Supernote devices sync via
+    their **Supernote Cloud** + a local Wi-Fi "Browse & Access" HTTP file interface;
+    there's no official public API, so options are limited. Plausible: export
+    saved/starred articles as documents (PDF or `.note`-friendly format) to a folder
+    the device picks up (Cloud folder or the device's WebDAV-ish local server). A
+    "send to Supernote" destination (like the send-to-destination family) that drops
+    a readable PDF of an article. Investigate the local Browse&Access API and whether
+    Supernote Cloud has any usable upload endpoint before committing.
+  - **Quire.io integration** — task manager with a documented **OAuth2 REST API**
+    (create tasks/projects). Fits the "send to destination" family: a `quire` rule /
+    on-star action that creates a Quire task from an entry (title + link + excerpt) in
+    a chosen project. Same shape as the planned Instapaper rule — promote a manual
+    "send to Quire" into a rule type, gated on a connected Quire account (OAuth).
+
 
 ## Known limitations (not bugs)
 
