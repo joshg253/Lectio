@@ -7824,6 +7824,7 @@
           testBtn.type = 'button';
           testBtn.className = 'hl-rule-test';
           testBtn.setAttribute('aria-label', 'Test rule (dry run)');
+          testBtn.title = 'Test (dry run) — preview matching articles without acting';
           testBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">play_circle</span>';
           testBtn.addEventListener('click', async () => {
             const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
@@ -7913,6 +7914,7 @@
             histBtn.type = 'button';
             histBtn.className = 'hl-rule-hist';
             histBtn.setAttribute('aria-label', 'Show run history for this rule');
+            histBtn.title = 'Run history — what this rule has done';
             histBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">history</span>';
             histBtn.addEventListener('click', async () => {
               const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
@@ -8026,6 +8028,7 @@
           edit.type = 'button';
           edit.className = 'hl-rule-edit';
           edit.setAttribute('aria-label', `Edit rule for "${rule.keyword}"`);
+          edit.title = 'Edit rule';
           edit.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">edit</span>';
           edit.addEventListener('click', () => {
             const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
@@ -8075,6 +8078,7 @@
           del.type = 'button';
           del.className = 'hl-rule-delete';
           del.setAttribute('aria-label', `Delete rule for "${rule.keyword}"`);
+          del.title = 'Delete rule';
           del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">delete</span>';
           del.addEventListener('click', async () => {
             const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword });
@@ -8272,6 +8276,14 @@
             feedEl.className = 'hl-rule-dryrun-item-feed';
             feedEl.textContent = (m.read ? '✓ ' : '') + (m.feed_title || m.feed_url);
             item.appendChild(titleEl); item.appendChild(feedEl);
+            if (m.published) {
+              const dateEl = document.createElement('span');
+              dateEl.className = 'hl-rule-dryrun-item-date';
+              let dt = m.published;
+              try { dt = new Date(m.published).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch {}
+              dateEl.textContent = dt;
+              item.appendChild(dateEl);
+            }
             panel.appendChild(item);
           }
         }
