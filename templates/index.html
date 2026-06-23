@@ -1399,15 +1399,21 @@
       <!-- Integrations tab -->
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
         <h4 class="settings-section-title">YouTube</h4>
-        <div class="settings-section">
-          <label class="settings-label" for="sett-yt-key">API key</label>
-          <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
-          <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
-          <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
-          <label class="settings-label" for="sett-yt-folder">Folder name</label>
-          <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
+        <div class="settings-section settings-section--inline">
           <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
-          <label class="settings-toggle-row" style="grid-column:1 / -1;display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-key">API key</label>
+            <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
+            <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-folder">Folder name</label>
+            <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
+          </div>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
             <input type="checkbox" id="sett-yt-account-features" />
             <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
           </label>
@@ -1420,14 +1426,20 @@
           </div>
         </div>
         <h4 class="settings-section-title">DeviantArt</h4>
-        <div class="settings-section">
-          <label class="settings-label" for="sett-da-id">Client ID</label>
-          <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
-          <label class="settings-label" for="sett-da-secret">Client Secret</label>
-          <input type="password" id="sett-da-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
-          <label class="settings-label" for="sett-da-folder">Watch-feed folder</label>
-          <input type="text" id="sett-da-folder" class="settings-input" placeholder="DeviantArt" maxlength="200" autocomplete="off" />
+        <div class="settings-section settings-section--inline">
           <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-da-id">Client ID</label>
+            <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-da-secret">Client Secret</label>
+            <input type="password" id="sett-da-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-da-folder">Watch-feed folder</label>
+            <input type="text" id="sett-da-folder" class="settings-input" placeholder="DeviantArt" maxlength="200" autocomplete="off" />
+          </div>
           <div class="settings-da-account" style="margin-top:0.5rem">
             <span id="sett-da-status" class="settings-inline-status"></span>
             <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect">Connect DeviantArt account</a>
@@ -1437,12 +1449,16 @@
           </div>
         </div>
         <h4 class="settings-section-title">Instapaper</h4>
-        <div class="settings-section">
-          <label class="settings-label" for="sett-ip-user">Username</label>
-          <input type="text" id="sett-ip-user" class="settings-input" placeholder="your@email.com" maxlength="200" autocomplete="off" />
-          <label class="settings-label" for="sett-ip-pass">Password</label>
-          <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
+        <div class="settings-section settings-section--inline">
           <p class="settings-hint">Lectio saves articles via the <a href="https://www.instapaper.com/api/simple" target="_blank" rel="noopener">Instapaper Simple API</a> using your account credentials. No separate API key is needed.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-ip-user">Username</label>
+            <input type="text" id="sett-ip-user" class="settings-input" placeholder="your@email.com" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-ip-pass">Password</label>
+            <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
+          </div>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
@@ -8351,48 +8367,112 @@
         }
         draft.appendChild(folderSel);
 
-        // Scope: feed(s) — a multi-select listbox. No selection = whole folder;
-        // exactly one = that feed (scope "feed"); two or more = scope "feeds".
-        const feedSel = document.createElement('select');
-        feedSel.className = 'hl-draft-select hl-feed-select';
-        feedSel.multiple = true;
-        feedSel.size = 4;
-        feedSel.title = 'Leave empty for the whole folder; Ctrl/Cmd-click to pick several feeds';
-
-        // Feeds the rule already targets (scope feed = one url; feeds = newline list).
-        const _prefillFeedUrls = new Set(
+        // Scope: feed(s) — a searchable token picker (chips + find-as-you-type),
+        // so it scales to thousands of feeds in one folder. No selection = whole
+        // folder; exactly one = "feed" scope; two or more = "feeds". Selection lives
+        // in selectedFeedUrls (decoupled from the DOM) so it survives type changes.
+        const selectedFeedUrls = new Set(
           prefill.scope === 'feed' ? [prefill.scope_id]
           : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
           : []
         );
-
-        function populateFeeds(folderId, preselect) {
-          const keep = preselect || new Set([...feedSel.selectedOptions].map(o => o.value));
-          feedSel.innerHTML = '';
-          if (!folderId) { feedSel.disabled = true; return; }
-          const feeds = [];
+        let folderFeeds = [];                  // [{url,title}] for the current folder
+        const feedTitleByUrl = new Map();
+        function loadFolderFeeds(folderId) {
+          folderFeeds = [];
+          feedTitleByUrl.clear();
+          if (!folderId) return;
           for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
             const url = el.getAttribute('data-feed-url');
-            if (url && !feeds.some(f => f.url === url)) feeds.push({ url, title: el.textContent.trim() });
+            if (url && !feedTitleByUrl.has(url)) {
+              const title = el.textContent.trim();
+              folderFeeds.push({ url, title });
+              feedTitleByUrl.set(url, title);
+            }
           }
-          feeds.sort((a, b) => a.title.localeCompare(b.title));
-          for (const f of feeds) {
-            const opt = document.createElement('option');
-            opt.value = f.url;
-            opt.textContent = f.title;
-            if (keep.has(f.url)) opt.selected = true;
-            feedSel.appendChild(opt);
-          }
-          feedSel.disabled = feeds.length === 0;
+          folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
         }
-        function getSelectedFeeds() {
-          return [...feedSel.selectedOptions].map(o => o.value).filter(Boolean);
-        }
+        function getSelectedFeeds() { return [...selectedFeedUrls]; }
 
-        populateFeeds(folderSel.value, _prefillFeedUrls);
-        // Changing folder resets the feed selection to that folder's feeds.
-        folderSel.addEventListener('change', () => populateFeeds(folderSel.value, new Set()));
-        draft.appendChild(feedSel);
+        const feedPick = document.createElement('div');
+        feedPick.className = 'hl-feed-pick';
+        const feedChips = document.createElement('div');
+        feedChips.className = 'hl-feed-chips';
+        const feedSearchWrap = document.createElement('div');
+        feedSearchWrap.className = 'hl-token-input-wrap hl-feed-search-wrap';
+        const feedSearch = document.createElement('input');
+        feedSearch.type = 'text';
+        feedSearch.className = 'hl-token-input-field';
+        feedSearch.placeholder = 'Type to add specific feeds…';
+        feedSearch.setAttribute('autocomplete', 'off');
+        const feedDrop = document.createElement('div');
+        feedDrop.className = 'hl-token-input-dropdown';
+        feedDrop.hidden = true;
+        feedSearchWrap.appendChild(feedSearch);
+        feedSearchWrap.appendChild(feedDrop);
+        feedPick.appendChild(feedChips);
+        feedPick.appendChild(feedSearchWrap);
+
+        function renderFeedChips() {
+          feedChips.innerHTML = '';
+          if (!selectedFeedUrls.size) {
+            const none = document.createElement('span');
+            none.className = 'hl-feed-chips-empty';
+            none.textContent = folderSel.value ? 'All feeds in folder' : 'All feeds';
+            feedChips.appendChild(none);
+            return;
+          }
+          for (const url of selectedFeedUrls) {
+            const tag = document.createElement('span');
+            tag.className = 'hl-folder-tag';
+            tag.textContent = feedTitleByUrl.get(url) || url;
+            const x = document.createElement('button');
+            x.type = 'button'; x.className = 'hl-folder-tag-remove'; x.textContent = '×';
+            x.setAttribute('aria-label', 'Remove');
+            x.addEventListener('click', e => { e.stopPropagation(); selectedFeedUrls.delete(url); renderFeedChips(); renderFeedDrop(); });
+            tag.appendChild(x);
+            feedChips.appendChild(tag);
+          }
+        }
+        function renderFeedDrop() {
+          const q = feedSearch.value.trim().toLowerCase();
+          feedDrop.innerHTML = '';
+          if (!folderSel.value) { feedDrop.hidden = true; return; }
+          const avail = folderFeeds.filter(f => !selectedFeedUrls.has(f.url) && (!q || f.title.toLowerCase().includes(q)));
+          if (!avail.length) { feedDrop.hidden = true; return; }
+          for (const f of avail.slice(0, 50)) {
+            const opt = document.createElement('div');
+            opt.className = 'hl-token-input-option';
+            opt.textContent = f.title;
+            opt.addEventListener('mousedown', e => {
+              e.preventDefault();
+              selectedFeedUrls.add(f.url);
+              feedSearch.value = '';
+              renderFeedChips(); renderFeedDrop(); feedSearch.focus();
+            });
+            feedDrop.appendChild(opt);
+          }
+          if (avail.length > 50) {
+            const more = document.createElement('div');
+            more.className = 'hl-token-input-option hl-token-input-more';
+            more.textContent = `…and ${avail.length - 50} more — keep typing to narrow`;
+            feedDrop.appendChild(more);
+          }
+          feedDrop.hidden = false;
+        }
+        feedSearch.addEventListener('focus', renderFeedDrop);
+        feedSearch.addEventListener('input', renderFeedDrop);
+        feedSearch.addEventListener('blur', () => { feedDrop.hidden = true; });
+
+        loadFolderFeeds(folderSel.value);
+        renderFeedChips();
+        // Changing folder clears the (now out-of-scope) feed selection.
+        folderSel.addEventListener('change', () => {
+          selectedFeedUrls.clear();
+          loadFolderFeeds(folderSel.value);
+          renderFeedChips(); renderFeedDrop();
+        });
+        draft.appendChild(feedPick);
 
         // Match method (Deduplicate only)
         const matchMethodSel = document.createElement('select');
@@ -8881,16 +8961,11 @@
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
-          // The feed multi-select is shown for every type, including deduplicate —
-          // dedup can now run across an explicit set of selected feeds (>=2), not
-          // just a whole folder. populateFeeds() preserves the current selection
-          // across the rebuild so a type change keeps the chosen feed(s).
-          populateFeeds(folderSel.value);
+          // The feed picker shows for every type, including deduplicate — dedup can
+          // run across an explicit set of selected feeds (>=2). Selection is decoupled
+          // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
         }
         syncTypeControls();
-        // Re-apply the prefilled feed selection (populateFeeds preserves selection,
-        // but syncTypeControls' first run may have rebuilt before it was set).
-        if (_prefillFeedUrls.size && !feedSel.disabled) populateFeeds(folderSel.value, _prefillFeedUrls);
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
