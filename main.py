@@ -7997,6 +7997,10 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
             "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
             "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
+            # Audio embeds aren't 16:9 — give Bandcamp/SoundCloud their own height in reader view too.
+            "article iframe[src*='bandcamp.com/EmbeddedPlayer']{aspect-ratio:auto;height:470px;}"
+            "article iframe[src*='bandcamp.com/EmbeddedPlayer'][src*='size=small']{height:42px;}"
+            "article iframe[src*='soundcloud.com']{aspect-ratio:auto;height:166px;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
@@ -11020,6 +11024,10 @@ def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
             "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
             "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
             "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
+            # Audio embeds aren't 16:9 — give Bandcamp/SoundCloud their own height in reader view too.
+            "article iframe[src*='bandcamp.com/EmbeddedPlayer']{aspect-ratio:auto;height:470px;}"
+            "article iframe[src*='bandcamp.com/EmbeddedPlayer'][src*='size=small']{height:42px;}"
+            "article iframe[src*='soundcloud.com']{aspect-ratio:auto;height:166px;}"
             "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
