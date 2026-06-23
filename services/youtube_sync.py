@@ -18,6 +18,22 @@ YT_FEED_PREFIX = "https://www.youtube.com/feeds/videos.xml?channel_id="
 _CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 _SUBSCRIPTIONS_URL = "https://www.googleapis.com/youtube/v3/subscriptions"
 
+# Optional quota-spend sink (channels.list / subscriptions.list = 1 unit each call).
+_quota_sink = None
+
+
+def set_quota_sink(fn) -> None:
+    global _quota_sink
+    _quota_sink = fn
+
+
+def _bill(units: int) -> None:
+    if _quota_sink:
+        try:
+            _quota_sink(units)
+        except Exception:
+            pass
+
 
 def resolve_channel_id(api_key: str, identifier: str) -> str | None:
     """Return the channel ID for a handle (@foo), username, or raw channel ID.
@@ -37,6 +53,7 @@ def resolve_channel_id(api_key: str, identifier: str) -> str | None:
         # Try forHandle first (@-prefixed or bare handle)
         handle = identifier if identifier.startswith("@") else f"@{identifier}"
         r = client.get(_CHANNELS_URL, params={**base_params, "forHandle": handle})
+        _bill(1)
         if r.status_code == 200:
             items = r.json().get("items", [])
             if items:
@@ -44,6 +61,7 @@ def resolve_channel_id(api_key: str, identifier: str) -> str | None:
 
         # Fallback: forUsername (legacy usernames without @)
         r = client.get(_CHANNELS_URL, params={**base_params, "forUsername": identifier.lstrip("@")})
+        _bill(1)
         if r.status_code == 200:
             items = r.json().get("items", [])
             if items:
@@ -75,6 +93,7 @@ def fetch_subscriptions(api_key: str, channel_id: str) -> list[dict]:
 
             r = client.get(_SUBSCRIPTIONS_URL, params=params)
             r.raise_for_status()
+            _bill(1)
             data = r.json()
 
             for item in data.get("items", []):

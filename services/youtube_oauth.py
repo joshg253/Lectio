@@ -21,6 +21,24 @@ _SCOPE = "https://www.googleapis.com/auth/youtube"
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _TIMEOUT = 20
 
+# Optional quota-spend sink: the app sets this to record each call's documented unit
+# cost (playlists.list = 1, playlistItems.insert / playlists.insert = 50). Pure
+# parsing/HTTP stays in this module; the meter lives in the app layer.
+_quota_sink = None
+
+
+def set_quota_sink(fn) -> None:
+    global _quota_sink
+    _quota_sink = fn
+
+
+def _bill(units: int) -> None:
+    if _quota_sink:
+        try:
+            _quota_sink(units)
+        except Exception:
+            pass
+
 
 class QuotaExceeded(RuntimeError):
     """Raised when Google reports the daily quota is exhausted."""
@@ -105,6 +123,7 @@ def list_playlists(access_token: str) -> list[dict]:
                 params["pageToken"] = page_token
             resp = client.get(f"{_API_BASE}/playlists", params=params)
             _raise_for_quota(resp, "playlists.list")
+            _bill(1)
             data = resp.json()
             for item in data.get("items", []):
                 out.append({
@@ -129,6 +148,7 @@ def add_video_to_playlist(access_token: str, playlist_id: str, video_id: str) ->
     with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
         resp = client.post(f"{_API_BASE}/playlistItems", params={"part": "snippet"}, json=body)
     _raise_for_quota(resp, "playlistItems.insert")
+    _bill(50)
     return resp.json()
 
 
@@ -138,5 +158,6 @@ def create_playlist(access_token: str, title: str, privacy: str = "private") -> 
     with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
         resp = client.post(f"{_API_BASE}/playlists", params={"part": "snippet,status"}, json=body)
     _raise_for_quota(resp, "playlists.insert")
+    _bill(50)
     item = resp.json()
     return {"id": item.get("id", ""), "title": (item.get("snippet") or {}).get("title", title), "count": 0}

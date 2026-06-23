@@ -21,3 +21,23 @@ os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
 # the multi-user E2E tests spawn subprocesses with LECTIO_SECURITY_MODE=multi,
 # and the in-process multi tests monkeypatch main.MULTI_USER per-test.
 os.environ["LECTIO_SECURITY_MODE"] = "single"
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _disable_yt_quota_sink():
+    """The app wires a global YouTube quota-spend sink (writes the meta DB) at import.
+    Null it during tests so a billed YT API call in a tenancy-less unit test can't
+    write a stray quota row or leave a stale meta connection that pollutes a later
+    test. Tests that exercise billing set their own sink explicitly."""
+    try:
+        import main
+        from services import youtube_oauth, youtube_sync
+        if getattr(main, "youtube_duration_service", None) is not None:
+            main.youtube_duration_service._quota_sink = None
+        youtube_oauth.set_quota_sink(None)
+        youtube_sync.set_quota_sink(None)
+    except Exception:
+        pass
+    yield

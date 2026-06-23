@@ -6041,3 +6041,8 @@ textarea.hl-draft-pattern {
 .settings-section--inline .settings-field { display: flex; flex-direction: column; gap: 0.2rem; flex: 1 1 150px; min-width: 140px; }
 .settings-section--inline .settings-field .settings-label { margin: 0; }
 .settings-section--inline .settings-field .settings-input { width: 100%; }
+
+/* YouTube API quota meter (Integrations → YouTube). */
+.settings-yt-quota { font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid var(--border); color: var(--fg); }
+.settings-yt-quota--low { border-color: var(--accent); color: var(--accent); }
+.settings-yt-quota--exhausted { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }

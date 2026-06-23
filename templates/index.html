@@ -1430,6 +1430,8 @@
             <a id="sett-yt-oauth-connect" class="settings-inline-btn" href="/integrations/youtube/oauth/connect">Connect YouTube account</a>
             <button type="button" id="sett-yt-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
+          <div id="sett-yt-quota" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
+          <p class="settings-hint" style="grid-column:1 / -1">Estimated YouTube API quota used today (durations, playlist adds, sub-sync) against the daily cap — Google gives no live quota read, so this is Lectio's own tally and resets midnight Pacific.</p>
         </div>
         <h4 class="settings-section-title">DeviantArt</h4>
         <div class="settings-section settings-section--inline">
@@ -9257,6 +9259,20 @@
         v('sett-yt-folder', d.yt_folder_name);
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
+        {
+          const el = document.getElementById('sett-yt-quota');
+          const q = d.yt_quota;
+          if (el && q && d.yt_oauth_connected) {
+            const pct = q.cap ? Math.min(100, Math.round((q.spent / q.cap) * 100)) : 0;
+            const word = q.state === 'exhausted' ? ' — quota used up; resets midnight Pacific'
+              : (q.state === 'low' ? ' — running low' : '');
+            el.className = 'settings-yt-quota settings-yt-quota--' + q.state;
+            el.textContent = `Quota today: ${q.spent.toLocaleString()} / ${q.cap.toLocaleString()} (${q.remaining.toLocaleString()} left, ${pct}%)${word}`;
+            el.hidden = false;
+          } else if (el) {
+            el.hidden = true;
+          }
+        }
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
           const ytConfigured = !!d.yt_oauth_configured;
