@@ -251,6 +251,9 @@ SETTING_YT_FOLDER_NAME = "yt_folder_name"
 # Watch Later — work) instead of the privacy-enhanced youtube-nocookie.com. Off
 # (privacy) by default; the standard host sets YouTube cookies. "1"/"0".
 SETTING_YT_EMBED_ACCOUNT_FEATURES = "yt_embed_account_features"
+# Global per-user toggle: auto-mark YouTube Shorts read across ALL YouTube feeds at
+# refresh, regardless of the per-feed hide_shorts pref. Off ("0") by default.
+SETTING_YT_HIDE_SHORTS_GLOBAL = "yt_hide_shorts_global"
 SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
@@ -431,6 +434,12 @@ def youtube_embed_account_features_enabled() -> bool:
     (Share / Watch Later) instead of the privacy-enhanced -nocookie host.
     Privacy-enhanced is the default."""
     return get_runtime_setting(SETTING_YT_EMBED_ACCOUNT_FEATURES, "0") == "1"
+
+
+def youtube_hide_shorts_global() -> bool:
+    """Per-user: auto-mark Shorts read on ALL YouTube feeds at refresh (overrides the
+    per-feed pref). Off by default."""
+    return get_runtime_setting(SETTING_YT_HIDE_SHORTS_GLOBAL, "0") == "1"
 
 
 def youtube_embed_host() -> str:
@@ -4621,6 +4630,12 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 ).fetchall()
             }
         shorts_targets = refreshed_feed_urls & shorts_urls
+        # Global toggle: hide Shorts on every refreshed YouTube feed, regardless of
+        # the per-feed pref.
+        if youtube_hide_shorts_global():
+            shorts_targets = shorts_targets | {
+                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
+            }
         if shorts_targets:
             now_str = datetime.now().isoformat()
             with get_reader() as reader:
@@ -13587,6 +13602,7 @@ def get_all_settings():
         "yt_channel_id": get_yt_channel_id(),
         "yt_folder_name": get_yt_folder_name(),
         "yt_embed_account_features": youtube_embed_account_features_enabled(),
+        "yt_hide_shorts_global": youtube_hide_shorts_global(),
         "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
         "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
         "resend_api_key_set": bool(resend_key),
@@ -13630,7 +13646,7 @@ async def save_all_settings(request: Request):
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
-        SETTING_YT_EMBED_ACCOUNT_FEATURES,
+        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,

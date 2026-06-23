@@ -50,7 +50,8 @@ The short version:
   YouTube embeds default to the privacy-enhanced host; a per-user Integrations
   setting switches them to the standard host so Share / Watch Later work, and
   connecting a YouTube account (per-user OAuth) adds an **Add to playlist** control
-  beneath each video embed (lists your playlists, creates new ones).
+  beneath each video embed (lists your playlists, creates new ones). A global
+  Integrations toggle auto-hides **Shorts** across all YouTube feeds.
 - **Lead images** — per-feed extraction strategies with side-by-side comparison,
   smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
   and full-resolution webcomic panels (ComicControl thumb→full promotion). List
