@@ -334,6 +334,18 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
   rule-builder until connected) so it can't be created without a token. Runs in the
   per-user background context like the other after-refresh rules.
+- **Rule scope (incl. multi-feed)** — automation rules scope to `global` (all feeds),
+  `folder`, `feed` (one URL), or `feeds` (an explicit set; `scope_id` is the feed URLs
+  joined by newline — newline, not comma, since URLs can contain commas). Scope
+  resolution is centralized so every runner agrees: `resolve_rule_feed_urls(conn,
+  scope, scope_id)` returns the feed set (or `None` for global) for the bulk/dry-run
+  paths, and `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the
+  per-feed test the after-refresh runners use against each freshly-refreshed feed
+  (folder scopes pass a prefetched feed set for speed; `feeds`/`feed`/`global` don't
+  need it). Deduplicate is the one type restricted to `global`/`folder` (it compares
+  *across* feeds, so a single feed is meaningless). The rule builder derives the scope
+  from a multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
+  `feed`, 2+ = `feeds`.
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
   and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping

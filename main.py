@@ -2899,7 +2899,7 @@ def upsert_feed_thumb_strategy(conn: sqlite3.Connection, feed_url: str, strategy
 
 
 _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
-_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
+_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
 _HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist"}
@@ -3240,6 +3240,47 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
 def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+# A "feeds" rule scope targets an explicit set of feeds (not a whole folder). Its
+# scope_id is the feed URLs joined by newline (URLs may contain commas, so newline
+# is the safe separator). These helpers centralize parse + scope→feed-set + the
+# per-feed "is this feed in scope" check used by the after-refresh runners.
+_FEEDS_SCOPE_SEP = "\n"
+
+
+def parse_feeds_scope_id(scope_id: str) -> list[str]:
+    return [u.strip() for u in (scope_id or "").split(_FEEDS_SCOPE_SEP) if u.strip()]
+
+
+def resolve_rule_feed_urls(conn: sqlite3.Connection, scope: str, scope_id: str) -> set[str] | None:
+    """Return the set of feed URLs a rule applies to, or None for global (all feeds)."""
+    if scope == "global":
+        return None
+    if scope == "folder":
+        try:
+            return get_folder_feed_urls(conn, int(scope_id))
+        except (ValueError, TypeError):
+            return set()
+    if scope == "feed":
+        return {scope_id} if scope_id else set()
+    if scope == "feeds":
+        return set(parse_feeds_scope_id(scope_id))
+    return set()
+
+
+def feed_in_rule_scope(scope: str, scope_id: str, feed_url: str, folder_feed_urls: set[str] | None) -> bool:
+    """Per-feed scope test for the after-refresh runners. ``folder_feed_urls`` is the
+    prefetched feed set for a folder-scoped rule (ignored for other scopes)."""
+    if scope == "global":
+        return True
+    if scope == "folder":
+        return feed_url in (folder_feed_urls or set())
+    if scope == "feed":
+        return scope_id == feed_url
+    if scope == "feeds":
+        return feed_url in parse_feeds_scope_id(scope_id)
+    return False
 
 
 def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
@@ -3942,18 +3983,12 @@ def _dry_run_pattern(
         except _re.error as e:
             return {"error": f"Invalid regex: {e}"}
 
-    if scope == "global":
-        feed_urls: set[str] | None = None
-    elif scope == "folder":
+    if scope == "folder":
         try:
-            fid = int(scope_id)
+            int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    elif scope == "feed":
-        feed_urls = {scope_id} if scope_id else None
-    else:
-        feed_urls = None
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     matches: list[dict] = []
     total_scanned = 0
@@ -4211,18 +4246,12 @@ def _run_now_pattern(
     except _re.error as e:
         return {"error": f"Invalid regex: {e}"}
 
-    if scope == "global":
-        feed_urls: set[str] | None = None
-    elif scope == "folder":
+    if scope == "folder":
         try:
-            fid = int(scope_id)
+            int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    elif scope == "feed":
-        feed_urls = {scope_id} if scope_id else None
-    else:
-        feed_urls = None
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     to_mark: list[tuple[str, str]] = []
     matched_entries: list[dict] = []
@@ -4622,17 +4651,8 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                 if rule_type == "mark_as_read":
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
 
                         if not in_scope:
                             continue
@@ -4801,17 +4821,8 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                     for feed_url in refreshed_feed_urls:
                         # Scope check
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -4937,17 +4948,8 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                     feed_title_cache: dict[str, str] = {}
 
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -5057,17 +5059,8 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -5834,7 +5827,7 @@ _AUTOMATION_TYPE_LABELS = {
     "email_article": "Email article",
     "webhook": "Webhook",
 }
-_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed"}
+_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
 
 def _automation_rule_detail(rule: dict) -> str:
@@ -5876,6 +5869,8 @@ def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict
             applies = True
         elif scope == "feed":
             applies = scope_id == feed_url
+        elif scope == "feeds":
+            applies = feed_url in parse_feeds_scope_id(scope_id)
         elif scope == "folder":
             applies = scope_id.isdigit() and int(scope_id) in folder_id_set
         else:
@@ -12964,8 +12959,8 @@ def add_highlight_route(
     if type == "deduplicate":
         if keyword not in _DEDUP_VALID_MATCH_METHODS:
             return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
-        if scope == "feed":
-            return JSONResponse({"error": "deduplicate rules cannot be scoped to a single feed"}, status_code=400)
+        if scope in ("feed", "feeds"):
+            return JSONResponse({"error": "deduplicate rules cannot be scoped to specific feeds"}, status_code=400)
     elif type == "youtube_playlist":
         # Keyword is optional for this rule (empty = add every new video in scope).
         if not yt_playlist_id.strip():
