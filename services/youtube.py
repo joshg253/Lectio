@@ -28,6 +28,7 @@ class YouTubeDurationService:
         user_agent: str,
         cache: dict[str, tuple[int | None, str | None]] | None = None,
         api_key_provider: Callable[[], str] | None = None,
+        quota_sink: Callable[[int], None] | None = None,
     ) -> None:
         # The duration cache (video_id -> length) is a GLOBAL store shared across
         # users, since a video's length is a fact, not per-user data.
@@ -38,6 +39,8 @@ class YouTubeDurationService:
         # Resolves the API key per call — in multi mode this returns the current
         # user's key (with env fallback); None falls back to the env var.
         self._api_key_provider = api_key_provider
+        # Records each videos.list call's quota cost (1 unit/call); set by the app.
+        self._quota_sink = quota_sink
 
     @property
     def cache(self) -> dict[str, tuple[int | None, str | None]]:
@@ -131,6 +134,11 @@ class YouTubeDurationService:
                     timeout=10.0,
                 )
                 response.raise_for_status()
+                if self._quota_sink:
+                    try:
+                        self._quota_sink(1)  # videos.list = 1 unit per call
+                    except Exception:
+                        pass
                 for item in (response.json().get("items") or []):
                     vid = item.get("id")
                     duration_iso = (item.get("contentDetails") or {}).get("duration")

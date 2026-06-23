@@ -280,6 +280,17 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
+  so Lectio estimates spend itself: each billed call reports its documented unit cost
+  through a sink (`playlists.list`/`videos.list`/sub-sync = 1, `playlistItems.insert`/
+  `playlists.insert` = 50). `services/youtube_oauth.py` and `services/youtube_sync.py`
+  expose `set_quota_sink`; `YouTubeDurationService` takes a `quota_sink`; all three are
+  wired to `record_yt_quota_spend`, which tallies units into the per-user `yt_quota_spend`
+  table keyed by the **Pacific calendar date** (`_pacific_today()`, Google's reset). The
+  Integrations panel shows spent/cap/remaining via `get_yt_quota_status()` (cap =
+  `yt_quota_cap` setting, default 10k) with low (<500 left) and exhausted states; an
+  actual `quotaExceeded` response snaps the tally to the cap (`mark_yt_quota_exhausted`).
+  Tests null the sink (conftest autouse) so a billed call can't pollute another test.
 - **Hide Shorts (global, per-user)** — Shorts are auto-marked read at refresh by the
   hide-shorts pass in `_run_automation_after_refresh`. Per-feed it reads the
   `feed_display_prefs.hide_shorts` pref; the `yt_hide_shorts_global` setting
