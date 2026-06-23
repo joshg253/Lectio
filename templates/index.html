@@ -7871,6 +7871,7 @@
             runBtn.type = 'button';
             runBtn.className = 'hl-rule-run';
             runBtn.setAttribute('aria-label', 'Run rule now on unread entries');
+            runBtn.title = 'Run now — apply this rule to existing unread entries';
             runBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">bolt</span>';
             runBtn.addEventListener('click', async () => {
               const scopeLabel = hlScopeLabel(rule.scope, rule.scope_id);
