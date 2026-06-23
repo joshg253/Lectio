@@ -5656,6 +5656,12 @@ textarea.hl-draft-pattern {
   flex-shrink: 0;
   white-space: nowrap;
 }
+.hl-rule-dryrun-item-date {
+  font-size: 0.72rem;
+  color: var(--muted, #888);
+  margin-left: auto;       /* sit at the row end */
+  opacity: 0.85;
+}
 .hl-rule-dryrun-keep-label { color: #2e7d32; }
 .hl-rule-dryrun-markread-label { color: var(--danger, #c0392b); }
 .hl-rule-dryrun-more {
