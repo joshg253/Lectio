@@ -342,9 +342,10 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   paths, and `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the
   per-feed test the after-refresh runners use against each freshly-refreshed feed
   (folder scopes pass a prefetched feed set for speed; `feeds`/`feed`/`global` don't
-  need it). Deduplicate is the one type restricted to `global`/`folder` (it compares
-  *across* feeds, so a single feed is meaningless). The rule builder derives the scope
-  from a multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
+  need it). Deduplicate accepts `global`/`folder`/`feeds` (the latter dedupes across a
+  selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a single `feed`
+  — one feed can't cross-dedupe. The rule builder derives the scope from a
+  multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
   `feed`, 2+ = `feeds`.
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses

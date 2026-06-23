@@ -8850,11 +8850,11 @@
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
-          if (isDedup) { feedSel.disabled = true; feedSel.selectedIndex = -1; }
-          // populateFeeds() preserves the current selection across the rebuild, so a
-          // type change (e.g. right-click Feed → Automation → switch to YT) keeps the
-          // chosen feed(s) selected.
-          else { populateFeeds(folderSel.value); }
+          // The feed multi-select is shown for every type, including deduplicate —
+          // dedup can now run across an explicit set of selected feeds (>=2), not
+          // just a whole folder. populateFeeds() preserves the current selection
+          // across the rebuild so a type change keeps the chosen feed(s).
+          populateFeeds(folderSel.value);
         }
         syncTypeControls();
         // Re-apply the prefilled feed selection (populateFeeds preserves selection,
@@ -8875,8 +8875,14 @@
           if (ruleType === 'deduplicate') {
             const matchMethod = matchMethodSel.value || 'slug';
             const windowHours = (parseInt(windowHoursInput.value || '7', 10) || 7) * 24;
-            const scope = folderId ? 'folder' : 'global';
-            const scopeId = folderId || '';
+            const dedupFeeds = getSelectedFeeds();
+            // 2+ selected feeds → dedupe across just those; else folder/global.
+            // A single selected feed can't cross-dedupe — guide the user.
+            if (dedupFeeds.length === 1) { window.alert('Select at least two feeds to deduplicate between them (or none for the whole folder).'); return; }
+            let scope, scopeId;
+            if (dedupFeeds.length >= 2) { scope = 'feeds'; scopeId = dedupFeeds.join('\n'); }
+            else if (folderId)         { scope = 'folder'; scopeId = folderId; }
+            else                       { scope = 'global'; scopeId = ''; }
             const excludeIds = getExcludeIds();
             await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
