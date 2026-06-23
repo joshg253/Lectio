@@ -258,6 +258,11 @@ SETTING_YT_HIDE_SHORTS_GLOBAL = "yt_hide_shorts_global"
 # a setting in case a higher quota is granted.
 SETTING_YT_QUOTA_CAP = "yt_quota_cap"
 YT_QUOTA_DEFAULT_CAP = 10000
+# "On star, also send to…" — per-user destinations fired when an article is starred.
+SETTING_STAR_SEND_INSTAPAPER = "star_send_instapaper"   # "1"/"0"
+SETTING_STAR_SEND_YT_PLAYLIST = "star_send_yt_playlist"  # playlist id ("" = off)
+SETTING_STAR_SEND_YT_PLAYLIST_TITLE = "star_send_yt_playlist_title"
+SETTING_STAR_SEND_EMAIL = "star_send_email"             # address ("" = off)
 SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
@@ -13790,6 +13795,10 @@ def get_all_settings():
         "yt_hide_shorts_global": youtube_hide_shorts_global(),
         "yt_quota": get_yt_quota_status(),
         "yt_quota_cap": youtube_quota_cap(),
+        "star_send_instapaper": get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1",
+        "star_send_yt_playlist": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "",
+        "star_send_yt_playlist_title": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST_TITLE) or "",
+        "star_send_email": get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "",
         "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
         "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
         "resend_api_key_set": bool(resend_key),
@@ -13834,6 +13843,8 @@ async def save_all_settings(request: Request):
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
+        SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
@@ -14787,6 +14798,62 @@ def mark_entry_read(
     )
 
 
+def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
+    """Fire the configured "on star" destinations for a freshly-starred entry.
+    One-way (never on unstar), best-effort; runs in a background thread."""
+    try:
+        send_ip = get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1"
+        playlist_id = (get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "").strip()
+        email_to = (get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "").strip()
+        if not (send_ip or playlist_id or email_to):
+            return
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+            feed_title = ""
+            if entry:
+                try:
+                    feed_title = str(getattr(reader.get_feed(feed_url), "title", None) or "")
+                except Exception:
+                    feed_title = ""
+        if not entry:
+            return
+        link = str(getattr(entry, "link", "") or "")
+        title = str(getattr(entry, "title", "") or "")
+
+        if send_ip and is_instapaper_configured() and link:
+            u = get_runtime_setting(SETTING_INSTAPAPER_USERNAME).strip()
+            p = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD).strip()
+            if u and p:
+                ok, err = _instapaper_save_url(u, p, link, title)
+                if not ok:
+                    LOGGER.warning("[on-star] instapaper save failed: %s", err)
+
+        if playlist_id:
+            token = get_youtube_oauth_token()
+            if token:
+                body = "".join((c.value or "") for c in (getattr(entry, "content", None) or []))
+                body += str(getattr(entry, "summary", "") or "")
+                for vid in youtube_embeds.video_ids_in_text(link, body):
+                    try:
+                        youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
+                    except youtube_oauth_service.QuotaExceeded:
+                        mark_yt_quota_exhausted()
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("[on-star] playlist add failed for %s: %s", vid, exc)
+
+        if email_to and is_email_configured() and link:
+            try:
+                ok, err = send_article_email(get_resend_api_key(), get_resend_from(), email_to,
+                                             title, feed_title, link, _get_entry_excerpt(entry))
+                if not ok:
+                    LOGGER.warning("[on-star] email failed: %s", err)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("[on-star] email failed: %s", exc)
+    except Exception:
+        LOGGER.exception("[on-star] error for %s/%s", feed_url, entry_id)
+
+
 @app.post("/entries/saved")
 def toggle_entry_saved(
     request: Request,
@@ -14804,18 +14871,29 @@ def toggle_entry_saved(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
+    newly_starred = False
     with get_meta_connection() as conn:
         if saved:
-            conn.execute(
+            cur = conn.execute(
                 "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
                 (feed_url, entry_id),
             )
+            newly_starred = cur.rowcount > 0
         else:
             conn.execute(
                 "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
                 (feed_url, entry_id),
             )
         conn.commit()
+
+    # "On star, also send to…" — fire configured destinations once, only on a
+    # genuine new star (rowcount), off-request so the star stays snappy.
+    if newly_starred:
+        _uid = tenancy.current_user_id()
+        threading.Thread(
+            target=lambda: _run_in_user_context(_uid, _run_on_star_destinations, feed_url, entry_id),
+            daemon=True,
+        ).start()
 
     # Mirror the save state into the archive: queue a capture when starred,
     # mark for later removal when unstarred. The archive worker handles the

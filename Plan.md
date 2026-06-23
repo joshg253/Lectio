@@ -10,7 +10,7 @@ Build order (promoted from Later — top first):
 2. ~~**Auto add to Instapaper** rule~~ — ✅ SHIPPED (`instapaper` rule type; `_run_instapaper_rules_after_refresh`; gated on configured creds).
 3. ~~**YouTube quota meter**~~ — ✅ SHIPPED (per-user spend vs cap, Pacific reset, low/exhausted states).
 4. **Robust YT-folder identity + Integrations subtabs** — ✅ SHIPPED. Sync menu detects the YT folder by content (rename-safe); Integrations split into YouTube/DeviantArt/Instapaper subtabs (Settings→Feeds style) so the crowded YT section has its own tab. (Server-side connection gating of the YT subtab still possible later.)
-5. **On-star → send to destination(s)** — reuses the destination senders from #2.
+5. ~~**On-star → send to destination(s)**~~ — ✅ SHIPPED (Integrations → On Star: Instapaper / YouTube playlist / email; fires once on a genuine new star, async, one-way).
 6. **Bare media links → embedded players** — self-contained content win.
 
 Detailed specs follow.
@@ -125,7 +125,13 @@ Detailed specs follow.
   Size: small per destination once the YouTube rule establishes the engine pattern
   (Instapaper especially — reuses the existing save call).
 
-- **"On star, send to destination(s)" — star as a trigger.** Instead of (or
+- **"On star, send to destination(s)"** — ✅ **SHIPPED.** Integrations → On Star
+  subtab: toggle Instapaper, pick a YouTube playlist, and/or set an email address.
+  `/entries/saved` fires `_run_on_star_destinations` in a background thread on a
+  genuine new star (INSERT rowcount), one-way, reusing the existing senders.
+  (Original spec below.)
+
+  Instead of (or
   alongside) the keyword-matched after-refresh rules above, a much simpler trigger:
   when the user **stars/saves** a post, automatically push it to one or more chosen
   destinations. Star is a deliberate, single-item, user-initiated action — so this
