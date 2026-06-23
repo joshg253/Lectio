@@ -8968,7 +8968,8 @@
           ytRow.style.display = isYtPlaylist ? '' : 'none';
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
-          patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
+          patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)'
+            : (t === 'instapaper' ? 'optional keyword filter (blank = save all)' : 'keyword or pattern');
           // The feed picker shows for every type, including deduplicate — dedup can
           // run across an explicit set of selected feeds (>=2). Selection is decoupled
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
@@ -9006,8 +9007,8 @@
           }
 
           const pattern = patInput.value.trim();
-          // youtube_playlist allows an empty keyword (match all videos in scope).
-          if (!pattern && ruleType !== 'youtube_playlist') { patInput.focus(); return; }
+          // youtube_playlist and instapaper allow an empty keyword (all in scope).
+          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
