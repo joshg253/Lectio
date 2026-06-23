@@ -7824,6 +7824,7 @@
           testBtn.type = 'button';
           testBtn.className = 'hl-rule-test';
           testBtn.setAttribute('aria-label', 'Test rule (dry run)');
+          testBtn.title = 'Test (dry run) — preview matching articles without acting';
           testBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">play_circle</span>';
           testBtn.addEventListener('click', async () => {
             const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
@@ -7870,6 +7871,7 @@
             runBtn.type = 'button';
             runBtn.className = 'hl-rule-run';
             runBtn.setAttribute('aria-label', 'Run rule now on unread entries');
+            runBtn.title = 'Run now — apply this rule to existing unread entries';
             runBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">bolt</span>';
             runBtn.addEventListener('click', async () => {
               const scopeLabel = hlScopeLabel(rule.scope, rule.scope_id);
@@ -7913,6 +7915,7 @@
             histBtn.type = 'button';
             histBtn.className = 'hl-rule-hist';
             histBtn.setAttribute('aria-label', 'Show run history for this rule');
+            histBtn.title = 'Run history — what this rule has done';
             histBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">history</span>';
             histBtn.addEventListener('click', async () => {
               const ruleKey = rule.scope + '|' + rule.scope_id + '|' + rule.keyword;
@@ -8026,6 +8029,7 @@
           edit.type = 'button';
           edit.className = 'hl-rule-edit';
           edit.setAttribute('aria-label', `Edit rule for "${rule.keyword}"`);
+          edit.title = 'Edit rule';
           edit.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">edit</span>';
           edit.addEventListener('click', () => {
             const origScope = rule.scope, origScopeId = rule.scope_id, origKeyword = rule.keyword;
@@ -8075,6 +8079,7 @@
           del.type = 'button';
           del.className = 'hl-rule-delete';
           del.setAttribute('aria-label', `Delete rule for "${rule.keyword}"`);
+          del.title = 'Delete rule';
           del.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">delete</span>';
           del.addEventListener('click', async () => {
             const body = new URLSearchParams({ scope: rule.scope, scope_id: rule.scope_id, keyword: rule.keyword });
@@ -8272,6 +8277,21 @@
             feedEl.className = 'hl-rule-dryrun-item-feed';
             feedEl.textContent = (m.read ? '✓ ' : '') + (m.feed_title || m.feed_url);
             item.appendChild(titleEl); item.appendChild(feedEl);
+            if (m.published) {
+              const dateEl = document.createElement('span');
+              dateEl.className = 'hl-rule-dryrun-item-date';
+              // published is an ISO-8601 string from the server. Show a short date in
+              // the row, full date+time on hover; fall back to the raw value if it
+              // doesn't parse (no "Invalid Date").
+              const parsed = new Date(m.published);
+              if (isNaN(parsed.getTime())) {
+                dateEl.textContent = m.published;
+              } else {
+                dateEl.textContent = parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                dateEl.title = parsed.toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
+              }
+              item.appendChild(dateEl);
+            }
             panel.appendChild(item);
           }
         }
