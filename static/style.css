@@ -6013,3 +6013,12 @@ textarea.hl-draft-pattern {
   z-index: 5;
 }
 .hl-add-rule-btn[hidden] { display: none; }
+
+/* Pin the Automation tab's Rules/History subtab bar to the top of the scrolling
+   settings panel (mirrors the pinned Save/Add footer at the bottom). */
+.settings-tab-panel .hl-tab-bar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--elevated-bg);
+}

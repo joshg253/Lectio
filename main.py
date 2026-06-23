@@ -11462,6 +11462,9 @@ def home(
         }
         for r in inactive_feed_rows
     ]
+    # Sort alphabetically by title (the SQL orders by disabled_at, which reads as
+    # random in the list); title isn't known until feed_title_map is applied above.
+    inactive_feeds.sort(key=lambda x: x["feed_title"].casefold())
     problematic_unseen_count = 0
     for problematic_feed in problematic_feeds:
         pf_url = cast(str, problematic_feed["feed_url"])
