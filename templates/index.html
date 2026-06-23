@@ -8299,12 +8299,16 @@
             if (m.published) {
               const dateEl = document.createElement('span');
               dateEl.className = 'hl-rule-dryrun-item-date';
-              // published is an ISO-8601 string from the server; fall back to the raw
-              // value if it somehow doesn't parse (no "Invalid Date").
+              // published is an ISO-8601 string from the server. Show a short date in
+              // the row, full date+time on hover; fall back to the raw value if it
+              // doesn't parse (no "Invalid Date").
               const parsed = new Date(m.published);
-              dateEl.textContent = isNaN(parsed.getTime())
-                ? m.published
-                : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+              if (isNaN(parsed.getTime())) {
+                dateEl.textContent = m.published;
+              } else {
+                dateEl.textContent = parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                dateEl.title = parsed.toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
+              }
               item.appendChild(dateEl);
             }
             panel.appendChild(item);
