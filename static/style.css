@@ -4053,11 +4053,13 @@ body[data-keyboard-open="1"] .action-modal-panel {
   flex-direction: column;
   gap: 0.15rem;
   padding: 0.35rem 0.5rem;
-  border: 1px solid var(--border-color, #ccc);
-  border-radius: 6px;
+  /* No boxed outline (the old var(--border-color) fell back to white); a subtle
+     bottom divider keeps rows separable without the heavy box. */
+  border-bottom: 1px solid var(--line);
 }
+.feed-prop-history-item:last-child { border-bottom: none; }
 .feed-prop-history-item--error {
-  border-color: var(--error-color, #d33);
+  border-left: 3px solid var(--danger, #d33);
 }
 .feed-prop-history-head {
   display: flex;

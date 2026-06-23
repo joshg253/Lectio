@@ -1399,7 +1399,12 @@
 
       <!-- Integrations tab -->
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
-        <h4 class="settings-section-title">YouTube</h4>
+        <div class="feeds-tab-bar" role="tablist">
+          <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-int-view="youtube" role="tab" aria-selected="true">YouTube</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
           <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
           <div class="settings-field">
@@ -1433,7 +1438,8 @@
           <div id="sett-yt-quota" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
           <p class="settings-hint" style="grid-column:1 / -1">Estimated YouTube API quota used today (durations, playlist adds, sub-sync) against the daily cap — Google gives no live quota read, so this is Lectio's own tally and resets midnight Pacific.</p>
         </div>
-        <h4 class="settings-section-title">DeviantArt</h4>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="deviantart" hidden>
         <div class="settings-section settings-section--inline">
           <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
           <div class="settings-field">
@@ -1456,7 +1462,8 @@
             <span id="sett-da-action-status" class="settings-inline-status"></span>
           </div>
         </div>
-        <h4 class="settings-section-title">Instapaper</h4>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="instapaper" hidden>
         <div class="settings-section settings-section--inline">
           <p class="settings-hint">Lectio saves articles via the <a href="https://www.instapaper.com/api/simple" target="_blank" rel="noopener">Instapaper Simple API</a> using your account credentials. No separate API key is needed.</p>
           <div class="settings-field">
@@ -1467,6 +1474,7 @@
             <label class="settings-label" for="sett-ip-pass">Password</label>
             <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
           </div>
+        </div>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
@@ -5756,7 +5764,13 @@
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
         setMenuItemVisible(disableFeedButton, false);
-        const isYouTubeFolder = contextFolderName.startsWith('YouTube');
+        // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
+        // so renaming the folder doesn't break "Sync Subscriptions"; fall back to the
+        // conventional name for an as-yet-empty folder.
+        const _ytFid = folderLink.getAttribute('data-folder-id');
+        const _hasYtFeed = !!(_ytFid && document.querySelector(
+          `.feed-link[data-folder-id="${CSS.escape(_ytFid)}"][data-feed-url*="youtube.com/feeds/videos.xml"]`));
+        const isYouTubeFolder = _hasYtFeed || contextFolderName.startsWith('YouTube');
         setMenuItemVisible(youtubeSyncButton, isYouTubeFolder);
         if (isYouTubeFolder && youtubeSyncButton) {
           youtubeSyncButton.title = youtubeSyncLastAt
@@ -9910,6 +9924,22 @@
           panel.hidden = panel.getAttribute('data-feeds-panel') !== view;
         });
         if (view === 'failing') void markProblematicFeedsViewed();
+      });
+    });
+
+    // Integrations subtabs (YouTube / DeviantArt / Instapaper) — same toggle pattern.
+    const intTab = document.getElementById('settings-tab-integrations');
+    intTab?.querySelectorAll('[data-int-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-int-view');
+        intTab.querySelectorAll('[data-int-view]').forEach(b => {
+          const active = b.getAttribute('data-int-view') === view;
+          b.classList.toggle('feeds-tab-btn--active', active);
+          b.setAttribute('aria-selected', String(active));
+        });
+        intTab.querySelectorAll('[data-int-panel]').forEach(panel => {
+          panel.hidden = panel.getAttribute('data-int-panel') !== view;
+        });
       });
     });
 
