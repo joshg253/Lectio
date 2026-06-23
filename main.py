@@ -5093,7 +5093,8 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             added = getattr(entry, "added", None)
                             if not added or added < cutoff:
                                 continue
-                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                            # Empty keyword = save every new entry in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
                                 continue
                             link = str(entry.link or "")
                             if not link:
@@ -13130,8 +13131,7 @@ def add_highlight_route(
         if not youtube_oauth_connected():
             return JSONResponse({"error": "connect a YouTube account first"}, status_code=400)
     elif type == "instapaper":
-        if not keyword:
-            return JSONResponse({"error": "keyword is required"}, status_code=400)
+        # Keyword is optional (blank = save every new entry in scope).
         if not is_instapaper_configured():
             return JSONResponse({"error": "configure Instapaper first"}, status_code=400)
     else:
@@ -13252,8 +13252,9 @@ def rules_dry_run_route(
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
             _is_yt = type == "youtube_playlist"
+            # youtube_playlist and instapaper treat a blank keyword as "all in scope".
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=_is_yt,
+                                      match_all_if_empty=(_is_yt or type == "instapaper"),
                                       exclude_shorts=(_is_yt and not yt_include_shorts),
                                       min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
                                       max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
