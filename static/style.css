@@ -6022,3 +6022,11 @@ textarea.hl-draft-pattern {
   z-index: 6;
   background: var(--elevated-bg);
 }
+
+/* Rule-builder feed picker: searchable chips multi-select (scales to many feeds). */
+.hl-feed-pick { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 220px; min-width: 200px; }
+.hl-feed-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.hl-feed-chips-empty { color: var(--muted, #888); font-size: 0.85rem; font-style: italic; }
+.hl-feed-search-wrap { min-height: auto; }
+.hl-token-input-more { color: var(--muted, #888); font-style: italic; cursor: default; }
+.hl-token-input-more:hover { background: none; }
