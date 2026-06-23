@@ -188,6 +188,19 @@ this file only tracks what's still open.
     mode; needs a migration of the existing per-user rows.
   - **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, thumb
     generation. Not needed for trusted users; hooks left in the seam.
+  - **Write-abuse protection (read-state spam)** — an untrusted user flip-flopping
+    read/unread (or bulk mark) hammers the shared SQLite/process: every toggle writes
+    the reader DB + `entry_read_state` and bumps `_unread_counts_generation`, which
+    invalidates the unread-counts cache and forces a recompute. Defenses, cheapest →
+    strongest: (1) **coalesce/debounce** rapid toggles on the same entry (the toggle
+    is already async) so A→B→A→B collapses to last-write-wins; (2) **throttle the
+    unread-count recompute** (min interval per user) so spam can't trigger back-to-back
+    full scans; (3) the actual blocker — a **per-user token-bucket rate limit** on the
+    state-changing endpoints (mark-read/unread, mark-range, saved/star), returning
+    **429 + a short cooldown** when exceeded. **Tune thresholds so legitimate heavy use
+    never trips it** — fast keyboard triage marking dozens of items is normal; only
+    sustained pathological flip-flopping should hit the limit. Single-user/trusted
+    mode is exempt entirely.
   - **Authenticated/private feeds** — none supported today, so all feed/image content
     is safe to global-cache. If added, exclude those feeds from the global caches.
 
