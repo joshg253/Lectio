@@ -1403,6 +1403,7 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-int-view="youtube" role="tab" aria-selected="true">YouTube</button>
           <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
@@ -1474,6 +1475,24 @@
             <label class="settings-label" for="sett-ip-pass">Password</label>
             <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
           </div>
+        </div>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="onstar" hidden>
+        <div class="settings-section">
+          <p class="settings-hint" style="grid-column:1 / -1">When you ★ star an article, also send it to these destinations. One-way — un-starring doesn't remove it. Each is available once its integration is configured/connected.</p>
+          <label class="settings-toggle-row" id="sett-star-ip-row" style="display:flex;align-items:center;gap:0.5rem" hidden>
+            <input type="checkbox" id="sett-star-ip" />
+            <span class="settings-label" style="margin:0">Save to Instapaper</span>
+          </label>
+          <div class="settings-field" id="sett-star-yt-row" style="grid-column:1 / -1" hidden>
+            <label class="settings-label" for="sett-star-yt-playlist">Add to YouTube playlist</label>
+            <select id="sett-star-yt-playlist" class="settings-input"><option value="">— off —</option></select>
+          </div>
+          <div class="settings-field" id="sett-star-email-row" style="grid-column:1 / -1" hidden>
+            <label class="settings-label" for="sett-star-email">Email to (blank = off)</label>
+            <input type="email" id="sett-star-email" class="settings-input" placeholder="you@example.com" maxlength="200" autocomplete="off" />
+          </div>
+          <p class="settings-hint" id="sett-star-none" style="grid-column:1 / -1" hidden>Configure Instapaper, connect YouTube, or set up Email (above / in Settings) to enable on-star destinations.</p>
         </div>
         </div>
         <div class="settings-actions">
@@ -9307,6 +9326,42 @@
             el.hidden = true;
           }
         }
+        // "On Star" destinations: show each row only when its integration is ready.
+        {
+          const ipRow = document.getElementById('sett-star-ip-row');
+          const ytRow = document.getElementById('sett-star-yt-row');
+          const emRow = document.getElementById('sett-star-email-row');
+          const none = document.getElementById('sett-star-none');
+          const ipOk = !!window.INSTAPAPER_CONFIGURED, ytOk = !!d.yt_oauth_connected, emOk = !!window.EMAIL_CONFIGURED;
+          if (ipRow) { ipRow.hidden = !ipOk; const c = document.getElementById('sett-star-ip'); if (c) c.checked = !!d.star_send_instapaper; }
+          if (emRow) { emRow.hidden = !emOk; const i = document.getElementById('sett-star-email'); if (i) i.value = d.star_send_email || ''; }
+          if (ytRow) {
+            ytRow.hidden = !ytOk;
+            const sel = document.getElementById('sett-star-yt-playlist');
+            if (sel && ytOk) {
+              (async () => {
+                try {
+                  if (!window._ytPlaylistsForRules) {
+                    const r = await fetch('/api/youtube/playlists', { credentials: 'same-origin' });
+                    window._ytPlaylistsForRules = (await r.json().catch(() => ({}))).playlists || [];
+                  }
+                  sel.innerHTML = '<option value="">— off —</option>';
+                  for (const pl of window._ytPlaylistsForRules) {
+                    const o = document.createElement('option'); o.value = pl.id; o.textContent = pl.title; o.dataset.title = pl.title;
+                    sel.appendChild(o);
+                  }
+                  if (d.star_send_yt_playlist && !window._ytPlaylistsForRules.some(p => p.id === d.star_send_yt_playlist)) {
+                    const o = document.createElement('option'); o.value = d.star_send_yt_playlist;
+                    o.textContent = (d.star_send_yt_playlist_title || d.star_send_yt_playlist) + ' (unavailable)';
+                    o.dataset.title = d.star_send_yt_playlist_title || ''; sel.appendChild(o);
+                  }
+                  sel.value = d.star_send_yt_playlist || '';
+                } catch { /* leave default */ }
+              })();
+            }
+          }
+          if (none) none.hidden = (ipOk || ytOk || emOk);
+        }
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
           const ytConfigured = !!d.yt_oauth_configured;
@@ -9454,6 +9509,10 @@
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),
+            star_send_instapaper: (document.getElementById('sett-star-ip')?.checked ? '1' : '0'),
+            star_send_yt_playlist: (document.getElementById('sett-star-yt-playlist')?.value || ''),
+            star_send_yt_playlist_title: (() => { const s = document.getElementById('sett-star-yt-playlist'); const o = s && s.options[s.selectedIndex]; return (o && o.dataset.title) || ''; })(),
+            star_send_email: (document.getElementById('sett-star-email')?.value || '').trim(),
           };
         }
         try {
