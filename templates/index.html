@@ -8280,9 +8280,12 @@
             if (m.published) {
               const dateEl = document.createElement('span');
               dateEl.className = 'hl-rule-dryrun-item-date';
-              let dt = m.published;
-              try { dt = new Date(m.published).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch {}
-              dateEl.textContent = dt;
+              // published is an ISO-8601 string from the server; fall back to the raw
+              // value if it somehow doesn't parse (no "Invalid Date").
+              const parsed = new Date(m.published);
+              dateEl.textContent = isNaN(parsed.getTime())
+                ? m.published
+                : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
               item.appendChild(dateEl);
             }
             panel.appendChild(item);
