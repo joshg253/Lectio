@@ -324,7 +324,11 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   read. The rule's keyword is an **optional filter** — empty = every new video in
   scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
   `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the
-  `/shorts/` link), `yt_mark_read` (default on). Because `playlistItems.insert` is
+  `/shorts/` link), `yt_mark_read` (default on), and `yt_min_minutes`/`yt_max_minutes`
+  (0 = no limit). The **duration filter** reuses the cached video length (the same
+  store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
+  video whose duration isn't cached yet is skipped that run and retried once it is.
+  Because `playlistItems.insert` is
   **not idempotent**, a `youtube_playlist_added (scope, scope_id, keyword, entry_id,
   video_id)` table is the dedup guard: each (rule, entry, video) row is claimed with
   `INSERT OR IGNORE` *before* the API call (rowcount 0 → already added → skip), and

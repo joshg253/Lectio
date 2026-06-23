@@ -2462,6 +2462,15 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_mark_read INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
+        # Duration filter for youtube_playlist (minutes; 0 = no limit).
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_min_minutes INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_max_minutes INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
@@ -2913,7 +2922,8 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format,"
-        " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read"
+        " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
+        " yt_min_minutes, yt_max_minutes"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -2942,6 +2952,8 @@ def add_highlight_keyword(
     yt_playlist_title: str = "",
     yt_include_shorts: bool = False,
     yt_mark_read: bool = True,
+    yt_min_minutes: int = 0,
+    yt_max_minutes: int = 0,
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -2960,15 +2972,17 @@ def add_highlight_keyword(
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
         "  webhook_url, webhook_format,"
-        "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
+        "  yt_min_minutes, yt_max_minutes)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
          webhook_url.strip(), webhook_format,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
-         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0),
+         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
+         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
     )
 
 
@@ -3962,6 +3976,8 @@ def _dry_run_pattern(
     result_limit: int = 20,
     match_all_if_empty: bool = False,
     exclude_shorts: bool = False,
+    min_secs: int = 0,
+    max_secs: int = 0,
 ) -> dict:
     """Preview which entries a pattern-based rule would affect (read + unread, newest first).
 
@@ -4015,6 +4031,12 @@ def _dry_run_pattern(
                 break
             if exclude_shorts and _is_youtube_short(entry):
                 continue
+            if (min_secs or max_secs):
+                # Duration filter preview: use the entry's primary video (its link).
+                _vid = youtube_duration_service.extract_video_id(str(entry.link or ""))
+                _dur = youtube_duration_service.get_cached_duration(_vid)[0] if _vid else None
+                if _dur is None or (min_secs and _dur < min_secs) or (max_secs and _dur > max_secs):
+                    continue
             total_scanned += 1
             title_text = str(entry.title or "")
             body_text = ""
@@ -5058,6 +5080,8 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
             playlist_id = str(rule.get("yt_playlist_id") or "")
             include_shorts = bool(rule.get("yt_include_shorts"))
             mark_read = bool(rule.get("yt_mark_read"))
+            min_secs = max(0, int(rule.get("yt_min_minutes") or 0)) * 60
+            max_secs = max(0, int(rule.get("yt_max_minutes") or 0)) * 60
             run_entries: list[dict] = []
             marked: list[tuple[str, str]] = []
             try:
@@ -5092,6 +5116,18 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                             for vid in vids:
                                 if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
                                     break
+                                # Duration filter (minutes; 0 = no limit). The video's
+                                # length comes from the same cache that powers the
+                                # [duration] title prefix; an unknown duration is skipped
+                                # this run (it's retried once the duration is cached).
+                                if min_secs or max_secs:
+                                    dur = youtube_duration_service.get_cached_duration(vid)[0]
+                                    if dur is None:
+                                        continue
+                                    if min_secs and dur < min_secs:
+                                        continue
+                                    if max_secs and dur > max_secs:
+                                        continue
                                 # Dedup guard: claim the (rule, entry, video) row first;
                                 # rowcount 0 means we've added it before — skip.
                                 with get_meta_connection() as conn:
@@ -12957,6 +12993,8 @@ def add_highlight_route(
     yt_playlist_title: str = Form(""),
     yt_include_shorts: int = Form(0),
     yt_mark_read: int = Form(1),
+    yt_min_minutes: int = Form(0),
+    yt_max_minutes: int = Form(0),
 ):
     keyword = keyword.strip()
     if scope not in _HIGHLIGHT_VALID_SCOPES:
@@ -12989,7 +13027,8 @@ def add_highlight_route(
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
                               webhook_url, webhook_format,
                               yt_playlist_id, yt_playlist_title,
-                              bool(yt_include_shorts), bool(yt_mark_read))
+                              bool(yt_include_shorts), bool(yt_mark_read),
+                              yt_min_minutes, yt_max_minutes)
     return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
                          "color": color, "is_regex": bool(is_regex), "type": type,
                          "search_in": search_in, "delivery": delivery,
@@ -13001,7 +13040,9 @@ def add_highlight_route(
                          "yt_playlist_id": yt_playlist_id.strip(),
                          "yt_playlist_title": yt_playlist_title.strip(),
                          "yt_include_shorts": bool(yt_include_shorts),
-                         "yt_mark_read": bool(yt_mark_read)})
+                         "yt_mark_read": bool(yt_mark_read),
+                         "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
 
 
 @app.post("/highlights/remove")
@@ -13073,6 +13114,8 @@ def rules_dry_run_route(
     exclude_scope_ids: str = Query(""),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
     yt_include_shorts: int = Query(1),
+    yt_min_minutes: int = Query(0),
+    yt_max_minutes: int = Query(0),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -13086,9 +13129,12 @@ def rules_dry_run_route(
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
+            _is_yt = type == "youtube_playlist"
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(type == "youtube_playlist"),
-                                      exclude_shorts=(type == "youtube_playlist" and not yt_include_shorts))
+                                      match_all_if_empty=_is_yt,
+                                      exclude_shorts=(_is_yt and not yt_include_shorts),
+                                      min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
+                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:

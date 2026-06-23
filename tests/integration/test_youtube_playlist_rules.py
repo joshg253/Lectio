@@ -184,6 +184,38 @@ def test_auto_add_feeds_scope_covers_each_selected_feed(env, monkeypatch):
     assert sorted(calls) == sorted([VID, VID2])
 
 
+def test_duration_filter_min_only_adds_long_videos(env, monkeypatch):
+    SHORTV = "shortVID000"   # exactly 11 chars (YouTube id length)
+    LONGV = "longVID0000"
+    # Durations: 10 min vs 90 min (monkeypatched so we don't touch the global cache/DB).
+    _durs = {SHORTV: (600, "10:00"), LONGV: (5400, "1:30:00")}
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration",
+                        lambda vid: _durs.get(vid, (None, None)))
+    _add_entry(entry_id="s", link=f"https://www.youtube.com/watch?v={SHORTV}")
+    _add_entry(entry_id="l", link=f"https://www.youtube.com/watch?v={LONGV}")
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
+                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
+                                   yt_min_minutes=60)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == [LONGV]   # only the >=60min video
+
+
+def test_duration_unknown_is_skipped_when_filtered(env, monkeypatch):
+    NOID = "unknownVID0"   # 11 chars, no cached duration
+    _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
+                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
+                                   yt_min_minutes=60)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []  # unknown duration not added while a duration filter is active
+
+
 def test_rule_persists_fields(env):
     _add_rule(playlist="PLxyz", include_shorts=True, mark_read=False)
     with main.get_meta_connection() as conn:
