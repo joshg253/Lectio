@@ -58,7 +58,7 @@ The short version:
   thumbnails fall back to a direct browser load when the server-side image proxy
   is refused (some hosts IP-block the server but serve your own IP fine).
 - **Automation** — highlight, mark-as-read, deduplicate, email-article,
-  outbound-webhook, and **add-to-YouTube-playlist** rules (the last auto-adds new
+  outbound-webhook, **save-to-Instapaper**, and **add-to-YouTube-playlist** rules (the last auto-adds new
   videos — including those embedded in any feed's article — to a chosen playlist,
   with include-Shorts, mark-read, and **min/max-duration** options; quota-capped,
   no double-adds); scope a

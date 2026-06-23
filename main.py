@@ -2920,7 +2920,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -4743,6 +4743,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         _run_email_rules_after_refresh(refreshed_feed_urls)
         # Webhook rules likewise fire after mark_as_read/dedup.
         _run_webhook_rules_after_refresh(refreshed_feed_urls)
+        _run_instapaper_rules_after_refresh(refreshed_feed_urls)
         # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
         # add" doesn't fight an earlier rule).
         _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls)
@@ -5038,6 +5039,87 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[webhook-auto] error in _run_webhook_rules_after_refresh")
+
+
+_INSTAPAPER_AUTO_PER_RUN_CAP = 50  # max Instapaper saves per refresh cycle
+
+
+def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Save matching freshly-refreshed entries to Instapaper. Instapaper dedupes by
+    URL, so re-saves are harmless; the 15-min cutoff + per-run cap bound the calls."""
+    if not refreshed_feed_urls:
+        return
+    username = get_runtime_setting(SETTING_INSTAPAPER_USERNAME).strip()
+    password = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD).strip()
+    if not (username and password):
+        return
+
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "instapaper"]
+        if not rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if sent >= _INSTAPAPER_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            link = str(entry.link or "")
+                            if not link:
+                                continue
+                            ok, err = _instapaper_save_url(username, password, link, str(entry.title or ""))
+                            if not ok:
+                                LOGGER.warning("[instapaper-auto] save failed: %s", err)
+                                continue
+                            sent += 1
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            with get_meta_connection() as conn:
+                                _log_auto_run(conn, now_str, "instapaper", scope, scope_id, keyword, {
+                                    "count": 1,
+                                    "entries": [{"feed_url": fu, "entry_id": str(entry.id),
+                                                 "title": str(entry.title or ""), "link": link,
+                                                 "feed_title": feed_title_cache.get(fu, fu)}],
+                                })
+            except Exception:
+                LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[instapaper-auto] error in _run_instapaper_rules_after_refresh")
 
 
 # Each playlistItems.insert costs 50 quota units; cap a run well under the daily
@@ -5883,6 +5965,7 @@ _AUTOMATION_TYPE_LABELS = {
     "email_article": "Email article",
     "webhook": "Webhook",
     "youtube_playlist": "Add to YT playlist",
+    "instapaper": "Save to Instapaper",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
@@ -5905,6 +5988,8 @@ def _automation_rule_detail(rule: dict) -> str:
     if rule_type == "webhook":
         fmt = str(rule.get("webhook_format") or "generic")
         return f"POST · {fmt} · matches {search_in}"
+    if rule_type == "instapaper":
+        return f"save · matches {search_in}"
     if rule_type == "youtube_playlist":
         parts = ["→ " + (str(rule.get("yt_playlist_title") or "") or "playlist")]
         kw = str(rule.get("keyword") or "").strip()
@@ -13044,6 +13129,11 @@ def add_highlight_route(
             return JSONResponse({"error": "a target playlist is required"}, status_code=400)
         if not youtube_oauth_connected():
             return JSONResponse({"error": "connect a YouTube account first"}, status_code=400)
+    elif type == "instapaper":
+        if not keyword:
+            return JSONResponse({"error": "keyword is required"}, status_code=400)
+        if not is_instapaper_configured():
+            return JSONResponse({"error": "configure Instapaper first"}, status_code=400)
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
@@ -13157,7 +13247,7 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist"):
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist", "instapaper"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
@@ -15182,6 +15272,28 @@ def email_entry(
     return JSONResponse({"ok": False, "error": error or "Send failed."}, status_code=500)
 
 
+def _instapaper_save_url(username: str, password: str, url: str, title: str) -> tuple[bool, str | None]:
+    """POST a URL to the Instapaper Simple API. Returns (ok, error). Instapaper
+    dedupes by URL on its side, so re-saving the same URL is harmless."""
+    try:
+        import urllib.parse
+        import urllib.request
+        data = urllib.parse.urlencode({
+            "username": username, "password": password, "url": url, "title": title or "",
+        }).encode()
+        req = urllib.request.Request(
+            "https://www.instapaper.com/api/add", data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+        if status in (200, 201):
+            return True, None
+        return False, f"Instapaper returned {status}."
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc) or "Request failed."
+
+
 @app.post("/entries/instapaper")
 def save_to_instapaper(
     feed_url: str = Form(...),
@@ -15202,27 +15314,11 @@ def save_to_instapaper(
     if not url:
         return JSONResponse({"ok": False, "error": "Entry has no URL."}, status_code=400)
 
-    try:
-        import urllib.request, urllib.parse, urllib.error
-        data = urllib.parse.urlencode({
-            "username": username,
-            "password": password,
-            "url": url,
-            "title": entry.title or "",
-        }).encode()
-        req = urllib.request.Request(
-            "https://www.instapaper.com/api/add",
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status = resp.status
-        if status in (200, 201):
-            return JSONResponse({"ok": True})
-        return JSONResponse({"ok": False, "error": f"Instapaper returned {status}."}, status_code=502)
-    except Exception as exc:
-        LOGGER.warning("Instapaper save failed for %s: %s", url, exc)
-        return JSONResponse({"ok": False, "error": str(exc) or "Request failed."}, status_code=502)
+    ok, err = _instapaper_save_url(username, password, url, entry.title or "")
+    if ok:
+        return JSONResponse({"ok": True})
+    LOGGER.warning("Instapaper save failed for %s: %s", url, err)
+    return JSONResponse({"ok": False, "error": err}, status_code=502)
 
 
 @app.post("/opml/import")

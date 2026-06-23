@@ -7,7 +7,7 @@ this file only tracks what's still open.
 
 Build order (promoted from Later — top first):
 1. ~~**Global skip-Shorts toggle** (YouTube area)~~ — ✅ SHIPPED (`yt_hide_shorts_global`).
-2. **Auto add to Instapaper** rule — establishes the send-to-destination engine pattern (cheap, reused by later destinations).
+2. ~~**Auto add to Instapaper** rule~~ — ✅ SHIPPED (`instapaper` rule type; `_run_instapaper_rules_after_refresh`; gated on configured creds).
 3. **YouTube quota meter** — high value after finding durations were eating the quota; per-user spend vs the 10k/day cap with low alerts.
 4. **Robust YT-folder identity + YT-area settings panel + connection gating** — the remaining YT-area UI.
 5. **On-star → send to destination(s)** — reuses the destination senders from #2.
@@ -105,10 +105,10 @@ Detailed specs follow.
   username/password settings). So the work is mostly *promoting existing manual
   integrations into automation rule types*, sharing one engine.
 
-  - **Auto add to Instapaper** (next concrete one): new `instapaper` rule type that,
-    on match, calls the existing Instapaper save with the entry URL/title. Gate the
-    rule-type option on `is_instapaper_configured()` (same gating pattern as the
-    YouTube rule on `yt_oauth_connected`). Cheap (no quota concerns like YouTube).
+  - **Auto add to Instapaper** — ✅ **SHIPPED.** `instapaper` rule type;
+    `_run_instapaper_rules_after_refresh` saves matches via `_instapaper_save_url`
+    (shared with the manual save route); gated on `is_instapaper_configured()`;
+    Instapaper dedupes by URL so re-saves are harmless (15-min cutoff + per-run cap).
   - **Other candidates** (each is "manual action → rule type"): save to the starred
     archive / a tag, DeviantArt-style pushes, future read-later services (Pocket is
     shutting down; Readwise/Reader, Wallabag if someone runs one). Only build the

@@ -13,6 +13,7 @@
     window.EMAIL_CONTACTS = {{ email_contacts | tojson }};
     window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
     window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
+    window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
     window.PROFILE_EMAIL = {{ profile_email | tojson }};
   </script>
@@ -7522,7 +7523,7 @@
             return;
           }
           const { folderNames, feedTitles } = hlScopeData();
-          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', highlight: 'Highlight' };
+          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', instapaper: 'Instapaper', highlight: 'Highlight' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
             const el = document.createElement('div');
@@ -7579,8 +7580,8 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist' };
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -8287,11 +8288,13 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
           // YouTube playlist rule needs a connected account; hide the option until
           // connected (unless editing an existing rule of this type).
           if (val === 'youtube_playlist' && !window.YT_OAUTH_CONNECTED && prefill.type !== 'youtube_playlist') continue;
+          // Instapaper rule needs configured credentials.
+          if (val === 'instapaper' && !window.INSTAPAPER_CONFIGURED && prefill.type !== 'instapaper') continue;
           const opt = document.createElement('option');
           opt.value = val;
           opt.textContent = label;
