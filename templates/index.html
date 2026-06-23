@@ -7766,6 +7766,13 @@
                 b.textContent = 'mark read';
                 row.appendChild(b);
               }
+              if (rule.yt_min_minutes || rule.yt_max_minutes) {
+                const b = document.createElement('span');
+                b.className = 'hl-rule-search-in-badge';
+                const lo = rule.yt_min_minutes || 0, hi = rule.yt_max_minutes || 0;
+                b.textContent = hi ? (lo ? `${lo}–${hi}m` : `≤${hi}m`) : `≥${lo}m`;
+                row.appendChild(b);
+              }
             }
           }
 
@@ -7808,6 +7815,8 @@
                 dedup_window_hours: rule.dedup_window_hours || 168,
                 exclude_scope_ids: rule.exclude_scope_ids || '',
                 yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
+                yt_min_minutes: rule.yt_min_minutes || 0,
+                yt_max_minutes: rule.yt_max_minutes || 0,
               });
               const resp = await fetch('/rules/dry-run?' + qs.toString(), { credentials: 'same-origin' });
               const data = await resp.json();
@@ -8820,6 +8829,28 @@
         ytMarkWrap.appendChild(document.createTextNode(' Mark read after add'));
         ytRow.appendChild(ytMarkWrap);
 
+        // Duration filter (minutes; blank/0 = no limit). Uses the cached video
+        // length, so it needs the YouTube API key that also powers durations.
+        const ytDurWrap = document.createElement('span');
+        ytDurWrap.className = 'hl-draft-field-label';
+        ytDurWrap.appendChild(document.createTextNode('Length'));
+        const ytMinInput = document.createElement('input');
+        ytMinInput.type = 'number'; ytMinInput.min = '0'; ytMinInput.placeholder = 'min';
+        ytMinInput.className = 'hl-draft-batch-count';
+        ytMinInput.title = 'Only add videos at least this many minutes long (blank = no minimum)';
+        ytMinInput.value = prefill.yt_min_minutes ? prefill.yt_min_minutes : '';
+        const ytMaxInput = document.createElement('input');
+        ytMaxInput.type = 'number'; ytMaxInput.min = '0'; ytMaxInput.placeholder = 'max';
+        ytMaxInput.className = 'hl-draft-batch-count';
+        ytMaxInput.title = 'Only add videos at most this many minutes long (blank = no maximum)';
+        ytMaxInput.value = prefill.yt_max_minutes ? prefill.yt_max_minutes : '';
+        ytDurWrap.appendChild(document.createTextNode(' '));
+        ytDurWrap.appendChild(ytMinInput);
+        ytDurWrap.appendChild(document.createTextNode('–'));
+        ytDurWrap.appendChild(ytMaxInput);
+        ytDurWrap.appendChild(document.createTextNode(' min'));
+        ytRow.appendChild(ytDurWrap);
+
         draft.appendChild(ytRow);
 
         // ── Sync visibility ───────────────────────────────────────────
@@ -8921,7 +8952,9 @@
                          yt_playlist_id: ytPlSel.value || '',
                          yt_playlist_title: (ytPlOpt && ytPlOpt.dataset.title) || '',
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
-                         yt_mark_read: ytMarkCheck.checked ? 1 : 0 });
+                         yt_mark_read: ytMarkCheck.checked ? 1 : 0,
+                         yt_min_minutes: parseInt(ytMinInput.value || '0', 10) || 0,
+                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0 });
         });
 
         return draft;
@@ -8942,6 +8975,7 @@
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
+          yt_min_minutes: r.yt_min_minutes || 0, yt_max_minutes: r.yt_max_minutes || 0,
         });
       }
 
