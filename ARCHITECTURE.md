@@ -324,7 +324,11 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   read. The rule's keyword is an **optional filter** — empty = every new video in
   scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
   `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the
-  `/shorts/` link), `yt_mark_read` (default on). Because `playlistItems.insert` is
+  `/shorts/` link), `yt_mark_read` (default on), and `yt_min_minutes`/`yt_max_minutes`
+  (0 = no limit). The **duration filter** reuses the cached video length (the same
+  store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
+  video whose duration isn't cached yet is skipped that run and retried once it is.
+  Because `playlistItems.insert` is
   **not idempotent**, a `youtube_playlist_added (scope, scope_id, keyword, entry_id,
   video_id)` table is the dedup guard: each (rule, entry, video) row is claimed with
   `INSERT OR IGNORE` *before* the API call (rowcount 0 → already added → skip), and
@@ -334,6 +338,19 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
   rule-builder until connected) so it can't be created without a token. Runs in the
   per-user background context like the other after-refresh rules.
+- **Rule scope (incl. multi-feed)** — automation rules scope to `global` (all feeds),
+  `folder`, `feed` (one URL), or `feeds` (an explicit set; `scope_id` is the feed URLs
+  joined by newline — newline, not comma, since URLs can contain commas). Scope
+  resolution is centralized so every runner agrees: `resolve_rule_feed_urls(conn,
+  scope, scope_id)` returns the feed set (or `None` for global) for the bulk/dry-run
+  paths, and `feed_in_rule_scope(scope, scope_id, feed_url, folder_feed_urls)` is the
+  per-feed test the after-refresh runners use against each freshly-refreshed feed
+  (folder scopes pass a prefetched feed set for speed; `feeds`/`feed`/`global` don't
+  need it). Deduplicate accepts `global`/`folder`/`feeds` (the latter dedupes across a
+  selected set, resolved via `_resolve_dedup_feed_urls`) but rejects a single `feed`
+  — one feed can't cross-dedupe. The rule builder derives the scope from a
+  multi-select feed listbox: 0 selected = folder (or global if no folder), 1 =
+  `feed`, 2+ = `feeds`.
 - **Inline-SVG sanitization** — a raw inline `<svg>` from feed content can also
   become a list thumbnail / article lead image. `services/svg_sanitize.py` parses
   and rebuilds it with a presentation/geometry tag+attribute allowlist, dropping

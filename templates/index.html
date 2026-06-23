@@ -7443,6 +7443,11 @@
         const { folderNames, feedTitles } = hlScopeData();
         if (scope === 'folder') return folderNames[scopeId] || `Folder ${scopeId}`;
         if (scope === 'feed') return feedTitles[scopeId] || scopeId;
+        if (scope === 'feeds') {
+          const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (urls.length <= 2) return urls.map(u => feedTitles[u] || u).join(', ');
+          return `${urls.length} feeds`;
+        }
         return scope;
       }
 
@@ -7761,6 +7766,13 @@
                 b.textContent = 'mark read';
                 row.appendChild(b);
               }
+              if (rule.yt_min_minutes || rule.yt_max_minutes) {
+                const b = document.createElement('span');
+                b.className = 'hl-rule-search-in-badge';
+                const lo = rule.yt_min_minutes || 0, hi = rule.yt_max_minutes || 0;
+                b.textContent = hi ? (lo ? `${lo}–${hi}m` : `≤${hi}m`) : `≥${lo}m`;
+                row.appendChild(b);
+              }
             }
           }
 
@@ -7803,6 +7815,8 @@
                 dedup_window_hours: rule.dedup_window_hours || 168,
                 exclude_scope_ids: rule.exclude_scope_ids || '',
                 yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
+                yt_min_minutes: rule.yt_min_minutes || 0,
+                yt_max_minutes: rule.yt_max_minutes || 0,
               });
               const resp = await fetch('/rules/dry-run?' + qs.toString(), { credentials: 'same-origin' });
               const data = await resp.json();
@@ -7997,6 +8011,27 @@
             hlInsertDraft(draft, row);
           });
           row.appendChild(edit);
+
+          // Duplicate: open a NEW add-draft prefilled from this rule so you can
+          // quickly make a similar rule (e.g. point it at a different feed). The
+          // copy starts disabled; change the scope/feed/keyword before saving (an
+          // unchanged copy would just overwrite the original, same primary key).
+          const dup = document.createElement('button');
+          dup.type = 'button';
+          dup.className = 'hl-rule-edit hl-rule-duplicate';
+          dup.setAttribute('aria-label', `Duplicate rule for "${rule.keyword}"`);
+          dup.title = 'Duplicate rule';
+          dup.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">content_copy</span>';
+          dup.addEventListener('click', () => {
+            // folder_id helps the draft preselect the folder for a feed-scoped rule.
+            const prefill = { ...rule };
+            if (rule.scope === 'feed') {
+              const fl = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(rule.scope_id)}"]`);
+              if (fl) prefill.folder_id = fl.getAttribute('data-folder-id') || '';
+            }
+            hlMakeAddDraft(prefill, row);
+          });
+          row.appendChild(dup);
 
           const del = document.createElement('button');
           del.type = 'button';
@@ -8296,14 +8331,18 @@
         }
         if (prefill.scope === 'folder') {
           folderSel.value = prefill.scope_id || '';
-        } else if (prefill.scope === 'feed') {
+        } else if (prefill.scope === 'feed' || prefill.scope === 'feeds') {
           // Prefer the explicit folder_id passed in the prefill (from context menu data
           // attributes), falling back to a DOM lookup so editing existing rules still works.
+          // For a multi-feed rule, locate the folder of the first selected feed.
+          const firstFeed = prefill.scope === 'feeds'
+            ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)[0]
+            : prefill.scope_id;
           if (prefill.folder_id) {
             folderSel.value = String(prefill.folder_id);
           } else {
             for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
-              if (el.getAttribute('data-feed-url') === prefill.scope_id) {
+              if (el.getAttribute('data-feed-url') === firstFeed) {
                 folderSel.value = el.getAttribute('data-folder-id') || '';
                 break;
               }
@@ -8312,17 +8351,25 @@
         }
         draft.appendChild(folderSel);
 
-        // Scope: feed
+        // Scope: feed(s) — a multi-select listbox. No selection = whole folder;
+        // exactly one = that feed (scope "feed"); two or more = scope "feeds".
         const feedSel = document.createElement('select');
         feedSel.className = 'hl-draft-select hl-feed-select';
-        const allFeedOpt = document.createElement('option');
-        allFeedOpt.value = '';
-        allFeedOpt.textContent = 'All in folder';
-        feedSel.appendChild(allFeedOpt);
+        feedSel.multiple = true;
+        feedSel.size = 4;
+        feedSel.title = 'Leave empty for the whole folder; Ctrl/Cmd-click to pick several feeds';
 
-        function populateFeeds(folderId) {
-          while (feedSel.options.length > 1) feedSel.remove(1);
-          if (!folderId) { feedSel.disabled = true; feedSel.value = ''; return; }
+        // Feeds the rule already targets (scope feed = one url; feeds = newline list).
+        const _prefillFeedUrls = new Set(
+          prefill.scope === 'feed' ? [prefill.scope_id]
+          : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
+          : []
+        );
+
+        function populateFeeds(folderId, preselect) {
+          const keep = preselect || new Set([...feedSel.selectedOptions].map(o => o.value));
+          feedSel.innerHTML = '';
+          if (!folderId) { feedSel.disabled = true; return; }
           const feeds = [];
           for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
             const url = el.getAttribute('data-feed-url');
@@ -8333,14 +8380,18 @@
             const opt = document.createElement('option');
             opt.value = f.url;
             opt.textContent = f.title;
+            if (keep.has(f.url)) opt.selected = true;
             feedSel.appendChild(opt);
           }
           feedSel.disabled = feeds.length === 0;
         }
+        function getSelectedFeeds() {
+          return [...feedSel.selectedOptions].map(o => o.value).filter(Boolean);
+        }
 
-        populateFeeds(folderSel.value);
-        if (prefill.scope === 'feed') feedSel.value = prefill.scope_id || '';
-        folderSel.addEventListener('change', () => populateFeeds(folderSel.value));
+        populateFeeds(folderSel.value, _prefillFeedUrls);
+        // Changing folder resets the feed selection to that folder's feeds.
+        folderSel.addEventListener('change', () => populateFeeds(folderSel.value, new Set()));
         draft.appendChild(feedSel);
 
         // Match method (Deduplicate only)
@@ -8778,6 +8829,28 @@
         ytMarkWrap.appendChild(document.createTextNode(' Mark read after add'));
         ytRow.appendChild(ytMarkWrap);
 
+        // Duration filter (minutes; blank/0 = no limit). Uses the cached video
+        // length, so it needs the YouTube API key that also powers durations.
+        const ytDurWrap = document.createElement('span');
+        ytDurWrap.className = 'hl-draft-field-label';
+        ytDurWrap.appendChild(document.createTextNode('Length'));
+        const ytMinInput = document.createElement('input');
+        ytMinInput.type = 'number'; ytMinInput.min = '0'; ytMinInput.placeholder = 'min';
+        ytMinInput.className = 'hl-draft-batch-count';
+        ytMinInput.title = 'Only add videos at least this many minutes long (blank = no minimum)';
+        ytMinInput.value = prefill.yt_min_minutes ? prefill.yt_min_minutes : '';
+        const ytMaxInput = document.createElement('input');
+        ytMaxInput.type = 'number'; ytMaxInput.min = '0'; ytMaxInput.placeholder = 'max';
+        ytMaxInput.className = 'hl-draft-batch-count';
+        ytMaxInput.title = 'Only add videos at most this many minutes long (blank = no maximum)';
+        ytMaxInput.value = prefill.yt_max_minutes ? prefill.yt_max_minutes : '';
+        ytDurWrap.appendChild(document.createTextNode(' '));
+        ytDurWrap.appendChild(ytMinInput);
+        ytDurWrap.appendChild(document.createTextNode('–'));
+        ytDurWrap.appendChild(ytMaxInput);
+        ytDurWrap.appendChild(document.createTextNode(' min'));
+        ytRow.appendChild(ytDurWrap);
+
         draft.appendChild(ytRow);
 
         // ── Sync visibility ───────────────────────────────────────────
@@ -8808,14 +8881,16 @@
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
-          if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
-          else { populateFeeds(folderSel.value); }
+          // The feed multi-select is shown for every type, including deduplicate —
+          // dedup can now run across an explicit set of selected feeds (>=2), not
+          // just a whole folder. populateFeeds() preserves the current selection
+          // across the rebuild so a type change keeps the chosen feed(s).
+          populateFeeds(folderSel.value);
         }
         syncTypeControls();
-        // syncTypeControls() re-runs populateFeeds(), which resets the feed
-        // <select>; re-apply the prefilled feed scope so an explicitly chosen
-        // feed (e.g. from a post/feed right-click → Automation) stays selected.
-        if (prefill.scope === 'feed' && !feedSel.disabled) feedSel.value = prefill.scope_id || '';
+        // Re-apply the prefilled feed selection (populateFeeds preserves selection,
+        // but syncTypeControls' first run may have rebuilt before it was set).
+        if (_prefillFeedUrls.size && !feedSel.disabled) populateFeeds(folderSel.value, _prefillFeedUrls);
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
@@ -8831,8 +8906,14 @@
           if (ruleType === 'deduplicate') {
             const matchMethod = matchMethodSel.value || 'slug';
             const windowHours = (parseInt(windowHoursInput.value || '7', 10) || 7) * 24;
-            const scope = folderId ? 'folder' : 'global';
-            const scopeId = folderId || '';
+            const dedupFeeds = getSelectedFeeds();
+            // 2+ selected feeds → dedupe across just those; else folder/global.
+            // A single selected feed can't cross-dedupe — guide the user.
+            if (dedupFeeds.length === 1) { window.alert('Select at least two feeds to deduplicate between them (or none for the whole folder).'); return; }
+            let scope, scopeId;
+            if (dedupFeeds.length >= 2) { scope = 'feeds'; scopeId = dedupFeeds.join('\n'); }
+            else if (folderId)         { scope = 'folder'; scopeId = folderId; }
+            else                       { scope = 'global'; scopeId = ''; }
             const excludeIds = getExcludeIds();
             await onSave({ scope, scope_id: scopeId, keyword: matchMethod, color: 'yellow',
                            is_regex: 0, type: 'deduplicate', search_in: 'title',
@@ -8849,7 +8930,7 @@
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
           if (ruleType === 'youtube_playlist' && !ytPlSel.value) { ytPlSel.focus(); return; }
           const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
-          const feedUrl  = feedSel.value || '';
+          const selectedFeeds = getSelectedFeeds();
           const color    = colorSel.value || 'yellow';
           const searchIn = searchInSel.value || 'title';
           const delivery = deliverySel.value || 'immediately';
@@ -8859,9 +8940,10 @@
           const ccMe = ccMeCheck.checked ? 1 : 0;
           const webhookFormat = webhookFormatSel.value || 'generic';
           let scope, scopeId;
-          if (!folderId)     { scope = 'global'; scopeId = ''; }
-          else if (!feedUrl) { scope = 'folder'; scopeId = folderId; }
-          else               { scope = 'feed';   scopeId = feedUrl; }
+          if (!folderId)                  { scope = 'global'; scopeId = ''; }
+          else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
+          else if (selectedFeeds.length === 1) { scope = 'feed';   scopeId = selectedFeeds[0]; }
+          else                            { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
           const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
@@ -8870,7 +8952,9 @@
                          yt_playlist_id: ytPlSel.value || '',
                          yt_playlist_title: (ytPlOpt && ytPlOpt.dataset.title) || '',
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
-                         yt_mark_read: ytMarkCheck.checked ? 1 : 0 });
+                         yt_mark_read: ytMarkCheck.checked ? 1 : 0,
+                         yt_min_minutes: parseInt(ytMinInput.value || '0', 10) || 0,
+                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0 });
         });
 
         return draft;
@@ -8891,10 +8975,11 @@
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
+          yt_min_minutes: r.yt_min_minutes || 0, yt_max_minutes: r.yt_max_minutes || 0,
         });
       }
 
-      function hlMakeAddDraft(prefill) {
+      function hlMakeAddDraft(prefill, afterEl = null) {
         const draft = hlBuildDraft(prefill || {}, 'Add', async (newRule) => {
           try {
             const params = hlRuleToParams({ ...newRule, enabled: 0 });
@@ -8908,7 +8993,7 @@
             applyHighlights();
           } catch { window.alert('Failed to add rule'); }
         });
-        hlInsertDraft(draft, null);
+        hlInsertDraft(draft, afterEl);
       }
 
       addRuleBtn?.addEventListener('click', () => hlMakeAddDraft({}));

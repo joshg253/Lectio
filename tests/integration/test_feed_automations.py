@@ -84,3 +84,23 @@ def test_recent_runs_only_count_this_feed(meta):
 def test_feed_with_no_automations_is_empty(meta):
     result = main.collect_feed_automations(meta, FEED, folder_ids=[])
     assert result == {"rules": [], "recent_runs": []}
+
+
+def test_feeds_scope_dedup_resolves_selected_feeds(meta):
+    # Dedupe across an explicit set of feeds (scope "feeds"): the resolver returns
+    # exactly the selected URLs without needing a folder.
+    urls = main._resolve_dedup_feed_urls(meta, "feeds", f"{FEED}\n{OTHER_FEED}")
+    assert urls == {FEED, OTHER_FEED}
+    # A single feed still can't cross-dedupe.
+    single = main._resolve_dedup_feed_urls(meta, "feed", FEED)
+    assert isinstance(single, dict) and "error" in single
+
+
+def test_feeds_scoped_rule_applies_to_member_feed(meta):
+    main.add_highlight_keyword(meta, "feeds", f"{FEED}\n{OTHER_FEED}", "x", "yellow",
+                               rule_type="highlight", enabled=1)
+    applies = main.collect_feed_automations(meta, FEED, folder_ids=[])["rules"]
+    assert any(r["scope_label"] == "Selected feeds" for r in applies)
+    # A feed not in the set sees no rule.
+    none = main.collect_feed_automations(meta, "https://nope.test/feed", folder_ids=[])["rules"]
+    assert none == []

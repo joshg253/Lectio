@@ -153,6 +153,69 @@ def test_dry_run_excludes_shorts_when_opted_out(env):
     assert incl["total_matches"] == 2   # both included
 
 
+def test_feeds_scope_resolution_helpers():
+    # Multi-feed scope: scope_id is newline-joined feed URLs.
+    assert main.parse_feeds_scope_id("a\nb\n c ") == ["a", "b", "c"]
+    assert main.feed_in_rule_scope("feeds", "x\ny", "y", None) is True
+    assert main.feed_in_rule_scope("feeds", "x\ny", "z", None) is False
+    assert main.feed_in_rule_scope("feed", "x", "x", None) is True
+    assert main.feed_in_rule_scope("global", "", "anything", None) is True
+
+
+def test_auto_add_feeds_scope_covers_each_selected_feed(env, monkeypatch):
+    FEED2 = "https://www.youtube.com/feeds/videos.xml?channel_id=UCDEF"
+    VID2 = "abcdEFGHijk"
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    # Two feeds, one entry each.
+    _add_entry(entry_id="e1", link=f"https://www.youtube.com/watch?v={VID}")
+    reader = main.get_reader()
+    reader.add_feed(FEED2, allow_invalid_url=True)
+    import datetime as _dt
+    reader.add_entry({"feed_url": FEED2, "id": "e2",
+                      "link": f"https://www.youtube.com/watch?v={VID2}", "title": "V2",
+                      "published": _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc)})
+    # A rule scoped to BOTH feeds.
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feeds", f"{FEED}\n{FEED2}", "", "yellow",
+                                   rule_type="youtube_playlist", enabled=1,
+                                   yt_playlist_id="PL1", yt_mark_read=False)
+    main._run_youtube_playlist_rules_after_refresh({FEED, FEED2})
+    assert sorted(calls) == sorted([VID, VID2])
+
+
+def test_duration_filter_min_only_adds_long_videos(env, monkeypatch):
+    SHORTV = "shortVID000"   # exactly 11 chars (YouTube id length)
+    LONGV = "longVID0000"
+    # Durations: 10 min vs 90 min (monkeypatched so we don't touch the global cache/DB).
+    _durs = {SHORTV: (600, "10:00"), LONGV: (5400, "1:30:00")}
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration",
+                        lambda vid: _durs.get(vid, (None, None)))
+    _add_entry(entry_id="s", link=f"https://www.youtube.com/watch?v={SHORTV}")
+    _add_entry(entry_id="l", link=f"https://www.youtube.com/watch?v={LONGV}")
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
+                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
+                                   yt_min_minutes=60)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == [LONGV]   # only the >=60min video
+
+
+def test_duration_unknown_is_skipped_when_filtered(env, monkeypatch):
+    NOID = "unknownVID0"   # 11 chars, no cached duration
+    _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
+    calls = []
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "global", "", "", "yellow", rule_type="youtube_playlist",
+                                   enabled=1, yt_playlist_id="PL1", yt_mark_read=False,
+                                   yt_min_minutes=60)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []  # unknown duration not added while a duration filter is active
+
+
 def test_rule_persists_fields(env):
     _add_rule(playlist="PLxyz", include_shorts=True, mark_read=False)
     with main.get_meta_connection() as conn:
