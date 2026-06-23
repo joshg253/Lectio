@@ -8,7 +8,7 @@ this file only tracks what's still open.
 Build order (promoted from Later — top first):
 1. ~~**Global skip-Shorts toggle** (YouTube area)~~ — ✅ SHIPPED (`yt_hide_shorts_global`).
 2. ~~**Auto add to Instapaper** rule~~ — ✅ SHIPPED (`instapaper` rule type; `_run_instapaper_rules_after_refresh`; gated on configured creds).
-3. **YouTube quota meter** — high value after finding durations were eating the quota; per-user spend vs the 10k/day cap with low alerts.
+3. ~~**YouTube quota meter**~~ — ✅ SHIPPED (per-user spend vs cap, Pacific reset, low/exhausted states).
 4. **Robust YT-folder identity + YT-area settings panel + connection gating** — the remaining YT-area UI.
 5. **On-star → send to destination(s)** — reuses the destination senders from #2.
 6. **Bare media links → embedded players** — self-contained content win.
@@ -59,10 +59,11 @@ Detailed specs follow.
      **YT special-area panel** (items 1–2) exists: gate that panel too and surface a
      single "Connect YouTube account" prompt when not connected. Gate server-side.
 
-  5. **Quota meter — "tokens left" with low alerts.** Show estimated remaining daily
-     quota somewhere visible (YT-area header, near the Add-to-playlist controls, and
-     in the `youtube_playlist` rule editor), with a warning state when low and a hard
-     "exhausted" state.
+  5. **Quota meter — "tokens left" with low alerts.** — ✅ **SHIPPED.** Per-user
+     `yt_quota_spend` table keyed by Pacific date; each billed call reports its unit
+     cost via a sink → `record_yt_quota_spend`; Integrations panel shows spent/cap/
+     remaining (`get_yt_quota_status`) with low/exhausted states; `quotaExceeded`
+     snaps to the cap. (Could still surface it in the rule editor / run-log later.)
      - **Key constraint:** the YouTube Data API exposes **no endpoint to read your
        remaining quota** — Google only enforces it server-side and returns
        `quotaExceeded`. So we must **track spend ourselves**: a per-user daily counter

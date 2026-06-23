@@ -254,6 +254,10 @@ SETTING_YT_EMBED_ACCOUNT_FEATURES = "yt_embed_account_features"
 # Global per-user toggle: auto-mark YouTube Shorts read across ALL YouTube feeds at
 # refresh, regardless of the per-feed hide_shorts pref. Off ("0") by default.
 SETTING_YT_HIDE_SHORTS_GLOBAL = "yt_hide_shorts_global"
+# Daily YouTube Data API quota cap (units). Google's default is 10,000/day; make it
+# a setting in case a higher quota is granted.
+SETTING_YT_QUOTA_CAP = "yt_quota_cap"
+YT_QUOTA_DEFAULT_CAP = 10000
 SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
@@ -440,6 +444,74 @@ def youtube_hide_shorts_global() -> bool:
     """Per-user: auto-mark Shorts read on ALL YouTube feeds at refresh (overrides the
     per-feed pref). Off by default."""
     return get_runtime_setting(SETTING_YT_HIDE_SHORTS_GLOBAL, "0") == "1"
+
+
+def _pacific_today() -> str:
+    """Today's date (YYYY-MM-DD) in US/Pacific — the timezone YouTube resets quota on."""
+    import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d")
+    except Exception:
+        # Fallback: fixed -08:00 offset (good enough for a day-bucket if tzdata is absent).
+        return (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def youtube_quota_cap() -> int:
+    try:
+        return max(1, int(get_runtime_setting(SETTING_YT_QUOTA_CAP, str(YT_QUOTA_DEFAULT_CAP)) or YT_QUOTA_DEFAULT_CAP))
+    except (TypeError, ValueError):
+        return YT_QUOTA_DEFAULT_CAP
+
+
+def record_yt_quota_spend(units: int) -> None:
+    """Add ``units`` to the current user's Pacific-day YouTube quota tally. Called by
+    the YT services after each billed API call (sink wired in at startup)."""
+    if units <= 0:
+        return
+    try:
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?)"
+                " ON CONFLICT(day) DO UPDATE SET units = units + excluded.units",
+                (_pacific_today(), int(units)),
+            )
+    except Exception:
+        LOGGER.debug("[yt-quota] failed to record %d units", units, exc_info=True)
+
+
+def mark_yt_quota_exhausted() -> None:
+    """Snap today's tally to the cap after an actual quotaExceeded response."""
+    try:
+        cap = youtube_quota_cap()
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT INTO yt_quota_spend (day, units) VALUES (?, ?)"
+                " ON CONFLICT(day) DO UPDATE SET units = MAX(units, excluded.units)",
+                (_pacific_today(), cap),
+            )
+    except Exception:
+        LOGGER.debug("[yt-quota] failed to mark exhausted", exc_info=True)
+
+
+def get_yt_quota_spent_today() -> int:
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute(
+                "SELECT units FROM yt_quota_spend WHERE day = ?", (_pacific_today(),)
+            ).fetchone()
+        return int(row["units"]) if row else 0
+    except Exception:
+        return 0
+
+
+def get_yt_quota_status() -> dict:
+    """Quota meter payload for the UI: spent / cap / remaining + a low/exhausted flag."""
+    cap = youtube_quota_cap()
+    spent = get_yt_quota_spent_today()
+    remaining = max(0, cap - spent)
+    state = "exhausted" if remaining <= 0 else ("low" if remaining < 500 else "ok")
+    return {"spent": spent, "cap": cap, "remaining": remaining, "state": state}
 
 
 def youtube_embed_host() -> str:
@@ -2493,6 +2565,17 @@ def ensure_meta_schema() -> None:
                 video_id TEXT NOT NULL,
                 added_at TEXT NOT NULL,
                 PRIMARY KEY (scope, scope_id, keyword, entry_id, video_id)
+            )
+            """
+        )
+        # Per-user YouTube Data API quota spend, keyed by the Pacific calendar date
+        # (Google resets quota at midnight Pacific). The API exposes no remaining-quota
+        # read, so we estimate by summing each call's documented unit cost.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS yt_quota_spend (
+                day TEXT PRIMARY KEY,
+                units INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -5251,6 +5334,7 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                                             " WHERE scope=? AND scope_id=? AND keyword=? AND entry_id=? AND video_id=?",
                                             (scope, scope_id, keyword, eid, vid),
                                         )
+                                    mark_yt_quota_exhausted()
                                     LOGGER.warning("[yt-playlist-auto] quota exceeded; %d added this run", added_total)
                                     raise
                                 except Exception as exc:  # noqa: BLE001
@@ -5521,7 +5605,15 @@ youtube_duration_service = YouTubeDurationService(
     user_agent=READABILITY_USER_AGENT,
     # Per-user API key (with env fallback) so each user's key drives durations.
     api_key_provider=lambda: get_yt_api_key(),
+    quota_sink=record_yt_quota_spend,
 )
+
+# Wire the quota-spend sink into the stateless YT modules so each billed API call
+# (playlist list/insert, sub-sync channels/subscriptions) tallies against the
+# current user's daily quota meter.
+youtube_oauth_service.set_quota_sink(record_yt_quota_spend)
+import services.youtube_sync as _youtube_sync_mod
+_youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
@@ -13557,6 +13649,7 @@ def youtube_playlists_route():
     try:
         playlists = youtube_oauth_service.list_playlists(token)
     except youtube_oauth_service.QuotaExceeded:
+        mark_yt_quota_exhausted()
         return JSONResponse({"connected": True, "error": "quota", "playlists": []}, status_code=429)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"connected": True, "error": str(exc), "playlists": []}, status_code=502)
@@ -13581,6 +13674,7 @@ async def youtube_playlist_add_route(request: Request):
             playlist_id = created["id"]
         youtube_oauth_service.add_video_to_playlist(token, playlist_id, video_id)
     except youtube_oauth_service.QuotaExceeded:
+        mark_yt_quota_exhausted()
         return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
@@ -13694,6 +13788,8 @@ def get_all_settings():
         "yt_folder_name": get_yt_folder_name(),
         "yt_embed_account_features": youtube_embed_account_features_enabled(),
         "yt_hide_shorts_global": youtube_hide_shorts_global(),
+        "yt_quota": get_yt_quota_status(),
+        "yt_quota_cap": youtube_quota_cap(),
         "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
         "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
         "resend_api_key_set": bool(resend_key),
@@ -13737,7 +13833,7 @@ async def save_all_settings(request: Request):
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
-        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL,
+        SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
