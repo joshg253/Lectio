@@ -199,8 +199,10 @@ this file only tracks what's still open.
     state-changing endpoints (mark-read/unread, mark-range, saved/star), returning
     **429 + a short cooldown** when exceeded. **Tune thresholds so legitimate heavy use
     never trips it** — fast keyboard triage marking dozens of items is normal; only
-    sustained pathological flip-flopping should hit the limit. Single-user/trusted
-    mode is exempt entirely.
+    sustained pathological flip-flopping should hit the limit. **Role-based: admins
+    are exempt (do whatever); regular users are subject to the limits.** Single-user
+    mode is exempt entirely. Make the exemption a reusable role check so it also
+    governs the other quotas (refresh cadence, scraping, thumb generation).
   - **Authenticated/private feeds** — none supported today, so all feed/image content
     is safe to global-cache. If added, exclude those feeds from the global caches.
 
