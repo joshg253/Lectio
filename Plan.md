@@ -5,11 +5,15 @@ this file only tracks what's still open.
 
 ## Now
 
-- Webhook follow-ups (shipped: `webhook` rule type + Send-test button): batch/digest
-  delivery, a Webhooks README badge.
+Build order (promoted from Later — top first):
+1. **Global skip-Shorts toggle** (YouTube area) — smallest; completes a daily-use gap.
+2. **Auto add to Instapaper** rule — establishes the send-to-destination engine pattern (cheap, reused by later destinations).
+3. **YouTube quota meter** — high value after finding durations were eating the quota; per-user spend vs the 10k/day cap with low alerts.
+4. **Robust YT-folder identity + YT-area settings panel + connection gating** — the remaining YT-area UI.
+5. **On-star → send to destination(s)** — reuses the destination senders from #2.
+6. **Bare media links → embedded players** — self-contained content win.
 
-
-## Later
+Detailed specs follow.
 
 - **YouTube as a first-class "special" area.** Shipped so far: manual Add-to-playlist
   (PR #61: per-user OAuth + the per-embed control, `services/youtube_oauth.py`) and the
@@ -150,6 +154,11 @@ this file only tracks what's still open.
   which isn't in the album URL — scrape the album page's embed `<meta>`/oEmbed once
   and cache it. Helps both the normal article view and Reader view. Larger than the
   Reader-view re-inject (Now) since it needs per-host link→id resolution + caching.
+## Later
+
+- **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button): batch/digest
+  delivery, a Webhooks README badge.
+
 - **Social embeds (Instagram, X/Twitter, etc.)** — harder subcase of the above.
   These ship in feeds as `<blockquote class="instagram-media" / "twitter-tweet">` +
   a platform `<script>`, not an iframe. We strip scripts (privacy/security + we don't
