@@ -7998,6 +7998,27 @@
           });
           row.appendChild(edit);
 
+          // Duplicate: open a NEW add-draft prefilled from this rule so you can
+          // quickly make a similar rule (e.g. point it at a different feed). The
+          // copy starts disabled; change the scope/feed/keyword before saving (an
+          // unchanged copy would just overwrite the original, same primary key).
+          const dup = document.createElement('button');
+          dup.type = 'button';
+          dup.className = 'hl-rule-edit hl-rule-duplicate';
+          dup.setAttribute('aria-label', `Duplicate rule for "${rule.keyword}"`);
+          dup.title = 'Duplicate rule';
+          dup.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">content_copy</span>';
+          dup.addEventListener('click', () => {
+            // folder_id helps the draft preselect the folder for a feed-scoped rule.
+            const prefill = { ...rule };
+            if (rule.scope === 'feed') {
+              const fl = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(rule.scope_id)}"]`);
+              if (fl) prefill.folder_id = fl.getAttribute('data-folder-id') || '';
+            }
+            hlMakeAddDraft(prefill, row);
+          });
+          row.appendChild(dup);
+
           const del = document.createElement('button');
           del.type = 'button';
           del.className = 'hl-rule-delete';
@@ -8809,7 +8830,14 @@
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
           if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
-          else { populateFeeds(folderSel.value); }
+          else {
+            // populateFeeds() rebuilds the <select> and clears its value; preserve
+            // the current feed selection across a type change so right-click
+            // Feed → Automation (and editing) doesn't lose the chosen feed.
+            const _prevFeed = feedSel.value;
+            populateFeeds(folderSel.value);
+            if (_prevFeed) feedSel.value = _prevFeed;
+          }
         }
         syncTypeControls();
         // syncTypeControls() re-runs populateFeeds(), which resets the feed
@@ -8894,7 +8922,7 @@
         });
       }
 
-      function hlMakeAddDraft(prefill) {
+      function hlMakeAddDraft(prefill, afterEl = null) {
         const draft = hlBuildDraft(prefill || {}, 'Add', async (newRule) => {
           try {
             const params = hlRuleToParams({ ...newRule, enabled: 0 });
@@ -8908,7 +8936,7 @@
             applyHighlights();
           } catch { window.alert('Failed to add rule'); }
         });
-        hlInsertDraft(draft, null);
+        hlInsertDraft(draft, afterEl);
       }
 
       addRuleBtn?.addEventListener('click', () => hlMakeAddDraft({}));
