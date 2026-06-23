@@ -1400,13 +1400,13 @@
       <div id="settings-tab-integrations" class="settings-tab-panel" hidden>
         <h4 class="settings-section-title">YouTube</h4>
         <div class="settings-section">
+          <p class="settings-hint" style="grid-column:1 / -1">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
           <label class="settings-label" for="sett-yt-key">API key</label>
           <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
           <label class="settings-label" for="sett-yt-channel">Channel ID / handle</label>
           <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
           <label class="settings-label" for="sett-yt-folder">Folder name</label>
           <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
-          <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
           <label class="settings-toggle-row" style="grid-column:1 / -1;display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
             <input type="checkbox" id="sett-yt-account-features" />
             <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
@@ -1421,13 +1421,13 @@
         </div>
         <h4 class="settings-section-title">DeviantArt</h4>
         <div class="settings-section">
+          <p class="settings-hint" style="grid-column:1 / -1">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
           <label class="settings-label" for="sett-da-id">Client ID</label>
           <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
           <label class="settings-label" for="sett-da-secret">Client Secret</label>
           <input type="password" id="sett-da-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
           <label class="settings-label" for="sett-da-folder">Watch-feed folder</label>
           <input type="text" id="sett-da-folder" class="settings-input" placeholder="DeviantArt" maxlength="200" autocomplete="off" />
-          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
           <div class="settings-da-account" style="margin-top:0.5rem">
             <span id="sett-da-status" class="settings-inline-status"></span>
             <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect">Connect DeviantArt account</a>
@@ -1438,11 +1438,11 @@
         </div>
         <h4 class="settings-section-title">Instapaper</h4>
         <div class="settings-section">
+          <p class="settings-hint" style="grid-column:1 / -1">Lectio saves articles via the <a href="https://www.instapaper.com/api/simple" target="_blank" rel="noopener">Instapaper Simple API</a> using your account credentials. No separate API key is needed.</p>
           <label class="settings-label" for="sett-ip-user">Username</label>
           <input type="text" id="sett-ip-user" class="settings-input" placeholder="your@email.com" maxlength="200" autocomplete="off" />
           <label class="settings-label" for="sett-ip-pass">Password</label>
           <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
-          <p class="settings-hint">Lectio saves articles via the <a href="https://www.instapaper.com/api/simple" target="_blank" rel="noopener">Instapaper Simple API</a> using your account credentials. No separate API key is needed.</p>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
