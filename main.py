@@ -2462,6 +2462,15 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_mark_read INTEGER NOT NULL DEFAULT 1")
         except Exception:
             pass
+        # Duration filter for youtube_playlist (minutes; 0 = no limit).
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_min_minutes INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_max_minutes INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
@@ -2899,7 +2908,7 @@ def upsert_feed_thumb_strategy(conn: sqlite3.Connection, feed_url: str, strategy
 
 
 _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'})
-_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed'})
+_HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
 _HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist"}
@@ -2913,7 +2922,8 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
         " webhook_url, webhook_format,"
-        " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read"
+        " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
+        " yt_min_minutes, yt_max_minutes"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -2942,6 +2952,8 @@ def add_highlight_keyword(
     yt_playlist_title: str = "",
     yt_include_shorts: bool = False,
     yt_mark_read: bool = True,
+    yt_min_minutes: int = 0,
+    yt_max_minutes: int = 0,
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -2960,15 +2972,17 @@ def add_highlight_keyword(
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
         "  webhook_url, webhook_format,"
-        "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
+        "  yt_min_minutes, yt_max_minutes)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
          webhook_url.strip(), webhook_format,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
-         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0),
+         1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
+         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
     )
 
 
@@ -3240,6 +3254,47 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
 def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+# A "feeds" rule scope targets an explicit set of feeds (not a whole folder). Its
+# scope_id is the feed URLs joined by newline (URLs may contain commas, so newline
+# is the safe separator). These helpers centralize parse + scope→feed-set + the
+# per-feed "is this feed in scope" check used by the after-refresh runners.
+_FEEDS_SCOPE_SEP = "\n"
+
+
+def parse_feeds_scope_id(scope_id: str) -> list[str]:
+    return [u.strip() for u in (scope_id or "").split(_FEEDS_SCOPE_SEP) if u.strip()]
+
+
+def resolve_rule_feed_urls(conn: sqlite3.Connection, scope: str, scope_id: str) -> set[str] | None:
+    """Return the set of feed URLs a rule applies to, or None for global (all feeds)."""
+    if scope == "global":
+        return None
+    if scope == "folder":
+        try:
+            return get_folder_feed_urls(conn, int(scope_id))
+        except (ValueError, TypeError):
+            return set()
+    if scope == "feed":
+        return {scope_id} if scope_id else set()
+    if scope == "feeds":
+        return set(parse_feeds_scope_id(scope_id))
+    return set()
+
+
+def feed_in_rule_scope(scope: str, scope_id: str, feed_url: str, folder_feed_urls: set[str] | None) -> bool:
+    """Per-feed scope test for the after-refresh runners. ``folder_feed_urls`` is the
+    prefetched feed set for a folder-scoped rule (ignored for other scopes)."""
+    if scope == "global":
+        return True
+    if scope == "folder":
+        return feed_url in (folder_feed_urls or set())
+    if scope == "feed":
+        return scope_id == feed_url
+    if scope == "feeds":
+        return feed_url in parse_feeds_scope_id(scope_id)
+    return False
 
 
 def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
@@ -3714,8 +3769,11 @@ def _resolve_dedup_feed_urls(
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
         feed_urls = get_folder_feed_urls(conn, fid)
+    elif scope == "feeds":
+        # Dedupe across an explicit set of selected feeds (>=2 needed; checked by caller).
+        feed_urls = set(parse_feeds_scope_id(scope_id))
     else:
-        return {"error": "deduplicate rules require global or folder scope"}
+        return {"error": "deduplicate rules require global, folder, or multi-feed scope"}
     if exclude_scope_ids:
         excluded: set[str] = set()
         for fid_str in exclude_scope_ids.split(","):
@@ -3918,6 +3976,8 @@ def _dry_run_pattern(
     result_limit: int = 20,
     match_all_if_empty: bool = False,
     exclude_shorts: bool = False,
+    min_secs: int = 0,
+    max_secs: int = 0,
 ) -> dict:
     """Preview which entries a pattern-based rule would affect (read + unread, newest first).
 
@@ -3942,18 +4002,12 @@ def _dry_run_pattern(
         except _re.error as e:
             return {"error": f"Invalid regex: {e}"}
 
-    if scope == "global":
-        feed_urls: set[str] | None = None
-    elif scope == "folder":
+    if scope == "folder":
         try:
-            fid = int(scope_id)
+            int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    elif scope == "feed":
-        feed_urls = {scope_id} if scope_id else None
-    else:
-        feed_urls = None
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     matches: list[dict] = []
     total_scanned = 0
@@ -3977,6 +4031,12 @@ def _dry_run_pattern(
                 break
             if exclude_shorts and _is_youtube_short(entry):
                 continue
+            if (min_secs or max_secs):
+                # Duration filter preview: use the entry's primary video (its link).
+                _vid = youtube_duration_service.extract_video_id(str(entry.link or ""))
+                _dur = youtube_duration_service.get_cached_duration(_vid)[0] if _vid else None
+                if _dur is None or (min_secs and _dur < min_secs) or (max_secs and _dur > max_secs):
+                    continue
             total_scanned += 1
             title_text = str(entry.title or "")
             body_text = ""
@@ -4211,18 +4271,12 @@ def _run_now_pattern(
     except _re.error as e:
         return {"error": f"Invalid regex: {e}"}
 
-    if scope == "global":
-        feed_urls: set[str] | None = None
-    elif scope == "folder":
+    if scope == "folder":
         try:
-            fid = int(scope_id)
+            int(scope_id)
         except (ValueError, TypeError):
             return {"error": "invalid scope_id"}
-        feed_urls = get_folder_feed_urls(conn, fid)
-    elif scope == "feed":
-        feed_urls = {scope_id} if scope_id else None
-    else:
-        feed_urls = None
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
 
     to_mark: list[tuple[str, str]] = []
     matched_entries: list[dict] = []
@@ -4622,17 +4676,8 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                 if rule_type == "mark_as_read":
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
 
                         if not in_scope:
                             continue
@@ -4654,8 +4699,10 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             in_scope = bool(refreshed_feed_urls & folder_feed_map.get(int(scope_id), set()))
                         except (ValueError, TypeError):
                             in_scope = False
+                    elif scope == "feeds":
+                        in_scope = bool(refreshed_feed_urls & set(parse_feeds_scope_id(scope_id)))
                     else:
-                        in_scope = False  # dedup requires global or folder scope
+                        in_scope = False  # dedup requires global / folder / multi-feed scope
 
                     if not in_scope:
                         continue
@@ -4801,17 +4848,8 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                     for feed_url in refreshed_feed_urls:
                         # Scope check
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -4937,17 +4975,8 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                     feed_title_cache: dict[str, str] = {}
 
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -5051,23 +5080,16 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
             playlist_id = str(rule.get("yt_playlist_id") or "")
             include_shorts = bool(rule.get("yt_include_shorts"))
             mark_read = bool(rule.get("yt_mark_read"))
+            min_secs = max(0, int(rule.get("yt_min_minutes") or 0)) * 60
+            max_secs = max(0, int(rule.get("yt_max_minutes") or 0)) * 60
             run_entries: list[dict] = []
             marked: list[tuple[str, str]] = []
             try:
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
                     for feed_url in refreshed_feed_urls:
-                        if scope == "global":
-                            in_scope = True
-                        elif scope == "folder":
-                            try:
-                                in_scope = feed_url in folder_feed_map.get(int(scope_id), set())
-                            except (ValueError, TypeError):
-                                in_scope = False
-                        elif scope == "feed":
-                            in_scope = scope_id == feed_url
-                        else:
-                            in_scope = False
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                         if not in_scope:
                             continue
 
@@ -5094,6 +5116,18 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
                             for vid in vids:
                                 if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
                                     break
+                                # Duration filter (minutes; 0 = no limit). The video's
+                                # length comes from the same cache that powers the
+                                # [duration] title prefix; an unknown duration is skipped
+                                # this run (it's retried once the duration is cached).
+                                if min_secs or max_secs:
+                                    dur = youtube_duration_service.get_cached_duration(vid)[0]
+                                    if dur is None:
+                                        continue
+                                    if min_secs and dur < min_secs:
+                                        continue
+                                    if max_secs and dur > max_secs:
+                                        continue
                                 # Dedup guard: claim the (rule, entry, video) row first;
                                 # rowcount 0 means we've added it before — skip.
                                 with get_meta_connection() as conn:
@@ -5834,7 +5868,7 @@ _AUTOMATION_TYPE_LABELS = {
     "email_article": "Email article",
     "webhook": "Webhook",
 }
-_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed"}
+_AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
 
 def _automation_rule_detail(rule: dict) -> str:
@@ -5876,6 +5910,8 @@ def collect_feed_automations(conn, feed_url: str, folder_ids: list[int]) -> dict
             applies = True
         elif scope == "feed":
             applies = scope_id == feed_url
+        elif scope == "feeds":
+            applies = feed_url in parse_feeds_scope_id(scope_id)
         elif scope == "folder":
             applies = scope_id.isdigit() and int(scope_id) in folder_id_set
         else:
@@ -12957,6 +12993,8 @@ def add_highlight_route(
     yt_playlist_title: str = Form(""),
     yt_include_shorts: int = Form(0),
     yt_mark_read: int = Form(1),
+    yt_min_minutes: int = Form(0),
+    yt_max_minutes: int = Form(0),
 ):
     keyword = keyword.strip()
     if scope not in _HIGHLIGHT_VALID_SCOPES:
@@ -12965,7 +13003,9 @@ def add_highlight_route(
         if keyword not in _DEDUP_VALID_MATCH_METHODS:
             return JSONResponse({"error": "invalid match method for deduplicate rule"}, status_code=400)
         if scope == "feed":
-            return JSONResponse({"error": "deduplicate rules cannot be scoped to a single feed"}, status_code=400)
+            return JSONResponse({"error": "deduplicate needs at least two feeds — select multiple feeds or a folder"}, status_code=400)
+        if scope == "feeds" and len(parse_feeds_scope_id(scope_id)) < 2:
+            return JSONResponse({"error": "deduplicate needs at least two feeds selected"}, status_code=400)
     elif type == "youtube_playlist":
         # Keyword is optional for this rule (empty = add every new video in scope).
         if not yt_playlist_id.strip():
@@ -12987,7 +13027,8 @@ def add_highlight_route(
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
                               webhook_url, webhook_format,
                               yt_playlist_id, yt_playlist_title,
-                              bool(yt_include_shorts), bool(yt_mark_read))
+                              bool(yt_include_shorts), bool(yt_mark_read),
+                              yt_min_minutes, yt_max_minutes)
     return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
                          "color": color, "is_regex": bool(is_regex), "type": type,
                          "search_in": search_in, "delivery": delivery,
@@ -12999,7 +13040,9 @@ def add_highlight_route(
                          "yt_playlist_id": yt_playlist_id.strip(),
                          "yt_playlist_title": yt_playlist_title.strip(),
                          "yt_include_shorts": bool(yt_include_shorts),
-                         "yt_mark_read": bool(yt_mark_read)})
+                         "yt_mark_read": bool(yt_mark_read),
+                         "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
 
 
 @app.post("/highlights/remove")
@@ -13071,6 +13114,8 @@ def rules_dry_run_route(
     exclude_scope_ids: str = Query(""),
     feed_urls: str = Query(""),  # comma-separated; overrides scope for dedup
     yt_include_shorts: int = Query(1),
+    yt_min_minutes: int = Query(0),
+    yt_max_minutes: int = Query(0),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -13084,9 +13129,12 @@ def rules_dry_run_route(
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
+            _is_yt = type == "youtube_playlist"
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(type == "youtube_playlist"),
-                                      exclude_shorts=(type == "youtube_playlist" and not yt_include_shorts))
+                                      match_all_if_empty=_is_yt,
+                                      exclude_shorts=(_is_yt and not yt_include_shorts),
+                                      min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
+                                      max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)
     if "error" in result:
