@@ -280,6 +280,13 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **Hide Shorts (global, per-user)** — Shorts are auto-marked read at refresh by the
+  hide-shorts pass in `_run_automation_after_refresh`. Per-feed it reads the
+  `feed_display_prefs.hide_shorts` pref; the `yt_hide_shorts_global` setting
+  (`youtube_hide_shorts_global()`, Integrations toggle, off by default) additionally
+  targets **every** refreshed YouTube feed (URL contains `youtube.com/feeds/videos.xml`)
+  regardless of the per-feed pref — one source of truth, no drift as feeds come/go via
+  sync. A Short is detected by `/shorts/` in the entry link (`_is_youtube_short`).
 - **YouTube embed host (per-user)** — both `youtube.com` and `youtube-nocookie.com`
   are allowlisted; which one a YouTube *embed* uses is the viewer's choice, applied
   at **render** (not ingest, since sanitization bakes content into each user's

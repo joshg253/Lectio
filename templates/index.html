@@ -1418,6 +1418,11 @@
             <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
           </label>
           <p class="settings-hint" style="grid-column:1 / -1">Use the standard <code>youtube.com</code> player instead of the privacy-enhanced <code>youtube-nocookie.com</code> one, so the in-article player shows Share and Watch Later (these need your signed-in YouTube cookies). Off by default for privacy; turning it on lets YouTube set its usual cookies.</p>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem">
+            <input type="checkbox" id="sett-yt-hide-shorts" />
+            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds</span>
+          </label>
+          <p class="settings-hint" style="grid-column:1 / -1">Auto-marks YouTube Shorts as read across every YouTube feed at refresh, so they stay out of your unread list. Off by default. (Overrides the per-feed Shorts setting when on.)</p>
           <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed (uses the YouTube Data API with your own OAuth grant — tokens are stored only for you).</p>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-yt-oauth-row">
             <span id="sett-yt-oauth-status" class="settings-inline-status"></span>
@@ -9247,6 +9252,7 @@
         v('sett-yt-channel', d.yt_channel_id);
         v('sett-yt-folder', d.yt_folder_name);
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
+        { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
           const ytConfigured = !!d.yt_oauth_configured;
@@ -9388,6 +9394,7 @@
             yt_channel_id: g('sett-yt-channel'),
             yt_folder_name: g('sett-yt-folder'),
             yt_embed_account_features: (document.getElementById('sett-yt-account-features')?.checked ? '1' : '0'),
+            yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             deviantart_client_id: g('sett-da-id'),

@@ -6,7 +6,7 @@ this file only tracks what's still open.
 ## Now
 
 Build order (promoted from Later — top first):
-1. **Global skip-Shorts toggle** (YouTube area) — smallest; completes a daily-use gap.
+1. ~~**Global skip-Shorts toggle** (YouTube area)~~ — ✅ SHIPPED (`yt_hide_shorts_global`).
 2. **Auto add to Instapaper** rule — establishes the send-to-destination engine pattern (cheap, reused by later destinations).
 3. **YouTube quota meter** — high value after finding durations were eating the quota; per-user spend vs the 10k/day cap with low alerts.
 4. **Robust YT-folder identity + YT-area settings panel + connection gating** — the remaining YT-area UI.
@@ -43,12 +43,10 @@ Detailed specs follow.
      or derive "YT area" = any folder whose feeds are all `is_youtube_feed`. Drives
      where the special settings/automation panel shows up.
 
-  2. **Global "skip Shorts" toggle** for the YT area — one switch that applies the
-     existing `hide_shorts` behavior across all YT feeds (and to feeds added later by
-     sync), instead of toggling each feed. **Default: off.** Implement as an
-     area-level setting the hide-shorts pass consults, OR as a bulk-apply that sets
-     `hide_shorts=1` on every YT feed + on sync of new ones. Prefer the area-level
-     setting (one source of truth; no drift when feeds come and go).
+  2. **Global "skip Shorts" toggle** — ✅ **SHIPPED.** `yt_hide_shorts_global` setting
+     (Integrations toggle, off by default); the hide-shorts pass targets every
+     refreshed YouTube feed when on, regardless of the per-feed pref. Area-level
+     setting → one source of truth, no drift.
 
   3. **"Auto add to playlist" automation** — ✅ **SHIPPED.** General `youtube_playlist`
      rule (any feed/folder), extracts all video ids per entry (incl. embedded + Shorts),
