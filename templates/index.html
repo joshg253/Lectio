@@ -7443,6 +7443,11 @@
         const { folderNames, feedTitles } = hlScopeData();
         if (scope === 'folder') return folderNames[scopeId] || `Folder ${scopeId}`;
         if (scope === 'feed') return feedTitles[scopeId] || scopeId;
+        if (scope === 'feeds') {
+          const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (urls.length <= 2) return urls.map(u => feedTitles[u] || u).join(', ');
+          return `${urls.length} feeds`;
+        }
         return scope;
       }
 
@@ -8317,14 +8322,18 @@
         }
         if (prefill.scope === 'folder') {
           folderSel.value = prefill.scope_id || '';
-        } else if (prefill.scope === 'feed') {
+        } else if (prefill.scope === 'feed' || prefill.scope === 'feeds') {
           // Prefer the explicit folder_id passed in the prefill (from context menu data
           // attributes), falling back to a DOM lookup so editing existing rules still works.
+          // For a multi-feed rule, locate the folder of the first selected feed.
+          const firstFeed = prefill.scope === 'feeds'
+            ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)[0]
+            : prefill.scope_id;
           if (prefill.folder_id) {
             folderSel.value = String(prefill.folder_id);
           } else {
             for (const el of document.querySelectorAll('.feed-link[data-feed-url]')) {
-              if (el.getAttribute('data-feed-url') === prefill.scope_id) {
+              if (el.getAttribute('data-feed-url') === firstFeed) {
                 folderSel.value = el.getAttribute('data-folder-id') || '';
                 break;
               }
@@ -8333,17 +8342,25 @@
         }
         draft.appendChild(folderSel);
 
-        // Scope: feed
+        // Scope: feed(s) — a multi-select listbox. No selection = whole folder;
+        // exactly one = that feed (scope "feed"); two or more = scope "feeds".
         const feedSel = document.createElement('select');
         feedSel.className = 'hl-draft-select hl-feed-select';
-        const allFeedOpt = document.createElement('option');
-        allFeedOpt.value = '';
-        allFeedOpt.textContent = 'All in folder';
-        feedSel.appendChild(allFeedOpt);
+        feedSel.multiple = true;
+        feedSel.size = 4;
+        feedSel.title = 'Leave empty for the whole folder; Ctrl/Cmd-click to pick several feeds';
 
-        function populateFeeds(folderId) {
-          while (feedSel.options.length > 1) feedSel.remove(1);
-          if (!folderId) { feedSel.disabled = true; feedSel.value = ''; return; }
+        // Feeds the rule already targets (scope feed = one url; feeds = newline list).
+        const _prefillFeedUrls = new Set(
+          prefill.scope === 'feed' ? [prefill.scope_id]
+          : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
+          : []
+        );
+
+        function populateFeeds(folderId, preselect) {
+          const keep = preselect || new Set([...feedSel.selectedOptions].map(o => o.value));
+          feedSel.innerHTML = '';
+          if (!folderId) { feedSel.disabled = true; return; }
           const feeds = [];
           for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
             const url = el.getAttribute('data-feed-url');
@@ -8354,14 +8371,18 @@
             const opt = document.createElement('option');
             opt.value = f.url;
             opt.textContent = f.title;
+            if (keep.has(f.url)) opt.selected = true;
             feedSel.appendChild(opt);
           }
           feedSel.disabled = feeds.length === 0;
         }
+        function getSelectedFeeds() {
+          return [...feedSel.selectedOptions].map(o => o.value).filter(Boolean);
+        }
 
-        populateFeeds(folderSel.value);
-        if (prefill.scope === 'feed') feedSel.value = prefill.scope_id || '';
-        folderSel.addEventListener('change', () => populateFeeds(folderSel.value));
+        populateFeeds(folderSel.value, _prefillFeedUrls);
+        // Changing folder resets the feed selection to that folder's feeds.
+        folderSel.addEventListener('change', () => populateFeeds(folderSel.value, new Set()));
         draft.appendChild(feedSel);
 
         // Match method (Deduplicate only)
@@ -8829,21 +8850,16 @@
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)' : 'keyword or pattern';
-          if (isDedup) { feedSel.disabled = true; feedSel.value = ''; }
-          else {
-            // populateFeeds() rebuilds the <select> and clears its value; preserve
-            // the current feed selection across a type change so right-click
-            // Feed → Automation (and editing) doesn't lose the chosen feed.
-            const _prevFeed = feedSel.value;
-            populateFeeds(folderSel.value);
-            if (_prevFeed) feedSel.value = _prevFeed;
-          }
+          if (isDedup) { feedSel.disabled = true; feedSel.selectedIndex = -1; }
+          // populateFeeds() preserves the current selection across the rebuild, so a
+          // type change (e.g. right-click Feed → Automation → switch to YT) keeps the
+          // chosen feed(s) selected.
+          else { populateFeeds(folderSel.value); }
         }
         syncTypeControls();
-        // syncTypeControls() re-runs populateFeeds(), which resets the feed
-        // <select>; re-apply the prefilled feed scope so an explicitly chosen
-        // feed (e.g. from a post/feed right-click → Automation) stays selected.
-        if (prefill.scope === 'feed' && !feedSel.disabled) feedSel.value = prefill.scope_id || '';
+        // Re-apply the prefilled feed selection (populateFeeds preserves selection,
+        // but syncTypeControls' first run may have rebuilt before it was set).
+        if (_prefillFeedUrls.size && !feedSel.disabled) populateFeeds(folderSel.value, _prefillFeedUrls);
         typeSel.addEventListener('change', syncTypeControls);
         deliverySel.addEventListener('change', syncTypeControls);
         matchMethodSel.addEventListener('change', syncTypeControls);
@@ -8877,7 +8893,7 @@
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
           if (ruleType === 'youtube_playlist' && !ytPlSel.value) { ytPlSel.focus(); return; }
           const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
-          const feedUrl  = feedSel.value || '';
+          const selectedFeeds = getSelectedFeeds();
           const color    = colorSel.value || 'yellow';
           const searchIn = searchInSel.value || 'title';
           const delivery = deliverySel.value || 'immediately';
@@ -8887,9 +8903,10 @@
           const ccMe = ccMeCheck.checked ? 1 : 0;
           const webhookFormat = webhookFormatSel.value || 'generic';
           let scope, scopeId;
-          if (!folderId)     { scope = 'global'; scopeId = ''; }
-          else if (!feedUrl) { scope = 'folder'; scopeId = folderId; }
-          else               { scope = 'feed';   scopeId = feedUrl; }
+          if (!folderId)                  { scope = 'global'; scopeId = ''; }
+          else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
+          else if (selectedFeeds.length === 1) { scope = 'feed';   scopeId = selectedFeeds[0]; }
+          else                            { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
           const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
