@@ -104,3 +104,14 @@ def test_feeds_scoped_rule_applies_to_member_feed(meta):
     # A feed not in the set sees no rule.
     none = main.collect_feed_automations(meta, "https://nope.test/feed", folder_ids=[])["rules"]
     assert none == []
+
+
+def test_youtube_playlist_rule_detail_and_label(meta):
+    main.add_highlight_keyword(meta, "feed", FEED, "", "yellow", rule_type="youtube_playlist",
+                               enabled=1, yt_playlist_id="PL1", yt_playlist_title="TV Queue",
+                               yt_include_shorts=False, yt_mark_read=True, yt_min_minutes=60)
+    rules = main.collect_feed_automations(meta, FEED, folder_ids=[])["rules"]
+    r = next(x for x in rules if x["type"] == "youtube_playlist")
+    assert r["type_label"] == "Add to YT playlist"
+    assert "TV Queue" in r["detail"]
+    assert "≥60m" in r["detail"] and "mark read" in r["detail"]

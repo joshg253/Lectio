@@ -5867,6 +5867,7 @@ _AUTOMATION_TYPE_LABELS = {
     "deduplicate": "Deduplicate",
     "email_article": "Email article",
     "webhook": "Webhook",
+    "youtube_playlist": "Add to YT playlist",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
@@ -5889,6 +5890,19 @@ def _automation_rule_detail(rule: dict) -> str:
     if rule_type == "webhook":
         fmt = str(rule.get("webhook_format") or "generic")
         return f"POST · {fmt} · matches {search_in}"
+    if rule_type == "youtube_playlist":
+        parts = ["→ " + (str(rule.get("yt_playlist_title") or "") or "playlist")]
+        kw = str(rule.get("keyword") or "").strip()
+        parts.append(f"keyword “{kw}”" if kw else "all videos")
+        if rule.get("yt_include_shorts"):
+            parts.append("incl. Shorts")
+        lo = int(rule.get("yt_min_minutes") or 0)
+        hi = int(rule.get("yt_max_minutes") or 0)
+        if lo or hi:
+            parts.append(f"{lo}–{hi}m" if hi else f"≥{lo}m")
+        if rule.get("yt_mark_read"):
+            parts.append("mark read")
+        return " · ".join(parts)
     return ""
 
 
