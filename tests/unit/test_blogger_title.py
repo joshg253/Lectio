@@ -43,3 +43,20 @@ def test_non_blogger_empty_title_stays_empty():
     # Tumblr reblogs are legitimately untitled — don't fabricate a slug title.
     e = _entry("", "https://www.tumblr.com/x/rss", "https://www.tumblr.com/blog/siamo-con-il-dio")
     assert main._display_title(e) == ""
+
+
+def test_display_title_decodes_entities():
+    # Feeds (e.g. Tumblr) leave a literal HTML entity in the stored title; it must
+    # be decoded so it doesn't render raw in escaped-text contexts.
+    e = _entry("Magus&rsquo; Castle in Chrono Trigger (SNES)", "https://x.tumblr.com/rss", "https://x/p/1")
+    assert main._display_title(e) == "Magus’ Castle in Chrono Trigger (SNES)"
+
+
+def test_display_title_decodes_double_encoded():
+    e = _entry("Tom &amp;amp; Jerry", "https://x.tumblr.com/rss", "https://x/p/2")
+    assert main._display_title(e) == "Tom & Jerry"
+
+
+def test_decode_display_entities_leaves_plain_text():
+    assert main._decode_display_entities("Fish & chips") == "Fish & chips"
+    assert main._decode_display_entities("Normal Title") == "Normal Title"

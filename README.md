@@ -47,7 +47,9 @@ The short version:
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
   article lost its player (the feed stripped the `<iframe>` before Lectio kept
   them), the missing YouTube/Bandcamp/SoundCloud embed is recovered from the
-  source page and re-attached. A bare
+  source page and re-attached. Titles that arrive HTML-encoded (or
+  double-encoded, as Tumblr does — `Magus&rsquo; Castle`) are decoded so they read
+  correctly instead of showing the raw entity. A bare
   YouTube link sitting alone in its own paragraph (common when a feed strips the
   oEmbed iframe) is turned into an inline player. Reader view re-injects
   allowlisted players (YouTube/Spotify/Bandcamp) that the readability extractor
