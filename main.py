@@ -14598,6 +14598,11 @@ def get_all_settings():
     instapaper_pw = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
     da_cid, da_secret = get_deviantart_credentials()
     quire_cid, quire_secret = get_quire_credentials()
+    # Lazily detect the Quire plan once (sets the meter caps) if a project is chosen
+    # but no plan has been recorded yet — e.g. projects picked before plan detection
+    # existed, so users see correct caps without re-picking. Best-effort, ~one call.
+    if is_quire_configured() and not get_runtime_setting(SETTING_QUIRE_PLAN):
+        detect_quire_plan_and_caps()
 
     return JSONResponse({
         "profile_name": profile_name,
