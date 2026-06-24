@@ -11,13 +11,13 @@
 
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
-Lectio is a self-hosted, local-first RSS reader with a focus on fast reading triage. It runs as a single-user server behind a TLS proxy and is designed to be deployed on a personal VPS.
+Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS, supports optional multi-user deployments, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
 
 ---
 
 ## What it is
 
-A three-pane desktop RSS reader (folder tree → post list → article pane). Built on Python + FastAPI + the [`reader`](https://github.com/lemon24/reader) library, with a plain-HTML/JS frontend — no build step, no bundler, no framework.
+A self-hosted RSS reader with a triage-first interface that adapts from a three-pane desktop layout to narrower tablet and phone workflows. Built on Python + FastAPI + the [`reader`](https://github.com/lemon24/reader) library, with a plain-HTML/JS frontend — no build step, no bundler, no framework.
 
 The design priority is **speed of triage**: quickly marking things read, surfacing what matters, and staying out of the way.
 
@@ -44,9 +44,13 @@ The short version:
   mark-as-read, manual tags, read history, search, and a Readability/web-view proxy.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
   inline podcast players (incl. audio borrowed from a separate host feed), file
-  attachments, recovered YouTube embeds, and bare-text feed cleanup. Reader view
-  re-injects allowlisted players (YouTube/Spotify/Bandcamp) that the readability
-  extractor would otherwise strip, and de-duplicates a repeated lead image.
+  attachments, recovered YouTube embeds, and bare-text feed cleanup. A bare
+  YouTube link sitting alone in its own paragraph (common when a feed strips the
+  oEmbed iframe) is turned into an inline player. Reader view re-injects
+  allowlisted players (YouTube/Spotify/Bandcamp) that the readability extractor
+  would otherwise strip — audio players (Bandcamp/SoundCloud/Spotify) keep their
+  proper fixed height instead of a 16:9 video box — and de-duplicates a repeated
+  lead image.
   YouTube embeds default to the privacy-enhanced host; a per-user Integrations
   setting switches them to the standard host so Share / Watch Later work, and
   connecting a YouTube account (per-user OAuth) adds an **Add to playlist** control

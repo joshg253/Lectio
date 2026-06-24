@@ -7929,6 +7929,23 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
         return None
 
 
+# Reader-view media CSS, shared by build_readability_response and
+# _wrap_readability_html so the two paths can't diverge. iframes default to 16:9;
+# the block below collects every exception (audio players that need a fixed
+# height instead) in one place — add new embed-host overrides here.
+_READER_VIEW_MEDIA_CSS = (
+    "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
+    "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
+    # --- audio embeds: not 16:9, give each its own fixed height ---
+    "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
+    "article iframe[src*='bandcamp.com/EmbeddedPlayer']{aspect-ratio:auto;height:470px;}"
+    "article iframe[src*='bandcamp.com/EmbeddedPlayer'][src*='size=small']{height:42px;}"
+    "article iframe[src*='soundcloud.com']{aspect-ratio:auto;height:166px;}"
+    # --- end audio embeds ---
+    "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
+)
+
+
 def build_readability_response(source_url: str) -> HTMLResponse:
     parsed = urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
@@ -7994,10 +8011,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
             "h1{margin:0;font-size:1.28rem;line-height:1.3;}"
             "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
-            "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
-            "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
-            "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
-            "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
+            + _READER_VIEW_MEDIA_CSS +
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
@@ -8845,6 +8859,53 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     return str(soup)
 
 
+_YT_WATCH_URL_RE = re.compile(
+    r'^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|'
+    r'youtube\.com/shorts/)[\w-]+',
+    re.IGNORECASE,
+)
+
+
+def _embed_standalone_youtube_links(content_html: str) -> str:
+    """Turn a paragraph/anchor that is *only* a bare YouTube link into a player.
+
+    Some feeds (WordPress with the oEmbed iframe stripped) deliver the video as
+    a standalone watch/youtu.be/shorts link in its own paragraph rather than an
+    embed. When a <p> (or a lone <a>) contains nothing but such a link, replace
+    it with the inline player. Inline mentions inside prose are left untouched —
+    we only convert when the link is the element's sole meaningful content."""
+    if not isinstance(content_html, str) or "youtu" not in content_html.lower():
+        return content_html
+    if "/embed/" in content_html and "youtube" in content_html.lower():
+        # An embed already exists; still scan, but each match is gated below.
+        pass
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    changed = False
+    for a in list(soup.find_all("a")):
+        href = (a.get("href") or "").strip()
+        if not href or not _YT_WATCH_URL_RE.match(href):
+            continue
+        # The link must be the sole content of its block — convert a paragraph
+        # (or lone anchor) that is just this link, but not a worded link sitting
+        # inside a sentence. Compare the anchor's text against its container's
+        # full text: if they match, the anchor is the container's only content.
+        anchor_text = a.get_text(strip=True)
+        parent = a.parent
+        target = a
+        if parent is not None and parent.name == "p":
+            if parent.get_text(strip=True) != anchor_text:
+                continue  # other prose in the paragraph → inline mention
+            target = parent
+        vid = youtube_duration_service.extract_video_id(href)
+        if not vid:
+            continue
+        target.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
+        changed = True
+    return str(soup) if changed else content_html
+
+
 def _inject_source_gallery(content_html, entry, lead_image_url):
     """Append the source article's images to an image-less feed body (paizo blog).
 
@@ -9348,6 +9409,10 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # readable comic, not the thumbnail.
     if isinstance(content_html, str) and "comicsthumbs" in content_html.lower():
         content_html = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", content_html, flags=re.IGNORECASE)
+
+    # Standalone bare YouTube links (own paragraph / lone anchor) → inline player.
+    # Covers feeds where the oEmbed iframe was stripped and only the link remains.
+    content_html = _embed_standalone_youtube_links(content_html)
 
     # Apply the per-user YouTube embed-host preference to feed-native players
     # (the recovered/injected player above already uses youtube_embed_host()).
@@ -11017,10 +11082,7 @@ def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
             "main{max-width:760px;margin:0 auto;padding:1.2rem 1rem 2rem;}"
             "header{font-family:Segoe UI,Arial,sans-serif;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #d4dbe5;}"
             "a{color:#0a5ca4;}article{font-size:1.05rem;line-height:1.7;}"
-            "article img{max-width:100%;height:auto;max-height:240px;}article a>img{max-height:1.4em;vertical-align:middle;}"
-            "article iframe{max-width:100%;width:100%;aspect-ratio:16/9;height:auto;border:0;}"
-            "p.lectio-embed{margin:1rem 0;}p.lectio-embed iframe[src*='spotify.com']{aspect-ratio:auto;height:152px;}"
-            "article svg{width:1.2em;height:1.2em;vertical-align:middle;flex-shrink:0;}"
+            + _READER_VIEW_MEDIA_CSS +
             "article pre{white-space:pre-wrap;}"
             "article *{color:inherit !important;background-color:transparent !important;}"
             "</style></head>"
