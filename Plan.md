@@ -207,6 +207,13 @@ Detailed specs follow.
     refresh win (single refresh per feed, deduped storage). Umbrella for "a global
     mechanism for all non-private feeds to reduce strain/storage." Pushes unread
     counts to an incrementally-maintained per-user table instead of live scans.
+    reader 3.24 documented the canonical layout: `shared.sqlite` holds all feed/entry
+    content (updated once per feed regardless of N subscribers), per-user DBs hold
+    only personal state, a routing layer merges at query time. `update_feeds_iter()`
+    yields per-feed results which could fan out into user-specific tables.
+    Current Lectio layout fetches each feed once per user (N users = N fetches) — fine
+    for 1–3 trusted users, but the natural limit before shared-content mode becomes
+    worth building.
   - **Global WebSub subscriptions** — the callback URL is already global, but
     subscription rows + secrets live per-user, so subscribe/renew POSTs and verify/
     push fanout are duplicated across users. Move to one shared subscription store

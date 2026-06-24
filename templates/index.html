@@ -310,7 +310,12 @@
     <div class="pane-resizer" data-resizer="left-middle" role="separator" aria-label="Resize left and middle panes"></div>
 
     <section class="pane pane-posts">
-      {% if selected_read_filter == 'history' %}
+      {% if no_feeds %}
+      <div class="no-feeds-prompt">
+        <p class="no-feeds-prompt-text muted">No feeds yet. Add your first feed to get started.</p>
+        <button type="button" class="btn no-feeds-add-btn" id="no-feeds-add-btn">+ Add Feed</button>
+      </div>
+      {% elif selected_read_filter == 'history' %}
       <div class="pane-header history-pane-header">
         <span class="material-symbols-rounded history-header-icon" aria-hidden="true">history</span>
         <span class="history-header-label">History</span>
@@ -11712,6 +11717,9 @@
       document.getElementById('menu-add-feed-btn')?.addEventListener('click', () => {
         window.openAddFeedDialog();
         document.getElementById('side-menu')?.removeAttribute('data-open');
+      });
+      document.getElementById('no-feeds-add-btn')?.addEventListener('click', () => {
+        window.openAddFeedDialog();
       });
     }());
 

@@ -12451,71 +12451,72 @@ def home(
     # Auto-refresh cadence shown in the menu: the bound user's own value in multi
     # mode (the menu form posts to set *their* setting), the cached global in single.
     _arm = _effective_auto_refresh_minutes()
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "folder_rows": folder_rows,
-            "root_folder_row": root_folder_row,
-            "child_folder_rows": child_folder_rows,
-            "folder_failing_counts": folder_failing_counts,
-            "folder_options": folder_options,
-            "feeds_by_folder": feeds_by_folder,
-            "settings_feeds_by_folder": settings_feeds_by_folder,
-            "feed_to_folder": feed_to_folder,
-            "push_feed_urls": get_push_active_feed_urls(),
-            "tag_rows": tag_rows,
-            "selected_folder_id": selected_folder_id,
-            "selected_feed_url": selected_feed_url,
-            "selected_tag": selected_tag,
-            "selected_query": selected_query,
-            "problematic_feeds": problematic_feeds,
-            "problematic_feed_count": len(problematic_feeds),
-            "problematic_unseen_count": problematic_unseen_count,
-            "selected_sort_by": selected_sort_by,
-            "selected_sort_dir": selected_sort_dir,
-            "selected_read_filter": selected_read_filter,
-            "selected_star_only": selected_star_only,
-            "selected_resume_read_filter": selected_resume_read_filter,
-            "global_note": global_note,
-            "email_configured": is_email_configured(),
-            "yt_oauth_connected": youtube_oauth_connected(),
-            "pinterest_oauth_connected": pinterest_oauth_connected(),
-            "pinterest_connected": pinterest_oauth_connected(),
-            "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
-            "email_to_default": email_to_default,
-            "instapaper_configured": is_instapaper_configured(),
-            "quire_configured": is_quire_configured(),
-            "youtube_sync_last_at": youtube_sync_last_at,
-            "youtube_sync_last_result": youtube_sync_last_result,
-            "inactive_feeds": inactive_feeds,
-            "inactive_feed_count": len(inactive_feeds),
-            "posts": posts,
-            "selected_entry": selected_entry,
-            "message": message,
-            "no_rss_url": no_rss_url,
-            "auto_refresh_enabled": _arm > 0,
-            "auto_refresh_minutes": _arm,
-            "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
-            "static_asset_version": STATIC_ASSET_VERSION,
-            "debug_mode": DEBUG_MODE,
-            "highlight_rules": highlight_rules,
-            "email_contacts": email_contacts,
-            "email_bcc": email_bcc,
-            "profile_name": profile_name,
-            "profile_email": profile_email,
-            "profile_avatar_url": profile_avatar_url,
-            "multi_user": MULTI_USER,
-            "auth_enabled": AUTH_ENABLED,
-            "current_user": _current_web_username(request),
-            "is_admin": _is_web_admin(_current_web_user(request)),
-            "current_api_token": (
-                user_store.get_api_token(_current_web_user(request))
-                if (MULTI_USER and user_store and _current_web_user(request))
-                else ""
-            ),
-        },
-    )
+    _tmpl_ctx = {
+        "request": request,
+        "folder_rows": folder_rows,
+        "root_folder_row": root_folder_row,
+        "child_folder_rows": child_folder_rows,
+        "folder_failing_counts": folder_failing_counts,
+        "folder_options": folder_options,
+        "feeds_by_folder": feeds_by_folder,
+        "settings_feeds_by_folder": settings_feeds_by_folder,
+        "feed_to_folder": feed_to_folder,
+        "push_feed_urls": get_push_active_feed_urls(),
+        "tag_rows": tag_rows,
+        "selected_folder_id": selected_folder_id,
+        "selected_feed_url": selected_feed_url,
+        "selected_tag": selected_tag,
+        "selected_query": selected_query,
+        "problematic_feeds": problematic_feeds,
+        "problematic_feed_count": len(problematic_feeds),
+        "problematic_unseen_count": problematic_unseen_count,
+        "selected_sort_by": selected_sort_by,
+        "selected_sort_dir": selected_sort_dir,
+        "selected_read_filter": selected_read_filter,
+        "selected_star_only": selected_star_only,
+        "selected_resume_read_filter": selected_resume_read_filter,
+        "global_note": global_note,
+        "email_configured": is_email_configured(),
+        "yt_oauth_connected": youtube_oauth_connected(),
+        "pinterest_oauth_connected": pinterest_oauth_connected(),
+        "pinterest_connected": pinterest_oauth_connected(),
+        "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
+        "email_to_default": email_to_default,
+        "instapaper_configured": is_instapaper_configured(),
+        "quire_configured": is_quire_configured(),
+        "youtube_sync_last_at": youtube_sync_last_at,
+        "youtube_sync_last_result": youtube_sync_last_result,
+        "inactive_feeds": inactive_feeds,
+        "inactive_feed_count": len(inactive_feeds),
+        "posts": posts,
+        "selected_entry": selected_entry,
+        "message": message,
+        "no_rss_url": no_rss_url,
+        "auto_refresh_enabled": _arm > 0,
+        "auto_refresh_minutes": _arm,
+        "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
+        "static_asset_version": STATIC_ASSET_VERSION,
+        "debug_mode": DEBUG_MODE,
+        "highlight_rules": highlight_rules,
+        "email_contacts": email_contacts,
+        "email_bcc": email_bcc,
+        "profile_name": profile_name,
+        "profile_email": profile_email,
+        "profile_avatar_url": profile_avatar_url,
+        "multi_user": MULTI_USER,
+        "auth_enabled": AUTH_ENABLED,
+        "current_user": _current_web_username(request),
+        "is_admin": _is_web_admin(_current_web_user(request)),
+        "current_api_token": (
+            user_store.get_api_token(_current_web_user(request))
+            if (MULTI_USER and user_store and _current_web_user(request))
+            else ""
+        ),
+        "no_feeds": len(all_feed_urls) == 0,
+    }
+    _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
+    _stream.enable_buffering(50)
+    return StreamingResponse(_stream, media_type="text/html")
 
 
 @app.get("/dev/feeds/email-match.xml")
@@ -16419,6 +16420,12 @@ async def opml_import(opml_file: Annotated[UploadFile, File(...)]):
     )
 
 
+# Limit concurrent takeout exports to 1: each one reads the full reader DB + meta DB
+# and builds an in-memory ZIP, so letting them pile up would multiply RAM + lock
+# contention. OPML export is fast/small and is not gated by this semaphore.
+_takeout_export_sem = threading.Semaphore(1)
+
+
 @app.get("/opml/export")
 def opml_export():
     with get_meta_connection() as conn:
@@ -16432,17 +16439,26 @@ def opml_export():
 
 @app.get("/takeout/export")
 def takeout_export():
-    with get_meta_connection() as conn:
-        opml_text = export_opml_text(conn)
-        zip_bytes = takeout_service.build_takeout_zip(
-            conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
+    if not _takeout_export_sem.acquire(blocking=False):
+        return Response(
+            content="An export is already in progress. Please wait and try again.",
+            status_code=429,
+            media_type="text/plain",
         )
-    date_str = datetime.now().strftime("%Y%m%d")
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=lectio-takeout-{date_str}.zip"},
-    )
+    try:
+        with get_meta_connection() as conn:
+            opml_text = export_opml_text(conn)
+            zip_bytes = takeout_service.build_takeout_zip(
+                conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
+            )
+        date_str = datetime.now().strftime("%Y%m%d")
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename=lectio-takeout-{date_str}.zip"},
+        )
+    finally:
+        _takeout_export_sem.release()
 
 
 @app.post("/takeout/import")
