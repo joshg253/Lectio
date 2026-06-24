@@ -5482,6 +5482,7 @@
       const body = new URLSearchParams({ feed_url: feedUrl, key, value: String(value) });
       const resp = await fetch('/feeds/display-prefs', { method: 'POST', body });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      try { return await resp.json(); } catch (e) { return {}; }
     }
 
     document.querySelectorAll('.feed-prop-crop-pos-btn').forEach(btn => {
@@ -5678,7 +5679,14 @@
     feedPropHideShorts?.addEventListener('change', async () => {
       const feedUrl = feedPropHideShorts.dataset.feedUrl;
       if (!feedUrl) return;
-      try { await saveDisplayPref(feedUrl, 'hide_shorts', feedPropHideShorts.checked ? 1 : 0); }
+      try {
+        const r = await saveDisplayPref(feedUrl, 'hide_shorts', feedPropHideShorts.checked ? 1 : 0);
+        // Enabling clears the existing Shorts backlog server-side; reflect it.
+        if (r && r.marked_read > 0) {
+          try { await _refreshSidebarCounts(); } catch (e) {}
+          try { await refreshCurrentFeedOrFolder(); } catch (e) {}
+        }
+      }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
     });
 
