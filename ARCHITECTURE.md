@@ -405,6 +405,21 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
   `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
   sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
+- **Source-page embed recovery (feed pane)** — entries ingested *before*
+  `services.reader_sanitize` stopped stripping `<iframe>` at feed-parse time lost
+  their players, and (unlike WordPress embed blocks) leave no placeholder `figure`
+  for `_inject_recovered_youtube_embeds` to refill, so the feed-side media scan
+  can't help. `_inject_recovered_source_embeds` (called from `get_entry_detail`
+  after the cleanups, skipped for native YouTube feeds) handles this: when the
+  stored body has no `<iframe>` and the entry has a source link, it reads the
+  lead-image **source-HTML cache** (shared with the lead-image scraper, so it's
+  often already warm; on a miss it queues `queue_source_html_fetch` and leaves the
+  body unchanged — never blocking the render on a network GET — so the embed fills
+  in on a later open), then `_extract_source_embed_iframes` pulls the allowlisted
+  players
+  (`_embed_host_allowed`) — YouTube rebuilt via `_youtube_embed_html` (honors the
+  host preference), the rest sanitized in place — and appends the ones the body
+  lacks. Mirrors the Reader-view recovery but for the normal entry pane.
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 
