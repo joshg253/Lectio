@@ -8971,6 +8971,76 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     return str(soup) if changed else content_html
 
 
+def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit: int = 8) -> list[str]:
+    """Pull allowlisted media-embed players out of a source page's raw HTML.
+
+    Returns sanitized embed markup in document order, skipping any whose src is
+    already present in ``existing_html`` (deduped on the src path). YouTube embeds
+    are rebuilt via ``_youtube_embed_html`` so they honor the user's host
+    preference; every other embed is run through the shared sanitizer (sandbox +
+    referrer policy) since it's injected at render time and not re-sanitized."""
+    if not raw_html or "<iframe" not in raw_html.lower():
+        return []
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(raw_html, "html.parser")
+    existing = (existing_html or "").lower()
+    seen: set[str] = set()
+    out: list[str] = []
+    for ifr in soup.find_all("iframe"):
+        src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+        if not src or not html_sanitize._embed_host_allowed(src):
+            continue
+        key = src.split("?", 1)[0].lower()
+        if key in seen or key in existing:
+            continue
+        seen.add(key)
+        vid = None
+        if "youtu" in src.lower():
+            _em = re.search(r"/embed/([\w-]{11})", src)
+            vid = _em.group(1) if _em else youtube_duration_service.extract_video_id(src)
+        if vid:
+            out.append(_youtube_embed_html(vid))
+        else:
+            cleaned = html_sanitize.sanitize_html(str(ifr))
+            if "<iframe" in cleaned.lower():
+                out.append(cleaned)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _inject_recovered_source_embeds(content_html, entry):
+    """Recover media embeds from the source page when the feed body has none.
+
+    Entries ingested before Lectio stopped stripping ``<iframe>`` at feed-parse
+    time lost their YouTube/Bandcamp/SoundCloud players, and — unlike WordPress
+    embed blocks — leave no placeholder figure to refill, so the feed-side
+    recovery can't help. When the stored body carries no embed and the entry has a
+    source link, fetch the page once (cached, SSRF-guarded via the lead-image
+    source-HTML cache) and append any allowlisted players it has — mirroring the
+    Reader-view ``_reinject_readability_embeds`` recovery."""
+    link = (getattr(entry, "link", "") or "").strip()
+    if not link:
+        return content_html
+    body = content_html if isinstance(content_html, str) else ""
+    if "<iframe" in body.lower():
+        return content_html  # already has an embed — nothing to recover
+    cached = lead_image_service.get_cached_source_html(link)
+    if cached is None:
+        # Don't block the render on a network GET — queue a background fetch and
+        # leave the body unchanged; the embed fills in on a later open. Many pages
+        # are already cached by the lead-image scraper, so this often hits.
+        lead_image_service.queue_source_html_fetch(link)
+        return content_html
+    _base, raw_html = cached
+    embeds = _extract_source_embed_iframes(raw_html, body)
+    if not embeds:
+        return content_html
+    block = "".join(f'<p class="lectio-embed">{e}</p>' for e in embeds)
+    return (body + block) if body else block
+
+
 def _inject_source_gallery(content_html, entry, lead_image_url):
     """Append the source article's images to an image-less feed body (paizo blog).
 
@@ -9505,6 +9575,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
         # iframes, recovered YouTube embeds). Operates on content_html only.
         content_html = _apply_feed_content_cleanups(content_html, feed_url, entry_id)
+
+        # Recover media embeds (YouTube/Bandcamp/SoundCloud/…) from the source
+        # page for older entries whose <iframe> was stripped at ingest and left no
+        # placeholder to refill. Skips when the body already has an embed; fetch is
+        # cached and SSRF-guarded. Runs before the YouTube-feed injection below so
+        # that path still wins for native YouTube feeds.
+        if not (isinstance(feed_url, str)
+                and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
+            content_html = _inject_recovered_source_embeds(content_html, entry)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
