@@ -303,6 +303,7 @@ SETTING_STAR_SEND_QUIRE = "star_send_quire"        # "1"/"0"
 # These are Lectio's own sliding-window caps used to drive the usage meter + back off.
 SETTING_QUIRE_RATE_CAP_MIN = "quire_rate_cap_min"
 SETTING_QUIRE_RATE_CAP_HOUR = "quire_rate_cap_hour"
+SETTING_QUIRE_PLAN = "quire_plan"  # detected plan name of the destination project's org (display only)
 QUIRE_RATE_DEFAULT_CAP_MIN = 50
 QUIRE_RATE_DEFAULT_CAP_HOUR = 200
 AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
@@ -791,6 +792,35 @@ def get_quire_usage_status() -> dict:
     state = "blocked" if blocked else ("low" if low else "ok")
     return {"minute_used": minute_used, "minute_cap": cap_min,
             "hour_used": hour_used, "hour_cap": cap_hour, "state": state}
+
+
+def detect_quire_plan_and_caps() -> str:
+    """Detect the destination project's organization plan and align the rate-meter
+    caps to it (Free 50/200, Professional 300/1250, Premium 1000/5000). Stores the
+    plan name for display. Best-effort; returns the detected plan ("" on failure).
+
+    Quire rate-limits per organization, so the cap that matters is the plan of the
+    org owning the chosen project."""
+    project_oid = quire_project_oid()
+    if not project_oid:
+        return ""
+    token = get_quire_user_token()
+    if not token:
+        return ""
+    try:
+        plan = quire_service.get_project_plan(token, project_oid)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[quire] plan detection failed: %s", exc)
+        return ""
+    caps = quire_service.PLAN_RATE_CAPS.get(plan.strip().lower())
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_QUIRE_PLAN, plan)
+        if caps:
+            # Enterprise (and any unknown plan) keeps the existing/default caps since
+            # its quota scales with member count and isn't a fixed pair.
+            set_setting(conn, SETTING_QUIRE_RATE_CAP_MIN, str(caps[0]))
+            set_setting(conn, SETTING_QUIRE_RATE_CAP_HOUR, str(caps[1]))
+    return plan
 
 
 def _deviantart_folder_name() -> str:
@@ -14613,6 +14643,7 @@ def get_all_settings():
         "quire_project_oid": quire_project_oid(),
         "quire_project_name": get_runtime_setting(SETTING_QUIRE_PROJECT_NAME),
         "quire_usage": get_quire_usage_status(),
+        "quire_plan": get_runtime_setting(SETTING_QUIRE_PLAN),
         "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
         "contacts": contacts,
         "email_to_default": email_to_default,
@@ -14666,6 +14697,7 @@ async def save_all_settings(request: Request):
     # Detect a YouTube fill-in so we can kick off an immediate sync (rather than
     # waiting for daily maintenance) when it goes from unconfigured -> configured.
     yt_configured_before = bool(get_yt_api_key() and get_yt_channel_id())
+    quire_project_before = quire_project_oid()
 
     import json as _json
     with get_meta_connection() as conn:
@@ -14709,6 +14741,15 @@ async def save_all_settings(request: Request):
             target=_run_in_user_context,
             args=(tenancy.current_user_id(), _run_youtube_sync),
             daemon=True, name="youtube-sync-on-config",
+        ).start()
+
+    # Quire destination project changed → detect its org's plan and align the
+    # rate-meter caps (Free/Pro/Premium) to it, in the configuring user's context.
+    if quire_project_oid() and quire_project_oid() != quire_project_before:
+        threading.Thread(
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), detect_quire_plan_and_caps),
+            daemon=True, name="quire-plan-detect",
         ).start()
 
     return JSONResponse({"ok": True})

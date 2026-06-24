@@ -9600,8 +9600,9 @@
           if (el && q && connected) {
             const word = q.state === 'blocked' ? ' — rate limit reached'
               : (q.state === 'low' ? ' — running low' : '');
+            const planTag = d.quire_plan ? ` [${d.quire_plan} plan]` : '';
             el.className = 'settings-yt-quota settings-yt-quota--' + (q.state === 'blocked' ? 'exhausted' : q.state);
-            el.textContent = `Quire calls: ${q.minute_used}/${q.minute_cap} this minute, ${q.hour_used}/${q.hour_cap} this hour${word}`;
+            el.textContent = `Quire calls: ${q.minute_used}/${q.minute_cap} this minute, ${q.hour_used}/${q.hour_cap} this hour${planTag}${word}`;
             el.hidden = false;
             if (hint) hint.hidden = false;
           } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }

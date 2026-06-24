@@ -130,6 +130,31 @@ def whoami(access_token: str) -> str:
     return str(data.get("nameText") or data.get("name") or "")
 
 
+# Per-organization rate caps by plan (requests/minute, requests/hour) from
+# https://quire.io/dev/api/#rate-limits. Enterprise scales with members, so it has
+# no fixed entry — callers fall back to the configured default for unknown plans.
+PLAN_RATE_CAPS: dict[str, tuple[int, int]] = {
+    "free": (50, 200),
+    "professional": (300, 1250),
+    "premium": (1000, 5000),
+}
+
+
+def get_project_plan(access_token: str, project_oid: str) -> str:
+    """Return the subscription plan name of the org that owns ``project_oid``
+    (e.g. "Free"/"Professional"/"Premium"/"Enterprise"), or "" if unavailable.
+
+    Quire rate-limits per organization, so this is the plan that governs the
+    destination project's quota. ``GET /project/{oid}`` returns a ProjectWithPlan."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        resp = client.get(f"{_API_BASE}/project/{project_oid}")
+    _raise_for_status(resp, "project.get")
+    _bill(1)
+    data = resp.json() or {}
+    sub = data.get("subscription") or {}
+    return str(sub.get("plan") or "")
+
+
 def create_task(access_token: str, project_oid: str, name: str, description: str = "") -> dict:
     """Add a root task named ``name`` to ``project_oid``. Costs 1 call."""
     body: dict = {"name": name}
