@@ -291,6 +291,20 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   `yt_quota_cap` setting, default 10k) with low (<500 left) and exhausted states; an
   actual `quotaExceeded` response snaps the tally to the cap (`mark_yt_quota_exhausted`).
   Tests null the sink (conftest autouse) so a billed call can't pollute another test.
+- **Quire destination (per-user)** — another per-user OAuth outbound destination
+  (`services/quire.py`, same shape as DeviantArt: `/quire/connect` → `/quire/callback`
+  store tokens; `get_quire_user_token` refreshes on expiry). A user picks one default
+  project (`quire_project_oid`); the `Add to Quire` entry button (`/entries/quire`),
+  On-Star, and the `quire` automation rule (`_run_quire_rules_after_refresh`) all create
+  a task in it. Unlike YouTube's **daily** quota, Quire rate-limits **per organization by
+  minute and hour** with no remaining-quota read, so the meter is a **sliding window**:
+  each billed call logs a row into `quire_call_log` (pruned to the last hour) via the
+  `set_usage_sink` → `record_quire_call` sink; `get_quire_usage_status()` reports
+  minute/hour usage vs the `quire_rate_cap_min`/`_hour` caps (Free defaults 50/200) with
+  low (≥80%) and blocked (≥cap) states. Automation runs check the meter before each add,
+  honor a per-run cap (`_QUIRE_AUTO_PER_RUN_CAP`), and back off on a 429 (`Retry-After`).
+  The far-right entry-header **share-dropdown consolidation** of all destinations is a
+  deferred follow-up (see Plan.md); for now Quire is a standalone glyph beside the others.
 - **Hide Shorts (global, per-user)** — Shorts are auto-marked read at refresh by the
   hide-shorts pass in `_run_automation_after_refresh`. Per-feed it reads the
   `feed_display_prefs.hide_shorts` pref; the `yt_hide_shorts_global` setting

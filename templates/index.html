@@ -14,6 +14,7 @@
     window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
     window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
     window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
+    window.QUIRE_CONFIGURED = {{ quire_configured | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
     window.PROFILE_EMAIL = {{ profile_email | tojson }};
   </script>
@@ -1404,6 +1405,7 @@
           <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
           <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
@@ -1489,12 +1491,40 @@
           <p class="settings-hint" id="sett-pinterest-not-configured" style="grid-column:1 / -1" hidden>Pinterest OAuth client is not configured — set <code>PINTEREST_OAUTH_CLIENT_ID</code> and <code>PINTEREST_OAUTH_CLIENT_SECRET</code> in the environment, then restart.</p>
         </div>
         </div>
+        <div class="feeds-tab-panel" data-int-panel="quire" hidden>
+        <div class="settings-section settings-section--inline">
+          <p class="settings-hint" style="grid-column:1 / -1">Connect <a href="https://quire.io" target="_blank" rel="noopener">Quire</a> to get an <strong>Add to Quire</strong> button on each article that creates a task in a project you pick. Register an app at <a href="https://quire.io/apps/dev" target="_blank" rel="noopener">quire.io/apps/dev</a> to get a Client ID + Secret, then Save. Add <code>https://lectio.REDACTED/quire/callback</code> to the app's Redirect URI whitelist.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-quire-id">Client ID</label>
+            <input type="text" id="sett-quire-id" class="settings-input" placeholder="your client ID" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-quire-secret">Client Secret</label>
+            <input type="password" id="sett-quire-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
+          <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.5rem">
+            <span id="sett-quire-status" class="settings-inline-status"></span>
+            <a id="sett-quire-connect" class="settings-inline-btn" href="/quire/connect">Connect Quire account</a>
+            <button type="button" id="sett-quire-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+          </div>
+          <div class="settings-field" id="sett-quire-project-row" style="grid-column:1 / -1" hidden>
+            <label class="settings-label" for="sett-quire-project">Destination project</label>
+            <select id="sett-quire-project" class="settings-input"><option value="">— pick a project —</option></select>
+          </div>
+          <div id="sett-quire-usage" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
+          <p class="settings-hint" id="sett-quire-usage-hint" style="grid-column:1 / -1" hidden>Quire limits API calls per organization by minute and hour; this is Lectio's own running tally of its calls in the last minute/hour. Automations back off as it fills.</p>
+        </div>
+        </div>
         <div class="feeds-tab-panel" data-int-panel="onstar" hidden>
         <div class="settings-section">
           <p class="settings-hint" style="grid-column:1 / -1">When you ★ star an article, also send it to these destinations. One-way — un-starring doesn't remove it. Each is available once its integration is configured/connected.</p>
           <label class="settings-toggle-row" id="sett-star-ip-row" style="display:flex;align-items:center;gap:0.5rem" hidden>
             <input type="checkbox" id="sett-star-ip" />
             <span class="settings-label" style="margin:0">Save to Instapaper</span>
+          </label>
+          <label class="settings-toggle-row" id="sett-star-quire-row" style="display:flex;align-items:center;gap:0.5rem" hidden>
+            <input type="checkbox" id="sett-star-quire" />
+            <span class="settings-label" style="margin:0">Add to Quire</span>
           </label>
           <div class="settings-field" id="sett-star-yt-row" style="grid-column:1 / -1" hidden>
             <label class="settings-label" for="sett-star-yt-playlist">Add to YouTube playlist</label>
@@ -2846,6 +2876,23 @@
       if (pinBtn) {
         event.preventDefault();
         await openPinterestPicker(pinBtn);
+        return;
+      }
+      const quireBtn = event.target instanceof Element && event.target.closest('[data-quire-feed-url]');
+      if (quireBtn) {
+        quireBtn.disabled = true;
+        try {
+          const fd = new FormData();
+          fd.append('feed_url', quireBtn.getAttribute('data-quire-feed-url') || '');
+          fd.append('entry_id', quireBtn.getAttribute('data-quire-entry-id') || '');
+          const resp = await fetch('/entries/quire', { method: 'POST', body: fd, credentials: 'same-origin' });
+          const data = await resp.json();
+          showToastMessage(data.ok ? 'Added to Quire' : (data.error || 'Quire add failed'));
+        } catch (e) {
+          showToastMessage('Quire add failed');
+        } finally {
+          quireBtn.disabled = false;
+        }
         return;
       }
     });
@@ -7653,7 +7700,7 @@
             return;
           }
           const { folderNames, feedTitles } = hlScopeData();
-          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', instapaper: 'Instapaper', highlight: 'Highlight' };
+          const typeLabels = { mark_as_read: 'Mark Read', deduplicate: 'Dedup', email_article: 'Email', webhook: 'Webhook', youtube_playlist: 'YT Playlist', instapaper: 'Instapaper', quire: 'Quire', highlight: 'Highlight' };
           const methodLabels = { safe: 'Safe', slug: 'URL Slug', title: 'Title', both: 'Slug+Title', fuzzy: 'Fuzzy' };
           for (const row of data.history) {
             const el = document.createElement('div');
@@ -7710,8 +7757,8 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper' };
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'quire'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', quire: 'Add to Quire' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -8438,13 +8485,15 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['quire','Add to Quire'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
           // YouTube playlist rule needs a connected account; hide the option until
           // connected (unless editing an existing rule of this type).
           if (val === 'youtube_playlist' && !window.YT_OAUTH_CONNECTED && prefill.type !== 'youtube_playlist') continue;
           // Instapaper rule needs configured credentials.
           if (val === 'instapaper' && !window.INSTAPAPER_CONFIGURED && prefill.type !== 'instapaper') continue;
+          // Quire rule needs a connected account + chosen destination project.
+          if (val === 'quire' && !window.QUIRE_CONFIGURED && prefill.type !== 'quire') continue;
           const opt = document.createElement('option');
           opt.value = val;
           opt.textContent = label;
@@ -9157,8 +9206,8 @@
           }
 
           const pattern = patInput.value.trim();
-          // youtube_playlist and instapaper allow an empty keyword (all in scope).
-          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper') { patInput.focus(); return; }
+          // youtube_playlist, instapaper, and quire allow an empty keyword (all in scope).
+          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
@@ -9427,8 +9476,11 @@
           const ytRow = document.getElementById('sett-star-yt-row');
           const emRow = document.getElementById('sett-star-email-row');
           const none = document.getElementById('sett-star-none');
+          const quireRow = document.getElementById('sett-star-quire-row');
           const ipOk = !!window.INSTAPAPER_CONFIGURED, ytOk = !!d.yt_oauth_connected, emOk = !!window.EMAIL_CONFIGURED;
+          const quireOk = !!d.quire_connected && !!d.quire_project_oid;
           if (ipRow) { ipRow.hidden = !ipOk; const c = document.getElementById('sett-star-ip'); if (c) c.checked = !!d.star_send_instapaper; }
+          if (quireRow) { quireRow.hidden = !quireOk; const c = document.getElementById('sett-star-quire'); if (c) c.checked = !!d.star_send_quire; }
           if (emRow) { emRow.hidden = !emOk; const i = document.getElementById('sett-star-email'); if (i) i.value = d.star_send_email || ''; }
           if (ytRow) {
             ytRow.hidden = !ytOk;
@@ -9455,7 +9507,7 @@
               })();
             }
           }
-          if (none) none.hidden = (ipOk || ytOk || emOk);
+          if (none) none.hidden = (ipOk || ytOk || emOk || quireOk);
         }
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
@@ -9505,6 +9557,55 @@
         });
         const daActionStatus = document.getElementById('sett-da-action-status');
         if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
+        // Quire integration: creds, connection status, project picker, usage meter.
+        v('sett-quire-id', d.quire_client_id);
+        secretField('sett-quire-secret', d.quire_client_secret_set, d.quire_client_secret_masked);
+        {
+          const connected = !!d.quire_connected;
+          window.QUIRE_CONFIGURED = connected && !!d.quire_project_oid;
+          const status = document.getElementById('sett-quire-status');
+          if (status) status.textContent = connected
+            ? `Connected as ${d.quire_username || 'Quire'}.`
+            : 'Not connected.';
+          const connect = document.getElementById('sett-quire-connect');
+          if (connect) connect.hidden = connected;
+          const disconnect = document.getElementById('sett-quire-disconnect');
+          if (disconnect) disconnect.hidden = !connected;
+          const projRow = document.getElementById('sett-quire-project-row');
+          if (projRow) projRow.hidden = !connected;
+          const sel = document.getElementById('sett-quire-project');
+          if (sel && connected) {
+            (async () => {
+              try {
+                const r = await fetch('/api/quire/projects', { credentials: 'same-origin' });
+                const projects = (await r.json().catch(() => ({}))).projects || [];
+                sel.innerHTML = '<option value="">— pick a project —</option>';
+                for (const p of projects) {
+                  const o = document.createElement('option'); o.value = p.oid; o.textContent = p.name; o.dataset.name = p.name;
+                  sel.appendChild(o);
+                }
+                if (d.quire_project_oid && !projects.some(p => p.oid === d.quire_project_oid)) {
+                  const o = document.createElement('option'); o.value = d.quire_project_oid;
+                  o.textContent = (d.quire_project_name || d.quire_project_oid) + ' (unavailable)';
+                  o.dataset.name = d.quire_project_name || ''; sel.appendChild(o);
+                }
+                sel.value = d.quire_project_oid || '';
+              } catch { /* leave default */ }
+            })();
+          }
+          // Usage meter (per-minute / per-hour).
+          const el = document.getElementById('sett-quire-usage');
+          const hint = document.getElementById('sett-quire-usage-hint');
+          const q = d.quire_usage;
+          if (el && q && connected) {
+            const word = q.state === 'blocked' ? ' — rate limit reached'
+              : (q.state === 'low' ? ' — running low' : '');
+            el.className = 'settings-yt-quota settings-yt-quota--' + (q.state === 'blocked' ? 'exhausted' : q.state);
+            el.textContent = `Quire calls: ${q.minute_used}/${q.minute_cap} this minute, ${q.hour_used}/${q.hour_cap} this hour${word}`;
+            el.hidden = false;
+            if (hint) hint.hidden = false;
+          } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }
+        }
         settContacts = d.contacts || [];
         settDefaultAddress = d.email_to_default || '';
         settRenderContacts();
@@ -9620,6 +9721,11 @@
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),
+            quire_client_id: g('sett-quire-id'),
+            quire_client_secret: g('sett-quire-secret'),
+            quire_project_oid: (document.getElementById('sett-quire-project')?.value || ''),
+            quire_project_name: (() => { const s = document.getElementById('sett-quire-project'); const o = s && s.options[s.selectedIndex]; return (o && o.dataset.name) || ''; })(),
+            star_send_quire: (document.getElementById('sett-star-quire')?.checked ? '1' : '0'),
             star_send_instapaper: (document.getElementById('sett-star-ip')?.checked ? '1' : '0'),
             star_send_yt_playlist: (document.getElementById('sett-star-yt-playlist')?.value || ''),
             star_send_yt_playlist_title: (() => { const s = document.getElementById('sett-star-yt-playlist'); const o = s && s.options[s.selectedIndex]; return (o && o.dataset.title) || ''; })(),
@@ -9693,6 +9799,10 @@
       });
       document.getElementById('sett-pinterest-oauth-disconnect')?.addEventListener('click', async () => {
         await fetch('/integrations/pinterest/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
+      });
+      document.getElementById('sett-quire-disconnect')?.addEventListener('click', async () => {
+        await fetch('/quire/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
 

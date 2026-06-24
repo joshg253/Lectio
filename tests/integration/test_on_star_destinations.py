@@ -65,3 +65,32 @@ def test_instapaper_and_playlist_fire(env, monkeypatch):
     main._run_on_star_destinations(FEED, "e1")
     assert ip == [f"https://www.youtube.com/watch?v={VID}"]
     assert pl == [("PL1", VID)]
+
+
+def test_quire_fires_on_star(env, monkeypatch):
+    tasks = []
+    monkeypatch.setattr(main.quire_service, "create_task",
+                        lambda tok, oid, name, desc="": tasks.append((oid, name, desc)))
+    monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")
+        main.set_setting(conn, main.SETTING_QUIRE_PROJECT_OID, "proj-oid")
+        main.set_setting(conn, main.SETTING_STAR_SEND_QUIRE, "1")
+    main._run_on_star_destinations(FEED, "e1")
+    assert len(tasks) == 1
+    oid, name, desc = tasks[0]
+    assert oid == "proj-oid"
+    assert name == "Vid"
+    assert f"watch?v={VID}" in desc
+
+
+def test_quire_skipped_when_no_project(env, monkeypatch):
+    tasks = []
+    monkeypatch.setattr(main.quire_service, "create_task",
+                        lambda *a, **k: tasks.append(a))
+    monkeypatch.setattr(main, "get_quire_user_token", lambda: "qtok")
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")
+        main.set_setting(conn, main.SETTING_STAR_SEND_QUIRE, "1")  # no project picked
+    main._run_on_star_destinations(FEED, "e1")
+    assert tasks == []
