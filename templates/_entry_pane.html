@@ -349,6 +349,18 @@
           ><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span></button
         >
         {% endif %}
+        {% if pinterest_connected %}
+        <button
+          type="button"
+          id="entry-pinterest-button"
+          class="entry-source-button"
+          data-pinterest-feed-url="{{ selected_entry.feed_url }}"
+          data-pinterest-entry-id="{{ selected_entry.id }}"
+          title="Pin to Pinterest"
+          aria-label="Pin to Pinterest"
+          ><span class="material-symbols-rounded" aria-hidden="true">push_pin</span></button
+        >
+        {% endif %}
       </div>
       {% endif %}
     </div>

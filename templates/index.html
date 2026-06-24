@@ -1403,6 +1403,7 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-int-view="youtube" role="tab" aria-selected="true">YouTube</button>
           <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
@@ -1475,6 +1476,17 @@
             <label class="settings-label" for="sett-ip-pass">Password</label>
             <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
           </div>
+        </div>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="pinterest" hidden>
+        <div class="settings-section settings-section--inline">
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Uses the Pinterest API v5 with your own OAuth grant — tokens are stored only for you. Requires <code>PINTEREST_OAUTH_CLIENT_ID/SECRET</code> in the environment.</p>
+          <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-pinterest-oauth-row">
+            <span id="sett-pinterest-oauth-status" class="settings-inline-status"></span>
+            <a id="sett-pinterest-oauth-connect" class="settings-inline-btn" href="/integrations/pinterest/oauth/connect">Connect Pinterest account</a>
+            <button type="button" id="sett-pinterest-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+          </div>
+          <p class="settings-hint" id="sett-pinterest-not-configured" style="grid-column:1 / -1" hidden>Pinterest OAuth client is not configured — set <code>PINTEREST_OAUTH_CLIENT_ID</code> and <code>PINTEREST_OAUTH_CLIENT_SECRET</code> in the environment, then restart.</p>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="onstar" hidden>
@@ -2830,7 +2842,82 @@
         }
         return;
       }
+      const pinBtn = event.target instanceof Element && event.target.closest('[data-pinterest-feed-url]');
+      if (pinBtn) {
+        event.preventDefault();
+        await openPinterestPicker(pinBtn);
+        return;
+      }
     });
+
+    // --- Pinterest "Pin to board" picker -----------------------------------
+    let _pinterestBoardsCache = null;   // null = not fetched; {connected, boards, error}
+    async function _pinFetchBoards() {
+      if (_pinterestBoardsCache) return _pinterestBoardsCache;
+      try {
+        const r = await fetch('/api/pinterest/boards', { credentials: 'same-origin' });
+        _pinterestBoardsCache = (await r.json().catch(() => ({}))) || { connected: false, boards: [] };
+      } catch (e) {
+        _pinterestBoardsCache = { connected: false, boards: [], error: 'network' };
+      }
+      return _pinterestBoardsCache;
+    }
+
+    function _closePinMenu() {
+      document.querySelector('.lectio-pin-menu')?.remove();
+      document.removeEventListener('click', _pinOutsideClick, true);
+    }
+    function _pinOutsideClick(e) {
+      if (!(e.target instanceof Element) || !e.target.closest('.lectio-pin-menu, [data-pinterest-feed-url]')) _closePinMenu();
+    }
+
+    async function _doPin(feedUrl, entryId, boardId, boardName) {
+      const r = await fetch('/api/pinterest/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ feed_url: feedUrl, entry_id: entryId, board_id: boardId }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      showToastMessage(`Pinned to ${boardName}.`);
+    }
+
+    async function openPinterestPicker(btn) {
+      _closePinMenu();
+      const feedUrl = btn.getAttribute('data-pinterest-feed-url') || '';
+      const entryId = btn.getAttribute('data-pinterest-entry-id') || '';
+      const menu = document.createElement('div');
+      menu.className = 'lectio-pin-menu';
+      menu.innerHTML = '<div class="lectio-pin-loading">Loading boards…</div>';
+      document.body.appendChild(menu);
+      const rect = btn.getBoundingClientRect();
+      menu.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+      setTimeout(() => document.addEventListener('click', _pinOutsideClick, true), 0);
+
+      const data = await _pinFetchBoards();
+      if (!data.connected) {
+        menu.innerHTML = '<a class="lectio-pin-item" href="/integrations/pinterest/oauth/connect">Connect Pinterest…</a>';
+        return;
+      }
+      if (data.error) { menu.innerHTML = `<div class="lectio-pin-loading">Error: ${data.error}</div>`; return; }
+      const boards = data.boards || [];
+      if (!boards.length) { menu.innerHTML = '<div class="lectio-pin-loading">No boards found.</div>'; return; }
+      menu.innerHTML = '';
+      boards.forEach(b => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'lectio-pin-item';
+        item.textContent = b.name || '(untitled)';
+        item.addEventListener('click', async () => {
+          _closePinMenu();
+          try { await _doPin(feedUrl, entryId, b.id, b.name || 'board'); }
+          catch (e) { showToastMessage(e.message || 'Pin failed'); }
+        });
+        menu.appendChild(item);
+      });
+    }
 
     document.addEventListener('click', (event) => {
       const btn = event.target instanceof Element && event.target.closest('[data-open-email-modal]');
@@ -9383,6 +9470,22 @@
           if (connect) connect.hidden = ytConnected;
           if (disconnect) disconnect.hidden = !ytConnected;
         }
+        // Pinterest account (OAuth) connection status for the per-article Pin button.
+        {
+          const piConfigured = !!d.pinterest_oauth_configured;
+          const piConnected = !!d.pinterest_oauth_connected;
+          window.PINTEREST_CONNECTED = piConnected;
+          const row = document.getElementById('sett-pinterest-oauth-row');
+          const status = document.getElementById('sett-pinterest-oauth-status');
+          const connect = document.getElementById('sett-pinterest-oauth-connect');
+          const disconnect = document.getElementById('sett-pinterest-oauth-disconnect');
+          const notConf = document.getElementById('sett-pinterest-not-configured');
+          if (row) row.hidden = !piConfigured;
+          if (notConf) notConf.hidden = piConfigured;
+          if (status) status.textContent = piConnected ? 'Connected.' : 'Not connected.';
+          if (connect) connect.hidden = piConnected;
+          if (disconnect) disconnect.hidden = !piConnected;
+        }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
         v('sett-da-id', d.deviantart_client_id);
@@ -9586,6 +9689,10 @@
       });
       document.getElementById('sett-yt-oauth-disconnect')?.addEventListener('click', async () => {
         await fetch('/integrations/youtube/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
+      });
+      document.getElementById('sett-pinterest-oauth-disconnect')?.addEventListener('click', async () => {
+        await fetch('/integrations/pinterest/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
 
