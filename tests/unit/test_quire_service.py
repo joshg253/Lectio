@@ -74,6 +74,24 @@ def test_create_task_bills_and_sends_payload(monkeypatch):
     assert billed == [1]
 
 
+def test_get_project_plan_reads_subscription(monkeypatch):
+    class _C:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url, params=None):
+            return httpx.Response(200, json={"oid": "o1", "subscription": {"plan": "Professional"}})
+
+    monkeypatch.setattr(quire.httpx, "Client", _C)
+    assert quire.get_project_plan("AT", "o1") == "Professional"
+
+
+def test_plan_rate_caps_known_plans():
+    assert quire.PLAN_RATE_CAPS["professional"] == (300, 1250)
+    assert quire.PLAN_RATE_CAPS["free"] == (50, 200)
+    assert quire.PLAN_RATE_CAPS["premium"] == (1000, 5000)
+
+
 def test_create_task_raises_rate_limited(monkeypatch):
     class _C:
         def __init__(self, *a, **k): pass

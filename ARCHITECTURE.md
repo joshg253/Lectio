@@ -300,8 +300,12 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   minute and hour** with no remaining-quota read, so the meter is a **sliding window**:
   each billed call logs a row into `quire_call_log` (pruned to the last hour) via the
   `set_usage_sink` → `record_quire_call` sink; `get_quire_usage_status()` reports
-  minute/hour usage vs the `quire_rate_cap_min`/`_hour` caps (Free defaults 50/200) with
-  low (≥80%) and blocked (≥cap) states. Automation runs check the meter before each add,
+  minute/hour usage vs the `quire_rate_cap_min`/`_hour` caps with low (≥80%) and blocked
+  (≥cap) states. The caps are **auto-detected from the destination project's organization
+  plan** (`detect_quire_plan_and_caps` → `GET /project/{oid}` returns `subscription.plan`;
+  `PLAN_RATE_CAPS` maps Free 50/200, Professional 300/1250, Premium 1000/5000; Enterprise
+  scales with members so it keeps the default), run on a background thread whenever the
+  chosen project changes; the detected plan name is shown in the meter. Automation runs check the meter before each add,
   honor a per-run cap (`_QUIRE_AUTO_PER_RUN_CAP`), and back off on a 429 (`Retry-After`).
   The far-right entry-header **share-dropdown consolidation** of all destinations is a
   deferred follow-up (see Plan.md); for now Quire is a standalone glyph beside the others.
