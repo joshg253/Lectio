@@ -56,3 +56,13 @@ def test_youtube_marker_without_id_is_negative():
 def test_non_youtube_entries_omitted():
     out = y.extract_youtube_embeds(_feed('<p>just text, no video</p>'))
     assert out == {}
+
+
+def test_recovers_nocookie_host_embed():
+    # Privacy-host embeds (youtube-nocookie.com, e.g. ArtStation) must be
+    # recognized — the marker previously only matched youtube.com.
+    body = ('<div class="video-wrapper media-asset-container">'
+            '<iframe src="https://www.youtube-nocookie.com/embed/oDMjofFNLSk?feature=oembed"></iframe>'
+            '</div>')
+    out = y.extract_youtube_embeds(_feed(body))
+    assert out == {"e0": ["oDMjofFNLSk"]}
