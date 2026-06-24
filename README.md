@@ -70,7 +70,8 @@ The short version:
   thumbnails fall back to a direct browser load when the server-side image proxy
   is refused (some hosts IP-block the server but serve your own IP fine).
 - **Automation** — highlight, mark-as-read, deduplicate, email-article,
-  outbound-webhook, **save-to-Instapaper**, and **add-to-YouTube-playlist** rules (the last auto-adds new
+  outbound-webhook, **save-to-Instapaper**, **add-to-YouTube-playlist**, and
+  **add-to-Quire** rules (the YouTube rule auto-adds new
   videos — including those embedded in any feed's article — to a chosen playlist,
   with include-Shorts, mark-read, and **min/max-duration** options; quota-capped,
   no double-adds); scope a
@@ -78,11 +79,20 @@ The short version:
   (deduplicate can run across a selected set of feeds, not just a whole folder),
   with a Duplicate button to clone one quickly; all fire at refresh time with a
   manual "Run Now". **Starring** an article can also auto-send it to Instapaper, a
-  YouTube playlist, and/or email (Integrations → On Star).
+  YouTube playlist, email, and/or Quire (Integrations → On Star).
 - **Save to Pinterest** — connect a Pinterest account (per-user OAuth) and a
   **Pin** button appears on each article, saving its lead image (linked back to
   the source) to a board you pick. Needs `PINTEREST_OAUTH_CLIENT_ID/SECRET`;
   entries without an image can't be pinned.
+- **Add to Quire** — connect a [Quire](https://quire.io) account (per-user OAuth)
+  and pick a destination project; an **Add to Quire** button then appears on each
+  article and creates a task (titled from the entry, with the link in the
+  description). Also available via On Star and Automation rules. Quire's
+  per-organization minute/hour rate limits are tracked with a usage meter in
+  Settings, and automation runs are capped and back off on a 429. Register an app
+  at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
+  `https://<your-host>/quire/callback`; creds are per-user (or
+  `QUIRE_CLIENT_ID/SECRET` as a single-user fallback).
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.
