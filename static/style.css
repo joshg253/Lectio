@@ -3025,6 +3025,10 @@ button:hover, .button-link:hover {
 .entry-content iframe[src*="bandcamp.com/EmbeddedPlayer"][src*="size=small"] {
   height: 42px;
 }
+/* SoundCloud's classic player has a fixed height; don't force it into a 16:9 box. */
+.entry-content iframe[src*="soundcloud.com"] {
+  height: 166px;
+}
 /* The inline YouTube player already sits in a 560px centered container with the
    look we're matching — keep its iframe margin/width untouched. */
 .entry-content .youtube-embed-container iframe {

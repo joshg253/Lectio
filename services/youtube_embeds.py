@@ -28,7 +28,9 @@ _YT_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 # Signals that an entry *intended* a YouTube embed even if no id is recoverable
 # (so the app can record a negative result and stop re-scanning).
-_YT_MARKER = re.compile(r"is-provider-youtube|wp-block-embed-youtube|youtube\.com|youtu\.be", re.I)
+_YT_MARKER = re.compile(
+    r"is-provider-youtube|wp-block-embed-youtube|youtube(?:-nocookie)?\.com|youtu\.be", re.I
+)
 
 
 def _entry_html(entry: dict) -> str:
