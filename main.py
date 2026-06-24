@@ -4464,6 +4464,36 @@ def _is_youtube_short(entry: object) -> bool:
     return "youtube.com/shorts/" in link
 
 
+def _mark_existing_shorts_read(feed_urls) -> int:
+    """Mark every currently-unread YouTube Short in ``feed_urls`` as read.
+
+    Shared by the after-refresh hide-shorts pass and the per-feed Hide-Shorts
+    toggle (so flipping it on immediately clears the backlog of Shorts, not just
+    future ones). Returns the number of entries marked read."""
+    feed_urls = set(feed_urls)
+    if not feed_urls:
+        return 0
+    global _unread_counts_generation
+    now_str = datetime.now().isoformat()
+    to_mark: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for feed_url in feed_urls:
+            for entry in reader.get_entries(feed=feed_url, read=False):
+                if _is_youtube_short(entry):
+                    to_mark.append((str(entry.feed_url), str(entry.id)))
+        for fu, eid in to_mark:
+            reader.mark_entry_as_read((fu, eid))
+    if to_mark:
+        with get_meta_connection() as conn:
+            conn.executemany(
+                "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+                " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+                [(fu, eid, now_str) for fu, eid in to_mark],
+            )
+        _unread_counts_generation += 1
+    return len(to_mark)
+
+
 _CHURN_TITLE_MIN_WORDS = 4   # require at least 4 words — avoids "New post" / "Update" false positives
 _CHURN_TITLE_DATE_DAYS  = 7  # published dates must be within this many days of each other
 
@@ -4725,23 +4755,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
             }
         if shorts_targets:
-            now_str = datetime.now().isoformat()
-            with get_reader() as reader:
-                to_mark = []
-                for feed_url in shorts_targets:
-                    for entry in reader.get_entries(feed=feed_url, read=False):
-                        if _is_youtube_short(entry):
-                            to_mark.append((str(entry.feed_url), str(entry.id)))
-                for fu, eid in to_mark:
-                    reader.mark_entry_as_read((fu, eid))
-            if to_mark:
-                with get_meta_connection() as conn:
-                    conn.executemany(
-                        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
-                        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
-                        [(fu, eid, now_str) for fu, eid in to_mark],
-                    )
-                _unread_counts_generation += 1
+            _mark_existing_shorts_read(shorts_targets)
     except Exception:
         LOGGER.exception("[automation] error applying hide-shorts")
     try:
@@ -13121,7 +13135,15 @@ def set_feed_display_pref_route(
         return JSONResponse({"error": "invalid key"}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_display_pref(conn, feed_url, key, value)
-    return JSONResponse({"ok": True, "key": key, "value": value})
+    # Turning Hide Shorts on clears the existing backlog immediately, not just
+    # future refreshes.
+    marked = 0
+    if key == "hide_shorts" and value:
+        try:
+            marked = _mark_existing_shorts_read({feed_url})
+        except Exception:
+            LOGGER.exception("[display-prefs] error marking existing shorts read")
+    return JSONResponse({"ok": True, "key": key, "value": value, "marked_read": marked})
 
 
 @app.post("/feeds/thumbnail-url")
