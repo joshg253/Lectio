@@ -64,16 +64,26 @@ def _request(method: str, url: str, *, headers: dict, params: dict | None = None
     delay = _RETRY_BASE_DELAY
     # One client for the whole call: retries reuse the connection pool instead of
     # paying TCP/TLS setup again on every 429 backoff.
+    last_resp = None
     with httpx.Client(timeout=timeout, headers=headers) as client:
         for attempt in range(_MAX_RETRIES):
             resp = client.request(method, url, params=params, data=data)
             if resp.status_code != 429:
                 return resp
+            last_resp = resp
             if attempt < _MAX_RETRIES - 1:
+                try:
+                    delay = float(resp.headers.get("Retry-After") or delay)
+                except ValueError:
+                    pass
                 LOGGER.info("[deviantart] 429 rate-limited; backing off %.0fs", delay)
                 time.sleep(delay)
                 delay *= 2
-    raise DeviantArtRateLimited("DeviantArt per-user request limit reached")
+    retry_after = last_resp.headers.get("Retry-After") if last_resp is not None else None
+    msg = "DeviantArt per-user request limit reached"
+    if retry_after:
+        msg += f" (retry after {retry_after}s)"
+    raise DeviantArtRateLimited(msg)
 
 # Cache of client_id -> (access_token, expires_at_epoch). Tokens are app-scoped,
 # so one per client_id is correct even across users sharing creds.

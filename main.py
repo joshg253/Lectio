@@ -922,6 +922,8 @@ def sync_deviantart_watchlist() -> dict:
     try:
         username = get_runtime_setting(SETTING_DEVIANTART_USERNAME) or deviantart_service.whoami(token)
         watching = deviantart_service.list_watching(token, username)
+    except deviantart_service.DeviantArtRateLimited as exc:
+        return {"added": 0, "total": 0, "error": f"DeviantArt rate limit hit — try again in a few minutes. ({exc})"}
     except Exception as exc:  # noqa: BLE001
         return {"added": 0, "total": 0, "error": f"Could not read your watch list: {exc}"}
 
@@ -969,7 +971,13 @@ def sync_deviantart_watchlist() -> dict:
         final = (f"Rate limited — added {added} so far, ~{remaining} left. "
                  "DeviantArt caps requests; click Sync again later to continue.")
     else:
-        final = f"Done: added {added} of {len(to_add)} watched" + (f", {failed} failed" if failed else "")
+        already = len(watching) - len(to_add)
+        parts = [f"Added {added} of {len(watching)} watched"]
+        if already:
+            parts.append(f"{already} already subscribed")
+        if failed:
+            parts.append(f"{failed} failed")
+        final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
     return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
