@@ -17,6 +17,7 @@ services:
       LECTIO_DATA_DIR: /data
       LECTIO_HTTPS_ONLY: "1"
       LECTIO_LOG_DIR: /data/logs
+      LECTIO_PUBLIC_URL: "https://lectio.${BASE_URL}"
     volumes:
       - ./data:/data
     networks:

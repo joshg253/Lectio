@@ -279,15 +279,25 @@ SETTING_DEVIANTART_OAUTH_STATE = "deviantart_oauth_state"
 SETTING_DEVIANTART_OAUTH_VERIFIER = "deviantart_oauth_verifier"
 SETTING_DEVIANTART_FOLDER_NAME = "deviantart_folder_name"
 SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
+SETTING_YT_OAUTH_CLIENT_ID = "yt_oauth_client_id"
+SETTING_YT_OAUTH_CLIENT_SECRET = "yt_oauth_client_secret"
 SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
 SETTING_YT_OAUTH_REFRESH_TOKEN = "yt_oauth_refresh_token"
 SETTING_YT_OAUTH_TOKEN_EXPIRES_AT = "yt_oauth_token_expires_at"
 SETTING_YT_OAUTH_STATE = "yt_oauth_state"
+# Shared-instance YouTube OAuth creds stored in the admin's app_settings.
+SETTING_SHARED_YT_OAUTH_CLIENT_ID = "shared_yt_oauth_client_id"
+SETTING_SHARED_YT_OAUTH_CLIENT_SECRET = "shared_yt_oauth_client_secret"
 # Pinterest outbound (save / pin an article to a board).
+SETTING_PINTEREST_OAUTH_CLIENT_ID = "pinterest_oauth_client_id"
+SETTING_PINTEREST_OAUTH_CLIENT_SECRET = "pinterest_oauth_client_secret"
 SETTING_PINTEREST_OAUTH_ACCESS_TOKEN = "pinterest_oauth_access_token"
 SETTING_PINTEREST_OAUTH_REFRESH_TOKEN = "pinterest_oauth_refresh_token"
 SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT = "pinterest_oauth_token_expires_at"
 SETTING_PINTEREST_OAUTH_STATE = "pinterest_oauth_state"
+# Shared-instance Pinterest OAuth creds stored in the admin's app_settings.
+SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID = "shared_pinterest_oauth_client_id"
+SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET = "shared_pinterest_oauth_client_secret"
 # Quire outbound (turn an article into a task in a chosen Quire project).
 SETTING_QUIRE_CLIENT_ID = "quire_client_id"
 SETTING_QUIRE_CLIENT_SECRET = "quire_client_secret"
@@ -451,24 +461,16 @@ if _yt_sync_hour_raw:
         pass
 
 
-# YouTube is per-user (each user's own key for durations + own channel for sub
-# sync). In multi mode the env YOUTUBE_* vars seed only the bootstrap admin and
-# are NOT a read-time fallback, so one user's key never leaks to another. In
-# single mode (one implicit user) env remains the config source.
-def _env_yt_fallback(env_val: str) -> str:
-    return "" if MULTI_USER else env_val
-
-
 def get_yt_api_key() -> str:
-    return get_runtime_setting(SETTING_YT_API_KEY, _env_yt_fallback(_ENV_YT_API_KEY))
+    return get_runtime_setting(SETTING_YT_API_KEY, _ENV_YT_API_KEY)
 
 
 def get_yt_channel_id() -> str:
-    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _env_yt_fallback(_ENV_YT_CHANNEL_ID))
+    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _ENV_YT_CHANNEL_ID)
 
 
 def get_yt_folder_name() -> str:
-    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _env_yt_fallback(_ENV_YT_FOLDER_NAME)) or "YouTube Subscriptions"
+    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _ENV_YT_FOLDER_NAME) or "YouTube Subscriptions"
 
 
 def youtube_embed_account_features_enabled() -> bool:
@@ -557,9 +559,36 @@ def youtube_embed_host() -> str:
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
+def _get_shared_credential(key: str) -> str:
+    """Read a shared-instance credential from the first admin user's settings.
+
+    Shared-instance OAuth creds are stored in the admin's own app_settings
+    under a namespaced key (e.g. shared_yt_oauth_client_id) and are used as a
+    middle tier: per-user setting → shared-instance → env var.
+    """
+    if user_store is None:
+        return ""
+    for u in user_store.list_users():
+        if u.get("is_admin") and not u.get("disabled"):
+            with tenancy.user_context(u["user_id"]):
+                val = get_runtime_setting(key)
+                if val:
+                    return val
+    return ""
+
+
 def get_youtube_oauth_credentials() -> tuple[str, str]:
-    """App-level YouTube OAuth client (client_id, client_secret) from env."""
-    return _ENV_YT_OAUTH_CLIENT_ID, _ENV_YT_OAUTH_CLIENT_SECRET
+    """YouTube OAuth client (client_id, client_secret).
+
+    Resolution: per-user setting → shared-instance (admin's settings) → env var.
+    """
+    cid = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID)
+           or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_ID)
+           or _ENV_YT_OAUTH_CLIENT_ID)
+    secret = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)
+              or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)
+              or _ENV_YT_OAUTH_CLIENT_SECRET)
+    return cid, secret
 
 
 def youtube_oauth_connected() -> bool:
@@ -601,8 +630,17 @@ def get_youtube_oauth_token() -> str:
 
 
 def get_pinterest_oauth_credentials() -> tuple[str, str]:
-    """App-level Pinterest OAuth client (client_id, client_secret) from env."""
-    return _ENV_PINTEREST_OAUTH_CLIENT_ID, _ENV_PINTEREST_OAUTH_CLIENT_SECRET
+    """Pinterest OAuth client (client_id, client_secret).
+
+    Resolution: per-user setting → shared-instance (admin's settings) → env var.
+    """
+    cid = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID)
+           or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID)
+           or _ENV_PINTEREST_OAUTH_CLIENT_ID)
+    secret = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)
+              or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)
+              or _ENV_PINTEREST_OAUTH_CLIENT_SECRET)
+    return cid, secret
 
 
 def pinterest_oauth_connected() -> bool:
@@ -646,8 +684,8 @@ def get_deviantart_credentials() -> tuple[str, str]:
 
     Stored per-user in app-settings; env vars are a single-user-only fallback.
     """
-    cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_ID))
-    secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_SECRET))
+    cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _ENV_DEVIANTART_CLIENT_ID)
+    secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _ENV_DEVIANTART_CLIENT_SECRET)
     return cid, secret
 
 
@@ -693,8 +731,8 @@ def get_quire_credentials() -> tuple[str, str]:
 
     Stored per-user in app-settings; env vars are a single-user-only fallback.
     """
-    cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _env_yt_fallback(_ENV_QUIRE_CLIENT_ID))
-    secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _env_yt_fallback(_ENV_QUIRE_CLIENT_SECRET))
+    cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _ENV_QUIRE_CLIENT_ID)
+    secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _ENV_QUIRE_CLIENT_SECRET)
     return cid, secret
 
 
@@ -971,13 +1009,14 @@ def get_img_cache_max_dim() -> int:
     return _ENV_IMG_CACHE_MAX_DIM
 
 # --- Auth config ---
-# Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
-# If either is absent, auth is disabled (safe for local-only use).
-# LECTIO_SECRET_KEY is used to sign session cookies; generate one with:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-# If not set a random key is generated at startup (sessions won't survive restarts).
-AUTH_USERNAME = os.getenv("LECTIO_USERNAME", "")
-AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
+# Bootstrap / login credentials. LECTIO_ADMIN_USERNAME/PASSWORD are used for both
+# multi-mode admin bootstrap and the single-mode login gate. The legacy
+# LECTIO_USERNAME/PASSWORD vars are silent aliases for existing deployments.
+AUTH_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "") or os.getenv("LECTIO_USERNAME", "")
+AUTH_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", "") or os.getenv("LECTIO_PASSWORD", "")
+# When set, skip the login form and auto-authenticate as the admin on every request.
+# Intended for local/private-network installs that don't need a password prompt.
+AUTO_LOGIN = os.getenv("LECTIO_AUTO_LOGIN", "0") == "1"
 
 # --- Multi-user / security mode ---
 # LECTIO_SECURITY_MODE selects the tenancy & auth posture:
@@ -987,13 +1026,14 @@ AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
 #            mode). Accounts live in a users table; each user gets their own
 #            reader/meta/starred DBs under DATA_DIR/users/<username>/.
 # A future "shared-content" mode is documented in ARCHITECTURE.md.
-_SECURITY_MODE_RAW = os.getenv("LECTIO_SECURITY_MODE", "single").strip().lower()
+# Defaults to "multi"; "single" is legacy and will be removed in a future cleanup.
+_SECURITY_MODE_RAW = os.getenv("LECTIO_SECURITY_MODE", "multi").strip().lower()
 if _SECURITY_MODE_RAW not in {"single", "multi"}:
     LOGGER.warning(
-        "LECTIO_SECURITY_MODE=%r unrecognized; using 'single'. Valid: single, multi.",
+        "LECTIO_SECURITY_MODE=%r unrecognized; using 'multi'. Valid: single, multi.",
         _SECURITY_MODE_RAW,
     )
-    _SECURITY_MODE_RAW = "single"
+    _SECURITY_MODE_RAW = "multi"
 SECURITY_MODE = _SECURITY_MODE_RAW
 MULTI_USER = SECURITY_MODE == "multi"
 
@@ -1531,6 +1571,16 @@ class _AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if _session_logged_in(request):
             return await call_next(request)
+        if AUTO_LOGIN and user_store is not None:
+            # Auto-authenticate as the first non-disabled admin user without
+            # showing the login form. Intended for local/private-network installs.
+            for _u in user_store.list_users():
+                if _u.get("is_admin") and not _u.get("disabled"):
+                    request.session["authenticated"] = True
+                    request.session["user_id"] = _u["user_id"]
+                    break
+            if _session_logged_in(request):
+                return await call_next(request)
         next_url = str(request.url)
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
 
@@ -11935,6 +11985,13 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
             "maintenance_last": maint_last,
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
+            # Shared OAuth apps (stored in admin's own app_settings).
+            "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
+            "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
+            "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
+            "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+            "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
+            "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
             "static_asset_version": STATIC_ASSET_VERSION,
         },
     )
@@ -14624,10 +14681,22 @@ def get_all_settings():
         "star_send_yt_playlist": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "",
         "star_send_yt_playlist_title": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST_TITLE) or "",
         "star_send_email": get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "",
-        "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
+        "yt_oauth_client_id": get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID, ""),
+        "yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)),
+        "yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET, "")),
+        "yt_oauth_configured": all(get_youtube_oauth_credentials()),
         "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
-        "pinterest_oauth_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
+        "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
+        "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
+        "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
+        "pinterest_oauth_client_id": get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID, ""),
+        "pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)),
+        "pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+        "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
         "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
+        "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+        "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
+        "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
         "resend_api_key_set": bool(resend_key),
         "resend_api_key_masked": _masked(resend_key),
         "email_from": get_resend_from(),
@@ -14673,13 +14742,16 @@ async def save_all_settings(request: Request):
     body = await request.json()
 
     _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
-                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET}
+                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
+                  SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+                  SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
         SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
@@ -14689,6 +14761,9 @@ async def save_all_settings(request: Request):
         SETTING_QUIRE_CLIENT_ID, SETTING_QUIRE_CLIENT_SECRET,
         SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME, SETTING_STAR_SEND_QUIRE,
         SETTING_QUIRE_RATE_CAP_MIN, SETTING_QUIRE_RATE_CAP_HOUR,
+        SETTING_PINTEREST_OAUTH_CLIENT_ID, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
@@ -14697,6 +14772,8 @@ async def save_all_settings(request: Request):
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
     }
     is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
 
