@@ -361,6 +361,22 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   is gated on `yt_oauth_connected` (server-side in `/highlights/add`; hidden in the
   rule-builder until connected) so it can't be created without a token. Runs in the
   per-user background context like the other after-refresh rules.
+- **Save to Pinterest (per-user OAuth)** — an outbound-only integration: a per-entry
+  **Pin** button saves an article to one of the user's boards. Pinterest has no
+  write-without-OAuth path, so `services/pinterest_oauth.py` speaks the **API v5**
+  OAuth flow (authorize / token / refresh — the token endpoint authenticates the
+  *client* with HTTP **Basic** auth, body form-encoded, unlike Google's JSON) plus
+  `boards.list` (scope `boards:read`) and `pins.create` (scope `pins:write`). main.py
+  owns the routes (`/integrations/pinterest/oauth/{connect,callback,disconnect}`,
+  `/api/pinterest/boards`, `/api/pinterest/pin`) and stores the **refresh token
+  per-user** (`get_pinterest_oauth_token()` refreshes on demand; "" → reconnect). The
+  OAuth *client* creds are app-level (`PINTEREST_OAUTH_CLIENT_ID/SECRET` from env,
+  both modes); only the tokens are per-user. The pin route derives the entry's lead
+  image via `_derive_article_lead_image` (the **source** URL, not the `/api/img`
+  proxy, since Pinterest must fetch it) and links the pin back to the entry; an entry
+  with no image returns 422 (Pinterest requires an image). The Pin button is rendered
+  only when connected (`pinterest_connected` context flag); the board picker is a
+  lightweight client-side menu fed by `/api/pinterest/boards`.
 - **Rule scope (incl. multi-feed)** — automation rules scope to `global` (all feeds),
   `folder`, `feed` (one URL), or `feeds` (an explicit set; `scope_id` is the feed URLs
   joined by newline — newline, not comma, since URLs can contain commas). Scope

@@ -72,6 +72,10 @@ The short version:
   with a Duplicate button to clone one quickly; all fire at refresh time with a
   manual "Run Now". **Starring** an article can also auto-send it to Instapaper, a
   YouTube playlist, and/or email (Integrations → On Star).
+- **Save to Pinterest** — connect a Pinterest account (per-user OAuth) and a
+  **Pin** button appears on each article, saving its lead image (linked back to
+  the source) to a board you pick. Needs `PINTEREST_OAUTH_CLIENT_ID/SECRET`;
+  entries without an image can't be pinned.
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.

@@ -11,7 +11,8 @@ Build order (promoted from Later — top first):
 3. ~~**YouTube quota meter**~~ — ✅ SHIPPED (per-user spend vs cap, Pacific reset, low/exhausted states).
 4. **Robust YT-folder identity + Integrations subtabs** — ✅ SHIPPED. Sync menu detects the YT folder by content (rename-safe); Integrations split into YouTube/DeviantArt/Instapaper subtabs (Settings→Feeds style) so the crowded YT section has its own tab. (Server-side connection gating of the YT subtab still possible later.)
 5. ~~**On-star → send to destination(s)**~~ — ✅ SHIPPED (Integrations → On Star: Instapaper / YouTube playlist / email; fires once on a genuine new star, async, one-way).
-6. **Bare media links → embedded players** — self-contained content win.
+6. **Bare media links → embedded players** — ✅ Part B (YT half) SHIPPED: a bare YouTube watch/youtu.be/shorts link that is the sole content of its paragraph becomes an inline player (`_embed_standalone_youtube_links`). Bandcamp standalone-link → cached scrape still deferred (see Later).
+7. ~~**Save to Pinterest**~~ — ✅ SHIPPED (per-entry **Pin** button; per-user Pinterest API v5 OAuth; board picker; pins the entry's lead image linked to source. `services/pinterest_oauth.py`, `PINTEREST_OAUTH_CLIENT_ID/SECRET`).
 
 Detailed specs follow.
 
