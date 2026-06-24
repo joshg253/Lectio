@@ -8048,6 +8048,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
                 if fallback and fallback.lower().count("<img") > art_img_count:
                     article_html = sanitize_readability_html(fallback).strip()
         article_html = _dedupe_readability_images(article_html)
+        article_html = _strip_bandcamp_track_signature(article_html)
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -8897,6 +8898,35 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+_BC_EMBED_IFRAME_RE = re.compile(
+    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*bandcamp\.com/EmbeddedPlayer/[^"\']*)(["\'])',
+    re.I,
+)
+
+
+def _strip_bandcamp_track_signature(content_html: str) -> str:
+    """Drop the domain-locked single-track signature from Bandcamp embeds.
+
+    Bandcamp's ``.../tracks=<ids>/esig=<sig>/`` single-track player form is bound
+    to the publisher's domain — Bandcamp validates the Referer, so it renders
+    "Sorry, this track or album is not available." anywhere else (including
+    Lectio). The plain ``album=<id>`` form embeds on any site and plays the same
+    (pre-order/premiere) album, so strip the ``tracks``/``esig`` path segments and
+    fall back to it rather than show a dead player."""
+    if not isinstance(content_html, str) or "bandcamp.com/EmbeddedPlayer" not in content_html:
+        return content_html
+    if "tracks=" not in content_html and "esig=" not in content_html:
+        return content_html
+
+    def _fix(m: re.Match) -> str:
+        src = m.group(2)
+        src = re.sub(r"/tracks=[\w,]+", "", src)
+        src = re.sub(r"/esig=[0-9a-f]+", "", src, flags=re.IGNORECASE)
+        return m.group(1) + src + m.group(3)
+
+    return _BC_EMBED_IFRAME_RE.sub(_fix, content_html)
+
+
 _YT_EMBED_SRC_HOST_RE = re.compile(
     r'(?P<pre><iframe\b[^>]*\bsrc=["\']https://)'
     r'(?:www\.)?youtube(?:-nocookie)?\.com'
@@ -9692,6 +9722,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if not (isinstance(feed_url, str)
                 and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
             content_html = _inject_recovered_source_embeds(content_html, entry)
+
+        # Bandcamp single-track esig players are domain-locked to the publisher and
+        # show "not available" in Lectio; fall back to the album player. Covers
+        # both feed-native and source-recovered embeds.
+        content_html = _strip_bandcamp_track_signature(content_html)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
@@ -11326,6 +11361,7 @@ def entry_readability(
 
 def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
     escaped_source = html.escape(source_url)
+    article_html = _strip_bandcamp_track_signature(article_html)
     return HTMLResponse(
         (
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
