@@ -1,8 +1,8 @@
 """Multi-user mode: end-to-end via subprocess + in-process middleware units.
 
-The E2E scenarios run in a subprocess because main.py reads LECTIO_SECURITY_MODE
-at import time, so the mode can't be flipped within the already-imported test
-process. The middleware-binding logic is additionally unit-tested in-process.
+The E2E scenarios run in a subprocess so each harness starts with a fresh
+import of main.py (which sets module-level constants at import time).
+The middleware-binding logic is additionally unit-tested in-process.
 """
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ def test_multi_mode_e2e(tmp_path):
         "multi",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "joshg253",
             "LECTIO_ADMIN_PASSWORD": "real-admin-pw",
         },
@@ -63,7 +62,6 @@ def test_multi_api_per_user_e2e(tmp_path):
         "multi_api",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "adminuser",
             "LECTIO_ADMIN_PASSWORD": "admin-pw",
         },
@@ -77,26 +75,8 @@ def test_account_ui_e2e(tmp_path):
         "account_ui",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "adminuser",
             "LECTIO_ADMIN_PASSWORD": "admin-pw",
-        },
-    )
-    assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert proc.returncode == 0, proc.stderr
-
-
-def test_single_mode_invariance_e2e(tmp_path):
-    proc = _run_harness(
-        "single",
-        tmp_path / "data",
-        {
-            "LECTIO_SECURITY_MODE": "single",
-            "LECTIO_ADMIN_USERNAME": "solouser",
-            "LECTIO_ADMIN_PASSWORD": "solo-pw",
-            # Clear legacy vars so the inherited env doesn't override the test creds.
-            "LECTIO_USERNAME": "",
-            "LECTIO_PASSWORD": "",
         },
     )
     assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -135,12 +115,6 @@ def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
 
 
-def test_middleware_does_not_bind_in_single_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    # Even with a user_id present in the session, single mode ignores it.
-    uid = _drive_middleware({"authenticated": True, "user_id": "alice"})
-    assert uid == tenancy.DEFAULT_USER_ID
-
 
 def test_middleware_does_not_bind_unauthenticated(monkeypatch):
     monkeypatch.setattr(main, "MULTI_USER", True)
@@ -166,12 +140,6 @@ def test_session_logged_in_requires_user_id_in_multi(monkeypatch):
     assert main._session_logged_in(_FakeReq({"authenticated": True})) is False
     assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True
     assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False
-    assert main._session_logged_in(_FakeReq({})) is False
-
-
-def test_session_logged_in_single_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    assert main._session_logged_in(_FakeReq({"authenticated": True})) is True
     assert main._session_logged_in(_FakeReq({})) is False
 
 
@@ -211,8 +179,3 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
         tenancy._layout = saved
 
 
-def test_bootstrap_noop_in_single_mode(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    monkeypatch.setattr(main, "user_store", None)
-    # Must not raise.
-    main.bootstrap_admin()

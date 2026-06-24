@@ -298,6 +298,12 @@ SETTING_PINTEREST_OAUTH_STATE = "pinterest_oauth_state"
 # Shared-instance Pinterest OAuth creds stored in the admin's app_settings.
 SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID = "shared_pinterest_oauth_client_id"
 SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET = "shared_pinterest_oauth_client_secret"
+# Instance tuning settings (admin-only, stored in admin's app_settings).
+SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
+SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
+SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
+SETTING_LOGIN_WINDOW_SECONDS = "login_window_seconds"
+SETTING_DEFAULT_AUTO_REFRESH_MINUTES = "default_auto_refresh_minutes"
 # Quire outbound (turn an article into a task in a chosen Quire project).
 SETTING_QUIRE_CLIENT_ID = "quire_client_id"
 SETTING_QUIRE_CLIENT_SECRET = "quire_client_secret"
@@ -321,10 +327,7 @@ SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
 CHUNK_SIZE = 10
-# feed_fetch_history retention (pruned in daily maintenance): keep at most this
-# many rows per feed, and drop anything older than the age cap regardless.
-FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
-FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
+# feed_fetch_history retention configured via the Administration panel.
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
 # Honest identifier for outbound fetches — names the app and links to the repo,
 # the good-citizen behavior some hosts (e.g. rachelbythebay.com) explicitly
@@ -575,6 +578,27 @@ def _get_shared_credential(key: str) -> str:
                 if val:
                     return val
     return ""
+
+
+def get_fetch_history_keep() -> int:
+    return int(get_runtime_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
+
+
+def get_fetch_history_max_age_days() -> int:
+    return int(get_runtime_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+def get_login_max_failures() -> int:
+    return int(get_runtime_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
+
+
+def get_login_window_seconds() -> int:
+    return int(get_runtime_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
+
+
+def get_instance_default_auto_refresh() -> int:
+    raw = int(get_runtime_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
+    return 0 if raw <= 0 else max(raw, MIN_AUTO_REFRESH_MINUTES)
 
 
 def get_youtube_oauth_credentials() -> tuple[str, str]:
@@ -1022,20 +1046,7 @@ AUTO_LOGIN = os.getenv("LECTIO_AUTO_LOGIN", "0") == "1"
 # LECTIO_SECURITY_MODE selects the tenancy & auth posture:
 #   single - legacy single-user; the LECTIO_USERNAME/PASSWORD env credential
 #            gates access, no per-user separation. Default.
-#   multi  - multi-user with isolated per-user databases (the tenancy "isolated"
-#            mode). Accounts live in a users table; each user gets their own
-#            reader/meta/starred DBs under DATA_DIR/users/<username>/.
-# A future "shared-content" mode is documented in ARCHITECTURE.md.
-# Defaults to "multi"; "single" is legacy and will be removed in a future cleanup.
-_SECURITY_MODE_RAW = os.getenv("LECTIO_SECURITY_MODE", "multi").strip().lower()
-if _SECURITY_MODE_RAW not in {"single", "multi"}:
-    LOGGER.warning(
-        "LECTIO_SECURITY_MODE=%r unrecognized; using 'multi'. Valid: single, multi.",
-        _SECURITY_MODE_RAW,
-    )
-    _SECURITY_MODE_RAW = "multi"
-SECURITY_MODE = _SECURITY_MODE_RAW
-MULTI_USER = SECURITY_MODE == "multi"
+MULTI_USER = True  # always multi; single-user mode removed
 
 # Password hashing scheme for stored credentials (multi mode). scrypt and
 # pbkdf2_sha256 are stdlib; argon2 needs the optional argon2-cffi package.
@@ -1068,8 +1079,7 @@ if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
         "LECTIO_SECRET_KEY is not set — using a random key. Sessions will not survive server restarts. Set a stable key in your .env."
     )
-# Cookie lifetime: 1 year. Changing this requires users to log in again.
-SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 * 3600)))
+SESSION_MAX_AGE_SECONDS = 365 * 24 * 3600  # 1 year; baked into SessionMiddleware at startup
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Proxies trusted for X-Forwarded-* headers. "*" (default) trusts any upstream —
@@ -1084,8 +1094,6 @@ _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
-_configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
-AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
 updating_feeds_lock = threading.Lock()
@@ -3092,7 +3100,7 @@ def ensure_meta_schema() -> None:
                 )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-            (AUTO_REFRESH_SETTING_KEY, str(AUTO_REFRESH_MINUTES)),
+            (AUTO_REFRESH_SETTING_KEY, str(get_instance_default_auto_refresh())),
         )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
@@ -3442,11 +3450,11 @@ def parse_epoch_setting(value: str | None) -> float | None:
 def get_auto_refresh_minutes(conn: sqlite3.Connection) -> int:
     raw_value = get_setting(conn, AUTO_REFRESH_SETTING_KEY)
     if raw_value is None:
-        return AUTO_REFRESH_MINUTES
+        return get_instance_default_auto_refresh()
     try:
         return normalize_auto_refresh_minutes(int(raw_value))
     except ValueError:
-        return AUTO_REFRESH_MINUTES
+        return get_instance_default_auto_refresh()
 
 
 def purge_lower_level_folders(conn: sqlite3.Connection) -> None:
@@ -11186,7 +11194,7 @@ def _daily_maintenance_for_user() -> None:
     # rows per feed and drop anything older than the age cap, so the diagnostic
     # log can't grow without limit on busy installs.
     try:
-        cutoff = time.time() - FEED_FETCH_HISTORY_MAX_AGE_DAYS * 86400
+        cutoff = time.time() - get_fetch_history_max_age_days() * 86400
         with get_meta_connection() as conn:
             cur = conn.execute(
                 """
@@ -11198,7 +11206,7 @@ def _daily_maintenance_for_user() -> None:
                     ) WHERE rn > ?
                 )
                 """,
-                (FEED_FETCH_HISTORY_KEEP,),
+                (get_fetch_history_keep(),),
             )
             pruned = cur.rowcount
             cur = conn.execute("DELETE FROM feed_fetch_history WHERE fetched_at < ?", (cutoff,))
@@ -11729,8 +11737,6 @@ def login_page(request: Request, next: str = "/"):
     )
 
 
-_LOGIN_RATE_LIMIT_MAX = int(os.getenv("LECTIO_LOGIN_MAX_FAILURES", "5"))
-_LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LECTIO_LOGIN_WINDOW_SECONDS", "300"))
 _login_failures: dict[str, list[float]] = {}
 _login_failures_lock = threading.Lock()
 
@@ -11748,11 +11754,12 @@ def _client_ip_for_rate_limit(request: Request) -> str:
 def _login_attempt_blocked(ip: str, now: float) -> bool:
     if DEBUG_MODE:
         return False
-    cutoff = now - _LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    window = get_login_window_seconds()
+    cutoff = now - window
     with _login_failures_lock:
         timestamps = [t for t in _login_failures.get(ip, []) if t >= cutoff]
         _login_failures[ip] = timestamps
-        return len(timestamps) >= _LOGIN_RATE_LIMIT_MAX
+        return len(timestamps) >= get_login_max_failures()
 
 
 def _record_login_failure(ip: str, now: float) -> None:
@@ -11789,7 +11796,7 @@ async def login_submit(request: Request, next: str = "/"):
             "login.html",
             {
                 "next": next,
-                "error": f"Too many failed login attempts. Try again in {_LOGIN_RATE_LIMIT_WINDOW_SECONDS // 60} minutes.",
+                "error": f"Too many failed login attempts. Try again in {get_login_window_seconds() // 60} minutes.",
                 "static_asset_version": STATIC_ASSET_VERSION,
             },
             status_code=429,
@@ -11992,6 +11999,13 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
             "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
             "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
             "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+            # Instance tuning
+            "fetch_history_keep": get_fetch_history_keep(),
+            "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+            "login_max_failures": get_login_max_failures(),
+            "login_window_seconds": get_login_window_seconds(),
+            "instance_auto_refresh": get_instance_default_auto_refresh(),
+            "public_url": LECTIO_PUBLIC_URL,
             "static_asset_version": STATIC_ASSET_VERSION,
         },
     )
@@ -14722,6 +14736,12 @@ def get_all_settings():
         "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
         "contacts": contacts,
         "email_to_default": email_to_default,
+        "public_url": LECTIO_PUBLIC_URL,
+        "fetch_history_keep": get_fetch_history_keep(),
+        "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "login_max_failures": get_login_max_failures(),
+        "login_window_seconds": get_login_window_seconds(),
+        "instance_auto_refresh": get_instance_default_auto_refresh(),
     })
 
 
@@ -14764,6 +14784,9 @@ async def save_all_settings(request: Request):
         SETTING_PINTEREST_OAUTH_CLIENT_ID, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
@@ -14774,6 +14797,9 @@ async def save_all_settings(request: Request):
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
     }
     is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
 

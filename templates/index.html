@@ -1438,7 +1438,7 @@
             <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds</span>
           </label>
           <p class="settings-hint" style="grid-column:1 / -1">Auto-marks YouTube Shorts as read across every YouTube feed at refresh, so they stay out of your unread list. Off by default. (Overrides the per-feed Shorts setting when on.)</p>
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed. Register an app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> to get your own OAuth Client ID and Secret, or use the shared instance credentials set in the Administration panel.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed. Register an app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and add <code id="sett-yt-callback-url"></code> as an authorized redirect URI, or use the shared instance credentials set in the Administration panel.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-yt-oauth-client-id">OAuth Client ID</label>
             <input type="text" id="sett-yt-oauth-client-id" class="settings-input" placeholder="166660….apps.googleusercontent.com" maxlength="200" autocomplete="off" />
@@ -1458,7 +1458,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="deviantart" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
+          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code id="sett-da-callback-url"></code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
           <div class="settings-field">
             <label class="settings-label" for="sett-da-id">Client ID</label>
             <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
@@ -1496,7 +1496,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="pinterest" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Register an app at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with redirect URI <code>https://&lt;your-host&gt;/integrations/pinterest/oauth/callback</code>, or use the shared instance credentials set in the Administration panel.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Register an app at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with redirect URI <code id="sett-pinterest-callback-url"></code>, or use the shared instance credentials set in the Administration panel.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-pinterest-client-id">OAuth Client ID</label>
             <input type="text" id="sett-pinterest-client-id" class="settings-input" placeholder="your app ID" maxlength="200" autocomplete="off" />
@@ -1514,7 +1514,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="quire" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect <a href="https://quire.io" target="_blank" rel="noopener">Quire</a> to get an <strong>Add to Quire</strong> button on each article that creates a task in a project you pick. Register an app at <a href="https://quire.io/apps/dev" target="_blank" rel="noopener">quire.io/apps/dev</a> to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/quire/callback</code> to the app's Redirect URI whitelist.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect <a href="https://quire.io" target="_blank" rel="noopener">Quire</a> to get an <strong>Add to Quire</strong> button on each article that creates a task in a project you pick. Register an app at <a href="https://quire.io/apps/dev" target="_blank" rel="noopener">quire.io/apps/dev</a> to get a Client ID + Secret, then Save. Add <code id="sett-quire-callback-url"></code> to the app's Redirect URI whitelist.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-quire-id">Client ID</label>
             <input type="text" id="sett-quire-id" class="settings-input" placeholder="your client ID" maxlength="200" autocomplete="off" />
@@ -9629,6 +9629,20 @@
             el.hidden = false;
             if (hint) hint.hidden = false;
           } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }
+        }
+        // Populate OAuth callback URL hints with the actual public URL.
+        {
+          const base = (d.public_url || window.location.origin).replace(/\/$/, '');
+          const cbMap = {
+            'sett-yt-callback-url':        base + '/youtube/oauth/callback',
+            'sett-da-callback-url':        base + '/deviantart/callback',
+            'sett-quire-callback-url':     base + '/quire/callback',
+            'sett-pinterest-callback-url': base + '/integrations/pinterest/oauth/callback',
+          };
+          for (const [id, url] of Object.entries(cbMap)) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = url;
+          }
         }
         settContacts = d.contacts || [];
         settDefaultAddress = d.email_to_default || '';
