@@ -202,6 +202,19 @@ def test_inject_recovered_youtube_embeds_rebuilds_player():
     assert main._inject_recovered_youtube_embeds(stored, []) == stored
 
 
+def test_inject_recovered_youtube_embeds_fills_artstation_video_wrapper():
+    # ArtStation leaves an empty <div class="video-wrapper"> (not a wp figure)
+    # when the embed iframe is stripped at ingest.
+    stored = ('<p>intro</p>'
+              '<div class="video-wrapper media-asset-container media-asset"></div>')
+    out = main._inject_recovered_youtube_embeds(stored, ["oDMjofFNLSk"])
+    assert "youtube-nocookie.com/embed/oDMjofFNLSk" in out
+    assert 'class="video-wrapper' not in out
+    # A video-wrapper that still has its own iframe is left alone.
+    kept = '<div class="video-wrapper"><iframe src="https://player.vimeo.com/x"></iframe></div>'
+    assert main._inject_recovered_youtube_embeds(kept, ["oDMjofFNLSk"]) == kept
+
+
 def _capture_uas(monkeypatch):
     """Record the User-Agent of each outbound client; return the list."""
     import contextlib

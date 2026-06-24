@@ -405,11 +405,18 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
   `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
   sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
+- **Feed-side YouTube recovery** — the embed `<iframe>` is stripped at ingest but
+  the raw feed still carries it, so the media scan (`extract_youtube_embeds`,
+  re-parsing the raw feed with sanitize off) caches the video ids and
+  `_inject_recovered_youtube_embeds` refills the empty placeholder it left behind:
+  WordPress' `<figure class="...is-provider-youtube">` **or** ArtStation's
+  `<div class="video-wrapper media-asset...">` (matched by `_YT_EMBED_PLACEHOLDER_RE`).
+  The id scan recognizes both the standard and privacy host (`youtube-nocookie.com`).
 - **Source-page embed recovery (feed pane)** — entries ingested *before*
   `services.reader_sanitize` stopped stripping `<iframe>` at feed-parse time lost
-  their players, and (unlike WordPress embed blocks) leave no placeholder `figure`
-  for `_inject_recovered_youtube_embeds` to refill, so the feed-side media scan
-  can't help. `_inject_recovered_source_embeds` (called from `get_entry_detail`
+  their players, and (unlike the placeholders above) leave *nothing* to refill —
+  no `figure`, no `video-wrapper` — and the raw feed item has often scrolled out
+  of the window, so the feed-side scan can't help. `_inject_recovered_source_embeds` (called from `get_entry_detail`
   after the cleanups, skipped for native YouTube feeds) handles this: when the
   stored body has no `<iframe>` and the entry has a source link, it reads the
   lead-image **source-HTML cache** (shared with the lead-image scraper, so it's

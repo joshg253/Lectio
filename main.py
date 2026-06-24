@@ -8899,28 +8899,38 @@ def _apply_youtube_embed_host(content_html: str) -> str:
 
 
 _YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
+# Empty placeholders left behind when an embed <iframe> was stripped at ingest:
+# WordPress' provider figure, or ArtStation's video-wrapper div.
+_YT_EMBED_PLACEHOLDER_RE = re.compile(
+    r"is-provider-youtube|wp-block-embed-youtube|video-wrapper", re.I
+)
 
 
 def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) -> str:
-    """Replace stripped WordPress YouTube embed figures with real players.
+    """Replace stripped YouTube embed placeholders with real players.
 
-    feedparser removes the embed ``<iframe>``, leaving an empty
-    ``<figure class="wp-block-embed ... is-provider-youtube">``. Replace each such
-    figure, in document order, with the player for the matching recovered video
-    id. Figures past the end of ``video_ids`` are left untouched."""
+    feedparser/ingest removes the embed ``<iframe>``, leaving an empty shell:
+    WordPress' ``<figure class="wp-block-embed ... is-provider-youtube">`` or
+    ArtStation's ``<div class="video-wrapper media-asset...">``. Replace each such
+    placeholder, in document order, with the player for the matching recovered
+    video id. Placeholders past the end of ``video_ids`` are left untouched."""
     if not video_ids:
         return content_html
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(content_html, "html.parser")
-    figures = [
-        fig for fig in soup.find_all("figure")
-        if _YT_EMBED_FIGURE_CLASS_RE.search(" ".join(fig.get("class", [])))
-    ]
-    if not figures:
+    placeholders = []
+    for tag in soup.find_all(["figure", "div"]):
+        classes = " ".join(tag.get("class", []))
+        if tag.name == "figure" and _YT_EMBED_FIGURE_CLASS_RE.search(classes):
+            placeholders.append(tag)
+        elif (tag.name == "div" and "video-wrapper" in classes.lower()
+                and not tag.find(["iframe", "video"])):
+            placeholders.append(tag)
+    if not placeholders:
         return content_html
-    for fig, vid in zip(figures, video_ids):
-        fig.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
+    for ph, vid in zip(placeholders, video_ids, strict=False):
+        ph.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
     return str(soup)
 
 
@@ -9608,7 +9618,7 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # iframes (services.reader_sanitize) — newer entries keep the real embed,
     # so skip recovery when an <iframe> is already present.
     if (isinstance(content_html, str)
-            and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
+            and _YT_EMBED_PLACEHOLDER_RE.search(content_html)
             and "<iframe" not in content_html.lower()):
         with get_meta_connection() as _vconn:
             _vids = _lookup_media_video(_vconn, feed_url, entry_id)
