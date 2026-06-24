@@ -64,3 +64,11 @@ def test_global_on_marks_shorts_read(env):
     main._run_automation_after_refresh({FEED})
     assert _read("short") is True       # Short auto-marked read
     assert _read("normal") in (False, None)  # normal video untouched
+
+
+def test_mark_existing_shorts_read_helper(env):
+    # Directly: flipping per-feed Hide Shorts on clears the backlog immediately.
+    n = main._mark_existing_shorts_read({FEED})
+    assert n == 1
+    assert _read("short") is True
+    assert _read("normal") in (False, None)
