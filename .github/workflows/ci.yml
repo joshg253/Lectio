@@ -16,11 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Install uv
-        # setup-uv publishes no moving major tag; pin the exact release.
-        uses: astral-sh/setup-uv@v8.2.0
+        # setup-uv publishes no moving major tag; pin the exact release by SHA.
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
           # Reuse the cache only when the lockfile is unchanged.
