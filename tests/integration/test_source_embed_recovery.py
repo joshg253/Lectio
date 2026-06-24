@@ -145,3 +145,24 @@ def test_inject_queues_without_blocking_on_miss(monkeypatch):
     assert out == body  # cache miss → unchanged, fills on a later open
     assert events["queued"] == ["https://example.com/post"]
     assert events["waited"] == []  # must NOT block the render on the fetch
+
+
+def test_strip_bandcamp_track_signature():
+    src = ("https://bandcamp.com/EmbeddedPlayer/album=2004014866/size=large/"
+           "bgcol=ffffff/tracklist=true/tracks=159,260/esig=d83a3a2cbedcb6/")
+    html_in = f'<iframe loading="lazy" src="{src}"></iframe>'
+    out = main._strip_bandcamp_track_signature(html_in)
+    assert "tracks=" not in out
+    assert "esig=" not in out
+    assert "album=2004014866" in out
+    assert "tracklist=true" in out  # display params kept
+
+
+def test_strip_bandcamp_leaves_plain_album_untouched():
+    src = "https://bandcamp.com/EmbeddedPlayer/album=1116738620/size=large/tracklist=false/"
+    html_in = f'<iframe src="{src}"></iframe>'
+    assert main._strip_bandcamp_track_signature(html_in) == html_in
+
+
+def test_strip_bandcamp_noop_without_embed():
+    assert main._strip_bandcamp_track_signature("<p>no embeds</p>") == "<p>no embeds</p>"

@@ -433,6 +433,15 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   placeholders that follow a heading (the stripped embed slots, e.g. theobelisk's
   `<h3>title</h3><p></p>`) in document order, (3) append leftovers. Mirrors the
   Reader-view recovery but for the normal entry pane.
+- **Bandcamp single-track embeds** — Bandcamp's `.../tracks=<ids>/esig=<sig>/`
+  player form is domain-locked: Bandcamp validates the Referer against the
+  publisher's site and serves "Sorry, this track or album is not available."
+  anywhere else (confirmed by headless test — the same iframe plays from the
+  publisher domain but not from Lectio). `_strip_bandcamp_track_signature` drops
+  the `tracks`/`esig` path segments so the embed falls back to the plain
+  `album=<id>` player, which embeds on any site and streams the same pre-order/
+  premiere album. Applied to feed-native and source-recovered embeds in
+  `get_entry_detail`, and to both reader-view render paths.
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 
