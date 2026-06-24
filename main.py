@@ -8971,14 +8971,19 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     return str(soup) if changed else content_html
 
 
-def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit: int = 8) -> list[str]:
+def _extract_source_embed_iframes(
+    raw_html: str, existing_html: str = "", limit: int = 8
+) -> list[tuple[str | None, str]]:
     """Pull allowlisted media-embed players out of a source page's raw HTML.
 
-    Returns sanitized embed markup in document order, skipping any whose src is
-    already present in ``existing_html`` (deduped on the src path). YouTube embeds
-    are rebuilt via ``_youtube_embed_html`` so they honor the user's host
-    preference; every other embed is run through the shared sanitizer (sandbox +
-    referrer policy) since it's injected at render time and not re-sanitized."""
+    Returns ``(canonical_link, embed_html)`` pairs in document order, skipping any
+    whose src is already present in ``existing_html`` (deduped on the src path).
+    YouTube embeds are rebuilt via ``_youtube_embed_html`` so they honor the
+    user's host preference; every other embed is run through the shared sanitizer
+    (sandbox + referrer policy) since it's injected at render time. The canonical
+    link (``yt:<id>`` for YouTube, else the embed's fallback ``<a href>`` so a
+    Bandcamp/SoundCloud player can be matched to its bare album/track link in the
+    body) drives in-context placement; ``None`` when no link can be derived."""
     if not raw_html or "<iframe" not in raw_html.lower():
         return []
     from bs4 import BeautifulSoup
@@ -8986,7 +8991,7 @@ def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit:
     soup = BeautifulSoup(raw_html, "html.parser")
     existing = (existing_html or "").lower()
     seen: set[str] = set()
-    out: list[str] = []
+    out: list[tuple[str | None, str]] = []
     for ifr in soup.find_all("iframe"):
         src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
         if not src or not html_sanitize._embed_host_allowed(src):
@@ -9000,13 +9005,89 @@ def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit:
             _em = re.search(r"/embed/([\w-]{11})", src)
             vid = _em.group(1) if _em else youtube_duration_service.extract_video_id(src)
         if vid:
-            out.append(_youtube_embed_html(vid))
+            out.append((f"yt:{vid}", _youtube_embed_html(vid)))
         else:
             cleaned = html_sanitize.sanitize_html(str(ifr))
             if "<iframe" in cleaned.lower():
-                out.append(cleaned)
+                # iframe content is parsed as raw text (the fallback <a> is a
+                # string, not a tag), so match its href out of the inner markup —
+                # the canonical album/track link for matching the body's bare link.
+                _am = re.search(r'href=["\']([^"\']+)["\']', ifr.decode_contents())
+                canonical = _am.group(1) if _am else None
+                out.append((canonical, cleaned))
         if len(out) >= limit:
             break
+    return out
+
+
+def _norm_media_link(url: str | None) -> str:
+    """Scheme/trailing-slash-insensitive key for matching media URLs."""
+    u = (url or "").strip().lower()
+    u = re.sub(r"^https?://", "", u).split("?", 1)[0].rstrip("/")
+    return u
+
+
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]]) -> str:
+    """Insert recovered embeds where they belong, not just at the bottom.
+
+    Three passes, in order: (1) replace a bare body link that points at the same
+    media — so the player takes the place of the link the feed showed instead of
+    the embed; (2) fill empty ``<p></p>`` placeholders that follow a heading (the
+    stripped embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in
+    document order; (3) append whatever's left at the bottom."""
+    if not items:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html or "", "html.parser")
+    remaining = list(items)
+
+    # Pass 1 — replace a matching bare link.
+    for canonical, embed in list(remaining):
+        if not canonical:
+            continue
+        target = None
+        for a in soup.find_all("a"):
+            href = a.get("href") or ""
+            if canonical.startswith("yt:"):
+                vid = canonical[3:]
+                if youtube_duration_service.extract_video_id(href) == vid or f"/embed/{vid}" in href:
+                    target = a
+                    break
+            elif _norm_media_link(href) and _norm_media_link(href) == _norm_media_link(canonical):
+                target = a
+                break
+        if target is None:
+            continue
+        repl = BeautifulSoup(embed, "html.parser")
+        parent = target.parent
+        if (parent is not None and parent.name == "p"
+                and parent.get_text(strip=True) == target.get_text(strip=True)):
+            parent.replace_with(repl)  # link is the paragraph's sole content
+        else:
+            target.replace_with(repl)
+        remaining.remove((canonical, embed))
+
+    # Pass 2 — fill empty <p> placeholders that follow a heading.
+    if remaining:
+        empties = []
+        for p in soup.find_all("p"):
+            if p.get_text(strip=True) or p.find(["img", "iframe", "audio", "video", "figure"]):
+                continue
+            prev = p.find_previous_sibling()
+            if prev is not None and prev.name in _HEADING_TAGS:
+                empties.append(p)
+        for p, (canonical, embed) in zip(empties, list(remaining), strict=False):
+            p.replace_with(BeautifulSoup(embed, "html.parser"))
+            remaining.remove((canonical, embed))
+
+    out = str(soup)
+    # Pass 3 — append leftovers.
+    if remaining:
+        out += "".join(f'<p class="lectio-embed">{e}</p>' for _, e in remaining)
     return out
 
 
@@ -9018,8 +9099,9 @@ def _inject_recovered_source_embeds(content_html, entry):
     embed blocks — leave no placeholder figure to refill, so the feed-side
     recovery can't help. When the stored body carries no embed and the entry has a
     source link, fetch the page once (cached, SSRF-guarded via the lead-image
-    source-HTML cache) and append any allowlisted players it has — mirroring the
-    Reader-view ``_reinject_readability_embeds`` recovery."""
+    source-HTML cache) and re-attach any allowlisted players it has, placed in
+    context (see ``_place_recovered_embeds``) — mirroring the Reader-view
+    ``_reinject_readability_embeds`` recovery."""
     link = (getattr(entry, "link", "") or "").strip()
     if not link:
         return content_html
@@ -9034,11 +9116,10 @@ def _inject_recovered_source_embeds(content_html, entry):
         lead_image_service.queue_source_html_fetch(link)
         return content_html
     _base, raw_html = cached
-    embeds = _extract_source_embed_iframes(raw_html, body)
-    if not embeds:
+    items = _extract_source_embed_iframes(raw_html, body)
+    if not items:
         return content_html
-    block = "".join(f'<p class="lectio-embed">{e}</p>' for e in embeds)
-    return (body + block) if body else block
+    return _place_recovered_embeds(body, items)
 
 
 def _inject_source_gallery(content_html, entry, lead_image_url):

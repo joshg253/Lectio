@@ -24,7 +24,7 @@ SOURCE_HTML = (
 
 def test_extract_pulls_only_allowlisted_embeds():
     out = main._extract_source_embed_iframes(SOURCE_HTML)
-    joined = "".join(out)
+    joined = "".join(e for _, e in out)
     assert f"/embed/{VID}" in joined
     assert "bandcamp.com/EmbeddedPlayer" in joined
     assert "soundcloud.com" in joined
@@ -34,20 +34,62 @@ def test_extract_pulls_only_allowlisted_embeds():
 def test_extract_skips_already_present_src():
     existing = f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>'
     out = main._extract_source_embed_iframes(SOURCE_HTML, existing_html=existing)
-    joined = "".join(out)
+    joined = "".join(e for _, e in out)
     assert f"/embed/{VID}" not in joined  # already present → skipped
     assert "bandcamp.com/EmbeddedPlayer" in joined
 
 
-def test_extract_youtube_uses_inline_player():
+def test_extract_youtube_uses_inline_player_and_canonical():
     out = main._extract_source_embed_iframes(
         f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>'
     )
-    assert "youtube-embed-container" in out[0]
+    canonical, embed = out[0]
+    assert canonical == f"yt:{VID}"
+    assert "youtube-embed-container" in embed
+
+
+def test_extract_bandcamp_canonical_from_inner_link():
+    html = (
+        f'<iframe src="{BC}">'
+        '<a href="https://artist.bandcamp.com/album/foo">Foo by Artist</a>'
+        "</iframe>"
+    )
+    out = main._extract_source_embed_iframes(html)
+    assert out[0][0] == "https://artist.bandcamp.com/album/foo"
 
 
 def test_extract_no_iframe_is_empty():
     assert main._extract_source_embed_iframes("<p>no embeds here</p>") == []
+
+
+def test_place_fills_empty_p_after_heading():
+    body = "<h3>Burial official video</h3><p></p><h3>Live on KEXP</h3><p></p>"
+    items = [
+        (f"yt:{VID}", main._youtube_embed_html(VID)),
+        ("yt:abc12345678", main._youtube_embed_html("abc12345678")),
+    ]
+    out = main._place_recovered_embeds(body, items)
+    assert "<p></p>" not in out  # both placeholders filled
+    assert f"/embed/{VID}" in out
+    # filled in document order: first heading's slot gets the first embed
+    assert out.index("Burial") < out.index(f"/embed/{VID}") < out.index("Live on KEXP")
+
+
+def test_place_replaces_matching_bare_link():
+    body = f'<p>Watch:</p><p><a href="https://youtu.be/{VID}">https://youtu.be/{VID}</a></p>'
+    items = [(f"yt:{VID}", main._youtube_embed_html(VID))]
+    out = main._place_recovered_embeds(body, items)
+    assert f"youtu.be/{VID}" not in out  # bare link replaced by the player
+    assert "youtube-embed-container" in out
+
+
+def test_place_appends_leftovers_at_bottom():
+    body = "<p>Article body, no slots or links.</p>"
+    items = [(f"yt:{VID}", main._youtube_embed_html(VID))]
+    out = main._place_recovered_embeds(body, items)
+    assert "Article body" in out
+    assert 'class="lectio-embed"' in out
+    assert out.index("Article body") < out.index("lectio-embed")
 
 
 def _entry(link="https://example.com/post"):
