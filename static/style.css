@@ -1,3 +1,6 @@
+/* Ensure [hidden] always wins over display: flex/grid on component rules */
+[hidden] { display: none !important; }
+
 /* History pane header styles */
 .history-pane-header {
   display: flex;
