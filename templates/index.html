@@ -1467,6 +1467,7 @@
             <span id="sett-da-status" class="settings-inline-status"></span>
             <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect">Connect DeviantArt account</a>
             <button type="button" id="sett-da-watchfeed" class="settings-inline-btn" hidden>Add Watch feed</button>
+            <button type="button" id="sett-da-sync" class="settings-inline-btn" hidden>Sync Watch List</button>
             <button type="button" id="sett-da-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
             <span id="sett-da-action-status" class="settings-inline-status"></span>
           </div>
@@ -9556,7 +9557,7 @@
           : 'Not connected.';
         const daConnect = document.getElementById('sett-da-connect');
         if (daConnect) daConnect.hidden = daConnected;
-        ['sett-da-watchfeed', 'sett-da-disconnect'].forEach(id => {
+        ['sett-da-watchfeed', 'sett-da-sync', 'sett-da-disconnect'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.hidden = !daConnected;
         });
@@ -9795,6 +9796,8 @@
       };
       document.getElementById('sett-da-watchfeed')?.addEventListener('click', () =>
         _daAction('/deviantart/add-watch-feed', 'Adding…', d => d.message || 'Added.'));
+      document.getElementById('sett-da-sync')?.addEventListener('click', () =>
+        _daAction('/deviantart/sync-watchlist', 'Syncing…', d => d.message || 'Sync started.'));
       document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
