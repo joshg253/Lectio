@@ -5144,6 +5144,10 @@ mark.highlight-mark {
   background: #fef3c7;
   color: #92400e;
 }
+.hl-rule-type-chip--quire {
+  background: #dcf2e8;
+  color: #1f7a55;
+}
 .hl-rule-search-in-badge {
   font-family: monospace;
   font-size: 0.7rem;
