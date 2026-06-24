@@ -13,6 +13,18 @@ Build order (promoted from Later — top first):
 5. ~~**On-star → send to destination(s)**~~ — ✅ SHIPPED (Integrations → On Star: Instapaper / YouTube playlist / email; fires once on a genuine new star, async, one-way).
 6. **Bare media links → embedded players** — ✅ Part B (YT half) SHIPPED: a bare YouTube watch/youtu.be/shorts link that is the sole content of its paragraph becomes an inline player (`_embed_standalone_youtube_links`). ✅ Part A (source-page embed recovery) SHIPPED: when an entry's stored body has no `<iframe>` (older entries stripped at ingest, no placeholder figure) and it has a source link, the missing YouTube/Bandcamp/SoundCloud players are scraped from the source page (cached lead-image source-HTML) and re-attached **in context** — `_place_recovered_embeds` replaces the bare body link the feed showed instead, or fills the empty `<p></p>` slot left after a video-title heading, falling back to bottom-append (`_inject_recovered_source_embeds` / `_extract_source_embed_iframes`). Bandcamp standalone *link* → embed (numeric album id from the album page) still deferred (see Later).
 7. ~~**Save to Pinterest**~~ — ✅ SHIPPED (per-entry **Pin** button; per-user Pinterest API v5 OAuth; board picker; pins the entry's lead image linked to source. `services/pinterest_oauth.py`, `PINTEREST_OAUTH_CLIENT_ID/SECRET`).
+8. ~~**Add to Quire**~~ — ✅ SHIPPED (per-entry **Add to Quire** button + On-Star + `quire` automation rule; per-user OAuth `services/quire.py`, `QUIRE_CLIENT_ID/SECRET`; one default destination project; sliding-window per-minute/hour usage meter `quire_call_log` + `get_quire_usage_status`, per-run cap `_QUIRE_AUTO_PER_RUN_CAP`, 429 back-off).
+
+### Deferred follow-ups (Quire / destinations)
+- **Share-dropdown consolidation** — collapse the per-entry destination glyphs
+  (Email, Instapaper, Pinterest, Quire) into a single far-right **share** dropdown,
+  with unavailable destinations greyed out + a tooltip ("connect X in Settings…").
+  Destination glyphs should use the service logo/favicon. (Original ask; deferred so
+  this PR stays focused on the Quire backend + standalone button.)
+- **Per-click Quire project picker** — let the entry button choose a project each
+  time (Pinterest-board-style menu) and offer a project list in Automations/On-Star,
+  instead of the single default project. The `/api/quire/projects` endpoint already
+  exists to back this.
 
 Detailed specs follow.
 

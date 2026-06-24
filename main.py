@@ -47,6 +47,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from services import deviantart as deviantart_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
+from services import quire as quire_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
@@ -287,6 +288,24 @@ SETTING_PINTEREST_OAUTH_ACCESS_TOKEN = "pinterest_oauth_access_token"
 SETTING_PINTEREST_OAUTH_REFRESH_TOKEN = "pinterest_oauth_refresh_token"
 SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT = "pinterest_oauth_token_expires_at"
 SETTING_PINTEREST_OAUTH_STATE = "pinterest_oauth_state"
+# Quire outbound (turn an article into a task in a chosen Quire project).
+SETTING_QUIRE_CLIENT_ID = "quire_client_id"
+SETTING_QUIRE_CLIENT_SECRET = "quire_client_secret"
+SETTING_QUIRE_ACCESS_TOKEN = "quire_access_token"
+SETTING_QUIRE_REFRESH_TOKEN = "quire_refresh_token"
+SETTING_QUIRE_TOKEN_EXPIRES_AT = "quire_token_expires_at"
+SETTING_QUIRE_OAUTH_STATE = "quire_oauth_state"
+SETTING_QUIRE_USERNAME = "quire_username"
+SETTING_QUIRE_PROJECT_OID = "quire_project_oid"   # default destination project ("" = none)
+SETTING_QUIRE_PROJECT_NAME = "quire_project_name"  # cached display name of that project
+SETTING_STAR_SEND_QUIRE = "star_send_quire"        # "1"/"0"
+# Quire rate limits are per-organization, per-minute and per-hour (Free: 50/min, 200/hr).
+# These are Lectio's own sliding-window caps used to drive the usage meter + back off.
+SETTING_QUIRE_RATE_CAP_MIN = "quire_rate_cap_min"
+SETTING_QUIRE_RATE_CAP_HOUR = "quire_rate_cap_hour"
+SETTING_QUIRE_PLAN = "quire_plan"  # detected plan name of the destination project's org (display only)
+QUIRE_RATE_DEFAULT_CAP_MIN = 50
+QUIRE_RATE_DEFAULT_CAP_HOUR = 200
 AUTO_REFRESH_OPTION_MINUTES = (0, 5, 15, 30, 60, 360, 720)
 SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
@@ -417,6 +436,10 @@ _ENV_YT_OAUTH_CLIENT_SECRET = os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip
 # as YouTube above — only the resulting tokens are per-user.
 _ENV_PINTEREST_OAUTH_CLIENT_ID = os.getenv("PINTEREST_OAUTH_CLIENT_ID", "").strip()
 _ENV_PINTEREST_OAUTH_CLIENT_SECRET = os.getenv("PINTEREST_OAUTH_CLIENT_SECRET", "").strip()
+# Quire API creds — per-user DB settings take precedence; env is single-user fallback
+# (same pattern as DeviantArt). Only the resulting tokens are ever per-user.
+_ENV_QUIRE_CLIENT_ID = os.getenv("QUIRE_CLIENT_ID", "").strip()
+_ENV_QUIRE_CLIENT_SECRET = os.getenv("QUIRE_CLIENT_SECRET", "").strip()
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
 _ENV_MAINTENANCE_HOUR: int | None = None
 if _yt_sync_hour_raw:
@@ -663,6 +686,141 @@ def get_deviantart_user_token() -> str:
             set_setting(conn, SETTING_DEVIANTART_REFRESH_TOKEN, data["refresh_token"])
         set_setting(conn, SETTING_DEVIANTART_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
     return data["access_token"]
+
+
+def get_quire_credentials() -> tuple[str, str]:
+    """Per-user Quire API credentials (client_id, client_secret).
+
+    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    """
+    cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _env_yt_fallback(_ENV_QUIRE_CLIENT_ID))
+    secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _env_yt_fallback(_ENV_QUIRE_CLIENT_SECRET))
+    return cid, secret
+
+
+def is_quire_connected() -> bool:
+    """True once the user has completed the Quire OAuth flow (has a token)."""
+    return bool(get_runtime_setting(SETTING_QUIRE_ACCESS_TOKEN))
+
+
+def quire_project_oid() -> str:
+    """The chosen default destination project's OID ("" if none picked yet)."""
+    return (get_runtime_setting(SETTING_QUIRE_PROJECT_OID) or "").strip()
+
+
+def is_quire_configured() -> bool:
+    """True when Quire is connected AND a default destination project is set —
+    the precondition for the entry button, On-Star, and Automation rules."""
+    return bool(is_quire_connected() and quire_project_oid())
+
+
+def get_quire_user_token() -> str:
+    """Return a valid Quire access token, refreshing if expired. Empty string if the
+    user hasn't connected their Quire account."""
+    with get_meta_connection() as conn:
+        access = get_setting(conn, SETTING_QUIRE_ACCESS_TOKEN) or ""
+        refresh = get_setting(conn, SETTING_QUIRE_REFRESH_TOKEN) or ""
+        try:
+            expires_at = float(get_setting(conn, SETTING_QUIRE_TOKEN_EXPIRES_AT) or 0)
+        except (TypeError, ValueError):
+            expires_at = 0.0
+    if not access:
+        return ""
+    if time.time() < expires_at - 60:
+        return access
+    if not refresh:
+        return access
+    cid, secret = get_quire_credentials()
+    try:
+        data = quire_service.refresh_access_token(cid, secret, refresh)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[quire] token refresh failed; reconnect required: %s", exc)
+        return ""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_QUIRE_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_QUIRE_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_QUIRE_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+    return data["access_token"]
+
+
+def quire_rate_caps() -> tuple[int, int]:
+    """(per-minute, per-hour) caps Lectio meters its Quire calls against."""
+    def _cap(key: str, default: int) -> int:
+        try:
+            return max(1, int(get_runtime_setting(key, str(default)) or default))
+        except (TypeError, ValueError):
+            return default
+    return (_cap(SETTING_QUIRE_RATE_CAP_MIN, QUIRE_RATE_DEFAULT_CAP_MIN),
+            _cap(SETTING_QUIRE_RATE_CAP_HOUR, QUIRE_RATE_DEFAULT_CAP_HOUR))
+
+
+def record_quire_call(calls: int = 1) -> None:
+    """Log ``calls`` Quire API calls into the sliding-window meter (wired as the
+    service usage sink at startup). Best-effort; prunes rows older than an hour."""
+    if calls <= 0:
+        return
+    try:
+        now = int(time.time())
+        with get_meta_connection() as conn:
+            conn.executemany(
+                "INSERT INTO quire_call_log (ts) VALUES (?)",
+                [(now,) for _ in range(int(calls))],
+            )
+            conn.execute("DELETE FROM quire_call_log WHERE ts < ?", (now - 3600,))
+    except Exception:
+        LOGGER.debug("[quire] failed to record %d calls", calls, exc_info=True)
+
+
+def get_quire_usage_status() -> dict:
+    """Usage-meter payload: calls in the last minute/hour vs caps, plus a state flag."""
+    cap_min, cap_hour = quire_rate_caps()
+    try:
+        now = int(time.time())
+        with get_meta_connection() as conn:
+            minute_used = conn.execute(
+                "SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 60,)
+            ).fetchone()["n"]
+            hour_used = conn.execute(
+                "SELECT COUNT(*) AS n FROM quire_call_log WHERE ts >= ?", (now - 3600,)
+            ).fetchone()["n"]
+    except Exception:
+        minute_used = hour_used = 0
+    minute_used, hour_used = int(minute_used), int(hour_used)
+    blocked = minute_used >= cap_min or hour_used >= cap_hour
+    low = (minute_used >= cap_min * 0.8) or (hour_used >= cap_hour * 0.8)
+    state = "blocked" if blocked else ("low" if low else "ok")
+    return {"minute_used": minute_used, "minute_cap": cap_min,
+            "hour_used": hour_used, "hour_cap": cap_hour, "state": state}
+
+
+def detect_quire_plan_and_caps() -> str:
+    """Detect the destination project's organization plan and align the rate-meter
+    caps to it (Free 50/200, Professional 300/1250, Premium 1000/5000). Stores the
+    plan name for display. Best-effort; returns the detected plan ("" on failure).
+
+    Quire rate-limits per organization, so the cap that matters is the plan of the
+    org owning the chosen project."""
+    project_oid = quire_project_oid()
+    if not project_oid:
+        return ""
+    token = get_quire_user_token()
+    if not token:
+        return ""
+    try:
+        plan = quire_service.get_project_plan(token, project_oid)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[quire] plan detection failed: %s", exc)
+        return ""
+    caps = quire_service.PLAN_RATE_CAPS.get(plan.strip().lower())
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_QUIRE_PLAN, plan)
+        if caps:
+            # Enterprise (and any unknown plan) keeps the existing/default caps since
+            # its quota scales with member count and isn't a fixed pair.
+            set_setting(conn, SETTING_QUIRE_RATE_CAP_MIN, str(caps[0]))
+            set_setting(conn, SETTING_QUIRE_RATE_CAP_HOUR, str(caps[1]))
+    return plan
 
 
 def _deviantart_folder_name() -> str:
@@ -2635,6 +2793,18 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Quire API call log — one row per billed call, used for the sliding-window
+        # rate meter (Quire limits per org by minute + hour, with no remaining-quota
+        # read). Rows older than an hour are pruned on each insert.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quire_call_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_quire_call_log_ts ON quire_call_log (ts)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS rule_run_log (
@@ -3059,7 +3229,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -4897,6 +5067,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         # Webhook rules likewise fire after mark_as_read/dedup.
         _run_webhook_rules_after_refresh(refreshed_feed_urls)
         _run_instapaper_rules_after_refresh(refreshed_feed_urls)
+        _run_quire_rules_after_refresh(refreshed_feed_urls)
         # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
         # add" doesn't fight an earlier rule).
         _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls)
@@ -5274,6 +5445,98 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[instapaper-auto] error in _run_instapaper_rules_after_refresh")
+
+
+# Cap a run well under the Free-tier 50/min so an automation burst never trips the
+# Quire rate limit; the sliding-window meter is also consulted before each add.
+_QUIRE_AUTO_PER_RUN_CAP = 20
+
+
+def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Add matching freshly-refreshed entries as tasks to the default Quire project.
+    Bounded by the 15-min cutoff, a per-run cap, the usage meter, and 429 backoff."""
+    if not refreshed_feed_urls:
+        return
+    if not is_quire_configured():
+        return
+    project_oid = quire_project_oid()
+    token = get_quire_user_token()
+    if not token:
+        return
+
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "quire"]
+        if not rules:
+            return
+
+        sent = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            if sent >= _QUIRE_AUTO_PER_RUN_CAP:
+                break
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if sent >= _QUIRE_AUTO_PER_RUN_CAP:
+                                break
+                            if get_quire_usage_status()["state"] == "blocked":
+                                LOGGER.warning("[quire-auto] rate limit reached; %d added this run", sent)
+                                return
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            link = str(entry.link or "")
+                            if not link:
+                                continue
+                            fu = str(entry.feed_url or "")
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            ok, err = _quire_add_entry(token, project_oid, str(entry.title or ""), link, feed_title_cache.get(fu, fu))
+                            if not ok:
+                                LOGGER.warning("[quire-auto] add failed: %s", err)
+                                if isinstance(err, str) and "rate limit" in err.lower():
+                                    return  # back off the whole run on 429
+                                continue
+                            sent += 1
+                            with get_meta_connection() as conn:
+                                _log_auto_run(conn, now_str, "quire", scope, scope_id, keyword, {
+                                    "count": 1,
+                                    "entries": [{"feed_url": fu, "entry_id": str(entry.id),
+                                                 "title": str(entry.title or ""), "link": link,
+                                                 "feed_title": feed_title_cache.get(fu, fu)}],
+                                })
+            except Exception:
+                LOGGER.exception("[quire-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[quire-auto] error in _run_quire_rules_after_refresh")
 
 
 # Each playlistItems.insert costs 50 quota units; cap a run well under the daily
@@ -5684,6 +5947,9 @@ youtube_duration_service = YouTubeDurationService(
 youtube_oauth_service.set_quota_sink(record_yt_quota_spend)
 import services.youtube_sync as _youtube_sync_mod
 _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
+
+# Quire calls feed the per-user sliding-window rate meter (per-minute/hour).
+quire_service.set_usage_sink(record_quire_call)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
@@ -6129,6 +6395,7 @@ _AUTOMATION_TYPE_LABELS = {
     "webhook": "Webhook",
     "youtube_playlist": "Add to YT playlist",
     "instapaper": "Save to Instapaper",
+    "quire": "Add to Quire",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
@@ -10180,6 +10447,7 @@ def entry_pane(
             "email_to_default": _get_email_to_default(),
             "instapaper_configured": is_instapaper_configured(),
             "pinterest_connected": pinterest_oauth_connected(),
+            "quire_configured": is_quire_configured(),
         },
     )
 
@@ -12217,6 +12485,7 @@ def home(
             "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
             "email_to_default": email_to_default,
             "instapaper_configured": is_instapaper_configured(),
+            "quire_configured": is_quire_configured(),
             "youtube_sync_last_at": youtube_sync_last_at,
             "youtube_sync_last_result": youtube_sync_last_result,
             "inactive_feeds": inactive_feeds,
@@ -13593,6 +13862,12 @@ def add_highlight_route(
         # Keyword is optional (blank = save every new entry in scope).
         if not is_instapaper_configured():
             return JSONResponse({"error": "configure Instapaper first"}, status_code=400)
+    elif type == "quire":
+        # Keyword is optional (blank = add every new entry in scope).
+        if not is_quire_connected():
+            return JSONResponse({"error": "connect Quire first"}, status_code=400)
+        if not quire_project_oid():
+            return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
@@ -13953,6 +14228,73 @@ def deviantart_callback(request: Request, code: str | None = None, state: str | 
     return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connected as {username}."), status_code=303)
 
 
+def _quire_redirect_uri(request: Request) -> str:
+    """Callback URL Quire redirects back to (must match the app's whitelist)."""
+    base = (os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/"))
+    if base:
+        return f"{base}/quire/callback"
+    return str(request.url_for("quire_callback"))
+
+
+@app.get("/quire/connect")
+def quire_connect(request: Request):
+    """Kick off the Quire OAuth flow → redirect to their consent page."""
+    cid, secret = get_quire_credentials()
+    if not cid or not secret:
+        return RedirectResponse(url="/?message=" + quote_plus("Add your Quire API keys in Settings first."), status_code=303)
+    state = secrets.token_urlsafe(24)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_QUIRE_OAUTH_STATE, state)
+    url = quire_service.authorize_url(cid, _quire_redirect_uri(request), state)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/quire/callback")
+def quire_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    """OAuth redirect target: exchange the code for tokens and store them."""
+    if error:
+        return RedirectResponse(url="/?message=" + quote_plus(f"Quire authorization failed: {error}"), status_code=303)
+    with get_meta_connection() as conn:
+        expected = get_setting(conn, SETTING_QUIRE_OAUTH_STATE) or ""
+    if not code or not state or state != expected:
+        return RedirectResponse(url="/?message=" + quote_plus("Quire authorization failed (bad state)."), status_code=303)
+    cid, secret = get_quire_credentials()
+    try:
+        data = quire_service.exchange_code(cid, secret, code, _quire_redirect_uri(request))
+        token = data["access_token"]
+        try:
+            username = quire_service.whoami(token)
+        except Exception:
+            username = ""
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url="/?message=" + quote_plus(f"Quire connect failed: {exc}"), status_code=303)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_QUIRE_ACCESS_TOKEN, token)
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_QUIRE_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_QUIRE_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+        set_setting(conn, SETTING_QUIRE_USERNAME, username)
+        delete_setting(conn, SETTING_QUIRE_OAUTH_STATE)
+    notice = f"Quire connected as {username}." if username else "Quire connected."
+    return RedirectResponse(url="/?message=" + quote_plus(notice + " Pick a destination project in Settings."), status_code=303)
+
+
+@app.get("/api/quire/projects")
+def quire_projects_route():
+    """List the connected user's Quire projects for the Settings destination picker."""
+    token = get_quire_user_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "Quire not connected."}, status_code=503)
+    try:
+        projects = quire_service.list_projects(token)
+    except quire_service.QuireRateLimited:
+        return JSONResponse({"ok": False, "error": "Quire rate limit hit — try again shortly."}, status_code=429)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[quire] project list failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    return JSONResponse({"ok": True, "projects": projects})
+
+
 def _youtube_oauth_redirect_uri(request: Request) -> str:
     """Callback URL Google redirects back to — MUST exactly match the URI
     registered on the OAuth client in Google Cloud."""
@@ -14161,6 +14503,16 @@ def deviantart_disconnect():
     return JSONResponse({"ok": True})
 
 
+@app.post("/quire/disconnect")
+def quire_disconnect():
+    with get_meta_connection() as conn:
+        for key in (SETTING_QUIRE_ACCESS_TOKEN, SETTING_QUIRE_REFRESH_TOKEN,
+                    SETTING_QUIRE_TOKEN_EXPIRES_AT, SETTING_QUIRE_USERNAME,
+                    SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME):
+            delete_setting(conn, key)
+    return JSONResponse({"ok": True})
+
+
 @app.post("/deviantart/sync-watchlist")
 def deviantart_sync_watchlist_route():
     """Start the watch-list → feeds sync in the background (it can take minutes)."""
@@ -14245,6 +14597,12 @@ def get_all_settings():
     resend_key = get_resend_api_key()
     instapaper_pw = get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
     da_cid, da_secret = get_deviantart_credentials()
+    quire_cid, quire_secret = get_quire_credentials()
+    # Lazily detect the Quire plan once (sets the meter caps) if a project is chosen
+    # but no plan has been recorded yet — e.g. projects picked before plan detection
+    # existed, so users see correct caps without re-picking. Best-effort, ~one call.
+    if is_quire_configured() and not get_runtime_setting(SETTING_QUIRE_PLAN):
+        detect_quire_plan_and_caps()
 
     return JSONResponse({
         "profile_name": profile_name,
@@ -14282,6 +14640,16 @@ def get_all_settings():
         "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
         "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
         "deviantart_folder_name": _deviantart_folder_name(),
+        "quire_client_id": quire_cid,
+        "quire_client_secret_set": bool(quire_secret),
+        "quire_client_secret_masked": _masked(quire_secret),
+        "quire_connected": is_quire_connected(),
+        "quire_username": get_runtime_setting(SETTING_QUIRE_USERNAME),
+        "quire_project_oid": quire_project_oid(),
+        "quire_project_name": get_runtime_setting(SETTING_QUIRE_PROJECT_NAME),
+        "quire_usage": get_quire_usage_status(),
+        "quire_plan": get_runtime_setting(SETTING_QUIRE_PLAN),
+        "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
         "contacts": contacts,
         "email_to_default": email_to_default,
     })
@@ -14304,7 +14672,7 @@ async def save_all_settings(request: Request):
     body = await request.json()
 
     _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
-                  SETTING_DEVIANTART_CLIENT_SECRET}
+                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
@@ -14317,6 +14685,9 @@ async def save_all_settings(request: Request):
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
         SETTING_DEVIANTART_FOLDER_NAME,
+        SETTING_QUIRE_CLIENT_ID, SETTING_QUIRE_CLIENT_SECRET,
+        SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME, SETTING_STAR_SEND_QUIRE,
+        SETTING_QUIRE_RATE_CAP_MIN, SETTING_QUIRE_RATE_CAP_HOUR,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
@@ -14331,6 +14702,7 @@ async def save_all_settings(request: Request):
     # Detect a YouTube fill-in so we can kick off an immediate sync (rather than
     # waiting for daily maintenance) when it goes from unconfigured -> configured.
     yt_configured_before = bool(get_yt_api_key() and get_yt_channel_id())
+    quire_project_before = quire_project_oid()
 
     import json as _json
     with get_meta_connection() as conn:
@@ -14374,6 +14746,15 @@ async def save_all_settings(request: Request):
             target=_run_in_user_context,
             args=(tenancy.current_user_id(), _run_youtube_sync),
             daemon=True, name="youtube-sync-on-config",
+        ).start()
+
+    # Quire destination project changed → detect its org's plan and align the
+    # rate-meter caps (Free/Pro/Premium) to it, in the configuring user's context.
+    if quire_project_oid() and quire_project_oid() != quire_project_before:
+        threading.Thread(
+            target=_run_in_user_context,
+            args=(tenancy.current_user_id(), detect_quire_plan_and_caps),
+            daemon=True, name="quire-plan-detect",
         ).start()
 
     return JSONResponse({"ok": True})
@@ -15273,7 +15654,8 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
         send_ip = get_runtime_setting(SETTING_STAR_SEND_INSTAPAPER, "0") == "1"
         playlist_id = (get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "").strip()
         email_to = (get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "").strip()
-        if not (send_ip or playlist_id or email_to):
+        send_quire = get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1" and is_quire_configured()
+        if not (send_ip or playlist_id or email_to or send_quire):
             return
         with get_reader() as reader:
             entry = reader.get_entry((feed_url, entry_id), None)
@@ -15318,6 +15700,16 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
                     LOGGER.warning("[on-star] email failed: %s", err)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning("[on-star] email failed: %s", exc)
+
+        if send_quire and link:
+            if get_quire_usage_status()["state"] == "blocked":
+                LOGGER.warning("[on-star] quire skipped: rate limit reached")
+            else:
+                token = get_quire_user_token()
+                if token:
+                    ok, err = _quire_add_entry(token, quire_project_oid(), title, link, feed_title)
+                    if not ok:
+                        LOGGER.warning("[on-star] quire add failed: %s", err)
     except Exception:
         LOGGER.exception("[on-star] error for %s/%s", feed_url, entry_id)
 
@@ -15961,6 +16353,55 @@ def save_to_instapaper(
     if ok:
         return JSONResponse({"ok": True})
     LOGGER.warning("Instapaper save failed for %s: %s", url, err)
+    return JSONResponse({"ok": False, "error": err}, status_code=502)
+
+
+def _quire_add_entry(token: str, project_oid: str, title: str, link: str, feed_title: str = "") -> tuple[bool, str | None]:
+    """Create a Quire task for an entry. Returns (ok, error). Raises nothing —
+    rate-limit and HTTP errors are mapped to (False, message)."""
+    name = (title or link or "Untitled").strip()
+    desc_parts = [p for p in (link, feed_title) if p]
+    description = "\n".join(desc_parts)
+    try:
+        quire_service.create_task(token, project_oid, name, description)
+        return True, None
+    except quire_service.QuireRateLimited as exc:
+        return False, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc) or "Request failed."
+
+
+@app.post("/entries/quire")
+def add_to_quire(
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    if not is_quire_connected():
+        return JSONResponse({"ok": False, "error": "Quire not connected."}, status_code=503)
+    project_oid = quire_project_oid()
+    if not project_oid:
+        return JSONResponse({"ok": False, "error": "Pick a Quire destination project in Settings."}, status_code=503)
+    if get_quire_usage_status()["state"] == "blocked":
+        return JSONResponse({"ok": False, "error": "Quire rate limit reached — try again shortly."}, status_code=429)
+    token = get_quire_user_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "Quire session expired — reconnect in Settings."}, status_code=503)
+
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        feed_title = ""
+        if entry:
+            try:
+                feed_title = str(getattr(reader.get_feed(feed_url), "title", None) or "")
+            except Exception:
+                feed_title = ""
+    if not entry:
+        return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+
+    ok, err = _quire_add_entry(token, project_oid, entry.title or "", entry.link or "", feed_title)
+    if ok:
+        return JSONResponse({"ok": True})
+    LOGGER.warning("Quire add failed for %s: %s", entry.link or entry_id, err)
     return JSONResponse({"ok": False, "error": err}, status_code=502)
 
 
