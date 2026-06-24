@@ -312,5 +312,9 @@ Detailed specs follow.
 - **Archive caps for starred entries** — only relevant after multi-user.
 - **Better tuning / live preview** — full entry preview pane, swappable strategy +
   display settings without saving.
+- **`ty` type-error backlog** — after upgrading to `ty` 0.0.53 (2026-06-24), 235
+  diagnostics surfaced. All appear pre-existing (Pillow `LANCZOS` stub gap,
+  `FeverService._synced` dynamic attr, test fake classes, `re.Match` narrowing,
+  `base64.binascii` access, etc.). Not blocking; address incrementally.
 - **YunoHost or other packaging.**
 - **PWA / offline-first features.**
