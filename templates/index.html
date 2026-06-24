@@ -1415,7 +1415,6 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-yt-key">API key</label>
             <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
@@ -1425,27 +1424,25 @@
             <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
           </div>
           <div class="settings-field">
-            <label class="settings-label" for="sett-yt-folder">Folder name</label>
+            <label class="settings-label" for="sett-yt-folder">Subscription folder</label>
             <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
           </div>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
-            <input type="checkbox" id="sett-yt-account-features" />
-            <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
-          </label>
-          <p class="settings-hint" style="grid-column:1 / -1">Use the standard <code>youtube.com</code> player instead of the privacy-enhanced <code>youtube-nocookie.com</code> one, so the in-article player shows Share and Watch Later (these need your signed-in YouTube cookies). Off by default for privacy; turning it on lets YouTube set its usual cookies.</p>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem">
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1">
             <input type="checkbox" id="sett-yt-hide-shorts" />
-            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds</span>
+            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds (overrides per-feed setting)</span>
           </label>
-          <p class="settings-hint" style="grid-column:1 / -1">Auto-marks YouTube Shorts as read across every YouTube feed at refresh, so they stay out of your unread list. Off by default. (Overrides the per-feed Shorts setting when on.)</p>
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed. Register an app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and add <code id="sett-yt-callback-url"></code> as an authorized redirect URI, or use the shared instance credentials set in the Administration panel.</p>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1;margin-top:0.25rem">
+            <input type="checkbox" id="sett-yt-account-features" />
+            <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later) — requires OAuth below</span>
+          </label>
+          <p class="settings-hint" style="grid-column:1 / -1">Register a Web app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>, add redirect URI <code id="sett-yt-callback-url"></code>, then paste below and Save to enable account features and playlist adds.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-yt-oauth-client-id">OAuth Client ID</label>
             <input type="text" id="sett-yt-oauth-client-id" class="settings-input" placeholder="166660….apps.googleusercontent.com" maxlength="200" autocomplete="off" />
           </div>
           <div class="settings-field">
             <label class="settings-label" for="sett-yt-oauth-client-secret">OAuth Client Secret</label>
-            <input type="password" id="sett-yt-oauth-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+            <input type="password" id="sett-yt-oauth-client-secret" class="settings-input settings-input--secret" placeholder="GOCSPX-…" autocomplete="new-password" />
           </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-yt-oauth-row">
             <span id="sett-yt-oauth-status" class="settings-inline-status"></span>
@@ -1453,7 +1450,7 @@
             <button type="button" id="sett-yt-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
           <div id="sett-yt-quota" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
-          <p class="settings-hint" style="grid-column:1 / -1">Estimated YouTube API quota used today (durations, playlist adds, sub-sync) against the daily cap — Google gives no live quota read, so this is Lectio's own tally and resets midnight Pacific.</p>
+          <p class="settings-hint" style="grid-column:1 / -1" id="sett-yt-quota-hint" hidden>Lectio's own tally — Google gives no live quota read. Resets midnight Pacific.</p>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="deviantart" hidden>
@@ -9487,6 +9484,8 @@
             el.className = 'settings-yt-quota settings-yt-quota--' + q.state;
             el.textContent = `Quota today: ${q.spent.toLocaleString()} / ${q.cap.toLocaleString()} (${q.remaining.toLocaleString()} left, ${pct}%)${word}`;
             el.hidden = false;
+            const qhint = document.getElementById('sett-yt-quota-hint');
+            if (qhint) qhint.hidden = false;
           } else if (el) {
             el.hidden = true;
           }
