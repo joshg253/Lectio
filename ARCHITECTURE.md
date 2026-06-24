@@ -416,10 +416,16 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   often already warm; on a miss it queues `queue_source_html_fetch` and leaves the
   body unchanged — never blocking the render on a network GET — so the embed fills
   in on a later open), then `_extract_source_embed_iframes` pulls the allowlisted
-  players
-  (`_embed_host_allowed`) — YouTube rebuilt via `_youtube_embed_html` (honors the
-  host preference), the rest sanitized in place — and appends the ones the body
-  lacks. Mirrors the Reader-view recovery but for the normal entry pane.
+  players (`_embed_host_allowed`) — YouTube rebuilt via `_youtube_embed_html`
+  (honors the host preference), the rest sanitized in place (Bandcamp/SoundCloud
+  esig/track signatures preserved verbatim). `_place_recovered_embeds` then puts
+  each one **in context** rather than dumping them at the bottom: (1) replace a
+  bare body link that points at the same media (so the player takes the place of
+  the link the feed showed instead — matched by video id for YouTube, by the
+  embed's fallback `<a href>` for Bandcamp/SoundCloud), (2) fill empty `<p></p>`
+  placeholders that follow a heading (the stripped embed slots, e.g. theobelisk's
+  `<h3>title</h3><p></p>`) in document order, (3) append leftovers. Mirrors the
+  Reader-view recovery but for the normal entry pane.
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 
