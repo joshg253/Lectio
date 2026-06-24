@@ -40,6 +40,11 @@ def test_reader_api_client_uses_configured_db_path(monkeypatch):
     assert captured.get("storage_path") == "my_reader.sqlite"
     assert captured["storage_kwargs"].get("timeout") == 30.0
     assert client.ok is True
+    # ua_fallback must be suppressed; entry_dedupe + enclosure_dedupe must be enabled.
+    plugins = captured["make_reader_kwargs"].get("plugins", [])
+    assert ".ua_fallback" not in list(plugins)
+    assert ".entry_dedupe" in list(plugins)
+    assert ".enclosure_dedupe" in list(plugins)
 
 
 def test_reader_api_registers_ua_lazy_init(monkeypatch):
@@ -125,10 +130,10 @@ def test_ua_hook_fires_on_real_reader(tmp_path):
     db = str(tmp_path / "test.sqlite")
     r = ReaderApi(db).client()
     try:
-        # Trigger lazy init by doing any operation that causes the parser to
-        # initialise its retrievers (add_feed touches the parser path).
-        # We call _parser.lazy_init directly so tests stay fast (no network).
-        for fn in list(r._parser.lazy_init_funcs):
+        # reader pops lazy_init_funcs from the END (LIFO), so iterate reversed
+        # to match real execution order: post_init (creates retrievers) runs
+        # first, then our UA hook runs last and can find the retrievers.
+        for fn in reversed(list(r._parser.lazy_init_funcs)):
             try:
                 fn(r._parser)
             except Exception:
