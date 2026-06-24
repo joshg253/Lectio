@@ -119,7 +119,26 @@
       <label class="fld">From address
         <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
       </label>
-      <p class="account-hint">One sending account for the instance (only a verified domain can send). YouTube is configured per-user in each user's Settings.</p>
+      <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
+
+      <h3>Shared OAuth apps (optional)</h3>
+      <p class="account-hint">Users can enter their own OAuth credentials in Settings. Set these here to provide a shared app for users who haven't — their own settings always take priority.</p>
+      <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>https://{{ request.url.netloc }}/integrations/youtube/oauth/callback</code> as an authorized redirect URI.</p>
+      <label class="fld">YouTube OAuth Client ID
+        <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
+      </label>
+      <label class="fld">YouTube OAuth Client Secret
+        <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
+               placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
+      </label>
+      <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>https://{{ request.url.netloc }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
+      <label class="fld">Pinterest OAuth Client ID
+        <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
+      </label>
+      <label class="fld">Pinterest OAuth Client Secret
+        <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
+               placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
+      </label>
 
       <h3>Maintenance</h3>
       <label class="fld">Hour (0–23, server local time)
@@ -165,9 +184,15 @@
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
           img_cache_days: $('adm-img-cache-days')?.value.trim() || '',
           img_cache_max_dim: $('adm-img-cache-max-dim')?.value.trim() || '',
+          shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
+          shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
         };
         const rk = $('adm-resend-key')?.value.trim();
         if (rk) payload.resend_api_key = rk;
+        const ytSecret = $('adm-yt-oauth-client-secret')?.value.trim();
+        if (ytSecret) payload.shared_yt_oauth_client_secret = ytSecret;
+        const piSecret = $('adm-pinterest-oauth-client-secret')?.value.trim();
+        if (piSecret) payload.shared_pinterest_oauth_client_secret = piSecret;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
       });

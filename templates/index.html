@@ -1438,7 +1438,15 @@
             <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds</span>
           </label>
           <p class="settings-hint" style="grid-column:1 / -1">Auto-marks YouTube Shorts as read across every YouTube feed at refresh, so they stay out of your unread list. Off by default. (Overrides the per-feed Shorts setting when on.)</p>
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed (uses the YouTube Data API with your own OAuth grant — tokens are stored only for you).</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed. Register an app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> to get your own OAuth Client ID and Secret, or use the shared instance credentials set in the Administration panel.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-oauth-client-id">OAuth Client ID</label>
+            <input type="text" id="sett-yt-oauth-client-id" class="settings-input" placeholder="166660….apps.googleusercontent.com" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-oauth-client-secret">OAuth Client Secret</label>
+            <input type="password" id="sett-yt-oauth-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-yt-oauth-row">
             <span id="sett-yt-oauth-status" class="settings-inline-status"></span>
             <a id="sett-yt-oauth-connect" class="settings-inline-btn" href="/integrations/youtube/oauth/connect" hidden>Connect YouTube account</a>
@@ -1488,13 +1496,20 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="pinterest" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Uses the Pinterest API v5 with your own OAuth grant — tokens are stored only for you. Requires <code>PINTEREST_OAUTH_CLIENT_ID/SECRET</code> in the environment.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Register an app at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with redirect URI <code>https://&lt;your-host&gt;/integrations/pinterest/oauth/callback</code>, or use the shared instance credentials set in the Administration panel.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-pinterest-client-id">OAuth Client ID</label>
+            <input type="text" id="sett-pinterest-client-id" class="settings-input" placeholder="your app ID" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-pinterest-client-secret">OAuth Client Secret</label>
+            <input type="password" id="sett-pinterest-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-pinterest-oauth-row">
             <span id="sett-pinterest-oauth-status" class="settings-inline-status"></span>
             <a id="sett-pinterest-oauth-connect" class="settings-inline-btn" href="/integrations/pinterest/oauth/connect" hidden>Connect Pinterest account</a>
             <button type="button" id="sett-pinterest-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
-          <p class="settings-hint" id="sett-pinterest-not-configured" style="grid-column:1 / -1" hidden>Pinterest OAuth client is not configured — set <code>PINTEREST_OAUTH_CLIENT_ID</code> and <code>PINTEREST_OAUTH_CLIENT_SECRET</code> in the environment, then restart.</p>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="quire" hidden>
@@ -9515,6 +9530,10 @@
           }
           if (none) none.hidden = (ipOk || ytOk || emOk || quireOk);
         }
+        v('sett-yt-oauth-client-id', d.yt_oauth_client_id);
+        secretField('sett-yt-oauth-client-secret', d.yt_oauth_client_secret_set, d.yt_oauth_client_secret_masked);
+        v('sett-pinterest-client-id', d.pinterest_oauth_client_id);
+        secretField('sett-pinterest-client-secret', d.pinterest_oauth_client_secret_set, d.pinterest_oauth_client_secret_masked);
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
           const ytConfigured = !!d.yt_oauth_configured;
@@ -9537,9 +9556,7 @@
           const status = document.getElementById('sett-pinterest-oauth-status');
           const connect = document.getElementById('sett-pinterest-oauth-connect');
           const disconnect = document.getElementById('sett-pinterest-oauth-disconnect');
-          const notConf = document.getElementById('sett-pinterest-not-configured');
           if (row) row.hidden = !piConfigured;
-          if (notConf) notConf.hidden = piConfigured;
           if (status) status.textContent = piConnected ? 'Connected.' : 'Not connected.';
           if (connect) connect.hidden = piConnected;
           if (disconnect) disconnect.hidden = !piConnected;
@@ -9725,6 +9742,10 @@
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
+            yt_oauth_client_id: g('sett-yt-oauth-client-id'),
+            yt_oauth_client_secret: g('sett-yt-oauth-client-secret'),
+            pinterest_oauth_client_id: g('sett-pinterest-client-id'),
+            pinterest_oauth_client_secret: g('sett-pinterest-client-secret'),
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),

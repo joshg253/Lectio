@@ -92,8 +92,11 @@ def test_single_mode_invariance_e2e(tmp_path):
         tmp_path / "data",
         {
             "LECTIO_SECURITY_MODE": "single",
-            "LECTIO_USERNAME": "solouser",
-            "LECTIO_PASSWORD": "solo-pw",
+            "LECTIO_ADMIN_USERNAME": "solouser",
+            "LECTIO_ADMIN_PASSWORD": "solo-pw",
+            # Clear legacy vars so the inherited env doesn't override the test creds.
+            "LECTIO_USERNAME": "",
+            "LECTIO_PASSWORD": "",
         },
     )
     assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"

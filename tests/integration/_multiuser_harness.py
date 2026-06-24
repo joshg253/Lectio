@@ -78,7 +78,7 @@ def _scenario_single() -> None:
 
         r = client.post(
             "/login",
-            data={"username": os.environ["LECTIO_USERNAME"], "password": os.environ["LECTIO_PASSWORD"]},
+            data={"username": os.environ["LECTIO_ADMIN_USERNAME"], "password": os.environ["LECTIO_ADMIN_PASSWORD"]},
             follow_redirects=False,
         )
         assert r.status_code == 303, r.status_code
