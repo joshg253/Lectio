@@ -5683,8 +5683,8 @@
         const r = await saveDisplayPref(feedUrl, 'hide_shorts', feedPropHideShorts.checked ? 1 : 0);
         // Enabling clears the existing Shorts backlog server-side; reflect it.
         if (r && r.marked_read > 0) {
-          try { await _refreshSidebarCounts(); } catch (e) {}
-          try { await refreshCurrentFeedOrFolder(); } catch (e) {}
+          try { await _refreshSidebarCounts(); } catch (e) { console.error('hide-shorts: sidebar refresh failed', e); }
+          try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('hide-shorts: view refresh failed', e); }
         }
       }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }

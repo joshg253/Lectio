@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated, Callable, Sequence, cast
+from typing import Annotated, Callable, Iterable, Sequence, cast
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urlparse, urlunparse
 
 import feedparser
@@ -4464,7 +4464,7 @@ def _is_youtube_short(entry: object) -> bool:
     return "youtube.com/shorts/" in link
 
 
-def _mark_existing_shorts_read(feed_urls) -> int:
+def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
     """Mark every currently-unread YouTube Short in ``feed_urls`` as read.
 
     Shared by the after-refresh hide-shorts pass and the per-feed Hide-Shorts
