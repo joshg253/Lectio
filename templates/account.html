@@ -17,15 +17,28 @@
     .account-wrap header { display: flex; justify-content: space-between; align-items: baseline; }
     .account-section { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid var(--line, #ccc); border-radius: 8px; }
     .account-section h2 { margin-top: 0; font-size: 1.05rem; }
+    .account-section h3 { font-size: .95rem; margin: 1rem 0 .35rem; }
     .account-section form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
     .account-section label.fld { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; }
-    .account-section input[type="text"], .account-section input[type="password"], .account-section input[type="number"], .account-section select { padding: .4rem .5rem; }
+    .account-section input[type="text"], .account-section input[type="password"],
+    .account-section input[type="number"], .account-section input[type="email"],
+    .account-section select { padding: .4rem .5rem; }
     .account-msg { padding: .5rem .75rem; background: rgba(40,160,80,.15); border-radius: 6px; }
     .account-users { width: 100%; border-collapse: collapse; margin: .5rem 0; }
     .account-users th, .account-users td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid rgba(127,127,127,.25); }
     .account-hint { font-size: .82rem; opacity: .75; margin: .25rem 0; }
     .account-users button.danger { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
     .account-users td > div form { margin: 0; }
+    /* tabs */
+    .adm-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line, #ccc); margin: 1rem 0 0; }
+    .adm-tab { padding: .45rem 1rem; cursor: pointer; border: 1px solid transparent;
+                border-bottom: none; border-radius: 6px 6px 0 0; font-size: .9rem;
+                background: none; color: inherit; }
+    .adm-tab.active { border-color: var(--line, #ccc); background: var(--surface, #fff);
+                       margin-bottom: -1px; font-weight: 600; }
+    .adm-panel { display: none; }
+    .adm-panel.active { display: block; }
+    .tuning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem; }
   </style>
 </head>
 <body class="account-page">
@@ -39,127 +52,183 @@
     {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
     <p id="admin-toast" class="account-msg" role="status" hidden></p>
 
-    <!-- ── Users ─────────────────────────────────────────────── -->
-    <section class="account-section">
-      <h2>Users</h2>
-      <table class="account-users">
-        <thead><tr><th>User</th><th>Admin</th><th>Last active</th><th>Feeds</th><th>DB size</th><th>Actions</th></tr></thead>
-        <tbody>
-        {% for u in users %}
-          <tr>
-            <td>{{ u.username }}{% if u.disabled %} <em>(disabled)</em>{% endif %}</td>
-            <td>{{ 'yes' if u.is_admin else '' }}</td>
-            <td>{{ u.last_active }}</td>
-            <td>{{ u.feed_count }}</td>
-            <td>{{ u.db_human }}</td>
-            <td>
-              {% if u.user_id != user_id %}
-              <div style="display:flex;gap:.4rem;align-items:center">
-                <form method="post" action="/admin/users/disable" style="margin:0">
-                  {{ csrf_input(request) | safe }}
-                  <input type="hidden" name="user_id" value="{{ u.user_id }}" />
-                  <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
-                  <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
-                </form>
-                <form method="post" action="/admin/users/delete" style="margin:0"
-                      onsubmit="return confirm('Permanently delete {{ u.username }} and ALL their feeds, folders, and saved articles? This cannot be undone.');">
-                  {{ csrf_input(request) | safe }}
-                  <input type="hidden" name="user_id" value="{{ u.user_id }}" />
-                  <button type="submit" class="danger">Delete</button>
-                </form>
-              </div>
-              {% else %}<span>—</span>{% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-
-      <h2>Create user</h2>
-      <form method="post" action="/admin/users/create">
-        {{ csrf_input(request) | safe }}
-        <input type="text" name="username" placeholder="username" minlength="4" maxlength="10" required />
-        <input type="password" name="password" placeholder="password" autocomplete="new-password" minlength="6" maxlength="36" required />
-        <label><input type="checkbox" name="is_admin" value="1" /> admin</label>
-        <button type="submit">Create user</button>
-      </form>
-
-      <h2>Reset a user's password</h2>
-      <form method="post" action="/admin/users/reset-password">
-        {{ csrf_input(request) | safe }}
-        <select name="user_id">
-          {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
-        </select>
-        <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
-        <button type="submit">Reset password</button>
-      </form>
-
-      <h2>Rename a user</h2>
-      <p class="account-hint">Changes the login name only — data, folders, and API tokens are keyed to a stable internal id and are unaffected.</p>
-      <form method="post" action="/admin/users/rename">
-        {{ csrf_input(request) | safe }}
-        <select name="user_id">
-          {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
-        </select>
-        <input type="text" name="new_username" placeholder="New username" required />
-        <button type="submit">Rename</button>
-      </form>
-    </section>
+    <div class="adm-tabs">
+      <button class="adm-tab active" data-panel="panel-config">Instance config</button>
+      <button class="adm-tab" data-panel="panel-users">Users</button>
+    </div>
 
     <!-- ── Instance configuration ────────────────────────────── -->
-    <section class="account-section">
-      <h2>Instance configuration</h2>
-      <p class="account-hint">Shared across the whole instance.</p>
+    <div id="panel-config" class="adm-panel active">
 
-      <h3>Email (Resend)</h3>
-      <label class="fld">API key
-        <input type="password" id="adm-resend-key" autocomplete="new-password"
-               placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
-      </label>
-      <label class="fld">From address
-        <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
-      </label>
-      <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
+      <section class="account-section">
+        <h2>Instance configuration</h2>
+        <p class="account-hint">Shared across the whole instance. Changes apply immediately after Save.</p>
 
-      <h3>Shared OAuth apps (optional)</h3>
-      <p class="account-hint">Users can enter their own OAuth credentials in Settings. Set these here to provide a shared app for users who haven't — their own settings always take priority.</p>
-      <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>https://{{ request.url.netloc }}/integrations/youtube/oauth/callback</code> as an authorized redirect URI.</p>
-      <label class="fld">YouTube OAuth Client ID
-        <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
-      </label>
-      <label class="fld">YouTube OAuth Client Secret
-        <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
-               placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
-      </label>
-      <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>https://{{ request.url.netloc }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
-      <label class="fld">Pinterest OAuth Client ID
-        <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
-      </label>
-      <label class="fld">Pinterest OAuth Client Secret
-        <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
-               placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
-      </label>
+        <h3>Email (Resend)</h3>
+        <label class="fld">API key
+          <input type="password" id="adm-resend-key" autocomplete="new-password"
+                 placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
+        </label>
+        <label class="fld">From address
+          <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
+        </label>
+        <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
 
-      <h3>Maintenance</h3>
-      <label class="fld">Hour (0–23, server local time)
-        <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
-      </label>
-      {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
+        <h3>Shared OAuth apps (optional)</h3>
+        <p class="account-hint">Users can enter their own OAuth credentials in Settings. Set these here to provide a shared app for users who haven't — their own settings always take priority.</p>
+        <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
+        <label class="fld">YouTube OAuth Client ID
+          <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
+        </label>
+        <label class="fld">YouTube OAuth Client Secret
+          <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
+        </label>
+        <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
+        <label class="fld">Pinterest OAuth Client ID
+          <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
+        </label>
+        <label class="fld">Pinterest OAuth Client Secret
+          <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
+        </label>
 
-      <h3>Image cache</h3>
-      <label class="fld">Retention (days, 0 = keep forever)
-        <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
-      </label>
-      <label class="fld">Max dimension (longest side, px; 0 = store originals)
-        <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
-      </label>
-      <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
+        <h3>Maintenance</h3>
+        <label class="fld">Hour (0–23, server local time)
+          <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
+        </label>
+        {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
 
-      <div style="display:flex; gap:.5rem; margin-top:.75rem">
-        <button type="button" id="adm-save">Save configuration</button>
-        <button type="button" id="adm-run-maint">Run maintenance now</button>
-      </div>
-    </section>
+        <h3>Image cache</h3>
+        <label class="fld">Retention (days, 0 = keep forever)
+          <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
+        </label>
+        <label class="fld">Max dimension (longest side, px; 0 = store originals)
+          <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
+        </label>
+        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
+
+        <h3>Tuning</h3>
+        <div class="tuning-grid">
+          <label class="fld">Login max failures
+            <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
+          </label>
+          <label class="fld">Lockout window (seconds)
+            <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
+          </label>
+          <label class="fld">Feed history keep (rows/feed)
+            <input type="number" id="adm-fetch-history-keep" min="1" value="{{ fetch_history_keep }}" placeholder="50" />
+          </label>
+          <label class="fld">Feed history max age (days)
+            <input type="number" id="adm-fetch-history-max-age" min="1" value="{{ fetch_history_max_age_days }}" placeholder="30" />
+          </label>
+          <label class="fld">Default auto-refresh (min, 0 = off)
+            <input type="number" id="adm-instance-auto-refresh" min="0" value="{{ instance_auto_refresh }}" placeholder="60" />
+          </label>
+        </div>
+        <p class="account-hint">Login lockout and feed history are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
+
+        <div style="display:flex; gap:.5rem; margin-top:.75rem">
+          <button type="button" id="adm-save">Save configuration</button>
+          <button type="button" id="adm-run-maint">Run maintenance now</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── Users ─────────────────────────────────────────────── -->
+    <div id="panel-users" class="adm-panel">
+
+      <section class="account-section">
+        <h2>Users</h2>
+        <table class="account-users">
+          <thead><tr><th>User</th><th>Admin</th><th>Last active</th><th>Feeds</th><th>DB size</th><th>Actions</th></tr></thead>
+          <tbody>
+          {% for u in users %}
+            <tr>
+              <td>{{ u.username }}{% if u.disabled %} <em>(disabled)</em>{% endif %}</td>
+              <td>{{ 'yes' if u.is_admin else '' }}</td>
+              <td>{{ u.last_active }}</td>
+              <td>{{ u.feed_count }}</td>
+              <td>{{ u.db_human }}</td>
+              <td>
+                {% if u.user_id != user_id %}
+                <div style="display:flex;gap:.4rem;align-items:center">
+                  <form method="post" action="/admin/users/disable" style="margin:0">
+                    {{ csrf_input(request) | safe }}
+                    <input type="hidden" name="user_id" value="{{ u.user_id }}" />
+                    <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
+                    <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
+                  </form>
+                  <form method="post" action="/admin/users/delete" style="margin:0"
+                        onsubmit="return confirm('Permanently delete {{ u.username }} and ALL their feeds, folders, and saved articles? This cannot be undone.');">
+                    {{ csrf_input(request) | safe }}
+                    <input type="hidden" name="user_id" value="{{ u.user_id }}" />
+                    <button type="submit" class="danger">Delete</button>
+                  </form>
+                </div>
+                {% else %}<span>—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+
+        <h2>Create user</h2>
+        <form method="post" action="/admin/users/create">
+          {{ csrf_input(request) | safe }}
+          <input type="text" name="username" placeholder="username" minlength="4" maxlength="10" required />
+          <input type="password" name="password" placeholder="password" autocomplete="new-password" minlength="6" maxlength="36" required />
+          <label><input type="checkbox" name="is_admin" value="1" /> admin</label>
+          <button type="submit">Create user</button>
+        </form>
+
+        <h2>Reset a user's password</h2>
+        <form method="post" action="/admin/users/reset-password">
+          {{ csrf_input(request) | safe }}
+          <select name="user_id">
+            {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
+          </select>
+          <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
+          <button type="submit">Reset password</button>
+        </form>
+
+        <h2>Rename a user</h2>
+        <p class="account-hint">Changes the login name only — data, folders, and API tokens are keyed to a stable internal id and are unaffected.</p>
+        <form method="post" action="/admin/users/rename">
+          {{ csrf_input(request) | safe }}
+          <select name="user_id">
+            {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
+          </select>
+          <input type="text" name="new_username" placeholder="New username" required />
+          <button type="submit">Rename</button>
+        </form>
+      </section>
+
+      <section class="account-section">
+        <h2>My account</h2>
+        <h3>Change password</h3>
+        <form method="post" action="/account/password">
+          {{ csrf_input(request) | safe }}
+          <label class="fld">Current password
+            <input type="password" name="current_password" autocomplete="current-password" required />
+          </label>
+          <label class="fld">New password
+            <input type="password" name="new_password" autocomplete="new-password" required minlength="6" />
+          </label>
+          <label class="fld">Confirm
+            <input type="password" name="confirm_password" autocomplete="new-password" required />
+          </label>
+          <button type="submit">Change password</button>
+        </form>
+
+        <h3>API token</h3>
+        <p class="account-hint">Used for GReader and Fever clients. Treat like a password.</p>
+        <form method="post" action="/account/api-token/regenerate">
+          {{ csrf_input(request) | safe }}
+          <button type="submit">Regenerate token</button>
+        </form>
+      </section>
+    </div>
   </div>
 
   <script>
@@ -167,6 +236,17 @@
       const CSRF = "{{ csrf_token_for(request) }}";
       const $ = id => document.getElementById(id);
       const toast = (msg) => { const t = $('admin-toast'); t.textContent = msg; t.hidden = false; };
+
+      // Tab switching
+      document.querySelectorAll('.adm-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.adm-tab').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.adm-panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById(btn.dataset.panel).classList.add('active');
+        });
+      });
+
       async function post(url, payload) {
         const r = await fetch(url, {
           method: 'POST',
@@ -176,9 +256,8 @@
         });
         if (!r.ok) throw new Error('failed');
       }
+
       $('adm-save')?.addEventListener('click', async () => {
-        // Always send text fields (so they can be edited/cleared); only send
-        // secret keys when actually entered (blank = leave unchanged).
         const payload = {
           email_from: $('adm-email-from')?.value.trim() || '',
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
@@ -186,6 +265,11 @@
           img_cache_max_dim: $('adm-img-cache-max-dim')?.value.trim() || '',
           shared_yt_oauth_client_id: $('adm-yt-oauth-client-id')?.value.trim() || '',
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
+          fetch_history_keep: $('adm-fetch-history-keep')?.value.trim() || '',
+          fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',
+          login_max_failures: $('adm-login-max-failures')?.value.trim() || '',
+          login_window_seconds: $('adm-login-window-seconds')?.value.trim() || '',
+          default_auto_refresh_minutes: $('adm-instance-auto-refresh')?.value.trim() || '',
         };
         const rk = $('adm-resend-key')?.value.trim();
         if (rk) payload.resend_api_key = rk;
@@ -196,6 +280,7 @@
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
       });
+
       $('adm-run-maint')?.addEventListener('click', async () => {
         try { await post('/settings/maintenance/run-now'); toast('Maintenance started.'); }
         catch { toast('Failed to start maintenance.'); }

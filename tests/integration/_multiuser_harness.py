@@ -65,31 +65,6 @@ def _scenario_multi() -> None:
         assert r.status_code == 200, r.status_code  # authed home
 
 
-def _scenario_single() -> None:
-    assert main.MULTI_USER is False
-    assert main.user_store is None
-    # The tenancy context never leaves the default user in single mode.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-
-    with TestClient(main.app) as client:
-        # Env credential gate is active (LECTIO_USERNAME/PASSWORD set by caller).
-        r = client.get("/", follow_redirects=False)
-        assert r.status_code == 303, r.status_code
-
-        r = client.post(
-            "/login",
-            data={"username": os.environ["LECTIO_ADMIN_USERNAME"], "password": os.environ["LECTIO_ADMIN_PASSWORD"]},
-            follow_redirects=False,
-        )
-        assert r.status_code == 303, r.status_code
-
-        r = client.get("/", follow_redirects=False)
-        assert r.status_code == 200, r.status_code
-        # Still the default user after an authenticated single-mode request.
-        assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-        # Account/admin UI is multi-mode only → 404 in single mode (even authed).
-        assert client.get("/administration", follow_redirects=False).status_code == 404
-
 
 def _add_folder(user_id: str, folder_name: str) -> None:
     """Add a folder under the root for a user (so GReader tag-list has content)."""
@@ -291,8 +266,6 @@ def main_entry() -> None:
     scenario = os.environ.get("SCENARIO", "")
     if scenario == "multi":
         _scenario_multi()
-    elif scenario == "single":
-        _scenario_single()
     elif scenario == "multi_api":
         _scenario_multi_api()
     elif scenario == "account_ui":

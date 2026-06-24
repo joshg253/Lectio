@@ -16,17 +16,25 @@ def _reset_login_rate_limit():
         main._login_failures.clear()
 
 
-def _enable_auth(monkeypatch, *, debug=False):
+def _enable_auth(monkeypatch, *, debug=False, max_failures=5, window_seconds=300):
     monkeypatch.setattr(main, "AUTH_ENABLED", True)
-    monkeypatch.setattr(main, "AUTH_USERNAME", "tester")
-    monkeypatch.setattr(main, "AUTH_PASSWORD", "secret")
     monkeypatch.setattr(main, "DEBUG_MODE", debug)
+    monkeypatch.setattr(main, "get_login_max_failures", lambda: max_failures)
+    monkeypatch.setattr(main, "get_login_window_seconds", lambda: window_seconds)
+    # Make user_store.verify_login accept "tester"/"secret" as valid credentials.
+    original_verify = main.user_store.verify_login if main.user_store else None
+
+    def _fake_verify(username, password, **kwargs):
+        if username == "tester" and password == "secret":
+            return "u_test_tester"
+        return None
+
+    if main.user_store is not None:
+        monkeypatch.setattr(main.user_store, "verify_login", _fake_verify)
 
 
 def test_login_blocks_after_max_failures(monkeypatch):
-    _enable_auth(monkeypatch, debug=False)
-    monkeypatch.setattr(main, "_LOGIN_RATE_LIMIT_MAX", 3)
-    monkeypatch.setattr(main, "_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 300)
+    _enable_auth(monkeypatch, debug=False, max_failures=3, window_seconds=300)
     _reset_login_rate_limit()
 
     with TestClient(main.app) as client:
@@ -41,9 +49,7 @@ def test_login_blocks_after_max_failures(monkeypatch):
 
 
 def test_successful_login_clears_failure_history(monkeypatch):
-    _enable_auth(monkeypatch, debug=False)
-    monkeypatch.setattr(main, "_LOGIN_RATE_LIMIT_MAX", 3)
-    monkeypatch.setattr(main, "_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 300)
+    _enable_auth(monkeypatch, debug=False, max_failures=3, window_seconds=300)
     _reset_login_rate_limit()
 
     with TestClient(main.app) as client:
@@ -60,8 +66,7 @@ def test_successful_login_clears_failure_history(monkeypatch):
 
 
 def test_debug_mode_bypasses_login_rate_limit(monkeypatch):
-    _enable_auth(monkeypatch, debug=True)
-    monkeypatch.setattr(main, "_LOGIN_RATE_LIMIT_MAX", 1)
+    _enable_auth(monkeypatch, debug=True, max_failures=1)
     _reset_login_rate_limit()
 
     with TestClient(main.app) as client:
