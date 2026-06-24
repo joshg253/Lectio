@@ -54,6 +54,25 @@ def test_ingest_drops_untrusted_iframe():
     assert "<iframe" not in entries[0].content[0].value.lower()
 
 
+def test_internal_imports_still_available():
+    """Smoke-test that the private reader symbols we import still exist after upgrades."""
+    from reader._parser.feedparser import FeedparserParser as _FP, _process_feed, feedparser as _fp  # noqa: F401
+
+
+def test_install_on_real_reader(tmp_path):
+    """install() does not raise on a real reader instance and registers the swap hook."""
+    import reader as reader_lib
+
+    db = str(tmp_path / "sanitize_test.sqlite")
+    r = reader_lib.make_reader(db)
+    try:
+        before = len(r._parser.lazy_init_funcs)
+        reader_sanitize.install(r)
+        assert len(r._parser.lazy_init_funcs) == before + 1
+    finally:
+        r.close()
+
+
 def test_install_swaps_default_parser():
     class FakeParser:
         def __init__(self):
