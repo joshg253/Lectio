@@ -8113,6 +8113,23 @@ def _title_from_blogger_slug(link: str) -> str | None:
     return " ".join(w.capitalize() for w in words)
 
 
+def _decode_display_entities(text: str) -> str:
+    """Fully decode HTML entities for plain-text display (e.g. titles).
+
+    Titles are rendered as escaped text, so a stored literal entity shows raw
+    ("Magus&rsquo; Castle"). Some feeds (notably Tumblr) double-encode
+    ("&amp;rsquo;"), so unescape repeatedly until stable to surface the real
+    character. Safe for display: the value is plain text that the template /
+    JSON layer escapes again, so no markup can be introduced."""
+    prev = text
+    for _ in range(3):
+        cur = html.unescape(prev)
+        if cur == prev:
+            break
+        prev = cur
+    return prev
+
+
 def _display_title(entry) -> str:
     """Entry title for display, recovering Blogger empty-title posts from the slug.
 
@@ -8121,7 +8138,7 @@ def _display_title(entry) -> str:
     "(untitled)") for genuinely-untitled posts on other sites."""
     title = (getattr(entry, "title", None) or "").strip()
     if title:
-        return title
+        return _decode_display_entities(title)
     feed_url = str(getattr(entry, "feed_url", "") or "")
     link = str(getattr(entry, "link", "") or "")
     if _BLOGGER_FEED_RE.search(feed_url) or _BLOGGER_FEED_RE.search(link):
