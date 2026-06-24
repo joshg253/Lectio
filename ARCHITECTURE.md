@@ -405,6 +405,43 @@ Multi-user makes these structural changes mandatory (not optional hardening):
   *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
   `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
   sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
+- **Feed-side YouTube recovery** — the embed `<iframe>` is stripped at ingest but
+  the raw feed still carries it, so the media scan (`extract_youtube_embeds`,
+  re-parsing the raw feed with sanitize off) caches the video ids and
+  `_inject_recovered_youtube_embeds` refills the empty placeholder it left behind:
+  WordPress' `<figure class="...is-provider-youtube">` **or** ArtStation's
+  `<div class="video-wrapper media-asset...">` (matched by `_YT_EMBED_PLACEHOLDER_RE`).
+  The id scan recognizes both the standard and privacy host (`youtube-nocookie.com`).
+- **Source-page embed recovery (feed pane)** — entries ingested *before*
+  `services.reader_sanitize` stopped stripping `<iframe>` at feed-parse time lost
+  their players, and (unlike the placeholders above) leave *nothing* to refill —
+  no `figure`, no `video-wrapper` — and the raw feed item has often scrolled out
+  of the window, so the feed-side scan can't help. `_inject_recovered_source_embeds` (called from `get_entry_detail`
+  after the cleanups, skipped for native YouTube feeds) handles this: when the
+  stored body has no `<iframe>` and the entry has a source link, it reads the
+  lead-image **source-HTML cache** (shared with the lead-image scraper, so it's
+  often already warm; on a miss it queues `queue_source_html_fetch` and leaves the
+  body unchanged — never blocking the render on a network GET — so the embed fills
+  in on a later open), then `_extract_source_embed_iframes` pulls the allowlisted
+  players (`_embed_host_allowed`) — YouTube rebuilt via `_youtube_embed_html`
+  (honors the host preference), the rest sanitized in place (Bandcamp/SoundCloud
+  esig/track signatures preserved verbatim). `_place_recovered_embeds` then puts
+  each one **in context** rather than dumping them at the bottom: (1) replace a
+  bare body link that points at the same media (so the player takes the place of
+  the link the feed showed instead — matched by video id for YouTube, by the
+  embed's fallback `<a href>` for Bandcamp/SoundCloud), (2) fill empty `<p></p>`
+  placeholders that follow a heading (the stripped embed slots, e.g. theobelisk's
+  `<h3>title</h3><p></p>`) in document order, (3) append leftovers. Mirrors the
+  Reader-view recovery but for the normal entry pane.
+- **Bandcamp single-track embeds** — Bandcamp's `.../tracks=<ids>/esig=<sig>/`
+  player form is domain-locked: Bandcamp validates the Referer against the
+  publisher's site and serves "Sorry, this track or album is not available."
+  anywhere else (confirmed by headless test — the same iframe plays from the
+  publisher domain but not from Lectio). `_strip_bandcamp_track_signature` drops
+  the `tracks`/`esig` path segments so the embed falls back to the plain
+  `album=<id>` player, which embeds on any site and streams the same pre-order/
+  premiere album. Applied to feed-native and source-recovered embeds in
+  `get_entry_detail`, and to both reader-view render paths.
 - **Open-redirect guard** — the login `next` param is filtered by `_safe_next`
   (same-origin paths only) before redirecting.
 

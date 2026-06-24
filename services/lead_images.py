@@ -1937,6 +1937,12 @@ class LeadImageService:
                 break
         return results
 
+    def get_cached_source_html(self, entry_link: str) -> tuple[str, str] | None:
+        """Return ``(base_url, html_text)`` for a source page already in the cache,
+        or ``None`` on a miss. Network-free — the caller primes the cache via
+        ``queue_source_html_fetch`` and fills in on a later open."""
+        return self._source_html_cache.get(entry_link)
+
     def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 1.0) -> bool:
         """Block up to ``timeout`` for an in-flight queue_source_html_fetch to finish.
         Returns True if the source HTML is cached afterward."""

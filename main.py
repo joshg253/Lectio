@@ -8048,6 +8048,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
                 if fallback and fallback.lower().count("<img") > art_img_count:
                     article_html = sanitize_readability_html(fallback).strip()
         article_html = _dedupe_readability_images(article_html)
+        article_html = _strip_bandcamp_track_signature(article_html)
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -8113,6 +8114,23 @@ def _title_from_blogger_slug(link: str) -> str | None:
     return " ".join(w.capitalize() for w in words)
 
 
+def _decode_display_entities(text: str) -> str:
+    """Fully decode HTML entities for plain-text display (e.g. titles).
+
+    Titles are rendered as escaped text, so a stored literal entity shows raw
+    ("Magus&rsquo; Castle"). Some feeds (notably Tumblr) double-encode
+    ("&amp;rsquo;"), so unescape repeatedly until stable to surface the real
+    character. Safe for display: the value is plain text that the template /
+    JSON layer escapes again, so no markup can be introduced."""
+    prev = text
+    for _ in range(3):
+        cur = html.unescape(prev)
+        if cur == prev:
+            break
+        prev = cur
+    return prev
+
+
 def _display_title(entry) -> str:
     """Entry title for display, recovering Blogger empty-title posts from the slug.
 
@@ -8121,7 +8139,7 @@ def _display_title(entry) -> str:
     "(untitled)") for genuinely-untitled posts on other sites."""
     title = (getattr(entry, "title", None) or "").strip()
     if title:
-        return title
+        return _decode_display_entities(title)
     feed_url = str(getattr(entry, "feed_url", "") or "")
     link = str(getattr(entry, "link", "") or "")
     if _BLOGGER_FEED_RE.search(feed_url) or _BLOGGER_FEED_RE.search(link):
@@ -8880,6 +8898,35 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+_BC_EMBED_IFRAME_RE = re.compile(
+    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*bandcamp\.com/EmbeddedPlayer/[^"\']*)(["\'])',
+    re.I,
+)
+
+
+def _strip_bandcamp_track_signature(content_html: str) -> str:
+    """Drop the domain-locked single-track signature from Bandcamp embeds.
+
+    Bandcamp's ``.../tracks=<ids>/esig=<sig>/`` single-track player form is bound
+    to the publisher's domain — Bandcamp validates the Referer, so it renders
+    "Sorry, this track or album is not available." anywhere else (including
+    Lectio). The plain ``album=<id>`` form embeds on any site and plays the same
+    (pre-order/premiere) album, so strip the ``tracks``/``esig`` path segments and
+    fall back to it rather than show a dead player."""
+    if not isinstance(content_html, str) or "bandcamp.com/EmbeddedPlayer" not in content_html:
+        return content_html
+    if "tracks=" not in content_html and "esig=" not in content_html:
+        return content_html
+
+    def _fix(m: re.Match) -> str:
+        src = m.group(2)
+        src = re.sub(r"/tracks=[\w,]+", "", src)
+        src = re.sub(r"/esig=[0-9a-f]+", "", src, flags=re.IGNORECASE)
+        return m.group(1) + src + m.group(3)
+
+    return _BC_EMBED_IFRAME_RE.sub(_fix, content_html)
+
+
 _YT_EMBED_SRC_HOST_RE = re.compile(
     r'(?P<pre><iframe\b[^>]*\bsrc=["\']https://)'
     r'(?:www\.)?youtube(?:-nocookie)?\.com'
@@ -8899,28 +8946,38 @@ def _apply_youtube_embed_host(content_html: str) -> str:
 
 
 _YT_EMBED_FIGURE_CLASS_RE = re.compile(r"is-provider-youtube|wp-block-embed-youtube", re.I)
+# Empty placeholders left behind when an embed <iframe> was stripped at ingest:
+# WordPress' provider figure, or ArtStation's video-wrapper div.
+_YT_EMBED_PLACEHOLDER_RE = re.compile(
+    r"is-provider-youtube|wp-block-embed-youtube|video-wrapper", re.I
+)
 
 
 def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) -> str:
-    """Replace stripped WordPress YouTube embed figures with real players.
+    """Replace stripped YouTube embed placeholders with real players.
 
-    feedparser removes the embed ``<iframe>``, leaving an empty
-    ``<figure class="wp-block-embed ... is-provider-youtube">``. Replace each such
-    figure, in document order, with the player for the matching recovered video
-    id. Figures past the end of ``video_ids`` are left untouched."""
+    feedparser/ingest removes the embed ``<iframe>``, leaving an empty shell:
+    WordPress' ``<figure class="wp-block-embed ... is-provider-youtube">`` or
+    ArtStation's ``<div class="video-wrapper media-asset...">``. Replace each such
+    placeholder, in document order, with the player for the matching recovered
+    video id. Placeholders past the end of ``video_ids`` are left untouched."""
     if not video_ids:
         return content_html
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(content_html, "html.parser")
-    figures = [
-        fig for fig in soup.find_all("figure")
-        if _YT_EMBED_FIGURE_CLASS_RE.search(" ".join(fig.get("class", [])))
-    ]
-    if not figures:
+    placeholders = []
+    for tag in soup.find_all(["figure", "div"]):
+        classes = " ".join(tag.get("class", []))
+        if tag.name == "figure" and _YT_EMBED_FIGURE_CLASS_RE.search(classes):
+            placeholders.append(tag)
+        elif (tag.name == "div" and "video-wrapper" in classes.lower()
+                and not tag.find(["iframe", "video"])):
+            placeholders.append(tag)
+    if not placeholders:
         return content_html
-    for fig, vid in zip(figures, video_ids):
-        fig.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
+    for ph, vid in zip(placeholders, video_ids, strict=False):
+        ph.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
     return str(soup)
 
 
@@ -8969,6 +9026,157 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
         target.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
         changed = True
     return str(soup) if changed else content_html
+
+
+def _extract_source_embed_iframes(
+    raw_html: str, existing_html: str = "", limit: int = 8
+) -> list[tuple[str | None, str]]:
+    """Pull allowlisted media-embed players out of a source page's raw HTML.
+
+    Returns ``(canonical_link, embed_html)`` pairs in document order, skipping any
+    whose src is already present in ``existing_html`` (deduped on the src path).
+    YouTube embeds are rebuilt via ``_youtube_embed_html`` so they honor the
+    user's host preference; every other embed is run through the shared sanitizer
+    (sandbox + referrer policy) since it's injected at render time. The canonical
+    link (``yt:<id>`` for YouTube, else the embed's fallback ``<a href>`` so a
+    Bandcamp/SoundCloud player can be matched to its bare album/track link in the
+    body) drives in-context placement; ``None`` when no link can be derived."""
+    if not raw_html or "<iframe" not in raw_html.lower():
+        return []
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(raw_html, "html.parser")
+    existing = (existing_html or "").lower()
+    seen: set[str] = set()
+    out: list[tuple[str | None, str]] = []
+    for ifr in soup.find_all("iframe"):
+        src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+        if not src or not html_sanitize._embed_host_allowed(src):
+            continue
+        key = src.split("?", 1)[0].lower()
+        if key in seen or key in existing:
+            continue
+        seen.add(key)
+        vid = None
+        if "youtu" in src.lower():
+            _em = re.search(r"/embed/([\w-]{11})", src)
+            vid = _em.group(1) if _em else youtube_duration_service.extract_video_id(src)
+        if vid:
+            out.append((f"yt:{vid}", _youtube_embed_html(vid)))
+        else:
+            cleaned = html_sanitize.sanitize_html(str(ifr))
+            if "<iframe" in cleaned.lower():
+                # iframe content is parsed as raw text (the fallback <a> is a
+                # string, not a tag), so match its href out of the inner markup —
+                # the canonical album/track link for matching the body's bare link.
+                _am = re.search(r'href=["\']([^"\']+)["\']', ifr.decode_contents())
+                canonical = _am.group(1) if _am else None
+                out.append((canonical, cleaned))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _norm_media_link(url: str | None) -> str:
+    """Scheme/trailing-slash-insensitive key for matching media URLs."""
+    u = (url or "").strip().lower()
+    u = re.sub(r"^https?://", "", u).split("?", 1)[0].rstrip("/")
+    return u
+
+
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]]) -> str:
+    """Insert recovered embeds where they belong, not just at the bottom.
+
+    Three passes, in order: (1) replace a bare body link that points at the same
+    media — so the player takes the place of the link the feed showed instead of
+    the embed; (2) fill empty ``<p></p>`` placeholders that follow a heading (the
+    stripped embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in
+    document order; (3) append whatever's left at the bottom."""
+    if not items:
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html or "", "html.parser")
+    remaining = list(items)
+
+    # Pass 1 — replace a matching bare link.
+    for canonical, embed in list(remaining):
+        if not canonical:
+            continue
+        target = None
+        for a in soup.find_all("a"):
+            href = a.get("href") or ""
+            if canonical.startswith("yt:"):
+                vid = canonical[3:]
+                if youtube_duration_service.extract_video_id(href) == vid or f"/embed/{vid}" in href:
+                    target = a
+                    break
+            elif _norm_media_link(href) and _norm_media_link(href) == _norm_media_link(canonical):
+                target = a
+                break
+        if target is None:
+            continue
+        repl = BeautifulSoup(embed, "html.parser")
+        parent = target.parent
+        if (parent is not None and parent.name == "p"
+                and parent.get_text(strip=True) == target.get_text(strip=True)):
+            parent.replace_with(repl)  # link is the paragraph's sole content
+        else:
+            target.replace_with(repl)
+        remaining.remove((canonical, embed))
+
+    # Pass 2 — fill empty <p> placeholders that follow a heading.
+    if remaining:
+        empties = []
+        for p in soup.find_all("p"):
+            if p.get_text(strip=True) or p.find(["img", "iframe", "audio", "video", "figure"]):
+                continue
+            prev = p.find_previous_sibling()
+            if prev is not None and prev.name in _HEADING_TAGS:
+                empties.append(p)
+        for p, (canonical, embed) in zip(empties, list(remaining), strict=False):
+            p.replace_with(BeautifulSoup(embed, "html.parser"))
+            remaining.remove((canonical, embed))
+
+    out = str(soup)
+    # Pass 3 — append leftovers.
+    if remaining:
+        out += "".join(f'<p class="lectio-embed">{e}</p>' for _, e in remaining)
+    return out
+
+
+def _inject_recovered_source_embeds(content_html, entry):
+    """Recover media embeds from the source page when the feed body has none.
+
+    Entries ingested before Lectio stopped stripping ``<iframe>`` at feed-parse
+    time lost their YouTube/Bandcamp/SoundCloud players, and — unlike WordPress
+    embed blocks — leave no placeholder figure to refill, so the feed-side
+    recovery can't help. When the stored body carries no embed and the entry has a
+    source link, fetch the page once (cached, SSRF-guarded via the lead-image
+    source-HTML cache) and re-attach any allowlisted players it has, placed in
+    context (see ``_place_recovered_embeds``) — mirroring the Reader-view
+    ``_reinject_readability_embeds`` recovery."""
+    link = (getattr(entry, "link", "") or "").strip()
+    if not link:
+        return content_html
+    body = content_html if isinstance(content_html, str) else ""
+    if "<iframe" in body.lower():
+        return content_html  # already has an embed — nothing to recover
+    cached = lead_image_service.get_cached_source_html(link)
+    if cached is None:
+        # Don't block the render on a network GET — queue a background fetch and
+        # leave the body unchanged; the embed fills in on a later open. Many pages
+        # are already cached by the lead-image scraper, so this often hits.
+        lead_image_service.queue_source_html_fetch(link)
+        return content_html
+    _base, raw_html = cached
+    items = _extract_source_embed_iframes(raw_html, body)
+    if not items:
+        return content_html
+    return _place_recovered_embeds(body, items)
 
 
 def _inject_source_gallery(content_html, entry, lead_image_url):
@@ -9457,7 +9665,7 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # iframes (services.reader_sanitize) — newer entries keep the real embed,
     # so skip recovery when an <iframe> is already present.
     if (isinstance(content_html, str)
-            and _YT_EMBED_FIGURE_CLASS_RE.search(content_html)
+            and _YT_EMBED_PLACEHOLDER_RE.search(content_html)
             and "<iframe" not in content_html.lower()):
         with get_meta_connection() as _vconn:
             _vids = _lookup_media_video(_vconn, feed_url, entry_id)
@@ -9505,6 +9713,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
         # iframes, recovered YouTube embeds). Operates on content_html only.
         content_html = _apply_feed_content_cleanups(content_html, feed_url, entry_id)
+
+        # Recover media embeds (YouTube/Bandcamp/SoundCloud/…) from the source
+        # page for older entries whose <iframe> was stripped at ingest and left no
+        # placeholder to refill. Skips when the body already has an embed; fetch is
+        # cached and SSRF-guarded. Runs before the YouTube-feed injection below so
+        # that path still wins for native YouTube feeds.
+        if not (isinstance(feed_url, str)
+                and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
+            content_html = _inject_recovered_source_embeds(content_html, entry)
+
+        # Bandcamp single-track esig players are domain-locked to the publisher and
+        # show "not available" in Lectio; fall back to the album player. Covers
+        # both feed-native and source-recovered embeds.
+        content_html = _strip_bandcamp_track_signature(content_html)
 
         # --- YouTube embed injection ---
         # Only for YouTube feeds (feeds/videos.xml?channel_id=...)
@@ -11139,6 +11361,7 @@ def entry_readability(
 
 def _wrap_readability_html(article_html: str, source_url: str) -> HTMLResponse:
     escaped_source = html.escape(source_url)
+    article_html = _strip_bandcamp_track_signature(article_html)
     return HTMLResponse(
         (
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
