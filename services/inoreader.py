@@ -23,7 +23,7 @@ _TOKEN_URL = "https://www.inoreader.com/oauth2/token"
 _API_BASE = "https://www.inoreader.com/reader/api/0"
 _SCOPE = "read write"
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
-_TIMEOUT = 20
+_TIMEOUT = 45
 
 
 # ---------------------------------------------------------------------------

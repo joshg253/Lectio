@@ -15444,6 +15444,9 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
     except inoreader_service.QuotaExceeded:
         LOGGER.info("[inoreader] drip paused: quota exhausted")
         _save()
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        LOGGER.warning("[inoreader] drip paused: network issue (%s)", exc)
+        _save()
     except Exception as exc:
         state["error"] = str(exc)[:300]
         _save()
