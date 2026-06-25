@@ -319,7 +319,8 @@ class UserStore:
             ).fetchall()
         match: str | None = None
         for r in rows:
-            candidate = hashlib.md5(f"{r['username']}:{r['api_token']}".encode()).hexdigest()
+            # MD5 is mandated by the Fever API spec (feedafever.com/api); not used for password storage.
+            candidate = hashlib.md5(f"{r['username']}:{r['api_token']}".encode()).hexdigest()  # nosec B324
             if hmac.compare_digest(api_key, candidate):
                 match = r["user_id"]  # don't break: keep comparison count ~constant
         return match
