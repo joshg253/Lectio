@@ -15344,7 +15344,8 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             label_ids = [
                 t["id"] for t in tags
-                if inoreader_service.label_name_from_tag_id(t.get("id", ""))
+                if (name := inoreader_service.label_name_from_tag_id(t.get("id", "")))
+                and inoreader_service.label_is_tag(name)
             ]
             state["label_ids"] = label_ids
             state["label_cursor"] = 0
@@ -15411,27 +15412,27 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             with get_reader() as reader:
-                with get_meta_connection() as conn:
-                    with sqlite3.connect(reader_db, timeout=10.0) as rconn:
-                        rconn.row_factory = sqlite3.Row
-                        for item in items:
-                            canonical = item.get("canonical") or []
-                            entry_url = canonical[0].get("href", "") if canonical else ""
-                            origin = item.get("origin") or {}
-                            raw_stream = origin.get("streamId", "")
-                            feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-                            if not entry_url or not feed_url:
-                                continue
-                            try:
-                                entry = _api_resolve_entry(reader, rconn, feed_url, entry_url, item)
-                                if entry:
+                with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                    rconn.row_factory = sqlite3.Row
+                    for item in items:
+                        canonical = item.get("canonical") or []
+                        entry_url = canonical[0].get("href", "") if canonical else ""
+                        origin = item.get("origin") or {}
+                        raw_stream = origin.get("streamId", "")
+                        feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                        if not entry_url or not feed_url:
+                            continue
+                        try:
+                            entry = _api_resolve_entry(reader, rconn, feed_url, entry_url, item)
+                            if entry:
+                                with get_meta_connection() as conn:
                                     conn.execute(
                                         "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
                                         (entry.feed_url, entry.id),
                                     )
-                                    state["items_starred"] = state.get("items_starred", 0) + 1
-                            except Exception:
-                                pass
+                                state["items_starred"] = state.get("items_starred", 0) + 1
+                        except Exception:
+                            pass
             if next_cont:
                 state["starred_continuation"] = next_cont
             else:
