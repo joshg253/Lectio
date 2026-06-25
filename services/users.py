@@ -351,3 +351,16 @@ class UserStore:
         if row and float(row["expires_at"]) > now and not row["disabled"]:
             return row["user_id"]
         return None
+
+    def miniflux_user_for_token(self, token: str) -> str | None:
+        """Resolve a Miniflux X-Auth-Token (the user's raw api_token) to a user_id."""
+        if not token:
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL"
+            ).fetchall()
+        for r in rows:
+            if r["api_token"] and hmac.compare_digest(token, r["api_token"]):
+                return r["user_id"]
+        return None

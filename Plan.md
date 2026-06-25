@@ -15,6 +15,8 @@ Build order (promoted from Later — top first):
 7. ~~**Save to Pinterest**~~ — ✅ SHIPPED (per-entry **Pin** button; per-user Pinterest API v5 OAuth; board picker; pins the entry's lead image linked to source. `services/pinterest_oauth.py`, `PINTEREST_OAUTH_CLIENT_ID/SECRET`).
 8. ~~**Add to Quire**~~ — ✅ SHIPPED (per-entry **Add to Quire** button + On-Star + `quire` automation rule; per-user OAuth `services/quire.py`, `QUIRE_CLIENT_ID/SECRET`; one default destination project; sliding-window per-minute/hour usage meter `quire_call_log` + `get_quire_usage_status`, per-run cap `_QUIRE_AUTO_PER_RUN_CAP`, 429 back-off).
 
+9. ~~**Miniflux v1 API compatibility**~~ — ✅ SHIPPED. `services/miniflux.py` + `/v1/*` routes in `main.py`. Covers: `/v1/version`, `/v1/me`, `/v1/categories`, `/v1/feeds`, `/v1/entries` (with status/feed/category/starred/limit/cursor params), `/v1/feeds/{id}/entries`, `/v1/categories/{id}/entries`, `/v1/entries/{id}`, `PUT /v1/entries` (bulk read/unread), `PUT /v1/entries/{id}/bookmark` (star toggle). Auth via `X-Auth-Token` header (user's raw `api_token`) or HTTP Basic password. Fever pre-sync race was already fixed (`presync=False`). README badge added.
+
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
 - ~~**Per-click Quire project picker**~~ — ✅ SHIPPED. Quire button now opens a project-picker menu (mirrors Pinterest board picker); POST `/entries/quire` accepts optional `project_oid` form param that overrides the settings default. On-Star and automation rules still use the settings default project; adding a per-rule project field is a future follow-up if needed.
@@ -272,14 +274,6 @@ Detailed specs follow.
   frameDeny/referrer) from Traefik into app middleware; make trusted-proxy IPs
   configurable instead of `--forwarded-allow-ips=*`. Document Traefik + one
   alternative now; expand later.
-- **Miniflux API compatibility** — Fever and GReader are done. Miniflux is the
-  remaining candidate for broader client support (Fluent Reader, ReadKit). Assess
-  multi-user requirement and cost first. When adding this (or any new API), revisit
-  the README API badge cluster (WebSub / GReader / Fever) to keep it accurate.
-- **Fever pre-sync startup race** (cosmetic) — `FeverService` starts its pre-sync
-  thread in `__init__` at import, before `lifespan` runs `ensure_meta_schema()`, so
-  a brand-new data dir logs one `no such table: fever_entry_map` on first boot
-  (harmless). Defer the thread until after schema init, or tolerate the missing table.
 - **Archive caps for starred entries** — only relevant after multi-user.
 - **Better tuning / live preview** — full entry preview pane, swappable strategy +
   display settings without saving.
