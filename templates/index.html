@@ -1803,6 +1803,9 @@
             </div>
             <div id="mig-ino-api-controls">
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                <label style="font-size:0.85em;display:flex;gap:0.35rem;align-items:center">
+                  Since <input type="date" id="mig-ino-api-since" style="font-size:inherit" title="Only fetch items newer than this date. Leave blank to import everything.">
+                </label>
                 <button type="button" id="mig-ino-api-start" class="settings-inline-btn">Start API import</button>
                 <button type="button" id="mig-ino-api-run" class="settings-inline-btn" hidden>Step now</button>
                 <button type="button" id="mig-ino-api-reset" class="settings-inline-btn" hidden>Reset API import</button>
@@ -10217,7 +10220,10 @@
       // API import controls.
       document.getElementById('mig-ino-api-start')?.addEventListener('click', async () => {
         try {
-          await fetch('/integrations/inoreader/import/start', { method: 'POST', credentials: 'same-origin' });
+          const since = document.getElementById('mig-ino-api-since')?.value || '';
+          const fd = new FormData();
+          if (since) fd.append('since', since);
+          await fetch('/integrations/inoreader/import/start', { method: 'POST', credentials: 'same-origin', body: fd });
           setTimeout(_migInoRefreshStatus, 1500);
         } catch { /* ignore */ }
       });
