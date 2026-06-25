@@ -229,32 +229,59 @@ def label_is_tag(label_name: str) -> bool:
 # JSON file import (Path B — no API calls needed)
 # ---------------------------------------------------------------------------
 
-def parse_export_json(data: list[dict]) -> list[dict]:
-    """Parse items from an InoreaderExportTool JSON blob into normalised records.
+def parse_export_json(data) -> list[dict]:
+    """Parse items into normalised records.
+
+    Accepts three formats:
+    - ExportTool / native Inoreader export: a plain ``list`` of item dicts with
+      ``categories`` paths (``user/ID/label/NAME``) and ``canonical`` URL objects.
+    - Native Inoreader export ZIP: a ``dict`` with an ``"items"`` key containing
+      the same item structure as above.
+    - JSON Feed (jsonfeed.org/version/1): a ``dict`` with ``version`` starting
+      with ``https://jsonfeed.org/``. Items have a flat ``url`` string, a ``tags``
+      list of plain label names, and no per-item feed URL.
 
     Each returned record:
       url          — article canonical URL
       title        — article title
       published    — Unix timestamp (int) or None
-      feed_url     — feed subscription URL
+      feed_url     — feed subscription URL, or ``""`` if unknown (JSON Feed)
       feed_title   — feed display name
       content      — article HTML (may be empty)
-      starred      — True if item has the google/like or google/starred state
-      labels       — list[str] of label names from categories
-      item_id      — Inoreader item ID (for delete-from-source mode)
+      starred      — True if starred
+      labels       — list[str] of user label names
+      item_id      — Inoreader item ID
     """
+    if isinstance(data, dict) and data.get("version", "").startswith("https://jsonfeed.org/"):
+        return _parse_jsonfeed(data)
+
+    is_native = isinstance(data, dict)
+    if is_native:
+        raw_items: list = data.get("items", [])
+    elif isinstance(data, list):
+        raw_items = data
+    else:
+        return []
+
     out = []
-    for item in data:
+    for item in raw_items:
         cats = item.get("categories", [])
         canonical = item.get("canonical") or []
         url = canonical[0].get("href", "") if canonical else ""
         origin = item.get("origin") or {}
         raw_stream = origin.get("streamId", "")
         feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-        starred = any(
-            ("state/com.google/like" in c or "state/com.google/starred" in c)
-            for c in cats
-        )
+        # Starred: only the native Inoreader export (dict format, starred*.json) is the
+        # source of truth for starred state. It uses a Unix-timestamp ``starred`` field.
+        # ExportTool files (list format) carry starred state in categories too, but we
+        # intentionally ignore it — starred.json is authoritative.
+        if is_native:
+            starred = bool(item.get("starred")) or any(
+                ("state/com.google/like" in c or "state/com.google/starred" in c)
+                for c in cats
+            )
+        else:
+            starred = False
         labels = []
         for c in cats:
             name = label_name_from_tag_id(c)
@@ -270,6 +297,32 @@ def parse_export_json(data: list[dict]) -> list[dict]:
             "content": summary.get("content", ""),
             "starred": starred,
             "labels": labels,
+            "item_id": item.get("id", ""),
+        })
+    return out
+
+
+def _parse_jsonfeed(data: dict) -> list[dict]:
+    """Parse a jsonfeed.org/version/1 export from Inoreader."""
+    from datetime import datetime, timezone
+    out = []
+    for item in data.get("items", []):
+        pub = None
+        raw_pub = item.get("date_published") or item.get("date_modified")
+        if raw_pub:
+            try:
+                pub = int(datetime.fromisoformat(raw_pub.replace("Z", "+00:00")).timestamp())
+            except Exception:
+                pass
+        out.append({
+            "url": item.get("url", ""),
+            "title": item.get("title", ""),
+            "published": pub,
+            "feed_url": "",  # not available per-item in JSON Feed
+            "feed_title": "",
+            "content": item.get("content_html", "") or item.get("content_text", ""),
+            "starred": False,  # JSON Feed exports are label streams, not starred
+            "labels": list(item.get("tags") or []),
             "item_id": item.get("id", ""),
         })
     return out
