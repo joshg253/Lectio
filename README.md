@@ -52,8 +52,10 @@ The short version:
   the album player so they actually stream. Titles that arrive HTML-encoded (or
   double-encoded, as Tumblr does — `Magus&rsquo; Castle`) are decoded so they read
   correctly instead of showing the raw entity. A bare
-  YouTube link sitting alone in its own paragraph (common when a feed strips the
-  oEmbed iframe) is turned into an inline player. Reader view re-injects
+  YouTube or Bandcamp album/track link sitting alone in its own paragraph (common
+  when a feed strips the oEmbed iframe) is turned into an inline player. (Bandcamp
+  resolves the numeric embed ID from the album page on first open and caches it; the
+  embed appears on the next open when the page isn't yet cached.) Reader view re-injects
   allowlisted players (YouTube/Spotify/Bandcamp) that the readability extractor
   would otherwise strip — audio players (Bandcamp/SoundCloud/Spotify) keep their
   proper fixed height instead of a 16:9 video box — and de-duplicates a repeated
