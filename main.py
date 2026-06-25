@@ -6330,6 +6330,38 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     return removed
 
 
+def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tuple[int, bool]:
+    """Rename a manual tag across every entry that carries it.
+
+    Returns ``(count, merged)`` where *count* is the number of entries
+    updated and *merged* is True if *new_tag* already had entries before
+    the rename (i.e. the two tags were combined).
+    """
+    old_norm = normalize_tag_value(old_tag)
+    new_norm = normalize_tag_value(new_tag)
+    if not old_norm or not new_norm or old_norm == new_norm:
+        return 0, False
+
+    old_key = f"{MANUAL_TAG_KEY_PREFIX}{old_norm}"
+    new_key = f"{MANUAL_TAG_KEY_PREFIX}{new_norm}"
+    updated = 0
+    with get_reader() as reader:
+        merged = reader.get_entry_counts(tags=[new_key]).total > 0
+        for entry in list(reader.get_entries(tags=[old_key])):
+            try:
+                reader.set_tag(entry.resource_id, new_key)
+                reader.delete_tag(entry.resource_id, old_key)
+                updated += 1
+            except Exception:
+                LOGGER.warning(
+                    "rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True
+                )
+    if updated:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return updated, merged
+
+
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -16967,6 +16999,43 @@ def delete_manual_tag(
 
     message = f"Removed #{normalized} from {removed} post{'' if removed == 1 else 's'}."
     return RedirectResponse(url=f"/?message={quote_plus(message)}", status_code=303)
+
+
+@app.post("/tags/rename")
+def rename_manual_tag(
+    request: Request,
+    old_tag: str = Form(...),
+    new_tag: str = Form(...),
+    force: str = Form(default=""),
+):
+    old_norm = normalize_tag_value(old_tag)
+    new_norm = normalize_tag_value(new_tag)
+    is_ajax = request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar")
+
+    if not old_norm or not new_norm:
+        if is_ajax:
+            return JSONResponse({"ok": False, "error": "Invalid tag name."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+    if old_norm == new_norm:
+        if is_ajax:
+            return JSONResponse({"ok": False, "error": "New name is the same as the old name."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+
+    # Without force, warn the caller if new_tag already exists so the UI can
+    # ask for explicit confirmation before merging two tags.
+    if not force:
+        with get_reader() as reader:
+            new_key = f"{MANUAL_TAG_KEY_PREFIX}{new_norm}"
+            if reader.get_entry_counts(tags=[new_key]).total > 0:
+                if is_ajax:
+                    return JSONResponse({"ok": False, "exists": True, "new_tag": new_norm})
+                return RedirectResponse(url="/", status_code=303)
+
+    count, merged = rename_manual_tag_everywhere(old_norm, new_norm)
+    if is_ajax:
+        return JSONResponse({"ok": True, "old_tag": old_norm, "new_tag": new_norm, "count": count, "merged": merged})
+    msg = f"Renamed #{old_norm} → #{new_norm} on {count} post{'' if count == 1 else 's'}."
+    return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 
 @app.post("/entries/mark-range-read")
