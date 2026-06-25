@@ -4,6 +4,7 @@ import collections
 import hashlib
 import html
 import io
+import json
 import logging
 import os
 import re
@@ -48,6 +49,7 @@ from services import deviantart as deviantart_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
 from services import quire as quire_service
+from services import inoreader as inoreader_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
@@ -299,6 +301,14 @@ SETTING_PINTEREST_OAUTH_STATE = "pinterest_oauth_state"
 # Shared-instance Pinterest OAuth creds stored in the admin's app_settings.
 SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID = "shared_pinterest_oauth_client_id"
 SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET = "shared_pinterest_oauth_client_secret"
+# Inoreader migration — OAuth tokens and import checkpoint.
+SETTING_INOREADER_CLIENT_ID = "inoreader_client_id"
+SETTING_INOREADER_CLIENT_SECRET = "inoreader_client_secret"
+SETTING_INOREADER_ACCESS_TOKEN = "inoreader_access_token"
+SETTING_INOREADER_REFRESH_TOKEN = "inoreader_refresh_token"
+SETTING_INOREADER_TOKEN_EXPIRES_AT = "inoreader_token_expires_at"
+SETTING_INOREADER_OAUTH_STATE = "inoreader_oauth_state"
+SETTING_INOREADER_IMPORT_STATE = "inoreader_import_state"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
@@ -452,6 +462,9 @@ _ENV_PINTEREST_OAUTH_CLIENT_SECRET = os.getenv("PINTEREST_OAUTH_CLIENT_SECRET", 
 # (same pattern as DeviantArt). Only the resulting tokens are ever per-user.
 _ENV_QUIRE_CLIENT_ID = os.getenv("QUIRE_CLIENT_ID", "").strip()
 _ENV_QUIRE_CLIENT_SECRET = os.getenv("QUIRE_CLIENT_SECRET", "").strip()
+# Inoreader migration OAuth creds — env is the fallback; DB settings take precedence.
+_ENV_INOREADER_CLIENT_ID = os.getenv("INOREADER_CLIENT_ID", "").strip()
+_ENV_INOREADER_CLIENT_SECRET = os.getenv("INOREADER_CLIENT_SECRET", "").strip()
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
 _ENV_MAINTENANCE_HOUR: int | None = None
 if _yt_sync_hour_raw:
@@ -699,6 +712,46 @@ def get_pinterest_oauth_token() -> str:
         if data.get("refresh_token"):
             set_setting(conn, SETTING_PINTEREST_OAUTH_REFRESH_TOKEN, data["refresh_token"])
         set_setting(conn, SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+    return data["access_token"]
+
+
+def get_inoreader_credentials() -> tuple[str, str]:
+    """Inoreader OAuth credentials (client_id, client_secret).
+
+    DB settings take precedence over env vars so any user can override them
+    without restarting the container.
+    """
+    cid = get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID)
+    secret = get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)
+    return cid, secret
+
+
+def inoreader_connected() -> bool:
+    with get_meta_connection() as conn:
+        return bool(get_setting(conn, SETTING_INOREADER_REFRESH_TOKEN))
+
+
+def get_inoreader_token() -> str:
+    """Return a valid Inoreader access token, refreshing it if expired."""
+    with get_meta_connection() as conn:
+        access = get_setting(conn, SETTING_INOREADER_ACCESS_TOKEN) or ""
+        refresh = get_setting(conn, SETTING_INOREADER_REFRESH_TOKEN) or ""
+        expires_at = float(get_setting(conn, SETTING_INOREADER_TOKEN_EXPIRES_AT) or 0)
+    if not refresh:
+        return ""
+    if access and time.time() < expires_at - 60:
+        return access
+    cid, secret = get_inoreader_credentials()
+    try:
+        data = inoreader_service.refresh_access_token(cid, secret, refresh)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[inoreader] token refresh failed; reconnect required: %s", exc)
+        return ""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_INOREADER_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_INOREADER_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
     return data["access_token"]
 
 
@@ -11331,6 +11384,11 @@ def _scheduled_refresh_tick() -> None:
                 scraper_service.refresh_all_scraped_feeds(_sc)
                 _da_cid, _da_secret = get_deviantart_credentials()
                 deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
+            if inoreader_connected():
+                try:
+                    _inoreader_drip_step()
+                except Exception:
+                    LOGGER.exception("[inoreader] drip step error in scheduler")
 
     if not feeds_to_refresh:
         return
@@ -12737,6 +12795,7 @@ def home(
         "yt_oauth_connected": youtube_oauth_connected(),
         "pinterest_oauth_connected": pinterest_oauth_connected(),
         "pinterest_connected": pinterest_oauth_connected(),
+        "inoreader_connected": inoreader_connected(),
         "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
         "email_to_default": email_to_default,
         "instapaper_configured": is_instapaper_configured(),
@@ -14662,6 +14721,377 @@ def pinterest_oauth_disconnect():
     return JSONResponse({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# Inoreader OAuth + import routes
+# ---------------------------------------------------------------------------
+
+def _inoreader_redirect_uri(request: Request) -> str:
+    """The registered callback URL — must exactly match Inoreader developer console."""
+    base = LECTIO_PUBLIC_URL
+    if base:
+        return f"{base}/inoreader/oauth/callback"
+    return str(request.url_for("inoreader_oauth_callback"))
+
+
+@app.get("/integrations/inoreader/oauth/connect")
+def inoreader_oauth_connect(request: Request):
+    """Kick off the Inoreader OAuth flow → redirect to Inoreader's consent page."""
+    cid, secret = get_inoreader_credentials()
+    if not cid or not secret:
+        return RedirectResponse(
+            url="/?message=" + quote_plus("Inoreader OAuth client is not configured (set INOREADER_CLIENT_ID/SECRET or enter them in Settings → Integrations → Inoreader)."),
+            status_code=303,
+        )
+    state = secrets.token_urlsafe(24)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_OAUTH_STATE, state)
+    url = inoreader_service.authorize_url(cid, _inoreader_redirect_uri(request), state)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/inoreader/oauth/callback", name="inoreader_oauth_callback")
+def inoreader_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    """OAuth redirect target registered at inoreader.com developer console.
+
+    The exact path ``/inoreader/oauth/callback`` must match what is registered
+    there — do not rename or move this route without updating the console.
+    """
+    if error:
+        return RedirectResponse(
+            url="/?message=" + quote_plus(f"Inoreader authorization failed: {error}"),
+            status_code=303,
+        )
+    with get_meta_connection() as conn:
+        expected = get_setting(conn, SETTING_INOREADER_OAUTH_STATE) or ""
+    if not code or not state or state != expected:
+        return RedirectResponse(
+            url="/?message=" + quote_plus("Inoreader authorization failed (bad state)."),
+            status_code=303,
+        )
+    cid, secret = get_inoreader_credentials()
+    try:
+        data = inoreader_service.exchange_code(cid, secret, code, _inoreader_redirect_uri(request))
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            url="/?message=" + quote_plus(f"Inoreader connect failed: {exc}"),
+            status_code=303,
+        )
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_INOREADER_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_INOREADER_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+        delete_setting(conn, SETTING_INOREADER_OAUTH_STATE)
+    return RedirectResponse(
+        url="/?message=" + quote_plus("Inoreader account connected. Go to Settings → Integrations → Inoreader to start the migration."),
+        status_code=303,
+    )
+
+
+@app.post("/integrations/inoreader/oauth/disconnect")
+def inoreader_oauth_disconnect():
+    with get_meta_connection() as conn:
+        for key in (
+            SETTING_INOREADER_ACCESS_TOKEN,
+            SETTING_INOREADER_REFRESH_TOKEN,
+            SETTING_INOREADER_TOKEN_EXPIRES_AT,
+            SETTING_INOREADER_OAUTH_STATE,
+        ):
+            delete_setting(conn, key)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/integrations/inoreader/import/status")
+def inoreader_import_status():
+    """Return the current import checkpoint state as JSON."""
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_INOREADER_IMPORT_STATE) or ""
+    if not raw:
+        return JSONResponse({"phase": None, "done": False, "running": False})
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return JSONResponse({"phase": "error", "done": False, "running": False})
+    return JSONResponse({**state, "running": False})
+
+
+@app.post("/integrations/inoreader/import/start")
+def inoreader_import_start(delete_mode: int = Form(default=0)):
+    """Initialise (or reinitialise) the API-driven import state and run the first drip step."""
+    if not inoreader_connected():
+        return JSONResponse({"ok": False, "error": "Not connected"}, status_code=400)
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "subscriptions",
+        "subs_added": 0,
+        "label_ids": [],
+        "label_cursor": 0,
+        "label_continuation": None,
+        "starred_continuation": None,
+        "items_tagged": 0,
+        "items_starred": 0,
+        "delete_mode": bool(delete_mode),
+        "z1_remaining": None,
+        "error": None,
+        "done": False,
+        "started_at": now,
+        "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+    # Run the first drip step immediately (best-effort, errors surface in status).
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_drip_step),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "state": state})
+
+
+@app.post("/integrations/inoreader/import/run")
+def inoreader_import_run():
+    """Manually trigger one drip step (for "Run now" button in UI)."""
+    if not inoreader_connected():
+        return JSONResponse({"ok": False, "error": "Not connected"}, status_code=400)
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_drip_step),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/integrations/inoreader/import/reset")
+def inoreader_import_reset():
+    """Clear the import checkpoint so the migration can be restarted."""
+    with get_meta_connection() as conn:
+        delete_setting(conn, SETTING_INOREADER_IMPORT_STATE)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/integrations/inoreader/import/json")
+async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
+    """Path B: import from an InoreaderExportTool JSON file (no API calls).
+
+    Subscribes any unknown feeds and applies starred/label state to any entries
+    that are already in the reader (best-effort — new feeds won't have entries
+    until after their first fetch).
+    """
+    try:
+        raw = await file.read()
+        data = json.loads(raw)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Invalid JSON: {exc}"}, status_code=400)
+
+    items = inoreader_service.parse_export_json(data if isinstance(data, list) else data.get("items", []))
+
+    feeds_added = 0
+    items_starred = 0
+    items_tagged = 0
+
+    # Subscribe missing feeds
+    feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
+    with get_reader() as reader:
+        existing = {str(f.url) for f in reader.get_feeds()}
+        for furl in feed_urls:
+            if furl not in existing:
+                try:
+                    reader.add_feed(furl, exist_ok=True)
+                    feeds_added += 1
+                except Exception:
+                    pass
+
+    # Apply stars and tags to entries already in reader
+    with get_reader() as reader:
+        with get_meta_connection() as conn:
+            for item in items:
+                entry_url = item["url"]
+                feed_url = item["feed_url"]
+                if not entry_url or not feed_url:
+                    continue
+                # Tag
+                for label_name in item["labels"]:
+                    if inoreader_service.label_is_tag(label_name):
+                        tag_key = f"{MANUAL_TAG_KEY_PREFIX}{label_name.lower()}"
+                        try:
+                            entry = reader.get_entry((feed_url, entry_url), None)
+                            if entry:
+                                reader.set_tag(entry, tag_key)
+                                items_tagged += 1
+                        except Exception:
+                            pass
+                # Star
+                if item["starred"]:
+                    try:
+                        entry = reader.get_entry((feed_url, entry_url), None)
+                        if entry:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                                (feed_url, entry_url),
+                            )
+                            items_starred += 1
+                    except Exception:
+                        pass
+
+    return JSONResponse({
+        "ok": True,
+        "feeds_added": feeds_added,
+        "items_starred": items_starred,
+        "items_tagged": items_tagged,
+        "total_items": len(items),
+    })
+
+
+def _inoreader_drip_step(calls_budget: int = 10) -> None:
+    """One drip-import step: advance the API-driven import by up to calls_budget API calls."""
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_INOREADER_IMPORT_STATE) or ""
+    if not raw:
+        return
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return
+    if state.get("done") or state.get("phase") == "error":
+        return
+
+    token = get_inoreader_token()
+    if not token:
+        return
+
+    calls_made = 0
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as _c:
+            set_setting(_c, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+
+    try:
+        # Phase: subscriptions
+        if state.get("phase") == "subscriptions" and calls_made < calls_budget:
+            subs, rl = inoreader_service.get_subscriptions(token)
+            calls_made += 1
+            state["z1_remaining"] = inoreader_service.z1_remaining(rl)
+            with get_reader() as reader:
+                existing = {str(f.url) for f in reader.get_feeds()}
+                added = 0
+                for sub in subs:
+                    furl = sub.get("feed_url", "")
+                    if furl and furl not in existing:
+                        try:
+                            reader.add_feed(furl, exist_ok=True)
+                            added += 1
+                        except Exception:
+                            pass
+            state["subs_added"] = state.get("subs_added", 0) + added
+            state["phase"] = "labels_list"
+            _save()
+
+        # Phase: build label list
+        if state.get("phase") == "labels_list" and calls_made < calls_budget:
+            tags, rl = inoreader_service.get_tags(token)
+            calls_made += 1
+            state["z1_remaining"] = inoreader_service.z1_remaining(rl)
+            label_ids = [
+                t["id"] for t in tags
+                if inoreader_service.label_name_from_tag_id(t.get("id", ""))
+            ]
+            state["label_ids"] = label_ids
+            state["label_cursor"] = 0
+            state["label_continuation"] = None
+            state["phase"] = "labels_items"
+            _save()
+
+        # Phase: page through each label stream and apply tags
+        if state.get("phase") == "labels_items":
+            label_ids = state.get("label_ids", [])
+            cursor = state.get("label_cursor", 0)
+            while cursor < len(label_ids) and calls_made < calls_budget:
+                tag_id = label_ids[cursor]
+                label_name = inoreader_service.label_name_from_tag_id(tag_id) or tag_id
+                stream_id = inoreader_service.label_stream_id(label_name)
+                continuation = state.get("label_continuation")
+                items, next_cont, rl = inoreader_service.get_stream_contents(
+                    token, stream_id, continuation=continuation, n=100
+                )
+                calls_made += 1
+                state["z1_remaining"] = inoreader_service.z1_remaining(rl)
+                if inoreader_service.label_is_tag(label_name):
+                    tag_key = f"{MANUAL_TAG_KEY_PREFIX}{label_name.lower()}"
+                    with get_reader() as reader:
+                        for item in items:
+                            canonical = item.get("canonical") or []
+                            entry_url = canonical[0].get("href", "") if canonical else ""
+                            origin = item.get("origin") or {}
+                            raw_stream = origin.get("streamId", "")
+                            feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                            if not entry_url or not feed_url:
+                                continue
+                            try:
+                                entry = reader.get_entry((feed_url, entry_url), None)
+                                if entry:
+                                    reader.set_tag(entry, tag_key)
+                                    state["items_tagged"] = state.get("items_tagged", 0) + 1
+                            except Exception:
+                                pass
+                if next_cont:
+                    state["label_continuation"] = next_cont
+                else:
+                    cursor += 1
+                    state["label_cursor"] = cursor
+                    state["label_continuation"] = None
+                _save()
+            if cursor >= len(label_ids):
+                state["phase"] = "starred"
+                state["starred_continuation"] = None
+                _save()
+
+        # Phase: page through starred stream and star entries
+        if state.get("phase") == "starred" and calls_made < calls_budget:
+            continuation = state.get("starred_continuation")
+            items, next_cont, rl = inoreader_service.get_stream_contents(
+                token, inoreader_service.STARRED_STREAM_ID, continuation=continuation, n=100
+            )
+            calls_made += 1
+            state["z1_remaining"] = inoreader_service.z1_remaining(rl)
+            with get_meta_connection() as conn:
+                for item in items:
+                    canonical = item.get("canonical") or []
+                    entry_url = canonical[0].get("href", "") if canonical else ""
+                    origin = item.get("origin") or {}
+                    raw_stream = origin.get("streamId", "")
+                    feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                    if not entry_url or not feed_url:
+                        continue
+                    try:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                            (feed_url, entry_url),
+                        )
+                        state["items_starred"] = state.get("items_starred", 0) + 1
+                    except Exception:
+                        pass
+            if next_cont:
+                state["starred_continuation"] = next_cont
+            else:
+                state["phase"] = "done"
+                state["done"] = True
+            _save()
+
+    except inoreader_service.QuotaExceeded:
+        LOGGER.info("[inoreader] drip paused: quota exhausted")
+        _save()
+    except Exception as exc:
+        state["error"] = str(exc)[:300]
+        _save()
+        LOGGER.exception("[inoreader] drip step error")
+
+
 @app.get("/api/pinterest/boards")
 def pinterest_boards_route():
     """List the connected user's boards for the Pin board-picker."""
@@ -14893,6 +15323,12 @@ def get_all_settings():
         "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
         "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
         "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+        # Inoreader migration
+        "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
+        "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
+        "inoreader_client_secret_masked": _masked(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
+        "inoreader_configured": bool(get_inoreader_credentials()[0] and get_inoreader_credentials()[1]),
+        "inoreader_connected": inoreader_connected(),
         "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
         "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
         "resend_api_key_set": bool(resend_key),
@@ -14948,7 +15384,8 @@ async def save_all_settings(request: Request):
     _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
                   SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
                   SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
-                  SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET}
+                  SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+                  SETTING_INOREADER_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
@@ -14968,6 +15405,7 @@ async def save_all_settings(request: Request):
         SETTING_PINTEREST_OAUTH_CLIENT_ID, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,

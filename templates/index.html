@@ -1405,6 +1405,7 @@
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
           <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="inoreader" role="tab" aria-selected="false">Inoreader</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
@@ -1548,6 +1549,36 @@
           </div>
           <p class="settings-hint" id="sett-star-none" style="grid-column:1 / -1" hidden>Configure Instapaper, connect YouTube, or set up Email (above / in Settings) to enable on-star destinations.</p>
         </div>
+        </div>
+        <div class="feeds-tab-panel" data-int-panel="inoreader" hidden>
+          <div class="settings-section">
+            <p class="settings-hint" style="grid-column:1 / -1">Migrate subscriptions, starred articles, and labels from Inoreader into Lectio. Register an app at <a href="https://www.inoreader.com/developers/" target="_blank" rel="noopener">inoreader.com/developers</a> with redirect URI <code id="sett-inoreader-callback-url"></code>, then save your Client ID + Secret below and connect.</p>
+            <label class="settings-label" for="sett-inoreader-client-id">Client ID</label>
+            <input type="text" id="sett-inoreader-client-id" class="settings-input" placeholder="your client ID" maxlength="200" autocomplete="off" />
+            <label class="settings-label" for="sett-inoreader-client-secret">Client Secret</label>
+            <input type="password" id="sett-inoreader-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+            <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-inoreader-oauth-row">
+              <span id="sett-inoreader-status" class="settings-inline-status"></span>
+              <a id="sett-inoreader-connect" class="settings-inline-btn" href="/integrations/inoreader/oauth/connect" hidden>Connect Inoreader account</a>
+              <button type="button" id="sett-inoreader-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+            </div>
+            <div id="sett-inoreader-import-section" style="grid-column:1 / -1;margin-top:0.75rem" hidden>
+              <p class="settings-hint" style="margin-top:0"><strong>API import</strong> — Fetches your subscriptions, labels, and starred articles directly from Inoreader. Rate-limited to ~10 API calls per scheduler cycle (~250/day free tier). The import resumes automatically each cycle.</p>
+              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+                <button type="button" id="sett-inoreader-import-start" class="settings-inline-btn">Start import</button>
+                <button type="button" id="sett-inoreader-import-run" class="settings-inline-btn" hidden>Step now</button>
+                <button type="button" id="sett-inoreader-import-reset" class="settings-inline-btn" hidden>Reset</button>
+              </div>
+              <div id="sett-inoreader-import-status" class="settings-hint" style="margin:0;white-space:pre-wrap"></div>
+              <p class="settings-hint" style="grid-column:1 / -1;margin-top:0.75rem"><strong>JSON import</strong> — Upload a JSON file exported from the <a href="https://github.com/joshg253/InoreaderExportTool" target="_blank" rel="noopener">InoreaderExportTool</a> to import labels and starred articles without spending API quota.</p>
+              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+                <input type="file" id="sett-inoreader-json-file" accept=".json,application/json" style="display:none" />
+                <button type="button" id="sett-inoreader-json-pick" class="settings-inline-btn">Choose JSON file…</button>
+                <button type="button" id="sett-inoreader-json-upload" class="settings-inline-btn" hidden>Upload</button>
+                <span id="sett-inoreader-json-status" class="settings-inline-status"></span>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
@@ -9674,6 +9705,24 @@
           if (connect) connect.hidden = piConnected;
           if (disconnect) disconnect.hidden = !piConnected;
         }
+        // Inoreader migration.
+        v('sett-inoreader-client-id', d.inoreader_client_id);
+        secretField('sett-inoreader-client-secret', d.inoreader_client_secret_set, d.inoreader_client_secret_masked);
+        {
+          const inoConfigured = !!d.inoreader_configured;
+          const inoConnected = !!d.inoreader_connected;
+          const row = document.getElementById('sett-inoreader-oauth-row');
+          const status = document.getElementById('sett-inoreader-status');
+          const connect = document.getElementById('sett-inoreader-connect');
+          const disconnect = document.getElementById('sett-inoreader-disconnect');
+          const importSection = document.getElementById('sett-inoreader-import-section');
+          if (row) row.hidden = !inoConfigured;
+          if (status) status.textContent = inoConnected ? 'Connected.' : inoConfigured ? 'Not connected.' : '';
+          if (connect) connect.hidden = inoConnected;
+          if (disconnect) disconnect.hidden = !inoConnected;
+          if (importSection) importSection.hidden = !inoConnected;
+          if (inoConnected) _inoRefreshImportStatus();
+        }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
         v('sett-da-id', d.deviantart_client_id);
@@ -9751,6 +9800,7 @@
             'sett-da-callback-url':        base + '/deviantart/callback',
             'sett-quire-callback-url':     base + '/quire/callback',
             'sett-pinterest-callback-url': base + '/integrations/pinterest/oauth/callback',
+            'sett-inoreader-callback-url': base + '/inoreader/oauth/callback',
           };
           for (const [id, url] of Object.entries(cbMap)) {
             const el = document.getElementById(id);
@@ -9876,6 +9926,8 @@
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),
+            inoreader_client_id: g('sett-inoreader-client-id'),
+            inoreader_client_secret: g('sett-inoreader-client-secret'),
             quire_client_id: g('sett-quire-id'),
             quire_client_secret: g('sett-quire-secret'),
             quire_project_oid: (document.getElementById('sett-quire-project')?.value || ''),
@@ -9961,6 +10013,95 @@
       document.getElementById('sett-quire-disconnect')?.addEventListener('click', async () => {
         await fetch('/quire/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
+      });
+
+      // Inoreader integration handlers.
+      async function _inoRefreshImportStatus() {
+        try {
+          const r = await fetch('/integrations/inoreader/import/status', { credentials: 'same-origin' });
+          const d = await r.json().catch(() => ({}));
+          const el = document.getElementById('sett-inoreader-import-status');
+          const startBtn = document.getElementById('sett-inoreader-import-start');
+          const runBtn = document.getElementById('sett-inoreader-import-run');
+          const resetBtn = document.getElementById('sett-inoreader-import-reset');
+          if (!el) return;
+          if (!d.phase) {
+            el.textContent = 'No import running. Click "Start import" to begin.';
+            if (startBtn) startBtn.hidden = false;
+            if (runBtn) runBtn.hidden = true;
+            if (resetBtn) resetBtn.hidden = true;
+            return;
+          }
+          const rl = d.z1_remaining != null ? ` | Zone1 remaining: ${d.z1_remaining}` : '';
+          if (d.done) {
+            el.textContent = `Done ✓ — ${d.subs_added || 0} feeds added, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred.${rl}`;
+            if (startBtn) startBtn.hidden = true;
+            if (runBtn) runBtn.hidden = true;
+            if (resetBtn) resetBtn.hidden = false;
+          } else if (d.error) {
+            el.textContent = `Error: ${d.error}${rl}`;
+            if (startBtn) startBtn.hidden = true;
+            if (runBtn) runBtn.hidden = false;
+            if (resetBtn) resetBtn.hidden = false;
+          } else {
+            const phaseLabels = { subscriptions: 'Subscribing feeds…', labels_list: 'Fetching label list…', labels_items: 'Importing labels…', starred: 'Importing starred…', done: 'Done' };
+            el.textContent = `Phase: ${phaseLabels[d.phase] || d.phase} — ${d.subs_added || 0} feeds, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred${rl}`;
+            if (startBtn) startBtn.hidden = true;
+            if (runBtn) runBtn.hidden = false;
+            if (resetBtn) resetBtn.hidden = false;
+          }
+        } catch { /* ignore */ }
+      }
+      document.getElementById('sett-inoreader-disconnect')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
+      });
+      document.getElementById('sett-inoreader-import-start')?.addEventListener('click', async () => {
+        const btn = document.getElementById('sett-inoreader-import-start');
+        if (btn) btn.textContent = 'Starting…';
+        try {
+          await fetch('/integrations/inoreader/import/start', { method: 'POST', credentials: 'same-origin' });
+        } catch { /* ignore */ }
+        setTimeout(_inoRefreshImportStatus, 1500);
+      });
+      document.getElementById('sett-inoreader-import-run')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/import/run', { method: 'POST', credentials: 'same-origin' });
+        setTimeout(_inoRefreshImportStatus, 2000);
+      });
+      document.getElementById('sett-inoreader-import-reset')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/import/reset', { method: 'POST', credentials: 'same-origin' });
+        _inoRefreshImportStatus();
+      });
+      // JSON file upload.
+      document.getElementById('sett-inoreader-json-pick')?.addEventListener('click', () => {
+        document.getElementById('sett-inoreader-json-file')?.click();
+      });
+      document.getElementById('sett-inoreader-json-file')?.addEventListener('change', e => {
+        const btn = document.getElementById('sett-inoreader-json-upload');
+        const status = document.getElementById('sett-inoreader-json-status');
+        const file = e.target.files?.[0];
+        if (btn) btn.hidden = !file;
+        if (status) status.textContent = file ? file.name : '';
+      });
+      document.getElementById('sett-inoreader-json-upload')?.addEventListener('click', async () => {
+        const input = document.getElementById('sett-inoreader-json-file');
+        const status = document.getElementById('sett-inoreader-json-status');
+        const file = input?.files?.[0];
+        if (!file) return;
+        if (status) status.textContent = 'Uploading…';
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+          const r = await fetch('/integrations/inoreader/import/json', { method: 'POST', credentials: 'same-origin', body: fd });
+          const d = await r.json().catch(() => ({}));
+          if (d.ok) {
+            if (status) status.textContent = `Done — ${d.feeds_added} feeds, ${d.items_starred} starred, ${d.items_tagged} tagged (of ${d.total_items} items).`;
+          } else {
+            if (status) status.textContent = `Error: ${d.error || 'unknown'}`;
+          }
+        } catch (err) {
+          if (status) status.textContent = `Error: ${err.message || err}`;
+        }
       });
 
       document.getElementById('sett-maint-run-now')?.addEventListener('click', async () => {
