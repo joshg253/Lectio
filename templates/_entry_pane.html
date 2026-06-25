@@ -324,54 +324,52 @@
             >open_in_new</span
           ></a
         >
-        {% if email_configured %}
-        <button
-          type="button"
-          id="entry-email-button"
-          class="entry-source-button"
-          data-open-email-modal
-          data-email-feed-url="{{ selected_entry.feed_url }}"
-          data-email-entry-id="{{ selected_entry.id }}"
-          title="Email this article"
-          aria-label="Email this article"
-          ><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span></button
-        >
-        {% endif %}
-        {% if instapaper_configured %}
-        <button
-          type="button"
-          id="entry-instapaper-button"
-          class="entry-source-button"
-          data-instapaper-feed-url="{{ selected_entry.feed_url }}"
-          data-instapaper-entry-id="{{ selected_entry.id }}"
-          title="Save to Instapaper"
-          aria-label="Save to Instapaper"
-          ><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span></button
-        >
-        {% endif %}
-        {% if pinterest_connected %}
-        <button
-          type="button"
-          id="entry-pinterest-button"
-          class="entry-source-button"
-          data-pinterest-feed-url="{{ selected_entry.feed_url }}"
-          data-pinterest-entry-id="{{ selected_entry.id }}"
-          title="Pin to Pinterest"
-          aria-label="Pin to Pinterest"
-          ><span class="material-symbols-rounded" aria-hidden="true">push_pin</span></button
-        >
-        {% endif %}
-        {% if quire_configured %}
-        <button
-          type="button"
-          id="entry-quire-button"
-          class="entry-source-button"
-          data-quire-feed-url="{{ selected_entry.feed_url }}"
-          data-quire-entry-id="{{ selected_entry.id }}"
-          title="Add to Quire"
-          aria-label="Add to Quire"
-          ><span class="material-symbols-rounded" aria-hidden="true">add_task</span></button
-        >
+        {% if email_configured or instapaper_configured or pinterest_connected or quire_configured %}
+        <div class="entry-share-wrap">
+          <button
+            type="button"
+            id="entry-share-btn"
+            class="entry-source-button"
+            title="Share / send"
+            aria-label="Share / send"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          ><span class="material-symbols-rounded" aria-hidden="true">ios_share</span></button>
+          <div id="entry-share-menu" class="entry-share-menu" role="menu" hidden>
+            <button
+              type="button"
+              id="entry-email-button"
+              class="share-menu-item{% if not email_configured %} share-menu-item--unavail{% endif %}"
+              {% if email_configured %}data-open-email-modal data-email-feed-url="{{ selected_entry.feed_url }}" data-email-entry-id="{{ selected_entry.id }}"{% else %}disabled{% endif %}
+              title="{% if email_configured %}Email this article{% else %}Configure email in Settings{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span> Email</button>
+            <button
+              type="button"
+              id="entry-instapaper-button"
+              class="share-menu-item{% if not instapaper_configured %} share-menu-item--unavail{% endif %}"
+              {% if instapaper_configured %}data-instapaper-feed-url="{{ selected_entry.feed_url }}" data-instapaper-entry-id="{{ selected_entry.id }}"{% else %}disabled{% endif %}
+              title="{% if instapaper_configured %}Save to Instapaper{% else %}Connect Instapaper in Settings{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span> Instapaper</button>
+            <button
+              type="button"
+              id="entry-pinterest-button"
+              class="share-menu-item{% if not pinterest_connected %} share-menu-item--unavail{% endif %}"
+              {% if pinterest_connected %}data-pinterest-feed-url="{{ selected_entry.feed_url }}" data-pinterest-entry-id="{{ selected_entry.id }}"{% else %}disabled{% endif %}
+              title="{% if pinterest_connected %}Pin to Pinterest{% else %}Connect Pinterest in Settings{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">push_pin</span> Pinterest</button>
+            <button
+              type="button"
+              id="entry-quire-button"
+              class="share-menu-item{% if not quire_configured %} share-menu-item--unavail{% endif %}"
+              {% if quire_configured %}data-quire-feed-url="{{ selected_entry.feed_url }}" data-quire-entry-id="{{ selected_entry.id }}"{% else %}disabled{% endif %}
+              title="{% if quire_configured %}Add to Quire{% else %}Connect Quire in Settings{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">add_task</span> Quire</button>
+          </div>
+        </div>
         {% endif %}
       </div>
       {% endif %}

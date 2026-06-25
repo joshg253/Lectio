@@ -16,11 +16,7 @@ Build order (promoted from Later — top first):
 8. ~~**Add to Quire**~~ — ✅ SHIPPED (per-entry **Add to Quire** button + On-Star + `quire` automation rule; per-user OAuth `services/quire.py`, `QUIRE_CLIENT_ID/SECRET`; one default destination project; sliding-window per-minute/hour usage meter `quire_call_log` + `get_quire_usage_status`, per-run cap `_QUIRE_AUTO_PER_RUN_CAP`, 429 back-off).
 
 ### Deferred follow-ups (Quire / destinations)
-- **Share-dropdown consolidation** — collapse the per-entry destination glyphs
-  (Email, Instapaper, Pinterest, Quire) into a single far-right **share** dropdown,
-  with unavailable destinations greyed out + a tooltip ("connect X in Settings…").
-  Destination glyphs should use the service logo/favicon. (Original ask; deferred so
-  this PR stays focused on the Quire backend + standalone button.)
+- ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
 - **Per-click Quire project picker** — let the entry button choose a project each
   time (Pinterest-board-style menu) and offer a project list in Automations/On-Star,
   instead of the single default project. The `/api/quire/projects` endpoint already
@@ -240,17 +236,7 @@ Detailed specs follow.
   - **Authenticated/private feeds** — none supported today, so all feed/image content
     is safe to global-cache. If added, exclude those feeds from the global caches.
 
-- **Tag management — remove / delete tags** — manual tagging is currently **add-only**.
-  The article-pane tag editor submits in append mode (`append_mode=1` in
-  `_entry_pane.html`), merging typed tags with the existing set, and the displayed
-  `#tags` are filter links with no remove control. There is no tag-management screen, so
-  a tag only leaves the sidebar once it's gone from every post. The `/entries/tags` route
-  already supports replace (`append_mode=0`, which deletes any omitted tag) — the UI just
-  never uses it.
-  - **Per-post remove** — an `×` on each tag chip in the article pane that removes that
-    one tag from the post (submit the reduced set via `append_mode=0`).
-  - **Delete everywhere** — a bulk action to strip a tag from every post that has it; the
-    sidebar entry disappears once its count hits zero.
+- ~~**Tag management — remove / delete tags**~~ — ✅ ALREADY SHIPPED. `×` on each article-pane tag chip removes it (append_mode=0); right-click any tag (sidebar or chip) → "Delete tag everywhere" via `/tags/delete`. Both fully wired.
 
 - **Integrations to investigate** (ideas; feasibility unconfirmed):
   - **Inoreader import (complete)** — Inoreader's own OPML/"takeout" omits *disabled*
