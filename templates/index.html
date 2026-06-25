@@ -3956,6 +3956,8 @@
     // --- YouTube "Add to playlist" embed enhancement ---------------------
     let _ytPlaylistsCache = null;        // null = not fetched; {connected, playlists, error}
     let _ytPlaylistsPromise = null;
+    let _ytFolderName = '';              // populated from settings; used for empty-folder sync detection
+    let _ytAccountFeaturesEnabled = false; // yt_embed_account_features setting
 
     async function _ytFetchPlaylists(force = false) {
       if (!force && _ytPlaylistsCache) return _ytPlaylistsCache;
@@ -4158,7 +4160,7 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
-        enhanceYoutubeEmbeds(nextPane);
+        if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane);
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
         }
@@ -6036,12 +6038,13 @@
         setMenuItemVisible(deleteFolderButton, true);
         setMenuItemVisible(disableFeedButton, false);
         // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
-        // so renaming the folder doesn't break "Sync Subscriptions"; fall back to the
-        // conventional name for an as-yet-empty folder.
+        // so renaming the folder doesn't break "Sync Subscriptions". Fall back to an
+        // exact match against the configured folder name (_ytFolderName, loaded from
+        // Settings) to handle an as-yet-empty folder before the first sync.
         const _ytFid = folderLink.getAttribute('data-folder-id');
         const _hasYtFeed = !!(_ytFid && document.querySelector(
           `.feed-link[data-folder-id="${CSS.escape(_ytFid)}"][data-feed-url*="youtube.com/feeds/videos.xml"]`));
-        const isYouTubeFolder = _hasYtFeed || contextFolderName.startsWith('YouTube');
+        const isYouTubeFolder = _hasYtFeed || (!!_ytFolderName && contextFolderName === _ytFolderName);
         setMenuItemVisible(youtubeSyncButton, isYouTubeFolder);
         if (isYouTubeFolder && youtubeSyncButton) {
           youtubeSyncButton.title = youtubeSyncLastAt
@@ -6529,7 +6532,7 @@
     }
 
     bindEntryPaneInteractions();
-    try { enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
+    try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
 
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
@@ -9564,6 +9567,8 @@
         secretField('sett-yt-key', d.yt_api_key_set, d.yt_api_key_masked);
         v('sett-yt-channel', d.yt_channel_id);
         v('sett-yt-folder', d.yt_folder_name);
+        _ytFolderName = d.yt_folder_name || '';
+        _ytAccountFeaturesEnabled = !!d.yt_embed_account_features;
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
         {
