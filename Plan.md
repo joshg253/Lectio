@@ -328,9 +328,6 @@ Detailed specs follow.
 - **Archive caps for starred entries** — only relevant after multi-user.
 - **Better tuning / live preview** — full entry preview pane, swappable strategy +
   display settings without saving.
-- **Social embeds (Instagram, X/Twitter)** — both platforms now require API auth for
-  oEmbed; IG is increasingly login-walled. Likely "won't fix" for privacy; revisit if
-  a clean no-auth path appears.
 - **Supernote integration** — no confirmed public API. Revisit if the Browse&Access
   HTTP interface proves usable.
 - ~~**`ty` type-error backlog**~~ — ✅ **SHIPPED.** 235 → 0 diagnostics. Fixed real bugs (`FeverService._synced` wrong attr, Pillow `LANCZOS` → `Resampling.LANCZOS`, `lead_images.py` None-before-raise_for_status); suppressed false positives and stub gaps with dual `# type: ignore  # ty: ignore` pattern.
