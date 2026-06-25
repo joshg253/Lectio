@@ -17,7 +17,6 @@ def _reset_login_rate_limit():
 
 
 def _enable_auth(monkeypatch, *, debug=False, max_failures=5, window_seconds=300):
-    monkeypatch.setattr(main, "AUTH_ENABLED", True)
     monkeypatch.setattr(main, "DEBUG_MODE", debug)
     monkeypatch.setattr(main, "get_login_max_failures", lambda: max_failures)
     monkeypatch.setattr(main, "get_login_window_seconds", lambda: window_seconds)

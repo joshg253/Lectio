@@ -11,7 +11,7 @@
 
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
-Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS, supports optional multi-user deployments, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
+Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS with full multi-user support, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
 
 ---
 
@@ -92,14 +92,14 @@ The short version:
   Settings, and automation runs are capped and back off on a 429. Register an app
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
-  `QUIRE_CLIENT_ID/SECRET` as a single-user fallback).
+  `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.
-- **Optional multi-user** — isolated per-user databases with shared content caches;
+- **Multi-user** — isolated per-user databases with shared content caches;
   **GReader** and **Fever** API compatibility; Instapaper & email integrations.
 - **Data portability** — Takeout-style ZIP export/import and online-safe backups.
 

@@ -131,7 +131,6 @@ def test_post_with_wrong_token_is_rejected():
 def test_login_post_is_csrf_exempt(monkeypatch):
     """/login must work without a CSRF token (auth gate, rate-limited
     separately). Otherwise nobody could log in."""
-    monkeypatch.setattr(main, "AUTH_ENABLED", True)
     monkeypatch.setattr(main, "DEBUG_MODE", False)
     main._login_failures.clear()
     # Make verify_login accept "tester"/"secret" without needing a real DB user.

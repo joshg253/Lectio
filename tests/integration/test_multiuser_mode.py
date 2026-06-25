@@ -108,7 +108,6 @@ def _drive_middleware(session: dict) -> str:
 
 
 def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     uid = _drive_middleware({"authenticated": True, "user_id": "alice"})
     assert uid == "alice"
     # Context is restored after the request.
@@ -117,13 +116,11 @@ def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
 
 
 def test_middleware_does_not_bind_unauthenticated(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     assert _drive_middleware({"user_id": "alice"}) == tenancy.DEFAULT_USER_ID
     assert _drive_middleware({}) == tenancy.DEFAULT_USER_ID
 
 
 def test_middleware_rejects_invalid_user_id(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     uid = _drive_middleware({"authenticated": True, "user_id": "../evil"})
     assert uid == tenancy.DEFAULT_USER_ID
 
@@ -133,10 +130,8 @@ class _FakeReq:
         self.session = session
 
 
-def test_session_logged_in_requires_user_id_in_multi(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
-    # Stale single-mode cookie: authenticated but no user_id → NOT logged in
-    # (this is what caused the /login redirect loop).
+def test_session_logged_in_requires_user_id(monkeypatch):
+    # authenticated flag alone is not enough — must also have a valid user_id.
     assert main._session_logged_in(_FakeReq({"authenticated": True})) is False
     assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True
     assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False
@@ -150,7 +145,6 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     from services.users import UserStore
 
     store = UserStore(tmp_path / "auth.sqlite")
-    monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
     monkeypatch.setattr(main, "BOOTSTRAP_ADMIN_USERNAME", "bootadmin")
     monkeypatch.setattr(main, "BOOTSTRAP_ADMIN_PASSWORD", "boot-pw")

@@ -115,12 +115,6 @@ def main() -> int:
         env.update({
             "LECTIO_DATA_DIR": str(data_dir),
             "PYTHONPATH": str(ROOT),
-            # Force a clean, unauthenticated single-user demo regardless of any
-            # auth configured in the developer's .env (which is auto-loaded). The
-            # explicit values win because .env only fills keys not already set.
-            "LECTIO_SECURITY_MODE": "single",
-            "LECTIO_USERNAME": "",
-            "LECTIO_PASSWORD": "",
             # Blank out any real instance config from the developer's .env so it
             # can never land in a committed screenshot.
             "RESEND_API_KEY": "",

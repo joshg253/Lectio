@@ -19,7 +19,6 @@ from services import tenancy
 
 
 def _scenario_multi() -> None:
-    assert main.MULTI_USER is True
     assert main.user_store is not None
 
     with TestClient(main.app) as client:  # runs lifespan → bootstrap_admin
@@ -84,7 +83,7 @@ def _add_folder(user_id: str, folder_name: str) -> None:
 def _scenario_multi_api() -> None:
     import hashlib
 
-    assert main.MULTI_USER and main.user_store is not None
+    assert main.user_store is not None
 
     with TestClient(main.app) as client:
         admin = os.environ["LECTIO_ADMIN_USERNAME"]
@@ -157,7 +156,7 @@ def _csrf_token(html: str) -> str:
 
 
 def _scenario_account_ui() -> None:
-    assert main.MULTI_USER and main.user_store is not None
+    assert main.user_store is not None
     admin = os.environ["LECTIO_ADMIN_USERNAME"]
     admin_pw = os.environ["LECTIO_ADMIN_PASSWORD"]
 
