@@ -44,6 +44,13 @@ def _dir() -> Path:
     return _scraped_feeds_dir
 
 
+def _assert_safe_feed_id(feed_id: str) -> None:
+    try:
+        uuid.UUID(feed_id)
+    except (ValueError, AttributeError):
+        raise ValueError(f"Invalid feed_id: {feed_id!r}")
+
+
 def feed_file_url(feed_id: str) -> str:
     return f"file://{_dir() / (feed_id + '.xml')}"
 
@@ -124,6 +131,7 @@ def _generate_rss_xml(feed_title: str, source_url: str, entries: list[dict]) -> 
 
 
 def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
+    _assert_safe_feed_id(feed_id)
     row = conn.execute("SELECT * FROM scraped_feeds WHERE id = ?", (feed_id,)).fetchone()
     if not row:
         return
@@ -141,6 +149,7 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
 
 
 def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> None:
+    _assert_safe_feed_id(feed_id)
     xml = _generate_rss_xml(feed_title, source_url, [])
     (_dir() / f"{feed_id}.xml").write_text(xml, encoding="utf-8")
 
@@ -317,6 +326,7 @@ def create_scraped_feed(
 
 def delete_scraped_feed(conn: sqlite3.Connection, reader, feed_id: str) -> None:
     """Remove a scraped feed: clean up DB rows, delete XML file, unsubscribe from reader."""
+    _assert_safe_feed_id(feed_id)
     file_url = feed_file_url(feed_id)
     conn.execute("DELETE FROM scraped_entries WHERE scraped_feed_id = ?", (feed_id,))
     conn.execute("DELETE FROM scraped_feeds WHERE id = ?", (feed_id,))
