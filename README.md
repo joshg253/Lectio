@@ -7,6 +7,7 @@
 ![WebSub](https://img.shields.io/badge/realtime-WebSub-FF5700)
 ![GReader API](https://img.shields.io/badge/API-Google%20Reader-FF5700)
 ![Fever API](https://img.shields.io/badge/API-Fever-FF5700)
+![Miniflux API](https://img.shields.io/badge/API-Miniflux%20v1-FF5700)
 ![Last commit](https://img.shields.io/github/last-commit/joshg253/Lectio)
 
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
@@ -102,7 +103,7 @@ The short version:
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.
 - **Multi-user** — isolated per-user databases with shared content caches;
-  **GReader** and **Fever** API compatibility; Instapaper & email integrations.
+  **GReader**, **Fever**, and **Miniflux v1** API compatibility; Instapaper & email integrations.
 - **Data portability** — Takeout-style ZIP export/import and online-safe backups.
 
 ---
