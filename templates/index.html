@@ -873,6 +873,7 @@
       if (appMenuDetails?.open) {
         appMenuDetails.removeAttribute('open');
       }
+      hideShareMenu();
     });
 
     // Folders pane in-pane collapse/expand + hover floater
@@ -4490,7 +4491,47 @@
       hidePostContextMenu();
       hideRootContextMenu();
       hideTagContextMenu();
+      hideShareMenu();
     }
+
+    function hideShareMenu() {
+      const menu = document.getElementById('entry-share-menu');
+      if (menu) menu.setAttribute('hidden', '');
+      document.getElementById('entry-share-btn')?.setAttribute('aria-expanded', 'false');
+    }
+
+    document.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element)) return;
+      const shareBtn = event.target.closest('#entry-share-btn');
+      if (shareBtn) {
+        event.stopPropagation();
+        const menu = document.getElementById('entry-share-menu');
+        if (!menu) return;
+        const isOpen = !menu.hasAttribute('hidden');
+        if (isOpen) {
+          hideShareMenu();
+        } else {
+          _closePinMenu();
+          menu.removeAttribute('hidden');
+          shareBtn.setAttribute('aria-expanded', 'true');
+        }
+        return;
+      }
+      // Close share menu on any click outside
+      const menu = document.getElementById('entry-share-menu');
+      if (menu && !menu.hasAttribute('hidden') && !event.target.closest('.entry-share-wrap')) {
+        hideShareMenu();
+      }
+    }, true);
+
+    // Close share menu when an active item is clicked (before action handlers fire)
+    document.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element)) return;
+      const item = event.target.closest('.share-menu-item:not(:disabled)');
+      if (item && item.closest('.entry-share-menu')) {
+        hideShareMenu();
+      }
+    }, true);
 
     function closeFeedPropertiesModal() {
       feedPropertiesModal?.setAttribute('hidden', '');
