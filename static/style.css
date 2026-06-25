@@ -6020,6 +6020,10 @@ textarea.hl-draft-pattern {
 .lectio-pin-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; text-decoration: none; }
 .lectio-pin-item:hover { background: var(--hover-bg); }
 .lectio-pin-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
+.lectio-quire-menu { position: absolute; z-index: 1000; min-width: 200px; max-height: 320px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+.lectio-quire-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; }
+.lectio-quire-item:hover { background: var(--hover-bg); }
+.lectio-quire-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
 
 /* Pin the Save / action footer to the bottom of the scrolling settings panel so
    it's always reachable without scrolling to the end of a long tab. */

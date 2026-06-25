@@ -17,10 +17,7 @@ Build order (promoted from Later — top first):
 
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
-- **Per-click Quire project picker** — let the entry button choose a project each
-  time (Pinterest-board-style menu) and offer a project list in Automations/On-Star,
-  instead of the single default project. The `/api/quire/projects` endpoint already
-  exists to back this.
+- ~~**Per-click Quire project picker**~~ — ✅ SHIPPED. Quire button now opens a project-picker menu (mirrors Pinterest board picker); POST `/entries/quire` accepts optional `project_oid` form param that overrides the settings default. On-Star and automation rules still use the settings default project; adding a per-rule project field is a future follow-up if needed.
 
 Detailed specs follow.
 
