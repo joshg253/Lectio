@@ -101,6 +101,13 @@ def _dir() -> Path:
     return _feeds_dir
 
 
+def _assert_safe_feed_id(feed_id: str) -> None:
+    try:
+        uuid.UUID(feed_id)
+    except (ValueError, AttributeError):
+        raise ValueError(f"Invalid feed_id: {feed_id!r}")
+
+
 def feed_file_url(feed_id: str) -> str:
     return f"file://{_dir() / (feed_id + '.xml')}"
 
@@ -333,6 +340,7 @@ def _gallery_page_url(username: str) -> str:
 
 
 def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
+    _assert_safe_feed_id(feed_id)
     row = conn.execute("SELECT * FROM deviantart_feeds WHERE id = ?", (feed_id,)).fetchone()
     if not row:
         return
@@ -511,6 +519,7 @@ def refresh_all_deviantart_feeds(conn: sqlite3.Connection, client_id: str, clien
 
 
 def delete_deviantart_feed(conn: sqlite3.Connection, reader, feed_id: str) -> None:
+    _assert_safe_feed_id(feed_id)
     file_url = feed_file_url(feed_id)
     conn.execute("DELETE FROM deviantart_entries WHERE deviantart_feed_id = ?", (feed_id,))
     conn.execute("DELETE FROM deviantart_feeds WHERE id = ?", (feed_id,))
