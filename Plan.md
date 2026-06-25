@@ -52,56 +52,72 @@ Build order (promoted from Later — top first):
       (Source C / a future refresh will pull them in).
     → Also ensure `origin.streamId` feed is subscribed (add if missing).
 
-    **Source C — Inoreader API**
+    **Source C — Inoreader API (OAuth, background drip)**
     Fills in what OPML and JSON miss: disabled/inactive subscriptions, complete
-    label/folder list, starred items not in JSON exports, and items for labels that
+    label/folder list, starred items not in JSON exports, items for labels that
     weren't exported.
 
-    Auth: AppId + AppKey headers + a ClientLogin token (POST
-    `/accounts/ClientLogin` with email + password → `Auth=` token). No OAuth
-    redirect. User enters credentials in Settings; token is exchanged at import
-    time and not persisted (short-lived, re-exchanged each session).
+    Auth: **OAuth 2.0** (same pattern as Pinterest/Quire — no password storage).
+    - User registers an app at `inoreader.com/developers` → gets App ID + App Key.
+    - Enters them in Lectio Settings → clicks "Connect Inoreader" → standard
+      OAuth redirect → `inoreader.com/oauth2/auth` → callback at
+      `/inoreader/oauth/callback` → exchange code for access + refresh tokens.
+    - Tokens stored per-user; access token auto-refreshed via refresh token.
+    - API calls use `Authorization: GoogleLogin auth=<access_token>` header
+      (Inoreader's Google Reader–compatible auth header).
 
-    **Rate limit and checkpoint:**
-    - Free tier: **250 API calls/day**. Store per-user state in an
-      `inoreader_import` meta-DB JSON blob:
-      `{calls_today, date, continuation_token, phase, label_cursor}`.
-    - On each call: increment `calls_today`; if ≥ 250, pause and surface
-      "quota reached — resume tomorrow" in the UI.
-    - Resume picks up from stored `continuation_token` + `label_cursor` —
-      nothing restarts from scratch.
+    **Rate limits are hateful — drip strategy:**
+    - Free tier: **250 API calls/day** (hard limit; errors out at 429).
+    - Do NOT try to finish in one session. Instead, piggyback on the existing
+      `scheduled_refresh_loop`: each refresh cycle burns a small call budget
+      (default: **50 calls per cycle**) to make incremental progress, then
+      checkpoints and stops. Import completes silently over multiple days.
+    - User can also trigger a manual "run now" burst from Settings (still
+      capped at the daily quota remainder).
+    - Checkpoint stored as a JSON blob in `app_settings`
+      (`inoreader_import_state`): `{phase, label_ids, label_cursor, continuation,
+      calls_today, quota_date, done}`. Survives restarts. Reset only on
+      "Start over" or a new OAuth connect.
 
-    **Import phases (Source C):**
-    1. `GET /reader/api/0/subscription/list` → all subscriptions incl. disabled;
-       add missing feeds + folder assignments. (1 call)
-    2. `GET /reader/api/0/tag/list` → all label IDs. For each: page through
-       `/reader/api/0/stream/contents/<label_id>` with continuation; match entries
-       by URL and apply tags/folder. (N calls, quota-checkpointed)
-    3. `GET /reader/api/0/stream/contents/user/-/state/com.google/starred` →
-       page through and star matching entries. (M calls, quota-checkpointed)
+    **Import phases (run across multiple cycles until `done=true`):**
+    1. `GET /reader/api/0/subscription/list` — all subscriptions incl. disabled;
+       subscribe to missing feeds + assign folders. (1 call; run once)
+    2. `GET /reader/api/0/tag/list` — fetch all label IDs upfront. (1 call; run once)
+    3. For each label in `label_ids[label_cursor:]`: page through
+       `/reader/api/0/stream/contents/<label_id>` with `continuation` token; for
+       each item match by URL and apply tag/folder/star. Advance `label_cursor`
+       when a label is fully drained. (N calls per cycle; most of the quota)
+    4. `GET /reader/api/0/stream/contents/user/-/state/com.google/starred` —
+       same paging; star matching entries. (M calls; last phase)
+    - Phases run in order; each cycle picks up mid-phase from `continuation`.
 
-    **Settings keys (per-user, in `_ALLOWED` / `_SENSITIVE`):**
+    **Settings keys (per-user, following Pinterest/Quire pattern):**
     ```
-    inoreader_app_id       (non-sensitive)
-    inoreader_app_key      (sensitive)
-    inoreader_email        (non-sensitive)
-    inoreader_password     (sensitive)
+    inoreader_client_id           (non-sensitive — App ID)
+    inoreader_client_secret       (sensitive — App Key)
+    inoreader_access_token        (sensitive)
+    inoreader_refresh_token       (sensitive)
+    inoreader_token_expires_at    (non-sensitive)
+    inoreader_oauth_state         (non-sensitive — CSRF nonce)
+    inoreader_import_state        (non-sensitive — JSON checkpoint blob)
     ```
 
-    **UI — Settings → new "Inoreader Import" tab** (migration tool, not ongoing
-    connection; keep separate from Integrations):
-    - Credentials fields (App ID, App Key, email, password) + Save.
+    **UI — Settings → "Inoreader" tab** (under Integrations, same pattern as
+    YouTube/DeviantArt subtabs):
+    - App ID + App Key fields + Save, then "Connect Inoreader" OAuth button.
+    - Connected state: shows account name, "Disconnect" button.
     - Upload OPML → immediate import, show feeds added.
-    - Upload JSON files (multi-select) → immediate import, show tags/stars applied.
-    - "Sync via API" button → runs phases 1–3 with progress + quota meter
-      ("X / 250 calls used today").
-    - "Resume" button when a prior run hit quota mid-import.
+    - Upload JSON label files (multi-select) → immediate import, show result.
+    - Import progress bar: "Migrating from Inoreader: phase 3/4 · label 7 of 12
+      · ~4 more days at 50 calls/cycle". Hidden once `done=true`.
+    - "Run now" button (burns today's remaining quota immediately).
+    - "Start over" button (resets checkpoint; re-runs all phases).
 
-    **New file:** `services/inoreader.py` (API client + all import logic).
-    **`main.py`:** 4 new setting constants, `/inoreader/import/*` routes,
-    settings in `_ALLOWED`/`_SENSITIVE`, checkpoint helpers.
-    **Schema migration:** `inoreader_import` JSON blob in `app_settings`
-    (no new table needed — reuse the existing KV store).
+    **New file:** `services/inoreader.py` (OAuth helpers + all import logic).
+    **`main.py`:** 7 new setting constants, `/inoreader/oauth/*` +
+    `/inoreader/import/*` routes, settings in `_ALLOWED`/`_SENSITIVE`,
+    background drip hooked into `scheduled_refresh_loop`.
+    **No new DB table** — checkpoint blob lives in `app_settings` KV store.
 
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
