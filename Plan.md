@@ -17,6 +17,92 @@ Build order (promoted from Later — top first):
 
 9. ~~**Miniflux v1 API compatibility**~~ — ✅ SHIPPED. `services/miniflux.py` + `/v1/*` routes in `main.py`. Covers: `/v1/version`, `/v1/me`, `/v1/categories`, `/v1/feeds`, `/v1/entries` (with status/feed/category/starred/limit/cursor params), `/v1/feeds/{id}/entries`, `/v1/categories/{id}/entries`, `/v1/entries/{id}`, `PUT /v1/entries` (bulk read/unread), `PUT /v1/entries/{id}/bookmark` (star toggle). Auth via `X-Auth-Token` header (user's raw `api_token`) or HTTP Basic password. Fever pre-sync race was already fixed (`presync=False`). README badge added.
 
+10. **Inoreader import (in-app, all three sources)**
+
+    Goal: import everything recoverable from an Inoreader account — feeds + folders
+    (incl. disabled), tagged/starred items — into the current Lectio user.
+    Three complementary input sources, each optional and independently useful.
+
+    **Source A — Inoreader OPML export**
+    Standard OPML; feeds + folder structure for active subscriptions only. Reuse
+    the existing `import_opml()` / `/opml/import` machinery. User uploads the file.
+    No new code needed beyond the UI hook.
+
+    **Source B — InoreaderExportTool JSON files**
+    [joshg253/InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool)
+    produces `backup/<label>.json` — one file per Inoreader label. Each item is
+    Google Reader format. **Schema confirmed from sample files:**
+    - `canonical[0].href` → entry URL
+    - `title` → entry title
+    - `published` → Unix timestamp (seconds)
+    - `summary.content` → HTML body
+    - `origin.streamId` → feed URL (strip leading `feed/` prefix)
+    - `origin.title` → feed title
+    - `categories[]` → contains `user/.../label/LABELNAME` (= filename stem) and
+      `user/.../state/com.google/like` when starred/liked
+    - Filename stem = the label name (lowercase = tag; Title Case = folder by
+      InoreaderExportTool convention)
+
+    Import logic:
+    → For each file: derive label from filename stem.
+    → Lowercase label → apply as Lectio tag to matching entries.
+    → Title Case label → also assign those entries' feeds to that folder.
+    → `state/com.google/like` in categories → star the entry in Lectio.
+    → Match entries by URL (`canonical[0].href`); skip entries not yet in Lectio
+      (Source C / a future refresh will pull them in).
+    → Also ensure `origin.streamId` feed is subscribed (add if missing).
+
+    **Source C — Inoreader API**
+    Fills in what OPML and JSON miss: disabled/inactive subscriptions, complete
+    label/folder list, starred items not in JSON exports, and items for labels that
+    weren't exported.
+
+    Auth: AppId + AppKey headers + a ClientLogin token (POST
+    `/accounts/ClientLogin` with email + password → `Auth=` token). No OAuth
+    redirect. User enters credentials in Settings; token is exchanged at import
+    time and not persisted (short-lived, re-exchanged each session).
+
+    **Rate limit and checkpoint:**
+    - Free tier: **250 API calls/day**. Store per-user state in an
+      `inoreader_import` meta-DB JSON blob:
+      `{calls_today, date, continuation_token, phase, label_cursor}`.
+    - On each call: increment `calls_today`; if ≥ 250, pause and surface
+      "quota reached — resume tomorrow" in the UI.
+    - Resume picks up from stored `continuation_token` + `label_cursor` —
+      nothing restarts from scratch.
+
+    **Import phases (Source C):**
+    1. `GET /reader/api/0/subscription/list` → all subscriptions incl. disabled;
+       add missing feeds + folder assignments. (1 call)
+    2. `GET /reader/api/0/tag/list` → all label IDs. For each: page through
+       `/reader/api/0/stream/contents/<label_id>` with continuation; match entries
+       by URL and apply tags/folder. (N calls, quota-checkpointed)
+    3. `GET /reader/api/0/stream/contents/user/-/state/com.google/starred` →
+       page through and star matching entries. (M calls, quota-checkpointed)
+
+    **Settings keys (per-user, in `_ALLOWED` / `_SENSITIVE`):**
+    ```
+    inoreader_app_id       (non-sensitive)
+    inoreader_app_key      (sensitive)
+    inoreader_email        (non-sensitive)
+    inoreader_password     (sensitive)
+    ```
+
+    **UI — Settings → new "Inoreader Import" tab** (migration tool, not ongoing
+    connection; keep separate from Integrations):
+    - Credentials fields (App ID, App Key, email, password) + Save.
+    - Upload OPML → immediate import, show feeds added.
+    - Upload JSON files (multi-select) → immediate import, show tags/stars applied.
+    - "Sync via API" button → runs phases 1–3 with progress + quota meter
+      ("X / 250 calls used today").
+    - "Resume" button when a prior run hit quota mid-import.
+
+    **New file:** `services/inoreader.py` (API client + all import logic).
+    **`main.py`:** 4 new setting constants, `/inoreader/import/*` routes,
+    settings in `_ALLOWED`/`_SENSITIVE`, checkpoint helpers.
+    **Schema migration:** `inoreader_import` JSON blob in `app_settings`
+    (no new table needed — reuse the existing KV store).
+
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
 - ~~**Per-click Quire project picker**~~ — ✅ SHIPPED. Quire button now opens a project-picker menu (mirrors Pinterest board picker); POST `/entries/quire` accepts optional `project_oid` form param that overrides the settings default. On-Star and automation rules still use the settings default project; adding a per-rule project field is a future follow-up if needed.
@@ -210,88 +296,6 @@ Detailed specs follow.
 
 - ~~**Tag management — remove / delete tags**~~ — ✅ ALREADY SHIPPED. `×` on each article-pane tag chip removes it (append_mode=0); right-click any tag (sidebar or chip) → "Delete tag everywhere" via `/tags/delete`. Both fully wired.
 
-- **Integrations to investigate** (ideas; feasibility unconfirmed):
-  - **Inoreader import (in-app, all sources, with rate-limit tracking)**
-
-    Goal: import everything recoverable from an Inoreader account — feeds + folders
-    (incl. disabled), tagged/starred items, and whatever the export tool captured —
-    into the current Lectio user. Three complementary input sources, each optional:
-
-    **Source A — Inoreader OPML export**
-    Standard OPML; feeds + folder structure for *active* subscriptions only. Reuse
-    the existing `import_opml()` / `/opml/import` machinery. User uploads the file.
-
-    **Source B — InoreaderExportTool JSON files**
-    [joshg253/InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool)
-    produces `backup/<label>.json` — one file per Inoreader label (lowercase label =
-    tag, Title Case = folder by convention). Each file contains a list of items with
-    at minimum: entry URL, title, and the label. User uploads one or more files.
-    → Map each label: lowercase → Lectio tag applied to those entries; Title Case →
-      also add the entry's feed to that folder.
-    → Mark starred items as starred in Lectio (if an `isStarred` / starred flag
-      exists in the JSON — **schema TBD: user to provide sample files**).
-    → For each entry URL, find the matching Lectio entry (by URL) and apply tags/star;
-      entries not yet in Lectio are skipped (API source below fills that gap).
-
-    **Source C — Inoreader API**
-    Fills in what OPML and JSON miss: disabled/inactive subscriptions, complete
-    label/folder list, starred items not captured in JSON batches, and items for
-    labels that weren't exported.
-
-    Auth: Inoreader API uses **AppId + AppKey** headers plus a **ClientLogin token**
-    (POST `/accounts/ClientLogin` with email + password → token). No OAuth redirect
-    needed. User enters App ID, App Key, Inoreader email, and password in Settings;
-    Lectio exchanges them for a token at import time. Credentials stored per-user
-    (`inoreader_app_id`, `inoreader_app_key`, `inoreader_email`, `inoreader_password`
-    — password treated as sensitive/masked).
-
-    **Rate limit and checkpoint:**
-    - Inoreader free tier: **250 API calls/day** (developer accounts: higher, but
-      treat 250 as the safe floor).
-    - Store per-user import state in a `inoreader_import` meta row:
-      `{calls_today, date, continuation_token, phase, label_cursor}`.
-    - On each API call: increment `calls_today`; if ≥ limit, pause and surface
-      "quota reached — resume tomorrow" in the UI. Show a quota meter in the import
-      panel (calls used / 250 today).
-    - Each resume picks up from the stored `continuation_token` and `label_cursor`
-      so nothing restarts from scratch.
-
-    **Import phases (for Source C):**
-    1. `GET /reader/api/0/subscription/list` → all subscriptions (incl. disabled);
-       add missing feeds + their folder assignments. (1 call)
-    2. For each label (from `/reader/api/0/tag/list`): page through
-       `/reader/api/0/stream/contents/<label_id>` with continuation token; for each
-       item, find the Lectio entry by URL and apply the tag. (N calls — pauses when
-       quota runs out; resumes at the stored continuation.)
-    3. Starred items stream (`user/-/state/com.google/starred`) — same paging
-       approach; mark matching entries as starred in Lectio.
-
-    **Settings keys (per-user, all in `_ALLOWED`):**
-    ```
-    SETTING_INOREADER_APP_ID       = "inoreader_app_id"
-    SETTING_INOREADER_APP_KEY      = "inoreader_app_key"      # sensitive
-    SETTING_INOREADER_EMAIL        = "inoreader_email"
-    SETTING_INOREADER_PASSWORD     = "inoreader_password"     # sensitive
-    ```
-    (No refresh token needed — the import is one-shot; the ClientLogin token is
-    short-lived and re-exchanged each session.)
-
-    **UI — per-user Settings → new "Inoreader Import" section** (separate from
-    Integrations; this is a one-time migration, not an ongoing connection):
-    - Credentials fields (App ID, App Key, email, password) + Save.
-    - Upload OPML file → immediate import, show count added.
-    - Upload JSON label files (multi-select) → immediate import, show tags/stars applied.
-    - "Sync via API" button → starts Phase 1–3 with progress bar + quota meter.
-    - Quota meter: "X / 250 API calls used today. Resets midnight UTC."
-    - "Resume" button appears if prior run hit the quota mid-import.
-
-    **New files:** `services/inoreader.py` (API client + import logic).
-    **`main.py` changes:** 4 new SETTING constants, new `/inoreader/import/*`
-    routes, settings added to `_ALLOWED`/`_SENSITIVE`, checkpoint state helpers.
-
-    **TODO before implementation:** user to provide a sample
-    `backup/<label>.json` entry so the JSON field names are confirmed (starred flag,
-    URL field name, etc.).
 
 
 ## Known limitations (not bugs)
