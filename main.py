@@ -11,9 +11,11 @@ import re
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -309,6 +311,7 @@ SETTING_INOREADER_REFRESH_TOKEN = "inoreader_refresh_token"
 SETTING_INOREADER_TOKEN_EXPIRES_AT = "inoreader_token_expires_at"
 SETTING_INOREADER_OAUTH_STATE = "inoreader_oauth_state"
 SETTING_INOREADER_IMPORT_STATE = "inoreader_import_state"
+SETTING_INOREADER_EXPORT_DIR = "inoreader_export_dir"  # server-side path to JSON export files
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
@@ -14874,6 +14877,286 @@ def inoreader_import_reset():
     return JSONResponse({"ok": True})
 
 
+@app.post("/integrations/inoreader/import/local")
+def inoreader_import_local():
+    """Server-side import: scan the configured export directory for JSON files and
+    import them all in background. Supports both InoreaderExportTool format (plain
+    list) and native Inoreader export format (dict with 'items' key).
+
+    The directory is set via Settings → Integrations → Inoreader (export dir field)
+    or the INOREADER_EXPORT_DIR env var. It must contain .json files — typically one
+    per label from ExportTool, plus starred-*.json from a native export ZIP.
+    """
+    export_dir = get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, "").strip()
+    if not export_dir:
+        return JSONResponse({"ok": False, "error": "No export directory configured."}, status_code=400)
+    dir_path = Path(export_dir)
+    if not dir_path.is_dir():
+        return JSONResponse({"ok": False, "error": f"Path is not a directory: {export_dir}"}, status_code=400)
+    json_files = sorted(dir_path.glob("*.json"))
+    if not json_files:
+        return JSONResponse({"ok": False, "error": "No .json files found in that directory."}, status_code=400)
+
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "local_files",
+        "files_total": len(json_files),
+        "files_done": 0,
+        "current_file": "",
+        "subs_added": 0,
+        "items_tagged": 0,
+        "items_starred": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_files),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "files": len(json_files), "state": state})
+
+
+@app.post("/integrations/inoreader/import/upload")
+async def inoreader_import_upload(files: list[UploadFile] = File(...)):
+    """Browser-upload import: accept one or more .json files or a single .zip.
+
+    Extracts all .json files to a server-side temp dir and starts the same
+    background worker as the server-path import. Returns immediately; poll
+    /integrations/inoreader/import/status for progress.
+    """
+    # Read all uploaded content first — this can take many seconds for large ZIPs.
+    # Only touch the meta DB after all I/O is done to avoid lock timeouts.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ino_import_"))
+    json_paths: list[Path] = []
+
+    for upload in files:
+        name = upload.filename or ""
+        content = await upload.read()
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    for member in zf.namelist():
+                        if member.lower().endswith(".json") and not member.startswith("__MACOSX"):
+                            out = tmp_dir / Path(member).name
+                            out.write_bytes(zf.read(member))
+                            json_paths.append(out)
+            except zipfile.BadZipFile as exc:
+                return JSONResponse({"ok": False, "error": f"Bad ZIP file: {exc}"}, status_code=400)
+        elif name.lower().endswith(".json"):
+            out = tmp_dir / name
+            out.write_bytes(content)
+            json_paths.append(out)
+
+    if not json_paths:
+        return JSONResponse({"ok": False, "error": "No .json files found in upload."}, status_code=400)
+
+    # All file I/O is done. Open a fresh short-lived connection with a generous
+    # timeout — the thread-local pool connection can't be used safely here because
+    # async coroutines on the same thread share it and may have it mid-transaction.
+    json_paths = sorted(json_paths)
+    now = datetime.now(timezone.utc).isoformat()
+    uid = tenancy.current_user_id()
+    _meta_conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=30.0)
+    _meta_conn.row_factory = sqlite3.Row
+    _meta_conn.execute("PRAGMA journal_mode=WAL")
+    _meta_conn.execute("PRAGMA busy_timeout=30000")
+    try:
+        raw = get_setting(_meta_conn, SETTING_INOREADER_IMPORT_STATE) or "{}"
+        existing = json.loads(raw)
+        if existing.get("phase") == "local_files" and not existing.get("done") and not existing.get("error"):
+            return JSONResponse({"ok": False, "error": "An import is already running. Reset first."}, status_code=409)
+        state = {
+            "phase": "local_files",
+            "files_total": len(json_paths),
+            "files_done": 0,
+            "current_file": "",
+            "subs_added": 0,
+            "items_tagged": 0,
+            "items_starred": 0,
+            "errors": 0,
+            "done": False,
+            "error": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        set_setting(_meta_conn, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+        _meta_conn.commit()
+    finally:
+        _meta_conn.close()
+
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_paths),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "files": len(json_paths)})
+
+
+def _inoreader_local_import_worker(json_files: list) -> None:
+    """Background worker: iterate JSON files and import all items."""
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_INOREADER_IMPORT_STATE) or "{}"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as _c:
+            set_setting(_c, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+
+    try:
+        _run_import_loop(json_files, state, _save)
+    except Exception as exc:
+        state["error"] = f"Worker crashed: {exc}"
+        state["done"] = False
+        _save()
+        LOGGER.exception("[inoreader-local] worker crashed")
+
+
+def _run_import_loop(json_files: list, state: dict, _save) -> None:
+    reader_db = str(tenancy.reader_db_path())
+    for i, json_path in enumerate(json_files):
+        state["current_file"] = json_path.name
+        state["files_done"] = i
+        _save()
+        try:
+            with open(json_path, encoding="utf-8") as fh:
+                raw_data = json.load(fh)
+            items = inoreader_service.parse_export_json(raw_data)
+        except Exception as exc:
+            LOGGER.warning("[inoreader-local] failed to parse %s: %s", json_path.name, exc)
+            state["errors"] = state.get("errors", 0) + 1
+            continue
+
+        # Collect unique feed URLs to subscribe.
+        new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
+        if new_feed_urls:
+            with get_reader() as reader:
+                existing = {str(f.url) for f in reader.get_feeds()}
+                for furl in new_feed_urls:
+                    if furl not in existing:
+                        try:
+                            reader.add_feed(furl, exist_ok=True)
+                            state["subs_added"] = state.get("subs_added", 0) + 1
+                            existing.add(furl)
+                        except Exception:
+                            pass
+
+        # Apply stars and tags, inserting the entry into the reader if not yet fetched.
+        # Reader entries use the feed's <guid>/<id> element as their ID, which often
+        # differs from the canonical web URL (e.g. WordPress ?p=123 vs /slug).
+        # Strategy:
+        #   1. Try lookup by (feed_url, canonical_url) — works when id == link.
+        #   2. Try lookup by link column directly in the reader DB — handles id≠link.
+        #   3. If still not found, synthesize and add_entry so tags/stars apply now.
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                    rconn.row_factory = sqlite3.Row
+                    for item in items:
+                        entry_url = item["url"]
+                        feed_url = item["feed_url"]
+                        if not entry_url or not feed_url:
+                            continue
+
+                        tagged = False
+                        starred = False
+
+                        # Tags from labels: lowercase = Lectio tag, Mixed Case = folder (skip).
+                        label_tags = [
+                            f"{MANUAL_TAG_KEY_PREFIX}{lbl.lower()}"
+                            for lbl in item["labels"]
+                            if inoreader_service.label_is_tag(lbl)
+                        ]
+                        if label_tags or item["starred"]:
+                            entry = None
+                            try:
+                                if feed_url:
+                                    # 1. Fast path: entry ID == canonical URL.
+                                    entry = reader.get_entry((feed_url, entry_url), None)
+
+                                    if entry is None:
+                                        # 2. Look up by link column (id ≠ link case).
+                                        row = rconn.execute(
+                                            "SELECT id FROM entries WHERE feed = ? AND link = ? LIMIT 1",
+                                            (feed_url, entry_url),
+                                        ).fetchone()
+                                        if row:
+                                            entry = reader.get_entry((feed_url, row["id"]), None)
+
+                                    if entry is None:
+                                        # 3. Not in reader at all — synthesize and insert.
+                                        pub = item.get("published")
+                                        entry_dict: dict = {
+                                            "feed_url": feed_url,
+                                            "id": entry_url,
+                                            "title": item.get("title") or "",
+                                            "link": entry_url,
+                                        }
+                                        if pub:
+                                            entry_dict["published"] = datetime.fromtimestamp(pub, timezone.utc)
+                                        if item.get("content"):
+                                            entry_dict["content"] = [{"value": item["content"]}]
+                                        try:
+                                            reader.add_entry(entry_dict)
+                                            entry = reader.get_entry((feed_url, entry_url), None)
+                                        except Exception:
+                                            pass
+                                else:
+                                    # JSON Feed format: no per-item feed URL — search by link across all feeds.
+                                    row = rconn.execute(
+                                        "SELECT id, feed FROM entries WHERE link = ? LIMIT 1",
+                                        (entry_url,),
+                                    ).fetchone()
+                                    if row is None:
+                                        row = rconn.execute(
+                                            "SELECT id, feed FROM entries WHERE id = ? LIMIT 1",
+                                            (entry_url,),
+                                        ).fetchone()
+                                    if row:
+                                        entry = reader.get_entry((row["feed"], row["id"]), None)
+
+                                if entry:
+                                    for tag_key in label_tags:
+                                        try:
+                                            reader.set_tag(entry, tag_key)
+                                            tagged = True
+                                        except Exception:
+                                            pass
+                                    if item["starred"]:
+                                        conn.execute(
+                                            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                                            (entry.feed_url, entry.id),
+                                        )
+                                        starred = True
+                            except Exception:
+                                pass
+
+                        if tagged:
+                            state["items_tagged"] = state.get("items_tagged", 0) + 1
+                        if starred:
+                            state["items_starred"] = state.get("items_starred", 0) + 1
+
+    state["files_done"] = len(json_files)
+    state["current_file"] = ""
+    state["done"] = True
+    _save()
+    LOGGER.info(
+        "[inoreader-local] done: %d files, %d subs, %d tagged, %d starred, %d errors",
+        len(json_files), state["subs_added"], state["items_tagged"],
+        state["items_starred"], state["errors"],
+    )
+
+
 @app.post("/integrations/inoreader/import/json")
 async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
     """Path B: import from an InoreaderExportTool JSON file (no API calls).
@@ -15327,8 +15610,9 @@ def get_all_settings():
         "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
         "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
         "inoreader_client_secret_masked": _masked(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
-        "inoreader_configured": bool(get_inoreader_credentials()[0] and get_inoreader_credentials()[1]),
+        "inoreader_configured": bool(all(get_inoreader_credentials())),
         "inoreader_connected": inoreader_connected(),
+        "inoreader_export_dir": get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, ""),
         "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
         "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
         "resend_api_key_set": bool(resend_key),
@@ -15406,6 +15690,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
+        SETTING_INOREADER_EXPORT_DIR,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -15422,6 +15707,7 @@ async def save_all_settings(request: Request):
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
+        SETTING_INOREADER_EXPORT_DIR,
     }
     is_admin = _is_web_admin(_current_web_user(request))
 
