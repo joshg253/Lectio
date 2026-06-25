@@ -155,6 +155,11 @@ Detailed specs follow.
 
 ## Later
 
+- ~~**Security-mode removal / admin tuning panel**~~ — ✅ **SHIPPED** (prior session).
+  `MULTI_USER = True` hardcoded; fetch-history / login-rate-limit / auto-refresh tuning
+  moved to DB-backed settings in the Administration panel; dynamic OAuth callback URLs
+  in Settings (populated from `public_url`).
+
 - **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button + README badge): batch/digest
   delivery.
 
@@ -218,18 +223,19 @@ Detailed specs follow.
 - ~~**Tag management — remove / delete tags**~~ — ✅ ALREADY SHIPPED. `×` on each article-pane tag chip removes it (append_mode=0); right-click any tag (sidebar or chip) → "Delete tag everywhere" via `/tags/delete`. Both fully wired.
 
 - **Integrations to investigate** (ideas; feasibility unconfirmed):
-  - **Inoreader import (complete)** — Inoreader's own OPML/"takeout" omits *disabled*
-    feeds, tags, and other state. The user maintains
-    [InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool): OAuth 2.0
-    against the Inoreader API, backing up **tagged items per label** to JSON
-    (`backup/<label>.json` cumulative + dated batches; lowercase = tags, Title Case =
-    folders by convention). Two ways to leverage it: (a) ingest its JSON output —
-    map each label → a Lectio tag and import the items (URL/title/tags) so tags
-    survive the move; (b) go further and talk to the Inoreader API directly to also
-    recover subscriptions incl. **disabled feeds** + folder structure (OPML misses
-    the disabled ones). Likely an importer in `services/` that reads the tool's JSON
-    first (lowest effort, already have it), with a direct-API path as a follow-up.
-    Decide scope: tags-only vs full (feeds+folders+tags+read/star state).
+  - **Inoreader import (in-app, with rate-limit tracking)** — Inoreader's own
+    OPML/"takeout" omits *disabled* feeds, tags, and read/star state. Two paths:
+    (a) **JSON import** — ingest [InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool)
+    output (`backup/<label>.json`): map labels → Lectio tags, import items; no API
+    calls needed. (b) **Direct Inoreader API** — recover subscriptions (incl. disabled
+    feeds), folder structure, starred items, read state; requires App ID + Key (API
+    key input, not full OAuth — one-time migration doesn't need token refresh).
+    **Rate limits**: free tier is 250 calls/day; a large archive will hit this. Must
+    checkpoint progress so the import can resume the next day without restarting.
+    Show a quota meter (calls used today / 250) and pause automatically when the
+    limit is reached. Build JSON path first; wire the API path as an enhanced option.
+    Scope: `services/inoreader.py` importer + a Settings → Import tab or an admin
+    import page with progress display.
   - **Supernote integration** (e-ink; user has a Manta) — Supernote devices sync via
     their **Supernote Cloud** + a local Wi-Fi "Browse & Access" HTTP file interface;
     there's no official public API, so options are limited. Plausible: export
