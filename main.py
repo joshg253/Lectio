@@ -11,9 +11,11 @@ import re
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -309,6 +311,7 @@ SETTING_INOREADER_REFRESH_TOKEN = "inoreader_refresh_token"
 SETTING_INOREADER_TOKEN_EXPIRES_AT = "inoreader_token_expires_at"
 SETTING_INOREADER_OAUTH_STATE = "inoreader_oauth_state"
 SETTING_INOREADER_IMPORT_STATE = "inoreader_import_state"
+SETTING_INOREADER_EXPORT_DIR = "inoreader_export_dir"  # server-side path to JSON export files
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
@@ -6327,6 +6330,38 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     return removed
 
 
+def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tuple[int, bool]:
+    """Rename a manual tag across every entry that carries it.
+
+    Returns ``(count, merged)`` where *count* is the number of entries
+    updated and *merged* is True if *new_tag* already had entries before
+    the rename (i.e. the two tags were combined).
+    """
+    old_norm = normalize_tag_value(old_tag)
+    new_norm = normalize_tag_value(new_tag)
+    if not old_norm or not new_norm or old_norm == new_norm:
+        return 0, False
+
+    old_key = f"{MANUAL_TAG_KEY_PREFIX}{old_norm}"
+    new_key = f"{MANUAL_TAG_KEY_PREFIX}{new_norm}"
+    updated = 0
+    with get_reader() as reader:
+        merged = reader.get_entry_counts(tags=[new_key]).total > 0
+        for entry in list(reader.get_entries(tags=[old_key])):
+            try:
+                reader.set_tag(entry.resource_id, new_key)
+                reader.delete_tag(entry.resource_id, old_key)
+                updated += 1
+            except Exception:
+                LOGGER.warning(
+                    "rename_manual_tag_everywhere: failed on %s", entry.resource_id, exc_info=True
+                )
+    if updated:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return updated, merged
+
+
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
@@ -8768,12 +8803,24 @@ def list_entries_for_feeds(
                         _feed_list + [fetch_limit],
                     ).fetchall()
                 else:
-                    sql_limit = max(fetch_limit * 4, fetch_limit + 500)
-                    rows = _rconn.execute(
-                        f"SELECT feed, id FROM entries WHERE 1=1{read_clause}"
-                        f" ORDER BY published ASC LIMIT ?",
-                        (sql_limit,),
-                    ).fetchall()
+                    # >999 feeds: SQLite's variable limit prevents a single IN clause.
+                    # A global scan without a feed filter picks up entries from feeds
+                    # outside feed_urls (e.g. import-synthesised feeds) and the Python
+                    # filter can discard the entire result window. Batch instead.
+                    _feed_list = list(feed_urls)
+                    batch_rows: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rconn.execute(
+                            f"SELECT feed, id, published FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
+                            f" ORDER BY published ASC LIMIT ?",
+                            _chunk + [fetch_limit],
+                        ).fetchall()
+                        batch_rows.extend(chunk_rows)
+                    batch_rows.sort(key=lambda r: r["published"] or "")
+                    rows = batch_rows
                 _rconn.close()
                 for row in rows:
                     if str(row["feed"]) not in feed_urls:
@@ -14821,10 +14868,24 @@ def inoreader_import_status():
 
 
 @app.post("/integrations/inoreader/import/start")
-def inoreader_import_start(delete_mode: int = Form(default=0)):
-    """Initialise (or reinitialise) the API-driven import state and run the first drip step."""
+def inoreader_import_start(delete_mode: int = Form(default=0), since: str = Form(default="")):
+    """Initialise (or reinitialise) the API-driven import state and run the first drip step.
+
+    ``since`` — optional ISO date (YYYY-MM-DD) or Unix timestamp string; only fetch
+    items newer than this. Useful when a file import already covered older history.
+    """
     if not inoreader_connected():
         return JSONResponse({"ok": False, "error": "Not connected"}, status_code=400)
+    since_ot: int | None = None
+    if since:
+        try:
+            since_ot = int(since)
+        except ValueError:
+            try:
+                from datetime import date
+                since_ot = int(datetime.fromisoformat(since.strip()).timestamp())
+            except Exception:
+                pass
     now = datetime.now(timezone.utc).isoformat()
     state = {
         "phase": "subscriptions",
@@ -14836,6 +14897,7 @@ def inoreader_import_start(delete_mode: int = Form(default=0)):
         "items_tagged": 0,
         "items_starred": 0,
         "delete_mode": bool(delete_mode),
+        "since_ot": since_ot,
         "z1_remaining": None,
         "error": None,
         "done": False,
@@ -14872,6 +14934,295 @@ def inoreader_import_reset():
     with get_meta_connection() as conn:
         delete_setting(conn, SETTING_INOREADER_IMPORT_STATE)
     return JSONResponse({"ok": True})
+
+
+@app.post("/integrations/inoreader/import/local")
+def inoreader_import_local():
+    """Server-side import: scan the configured export directory for JSON files and
+    import them all in background. Supports both InoreaderExportTool format (plain
+    list) and native Inoreader export format (dict with 'items' key).
+
+    The directory is set via Settings → Integrations → Inoreader (export dir field)
+    or the INOREADER_EXPORT_DIR env var. It must contain .json files — typically one
+    per label from ExportTool, plus starred-*.json from a native export ZIP.
+    """
+    export_dir = get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, "").strip()
+    if not export_dir:
+        return JSONResponse({"ok": False, "error": "No export directory configured."}, status_code=400)
+    dir_path = Path(export_dir)
+    if not dir_path.is_dir():
+        return JSONResponse({"ok": False, "error": f"Path is not a directory: {export_dir}"}, status_code=400)
+    json_files = sorted(dir_path.glob("*.json"))
+    if not json_files:
+        return JSONResponse({"ok": False, "error": "No .json files found in that directory."}, status_code=400)
+
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "local_files",
+        "files_total": len(json_files),
+        "files_done": 0,
+        "current_file": "",
+        "subs_added": 0,
+        "items_tagged": 0,
+        "items_starred": 0,
+        "errors": 0,
+        "done": False,
+        "error": None,
+        "started_at": now,
+        "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_files),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "files": len(json_files), "state": state})
+
+
+@app.post("/integrations/inoreader/import/upload")
+async def inoreader_import_upload(files: list[UploadFile] = File(...)):
+    """Browser-upload import: accept one or more .json files or a single .zip.
+
+    Extracts all .json files to a server-side temp dir and starts the same
+    background worker as the server-path import. Returns immediately; poll
+    /integrations/inoreader/import/status for progress.
+    """
+    # Read all uploaded content first — this can take many seconds for large ZIPs.
+    # Only touch the meta DB after all I/O is done to avoid lock timeouts.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ino_import_"))
+    json_paths: list[Path] = []
+
+    for upload in files:
+        name = upload.filename or ""
+        content = await upload.read()
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                    for member in zf.namelist():
+                        if member.lower().endswith(".json") and not member.startswith("__MACOSX"):
+                            out = tmp_dir / Path(member).name
+                            out.write_bytes(zf.read(member))
+                            json_paths.append(out)
+            except zipfile.BadZipFile:
+                return JSONResponse({"ok": False, "error": "Invalid or corrupt ZIP file."}, status_code=400)
+        elif name.lower().endswith(".json"):
+            out = tmp_dir / name
+            out.write_bytes(content)
+            json_paths.append(out)
+
+    if not json_paths:
+        return JSONResponse({"ok": False, "error": "No .json files found in upload."}, status_code=400)
+
+    # All file I/O is done. Open a fresh short-lived connection with a generous
+    # timeout — the thread-local pool connection can't be used safely here because
+    # async coroutines on the same thread share it and may have it mid-transaction.
+    json_paths = sorted(json_paths)
+    now = datetime.now(timezone.utc).isoformat()
+    uid = tenancy.current_user_id()
+    _meta_conn = sqlite3.connect(str(tenancy.meta_db_path(uid)), timeout=30.0)
+    _meta_conn.row_factory = sqlite3.Row
+    _meta_conn.execute("PRAGMA journal_mode=WAL")
+    _meta_conn.execute("PRAGMA busy_timeout=30000")
+    try:
+        raw = get_setting(_meta_conn, SETTING_INOREADER_IMPORT_STATE) or "{}"
+        existing = json.loads(raw)
+        if existing.get("phase") == "local_files" and not existing.get("done") and not existing.get("error"):
+            return JSONResponse({"ok": False, "error": "An import is already running. Reset first."}, status_code=409)
+        state = {
+            "phase": "local_files",
+            "files_total": len(json_paths),
+            "files_done": 0,
+            "current_file": "",
+            "subs_added": 0,
+            "items_tagged": 0,
+            "items_starred": 0,
+            "errors": 0,
+            "done": False,
+            "error": None,
+            "started_at": now,
+            "updated_at": now,
+        }
+        set_setting(_meta_conn, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+        _meta_conn.commit()
+    finally:
+        _meta_conn.close()
+
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_paths, tmp_dir),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "files": len(json_paths)})
+
+
+def _inoreader_local_import_worker(json_files: list, cleanup_dir: Path | None = None) -> None:
+    """Background worker: iterate JSON files and import all items."""
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_INOREADER_IMPORT_STATE) or "{}"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as _c:
+            set_setting(_c, SETTING_INOREADER_IMPORT_STATE, json.dumps(state))
+
+    try:
+        _run_import_loop(json_files, state, _save)
+    except Exception as exc:
+        state["error"] = f"Worker crashed: {exc}"
+        state["done"] = False
+        _save()
+        LOGGER.exception("[inoreader-local] worker crashed")
+    finally:
+        if cleanup_dir is not None:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def _run_import_loop(json_files: list, state: dict, _save) -> None:
+    reader_db = str(tenancy.reader_db_path())
+    for i, json_path in enumerate(json_files):
+        state["current_file"] = json_path.name
+        state["files_done"] = i
+        _save()
+        try:
+            with open(json_path, encoding="utf-8") as fh:
+                raw_data = json.load(fh)
+            items = inoreader_service.parse_export_json(raw_data)
+        except Exception as exc:
+            LOGGER.warning("[inoreader-local] failed to parse %s: %s", json_path.name, exc)
+            state["errors"] = state.get("errors", 0) + 1
+            continue
+
+        # Collect unique feed URLs to subscribe.
+        new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
+        if new_feed_urls:
+            with get_reader() as reader:
+                existing = {str(f.url) for f in reader.get_feeds()}
+                for furl in new_feed_urls:
+                    if furl not in existing:
+                        try:
+                            reader.add_feed(furl, exist_ok=True)
+                            state["subs_added"] = state.get("subs_added", 0) + 1
+                            existing.add(furl)
+                        except Exception:
+                            pass
+
+        # Apply stars and tags, inserting the entry into the reader if not yet fetched.
+        # Reader entries use the feed's <guid>/<id> element as their ID, which often
+        # differs from the canonical web URL (e.g. WordPress ?p=123 vs /slug).
+        # Strategy:
+        #   1. Try lookup by (feed_url, canonical_url) — works when id == link.
+        #   2. Try lookup by link column directly in the reader DB — handles id≠link.
+        #   3. If still not found, synthesize and add_entry so tags/stars apply now.
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                    rconn.row_factory = sqlite3.Row
+                    for item in items:
+                        entry_url = item["url"]
+                        feed_url = item["feed_url"]
+                        if not entry_url or not feed_url:
+                            continue
+
+                        tagged = False
+                        starred = False
+
+                        # Tags from labels: lowercase = Lectio tag, Mixed Case = folder (skip).
+                        label_tags = [
+                            f"{MANUAL_TAG_KEY_PREFIX}{lbl.lower()}"
+                            for lbl in item["labels"]
+                            if inoreader_service.label_is_tag(lbl)
+                        ]
+                        if label_tags or item["starred"]:
+                            entry = None
+                            try:
+                                if feed_url:
+                                    # 1. Fast path: entry ID == canonical URL.
+                                    entry = reader.get_entry((feed_url, entry_url), None)
+
+                                    if entry is None:
+                                        # 2. Look up by link column (id ≠ link case).
+                                        row = rconn.execute(
+                                            "SELECT id FROM entries WHERE feed = ? AND link = ? LIMIT 1",
+                                            (feed_url, entry_url),
+                                        ).fetchone()
+                                        if row:
+                                            entry = reader.get_entry((feed_url, row["id"]), None)
+
+                                    if entry is None:
+                                        # 3. Not in reader at all — synthesize and insert.
+                                        # Ensure the feed exists first (handles feeds that
+                                        # are broken/unfetchable but still need entries).
+                                        try:
+                                            reader.add_feed(feed_url, exist_ok=True)
+                                        except Exception:
+                                            pass
+                                        pub = item.get("published")
+                                        entry_dict: dict = {
+                                            "feed_url": feed_url,
+                                            "id": entry_url,
+                                            "title": item.get("title") or "",
+                                            "link": entry_url,
+                                        }
+                                        if pub:
+                                            entry_dict["published"] = datetime.fromtimestamp(pub, timezone.utc)
+                                        if item.get("content"):
+                                            entry_dict["content"] = [{"value": item["content"]}]
+                                        try:
+                                            reader.add_entry(entry_dict)
+                                            entry = reader.get_entry((feed_url, entry_url), None)
+                                        except Exception:
+                                            pass
+                                else:
+                                    # JSON Feed format: no per-item feed URL — search by link across all feeds.
+                                    row = rconn.execute(
+                                        "SELECT id, feed FROM entries WHERE link = ? LIMIT 1",
+                                        (entry_url,),
+                                    ).fetchone()
+                                    if row is None:
+                                        row = rconn.execute(
+                                            "SELECT id, feed FROM entries WHERE id = ? LIMIT 1",
+                                            (entry_url,),
+                                        ).fetchone()
+                                    if row:
+                                        entry = reader.get_entry((row["feed"], row["id"]), None)
+
+                                if entry:
+                                    for tag_key in label_tags:
+                                        try:
+                                            reader.set_tag(entry, tag_key)
+                                            tagged = True
+                                        except Exception:
+                                            pass
+                                    if item["starred"]:
+                                        conn.execute(
+                                            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                                            (entry.feed_url, entry.id),
+                                        )
+                                        starred = True
+                            except Exception:
+                                pass
+
+                        if tagged:
+                            state["items_tagged"] = state.get("items_tagged", 0) + 1
+                        if starred:
+                            state["items_starred"] = state.get("items_starred", 0) + 1
+
+    state["files_done"] = len(json_files)
+    state["current_file"] = ""
+    state["done"] = True
+    _save()
+    LOGGER.info(
+        "[inoreader-local] done: %d files, %d subs, %d tagged, %d starred, %d errors",
+        len(json_files), state["subs_added"], state["items_tagged"],
+        state["items_starred"], state["errors"],
+    )
 
 
 @app.post("/integrations/inoreader/import/json")
@@ -14947,6 +15298,47 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
     })
 
 
+def _api_resolve_entry(reader, rconn, feed_url: str, entry_url: str, item: dict):
+    """3-pass entry lookup for API drip items (same strategy as file import).
+
+    1. get_entry by id == canonical URL (fast path)
+    2. link-column lookup (handles id≠link WordPress/Atom feeds)
+    3. add_entry synthesis (entry not yet fetched; ensures feed exists first)
+    Returns the Entry or None.
+    """
+    entry = reader.get_entry((feed_url, entry_url), None)
+    if entry is None:
+        row = rconn.execute(
+            "SELECT id FROM entries WHERE feed = ? AND link = ? LIMIT 1",
+            (feed_url, entry_url),
+        ).fetchone()
+        if row:
+            entry = reader.get_entry((feed_url, row["id"]), None)
+    if entry is None:
+        try:
+            reader.add_feed(feed_url, exist_ok=True)
+        except Exception:
+            pass
+        pub = item.get("published")
+        summary = item.get("summary") or {}
+        entry_dict: dict = {
+            "feed_url": feed_url,
+            "id": entry_url,
+            "title": item.get("title") or "",
+            "link": entry_url,
+        }
+        if pub:
+            entry_dict["published"] = datetime.fromtimestamp(pub, timezone.utc)
+        if summary.get("content"):
+            entry_dict["content"] = [{"value": summary["content"]}]
+        try:
+            reader.add_entry(entry_dict)
+            entry = reader.get_entry((feed_url, entry_url), None)
+        except Exception:
+            pass
+    return entry
+
+
 def _inoreader_drip_step(calls_budget: int = 10) -> None:
     """One drip-import step: advance the API-driven import by up to calls_budget API calls."""
     with get_meta_connection() as conn:
@@ -14999,7 +15391,8 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
             label_ids = [
                 t["id"] for t in tags
-                if inoreader_service.label_name_from_tag_id(t.get("id", ""))
+                if (name := inoreader_service.label_name_from_tag_id(t.get("id", "")))
+                and inoreader_service.label_is_tag(name)
             ]
             state["label_ids"] = label_ids
             state["label_cursor"] = 0
@@ -15011,34 +15404,38 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
         if state.get("phase") == "labels_items":
             label_ids = state.get("label_ids", [])
             cursor = state.get("label_cursor", 0)
+            since_ot = state.get("since_ot")  # Unix timestamp cutoff — skip older items
+            reader_db = str(tenancy.reader_db_path())
             while cursor < len(label_ids) and calls_made < calls_budget:
                 tag_id = label_ids[cursor]
                 label_name = inoreader_service.label_name_from_tag_id(tag_id) or tag_id
                 stream_id = inoreader_service.label_stream_id(label_name)
                 continuation = state.get("label_continuation")
                 items, next_cont, rl = inoreader_service.get_stream_contents(
-                    token, stream_id, continuation=continuation, n=100
+                    token, stream_id, continuation=continuation, n=100, ot=since_ot
                 )
                 calls_made += 1
                 state["z1_remaining"] = inoreader_service.z1_remaining(rl)
                 if inoreader_service.label_is_tag(label_name):
                     tag_key = f"{MANUAL_TAG_KEY_PREFIX}{label_name.lower()}"
                     with get_reader() as reader:
-                        for item in items:
-                            canonical = item.get("canonical") or []
-                            entry_url = canonical[0].get("href", "") if canonical else ""
-                            origin = item.get("origin") or {}
-                            raw_stream = origin.get("streamId", "")
-                            feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-                            if not entry_url or not feed_url:
-                                continue
-                            try:
-                                entry = reader.get_entry((feed_url, entry_url), None)
-                                if entry:
-                                    reader.set_tag(entry, tag_key)
-                                    state["items_tagged"] = state.get("items_tagged", 0) + 1
-                            except Exception:
-                                pass
+                        with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                            rconn.row_factory = sqlite3.Row
+                            for item in items:
+                                canonical = item.get("canonical") or []
+                                entry_url = canonical[0].get("href", "") if canonical else ""
+                                origin = item.get("origin") or {}
+                                raw_stream = origin.get("streamId", "")
+                                feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                                if not entry_url or not feed_url:
+                                    continue
+                                try:
+                                    entry = _api_resolve_entry(reader, rconn, feed_url, entry_url, item)
+                                    if entry:
+                                        reader.set_tag(entry, tag_key)
+                                        state["items_tagged"] = state.get("items_tagged", 0) + 1
+                                except Exception:
+                                    pass
                 if next_cont:
                     state["label_continuation"] = next_cont
                 else:
@@ -15053,38 +15450,50 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
 
         # Phase: page through starred stream and star entries
         if state.get("phase") == "starred" and calls_made < calls_budget:
+            since_ot = state.get("since_ot")
+            reader_db = str(tenancy.reader_db_path())
             continuation = state.get("starred_continuation")
             items, next_cont, rl = inoreader_service.get_stream_contents(
-                token, inoreader_service.STARRED_STREAM_ID, continuation=continuation, n=100
+                token, inoreader_service.STARRED_STREAM_ID, continuation=continuation, n=100, ot=since_ot
             )
             calls_made += 1
             state["z1_remaining"] = inoreader_service.z1_remaining(rl)
-            with get_meta_connection() as conn:
-                for item in items:
-                    canonical = item.get("canonical") or []
-                    entry_url = canonical[0].get("href", "") if canonical else ""
-                    origin = item.get("origin") or {}
-                    raw_stream = origin.get("streamId", "")
-                    feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
-                    if not entry_url or not feed_url:
-                        continue
-                    try:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                            (feed_url, entry_url),
-                        )
-                        state["items_starred"] = state.get("items_starred", 0) + 1
-                    except Exception:
-                        pass
+            with get_reader() as reader:
+                with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                    rconn.row_factory = sqlite3.Row
+                    for item in items:
+                        canonical = item.get("canonical") or []
+                        entry_url = canonical[0].get("href", "") if canonical else ""
+                        origin = item.get("origin") or {}
+                        raw_stream = origin.get("streamId", "")
+                        feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                        if not entry_url or not feed_url:
+                            continue
+                        try:
+                            entry = _api_resolve_entry(reader, rconn, feed_url, entry_url, item)
+                            if entry:
+                                with get_meta_connection() as conn:
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                                        (entry.feed_url, entry.id),
+                                    )
+                                state["items_starred"] = state.get("items_starred", 0) + 1
+                        except Exception:
+                            pass
             if next_cont:
                 state["starred_continuation"] = next_cont
             else:
                 state["phase"] = "done"
                 state["done"] = True
+                # Advance the since_ot cutoff for the next cycle.
+                state["since_ot"] = int(datetime.now(timezone.utc).timestamp())
             _save()
 
     except inoreader_service.QuotaExceeded:
         LOGGER.info("[inoreader] drip paused: quota exhausted")
+        _save()
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        LOGGER.warning("[inoreader] drip paused: network issue (%s)", exc)
         _save()
     except Exception as exc:
         state["error"] = str(exc)[:300]
@@ -15327,8 +15736,9 @@ def get_all_settings():
         "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
         "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
         "inoreader_client_secret_masked": _masked(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
-        "inoreader_configured": bool(get_inoreader_credentials()[0] and get_inoreader_credentials()[1]),
+        "inoreader_configured": bool(all(get_inoreader_credentials())),
         "inoreader_connected": inoreader_connected(),
+        "inoreader_export_dir": get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, ""),
         "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
         "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
         "resend_api_key_set": bool(resend_key),
@@ -15406,6 +15816,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
+        SETTING_INOREADER_EXPORT_DIR,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -15422,6 +15833,7 @@ async def save_all_settings(request: Request):
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
+        SETTING_INOREADER_EXPORT_DIR,
     }
     is_admin = _is_web_admin(_current_web_user(request))
 
@@ -16590,6 +17002,42 @@ def delete_manual_tag(
 
     message = f"Removed #{normalized} from {removed} post{'' if removed == 1 else 's'}."
     return RedirectResponse(url=f"/?message={quote_plus(message)}", status_code=303)
+
+
+@app.post("/tags/rename")
+def rename_manual_tag(
+    request: Request,
+    old_tag: str = Form(...),
+    new_tag: str = Form(...),
+    force: str = Form(default=""),
+):
+    old_norm = normalize_tag_value(old_tag)
+    new_norm = normalize_tag_value(new_tag)
+    is_ajax = request.headers.get("X-Requested-With") in ("lectio-ajax", "lectio-sidebar")
+
+    if not old_norm or not new_norm:
+        if is_ajax:
+            return JSONResponse({"ok": False, "error": "Invalid tag name."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+    if old_norm == new_norm:
+        if is_ajax:
+            return JSONResponse({"ok": False, "error": "New name is the same as the old name."}, status_code=400)
+        return RedirectResponse(url="/", status_code=303)
+
+    # Without force, warn the caller if new_tag already exists so the UI can
+    # ask for explicit confirmation before merging two tags.
+    if not force:
+        with get_reader() as reader:
+            new_key = f"{MANUAL_TAG_KEY_PREFIX}{new_norm}"
+            if reader.get_entry_counts(tags=[new_key]).total > 0:
+                if is_ajax:
+                    return JSONResponse({"ok": False, "exists": True, "new_tag": new_norm})
+                return RedirectResponse(url="/", status_code=303)
+
+    count, merged = rename_manual_tag_everywhere(old_norm, new_norm)
+    if is_ajax:
+        return JSONResponse({"ok": True, "old_tag": old_norm, "new_tag": new_norm, "count": count, "merged": merged})
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/entries/mark-range-read")

@@ -1166,7 +1166,26 @@
   </div>
 
   <div id="tag-context-menu" class="context-menu" hidden>
+    <button type="button" id="ctx-tag-rename" class="context-menu-item">Rename tag…</button>
     <button type="button" id="ctx-tag-delete" class="context-menu-item danger">Delete tag everywhere</button>
+  </div>
+
+  <div id="tag-rename-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="tag-rename-title">
+      <div class="modal-header-row">
+        <h3 id="tag-rename-title" class="action-modal-title">Rename tag</h3>
+        <button type="button" class="modal-close" data-close-modal="tag-rename-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-body">
+        <label for="tag-rename-input" id="tag-rename-label">New name for <strong id="tag-rename-old"></strong>:</label>
+        <input type="text" id="tag-rename-input" class="text-input" autocomplete="off" spellcheck="false" style="margin-top:0.5rem;width:100%">
+        <p id="tag-rename-error" class="form-error" hidden></p>
+      </div>
+      <div class="action-modal-footer">
+        <button type="button" class="btn-secondary" data-close-modal="tag-rename-modal">Cancel</button>
+        <button type="button" id="tag-rename-confirm" class="btn-primary">Rename</button>
+      </div>
+    </div>
   </div>
 
   <div id="debug-confirm-modal" class="action-modal" hidden>
@@ -1405,7 +1424,6 @@
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
           <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
-          <button type="button" class="feeds-tab-btn" data-int-view="inoreader" role="tab" aria-selected="false">Inoreader</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
@@ -1549,36 +1567,6 @@
           </div>
           <p class="settings-hint" id="sett-star-none" style="grid-column:1 / -1" hidden>Configure Instapaper, connect YouTube, or set up Email (above / in Settings) to enable on-star destinations.</p>
         </div>
-        </div>
-        <div class="feeds-tab-panel" data-int-panel="inoreader" hidden>
-          <div class="settings-section">
-            <p class="settings-hint" style="grid-column:1 / -1">Migrate subscriptions, starred articles, and labels from Inoreader into Lectio. Register an app at <a href="https://www.inoreader.com/developers/" target="_blank" rel="noopener">inoreader.com/developers</a> with redirect URI <code id="sett-inoreader-callback-url"></code>, then save your Client ID + Secret below and connect.</p>
-            <label class="settings-label" for="sett-inoreader-client-id">Client ID</label>
-            <input type="text" id="sett-inoreader-client-id" class="settings-input" placeholder="your client ID" maxlength="200" autocomplete="off" />
-            <label class="settings-label" for="sett-inoreader-client-secret">Client Secret</label>
-            <input type="password" id="sett-inoreader-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
-            <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-inoreader-oauth-row">
-              <span id="sett-inoreader-status" class="settings-inline-status"></span>
-              <a id="sett-inoreader-connect" class="settings-inline-btn" href="/integrations/inoreader/oauth/connect" hidden>Connect Inoreader account</a>
-              <button type="button" id="sett-inoreader-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
-            </div>
-            <div id="sett-inoreader-import-section" style="grid-column:1 / -1;margin-top:0.75rem" hidden>
-              <p class="settings-hint" style="margin-top:0"><strong>API import</strong> — Fetches your subscriptions, labels, and starred articles directly from Inoreader. Rate-limited to ~10 API calls per scheduler cycle (~250/day free tier). The import resumes automatically each cycle.</p>
-              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
-                <button type="button" id="sett-inoreader-import-start" class="settings-inline-btn">Start import</button>
-                <button type="button" id="sett-inoreader-import-run" class="settings-inline-btn" hidden>Step now</button>
-                <button type="button" id="sett-inoreader-import-reset" class="settings-inline-btn" hidden>Reset</button>
-              </div>
-              <div id="sett-inoreader-import-status" class="settings-hint" style="margin:0;white-space:pre-wrap"></div>
-              <p class="settings-hint" style="grid-column:1 / -1;margin-top:0.75rem"><strong>JSON import</strong> — Upload a JSON file exported from the <a href="https://github.com/joshg253/InoreaderExportTool" target="_blank" rel="noopener">InoreaderExportTool</a> to import labels and starred articles without spending API quota.</p>
-              <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
-                <input type="file" id="sett-inoreader-json-file" accept=".json,application/json" style="display:none" />
-                <button type="button" id="sett-inoreader-json-pick" class="settings-inline-btn">Choose JSON file…</button>
-                <button type="button" id="sett-inoreader-json-upload" class="settings-inline-btn" hidden>Upload</button>
-                <span id="sett-inoreader-json-status" class="settings-inline-status"></span>
-              </div>
-            </div>
-          </div>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="integrations">Save</button>
@@ -1777,15 +1765,89 @@
 
       <!-- Import/Export tab -->
       <div id="settings-tab-importexport" class="settings-tab-panel" hidden>
-        <h4 class="settings-section-title">OPML</h4>
-        <div class="settings-section settings-importexport-group">
-          <label for="opml-file-input" class="settings-secondary-btn" style="cursor:pointer">Import OPML</label>
-          <a class="settings-secondary-btn" href="/opml/export">Export OPML</a>
+        <div class="feeds-tab-bar" role="tablist" id="migrator-tab-bar">
+          <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-migrator-view="general" role="tab" aria-selected="true">General</button>
+          <button type="button" class="feeds-tab-btn" data-migrator-view="inoreader" role="tab" aria-selected="false">Inoreader</button>
+          <button type="button" class="feeds-tab-btn" data-migrator-view="miniflux" role="tab" aria-selected="false">Miniflux</button>
+          <button type="button" class="feeds-tab-btn" data-migrator-view="freshrss" role="tab" aria-selected="false">FreshRSS</button>
+          <button type="button" class="feeds-tab-btn" data-migrator-view="ttrss" role="tab" aria-selected="false">tt-rss</button>
         </div>
-        <h4 class="settings-section-title" style="margin-top:1.25rem">Takeout</h4>
-        <div class="settings-section settings-importexport-group">
-          <a class="settings-secondary-btn" href="/takeout/export"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">download</span> Export ZIP</a>
-          <label for="takeout-file-input" class="settings-secondary-btn" style="cursor:pointer"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">upload</span> Import ZIP</label>
+
+        <!-- General: OPML + Takeout -->
+        <div class="feeds-tab-panel" data-migrator-panel="general" style="padding:0">
+          <h4 class="settings-section-title">OPML</h4>
+          <div class="settings-section settings-importexport-group">
+            <label for="opml-file-input" class="settings-secondary-btn" style="cursor:pointer">Import OPML</label>
+            <a class="settings-secondary-btn" href="/opml/export">Export OPML</a>
+          </div>
+          <h4 class="settings-section-title" style="margin-top:1.25rem">Takeout</h4>
+          <div class="settings-section settings-importexport-group">
+            <a class="settings-secondary-btn" href="/takeout/export"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">download</span> Export ZIP</a>
+            <label for="takeout-file-input" class="settings-secondary-btn" style="cursor:pointer"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">upload</span> Import ZIP</label>
+          </div>
+        </div>
+
+        <!-- Inoreader migrator -->
+        <div class="feeds-tab-panel settings-section" data-migrator-panel="inoreader" hidden style="margin-top:0">
+
+          <!-- OPML note -->
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">To import your Inoreader subscriptions list, use <strong>Import OPML</strong> on the General tab. Come back here after feeds are subscribed to import starred items and labels.</p>
+
+          <!-- File import -->
+          <div style="grid-column:1 / -1">
+            <p class="settings-hint" style="margin:0 0 0.5rem"><strong>Import from files</strong> — Select one or more <code>.json</code> files from the <a href="https://github.com/joshg253/InoreaderExportTool" target="_blank" rel="noopener">ExportTool</a> (one per label), or the <code>.zip</code> from Inoreader's <em>Export everything</em>. Stars and labels apply to articles already fetched by Lectio.</p>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <input type="file" id="mig-ino-file-input" accept=".json,.zip,application/json,application/zip" multiple style="display:none" />
+              <button type="button" id="mig-ino-file-pick" class="settings-inline-btn">Browse…</button>
+              <span id="mig-ino-file-label" class="settings-hint" style="margin:0;flex:1">No files selected</span>
+              <button type="button" id="mig-ino-upload-btn" class="settings-inline-btn" hidden>Upload &amp; Import</button>
+              <button type="button" id="mig-ino-local-cancel" class="settings-inline-btn" hidden>Reset</button>
+            </div>
+            <div style="margin-top:0.4rem">
+              <span id="mig-ino-local-status" class="settings-inline-status"></span>
+            </div>
+            <div id="mig-ino-progress" class="settings-hint" style="margin:0.25rem 0 0;white-space:pre-wrap" hidden></div>
+          </div>
+
+          <!-- API section -->
+          <div id="mig-ino-api-section" style="grid-column:1 / -1;border-top:1px solid var(--border-color,#e0e0e0);margin-top:0.75rem;padding-top:0.75rem">
+            <p class="settings-hint" style="margin:0 0 0.5rem"><strong>API sync (trickle import)</strong> — Pulls subscriptions, labels, and starred items directly from Inoreader. Rate-limited to ~10 calls per scheduler cycle (~250/day free tier). Register an app at <a href="https://www.inoreader.com/developers/" target="_blank" rel="noopener">inoreader.com/developers</a> with redirect URI <code id="sett-inoreader-callback-url"></code>, then save credentials and connect.</p>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.4rem" id="sett-inoreader-oauth-row">
+              <input type="text" id="sett-inoreader-client-id" class="settings-input" placeholder="Client ID" maxlength="200" autocomplete="off" style="flex:1;min-width:8rem" />
+              <input type="password" id="sett-inoreader-client-secret" class="settings-input settings-input--secret" placeholder="Client Secret" autocomplete="new-password" style="flex:1;min-width:8rem" />
+              <button type="button" class="settings-inline-btn" id="mig-ino-creds-save" style="flex:none">Save</button>
+              <span id="sett-inoreader-status" class="settings-inline-status"></span>
+              <a id="sett-inoreader-connect" class="settings-inline-btn" href="/integrations/inoreader/oauth/connect" hidden>Connect</a>
+              <button type="button" id="sett-inoreader-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+            </div>
+            <div id="mig-ino-api-controls">
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+                <label style="font-size:0.85em;display:flex;gap:0.35rem;align-items:center">
+                  Since <input type="date" id="mig-ino-api-since" style="font-size:inherit" title="Only fetch items newer than this date. Leave blank to import everything.">
+                </label>
+                <button type="button" id="mig-ino-api-start" class="settings-inline-btn">Start API import</button>
+                <button type="button" id="mig-ino-api-run" class="settings-inline-btn" hidden>Step now</button>
+                <button type="button" id="mig-ino-api-reset" class="settings-inline-btn" hidden>Reset API import</button>
+                <span id="mig-ino-api-status" class="settings-inline-status"></span>
+              </div>
+            </div>
+            <p id="mig-ino-api-not-connected" class="settings-hint" style="margin:0.25rem 0 0" hidden>Save credentials and connect to enable API import.</p>
+          </div>
+        </div>
+
+        <!-- Miniflux migrator (stub) -->
+        <div class="feeds-tab-panel settings-section" data-migrator-panel="miniflux" hidden style="margin-top:0">
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Miniflux migration — coming soon. Miniflux exposes a clean REST API with no rate limits (self-hosted), so the full import (subscriptions, read state, starred) can run in a single pass.</p>
+        </div>
+
+        <!-- FreshRSS migrator (stub) -->
+        <div class="feeds-tab-panel settings-section" data-migrator-panel="freshrss" hidden style="margin-top:0">
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">FreshRSS migration — coming soon. FreshRSS implements the Google Reader–compatible API (same as Inoreader), so the Inoreader API client can be reused with minimal changes.</p>
+        </div>
+
+        <!-- tt-rss migrator (stub) -->
+        <div class="feeds-tab-panel settings-section" data-migrator-panel="ttrss" hidden style="margin-top:0">
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Tiny Tiny RSS migration — coming soon. tt-rss has a JSON API that covers feeds, categories, and articles.</p>
         </div>
       </div>
 
@@ -6210,6 +6272,75 @@
       }
     });
 
+    // Tag rename
+    const tagRenameModal = document.getElementById('tag-rename-modal');
+    const tagRenameInput = document.getElementById('tag-rename-input');
+    const tagRenameOldLabel = document.getElementById('tag-rename-old');
+    const tagRenameError = document.getElementById('tag-rename-error');
+
+    document.getElementById('ctx-tag-rename')?.addEventListener('click', () => {
+      const tagName = contextTagName;
+      hideAllContextMenus();
+      if (!tagName || !tagRenameModal || !tagRenameInput) return;
+      if (tagRenameOldLabel) tagRenameOldLabel.textContent = `#${tagName}`;
+      if (tagRenameError) { tagRenameError.textContent = ''; tagRenameError.hidden = true; }
+      tagRenameInput.value = tagName;
+      tagRenameModal.hidden = false;
+      tagRenameInput.focus();
+      tagRenameInput.select();
+    });
+
+    async function doTagRename(oldTag, newTag, force) {
+      const body = new URLSearchParams({ old_tag: oldTag, new_tag: newTag });
+      if (force) body.set('force', '1');
+      const resp = await fetch('/tags/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-sidebar' },
+        credentials: 'same-origin',
+        body: body.toString(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return resp.json();
+    }
+
+    document.getElementById('tag-rename-confirm')?.addEventListener('click', async () => {
+      if (!tagRenameModal || !tagRenameInput) return;
+      const oldTag = contextTagName;
+      const newTag = tagRenameInput.value.trim().toLowerCase().replace(/^#+/, '');
+      if (!newTag) {
+        if (tagRenameError) { tagRenameError.textContent = 'Enter a name.'; tagRenameError.hidden = false; }
+        return;
+      }
+      if (newTag === oldTag) {
+        tagRenameModal.hidden = true;
+        return;
+      }
+      try {
+        let data = await doTagRename(oldTag, newTag, false);
+        if (!data.ok && data.exists) {
+          if (!window.confirm(`Tag "#${newTag}" already exists.\n\nRenaming will combine both tags into "#${newTag}". Continue?`)) return;
+          data = await doTagRename(oldTag, newTag, true);
+        }
+        if (!data.ok) {
+          if (tagRenameError) { tagRenameError.textContent = data.error || 'Rename failed.'; tagRenameError.hidden = false; }
+          return;
+        }
+        tagRenameModal.hidden = true;
+        const urlParams = new URLSearchParams(window.location.search);
+        if ((urlParams.get('tag') || '').toLowerCase() === oldTag) {
+          urlParams.set('tag', newTag);
+        }
+        window.location.assign('/?' + urlParams.toString());
+      } catch {
+        if (tagRenameError) { tagRenameError.textContent = 'Rename failed.'; tagRenameError.hidden = false; }
+      }
+    });
+
+    tagRenameInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('tag-rename-confirm')?.click();
+      if (e.key === 'Escape') { if (tagRenameModal) tagRenameModal.hidden = true; }
+    });
+
     refreshButton?.addEventListener('click', () => {
       if (contextTargetType === 'feed') {
         if (
@@ -9711,17 +9842,18 @@
         {
           const inoConfigured = !!d.inoreader_configured;
           const inoConnected = !!d.inoreader_connected;
-          const row = document.getElementById('sett-inoreader-oauth-row');
           const status = document.getElementById('sett-inoreader-status');
           const connect = document.getElementById('sett-inoreader-connect');
           const disconnect = document.getElementById('sett-inoreader-disconnect');
-          const importSection = document.getElementById('sett-inoreader-import-section');
-          if (row) row.hidden = !inoConfigured;
           if (status) status.textContent = inoConnected ? 'Connected.' : inoConfigured ? 'Not connected.' : '';
-          if (connect) connect.hidden = inoConnected;
+          if (connect) connect.hidden = inoConnected || !inoConfigured;
           if (disconnect) disconnect.hidden = !inoConnected;
-          if (importSection) importSection.hidden = !inoConnected;
-          if (inoConnected) _inoRefreshImportStatus();
+          // Show/hide API controls in Import/Export → Inoreader panel.
+          const apiControls = document.getElementById('mig-ino-api-controls');
+          const apiNotConn = document.getElementById('mig-ino-api-not-connected');
+          if (apiControls) apiControls.hidden = !inoConnected;
+          if (apiNotConn) apiNotConn.hidden = inoConnected;
+          _migInoRefreshStatus();
         }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
@@ -9926,8 +10058,6 @@
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),
-            inoreader_client_id: g('sett-inoreader-client-id'),
-            inoreader_client_secret: g('sett-inoreader-client-secret'),
             quire_client_id: g('sett-quire-id'),
             quire_client_secret: g('sett-quire-secret'),
             quire_project_oid: (document.getElementById('sett-quire-project')?.value || ''),
@@ -10016,92 +10146,182 @@
       });
 
       // Inoreader integration handlers.
-      async function _inoRefreshImportStatus() {
-        try {
-          const r = await fetch('/integrations/inoreader/import/status', { credentials: 'same-origin' });
-          const d = await r.json().catch(() => ({}));
-          const el = document.getElementById('sett-inoreader-import-status');
-          const startBtn = document.getElementById('sett-inoreader-import-start');
-          const runBtn = document.getElementById('sett-inoreader-import-run');
-          const resetBtn = document.getElementById('sett-inoreader-import-reset');
-          if (!el) return;
-          if (!d.phase) {
-            el.textContent = 'No import running. Click "Start import" to begin.';
-            if (startBtn) startBtn.hidden = false;
-            if (runBtn) runBtn.hidden = true;
-            if (resetBtn) resetBtn.hidden = true;
-            return;
-          }
-          const rl = d.z1_remaining != null ? ` | Zone1 remaining: ${d.z1_remaining}` : '';
-          if (d.done) {
-            el.textContent = `Done ✓ — ${d.subs_added || 0} feeds added, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred.${rl}`;
-            if (startBtn) startBtn.hidden = true;
-            if (runBtn) runBtn.hidden = true;
-            if (resetBtn) resetBtn.hidden = false;
-          } else if (d.error) {
-            el.textContent = `Error: ${d.error}${rl}`;
-            if (startBtn) startBtn.hidden = true;
-            if (runBtn) runBtn.hidden = false;
-            if (resetBtn) resetBtn.hidden = false;
-          } else {
-            const phaseLabels = { subscriptions: 'Subscribing feeds…', labels_list: 'Fetching label list…', labels_items: 'Importing labels…', starred: 'Importing starred…', done: 'Done' };
-            el.textContent = `Phase: ${phaseLabels[d.phase] || d.phase} — ${d.subs_added || 0} feeds, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred${rl}`;
-            if (startBtn) startBtn.hidden = true;
-            if (runBtn) runBtn.hidden = false;
-            if (resetBtn) resetBtn.hidden = false;
-          }
-        } catch { /* ignore */ }
-      }
+      // Inoreader OAuth (in Integrations tab).
       document.getElementById('sett-inoreader-disconnect')?.addEventListener('click', async () => {
         await fetch('/integrations/inoreader/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
-      document.getElementById('sett-inoreader-import-start')?.addEventListener('click', async () => {
-        const btn = document.getElementById('sett-inoreader-import-start');
-        if (btn) btn.textContent = 'Starting…';
+
+      // Inoreader migrator (in Import/Export tab).
+      async function _migInoRefreshStatus() {
         try {
-          await fetch('/integrations/inoreader/import/start', { method: 'POST', credentials: 'same-origin' });
+          const r = await fetch('/integrations/inoreader/import/status', { credentials: 'same-origin' });
+          const d = await r.json().catch(() => ({}));
+          const progressEl = document.getElementById('mig-ino-progress');
+          const localStatus = document.getElementById('mig-ino-local-status');
+          const cancelBtn = document.getElementById('mig-ino-local-cancel');
+          const apiStatus = document.getElementById('mig-ino-api-status');
+          const apiStart = document.getElementById('mig-ino-api-start');
+          const apiRun = document.getElementById('mig-ino-api-run');
+          const apiReset = document.getElementById('mig-ino-api-reset');
+
+          const phase = d.phase;
+          const isLocal = phase === 'local_files';
+          const isApi = phase && !isLocal;
+          const rl = d.z1_remaining != null ? ` (quota remaining: ${d.z1_remaining})` : '';
+
+          if (!phase) {
+            if (progressEl) { progressEl.textContent = ''; progressEl.hidden = true; }
+            if (localStatus) localStatus.textContent = '';
+            if (cancelBtn) cancelBtn.hidden = true;
+            if (apiStart) apiStart.hidden = false;
+            if (apiRun) apiRun.hidden = true;
+            if (apiReset) apiReset.hidden = true;
+            return;
+          }
+
+          if (isLocal) {
+            const total = d.files_total || 0;
+            const done = d.files_done || 0;
+            const pct = total ? Math.round(done / total * 100) : 0;
+            const summary = `${d.subs_added || 0} feeds added, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred`;
+            const cur = d.current_file ? ` — ${d.current_file}` : '';
+            if (d.done) {
+              if (localStatus) localStatus.textContent = `Done ✓ — ${summary}`;
+              if (progressEl) { progressEl.textContent = ''; progressEl.hidden = true; }
+              if (cancelBtn) cancelBtn.hidden = false;
+            } else if (d.error) {
+              if (localStatus) localStatus.textContent = `Error: ${d.error}`;
+              if (progressEl) { progressEl.textContent = ''; progressEl.hidden = true; }
+              if (cancelBtn) cancelBtn.hidden = false;
+            } else {
+              if (localStatus) localStatus.textContent = `${pct}% (${done}/${total} files)`;
+              if (progressEl) { progressEl.textContent = `${summary}${cur}`; progressEl.hidden = false; }
+              if (cancelBtn) cancelBtn.hidden = false;
+              // Poll while running.
+              setTimeout(_migInoRefreshStatus, 3000);
+            }
+          }
+
+          if (isApi) {
+            const phaseLabels = { subscriptions: 'Subscribing feeds…', labels_list: 'Fetching label list…', labels_items: 'Importing labels…', starred: 'Importing starred…' };
+            const summary = `${d.subs_added || 0} feeds, ${d.items_tagged || 0} tagged, ${d.items_starred || 0} starred${rl}`;
+            if (d.done) {
+              if (apiStatus) apiStatus.textContent = `Done ✓ — ${summary}`;
+              if (apiStart) apiStart.hidden = true;
+              if (apiRun) apiRun.hidden = true;
+              if (apiReset) apiReset.hidden = false;
+            } else if (d.error) {
+              if (apiStatus) apiStatus.textContent = `Error: ${d.error}`;
+              if (apiStart) apiStart.hidden = true;
+              if (apiRun) apiRun.hidden = false;
+              if (apiReset) apiReset.hidden = false;
+            } else {
+              if (apiStatus) apiStatus.textContent = `${phaseLabels[phase] || phase} — ${summary}`;
+              if (apiStart) apiStart.hidden = true;
+              if (apiRun) apiRun.hidden = false;
+              if (apiReset) apiReset.hidden = false;
+            }
+          }
         } catch { /* ignore */ }
-        setTimeout(_inoRefreshImportStatus, 1500);
-      });
-      document.getElementById('sett-inoreader-import-run')?.addEventListener('click', async () => {
-        await fetch('/integrations/inoreader/import/run', { method: 'POST', credentials: 'same-origin' });
-        setTimeout(_inoRefreshImportStatus, 2000);
-      });
-      document.getElementById('sett-inoreader-import-reset')?.addEventListener('click', async () => {
-        await fetch('/integrations/inoreader/import/reset', { method: 'POST', credentials: 'same-origin' });
-        _inoRefreshImportStatus();
-      });
-      // JSON file upload.
-      document.getElementById('sett-inoreader-json-pick')?.addEventListener('click', () => {
-        document.getElementById('sett-inoreader-json-file')?.click();
-      });
-      document.getElementById('sett-inoreader-json-file')?.addEventListener('change', e => {
-        const btn = document.getElementById('sett-inoreader-json-upload');
-        const status = document.getElementById('sett-inoreader-json-status');
-        const file = e.target.files?.[0];
-        if (btn) btn.hidden = !file;
-        if (status) status.textContent = file ? file.name : '';
-      });
-      document.getElementById('sett-inoreader-json-upload')?.addEventListener('click', async () => {
-        const input = document.getElementById('sett-inoreader-json-file');
-        const status = document.getElementById('sett-inoreader-json-status');
-        const file = input?.files?.[0];
-        if (!file) return;
-        if (status) status.textContent = 'Uploading…';
-        const fd = new FormData();
-        fd.append('file', file);
+      }
+
+      // Inoreader creds save button (in Import/Export → Inoreader panel).
+      document.getElementById('mig-ino-creds-save')?.addEventListener('click', async () => {
+        const cid = document.getElementById('sett-inoreader-client-id')?.value.trim() || '';
+        const secret = document.getElementById('sett-inoreader-client-secret')?.value.trim() || '';
+        const st = document.getElementById('sett-inoreader-status');
+        const payload = { inoreader_client_id: cid };
+        if (secret && !secret.startsWith('•')) payload.inoreader_client_secret = secret;
         try {
-          const r = await fetch('/integrations/inoreader/import/json', { method: 'POST', credentials: 'same-origin', body: fd });
+          const resp = await fetch('/settings/all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+          });
+          if (st) st.textContent = resp.ok ? 'Saved.' : 'Save failed.';
+          if (resp.ok) setTimeout(loadSettingsData, 300);
+        } catch (err) {
+          if (st) st.textContent = `Error: ${err.message || err}`;
+        }
+      });
+
+      // File picker for Inoreader import.
+      document.getElementById('mig-ino-file-pick')?.addEventListener('click', () => {
+        document.getElementById('mig-ino-file-input')?.click();
+      });
+      document.getElementById('mig-ino-file-input')?.addEventListener('change', e => {
+        const files = e.target.files;
+        const label = document.getElementById('mig-ino-file-label');
+        const uploadBtn = document.getElementById('mig-ino-upload-btn');
+        if (!files || !files.length) {
+          if (label) label.textContent = 'No files selected';
+          if (uploadBtn) uploadBtn.hidden = true;
+          return;
+        }
+        const names = Array.from(files).map(f => f.name).join(', ');
+        if (label) label.textContent = files.length === 1 ? names : `${files.length} files: ${names}`;
+        if (uploadBtn) uploadBtn.hidden = false;
+      });
+
+      // Upload & import button.
+      document.getElementById('mig-ino-upload-btn')?.addEventListener('click', async () => {
+        const input = document.getElementById('mig-ino-file-input');
+        const st = document.getElementById('mig-ino-local-status');
+        const uploadBtn = document.getElementById('mig-ino-upload-btn');
+        if (!input?.files?.length) return;
+        if (st) st.textContent = 'Uploading…';
+        if (uploadBtn) uploadBtn.disabled = true;
+        const fd = new FormData();
+        for (const f of input.files) fd.append('files', f);
+        try {
+          const r = await fetch('/integrations/inoreader/import/upload', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: fd,
+          });
           const d = await r.json().catch(() => ({}));
           if (d.ok) {
-            if (status) status.textContent = `Done — ${d.feeds_added} feeds, ${d.items_starred} starred, ${d.items_tagged} tagged (of ${d.total_items} items).`;
+            if (st) st.textContent = `Started — ${d.files} JSON file(s) queued.`;
+            if (uploadBtn) { uploadBtn.hidden = true; uploadBtn.disabled = false; }
+            setTimeout(_migInoRefreshStatus, 1500);
           } else {
-            if (status) status.textContent = `Error: ${d.error || 'unknown'}`;
+            if (st) st.textContent = `Error: ${d.error || 'unknown'}`;
+            if (uploadBtn) uploadBtn.disabled = false;
           }
         } catch (err) {
-          if (status) status.textContent = `Error: ${err.message || err}`;
+          if (st) st.textContent = `Error: ${err.message || err}`;
+          if (uploadBtn) uploadBtn.disabled = false;
         }
+      });
+
+      // Reset button for local import.
+      document.getElementById('mig-ino-local-cancel')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/import/reset', { method: 'POST', credentials: 'same-origin' });
+        document.getElementById('mig-ino-file-input').value = '';
+        document.getElementById('mig-ino-file-label').textContent = 'No files selected';
+        document.getElementById('mig-ino-upload-btn').hidden = true;
+        _migInoRefreshStatus();
+      });
+
+      // API import controls.
+      document.getElementById('mig-ino-api-start')?.addEventListener('click', async () => {
+        try {
+          const since = document.getElementById('mig-ino-api-since')?.value || '';
+          const fd = new FormData();
+          if (since) fd.append('since', since);
+          await fetch('/integrations/inoreader/import/start', { method: 'POST', credentials: 'same-origin', body: fd });
+          setTimeout(_migInoRefreshStatus, 1500);
+        } catch { /* ignore */ }
+      });
+      document.getElementById('mig-ino-api-run')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/import/run', { method: 'POST', credentials: 'same-origin' });
+        setTimeout(_migInoRefreshStatus, 2000);
+      });
+      document.getElementById('mig-ino-api-reset')?.addEventListener('click', async () => {
+        await fetch('/integrations/inoreader/import/reset', { method: 'POST', credentials: 'same-origin' });
+        _migInoRefreshStatus();
       });
 
       document.getElementById('sett-maint-run-now')?.addEventListener('click', async () => {
@@ -10541,6 +10761,22 @@
         });
         intTab.querySelectorAll('[data-int-panel]').forEach(panel => {
           panel.hidden = panel.getAttribute('data-int-panel') !== view;
+        });
+      });
+    });
+
+    // Platform-migrator subtabs in Import/Export tab.
+    const ieTab = document.getElementById('settings-tab-importexport');
+    ieTab?.querySelectorAll('[data-migrator-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-migrator-view');
+        ieTab.querySelectorAll('[data-migrator-view]').forEach(b => {
+          const active = b.getAttribute('data-migrator-view') === view;
+          b.classList.toggle('feeds-tab-btn--active', active);
+          b.setAttribute('aria-selected', String(active));
+        });
+        ieTab.querySelectorAll('[data-migrator-panel]').forEach(panel => {
+          panel.hidden = panel.getAttribute('data-migrator-panel') !== view;
         });
       });
     });
