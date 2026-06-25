@@ -1,3 +1,6 @@
+/* Ensure [hidden] always wins over display: flex/grid on component rules */
+[hidden] { display: none !important; }
+
 /* History pane header styles */
 .history-pane-header {
   display: flex;
@@ -6007,10 +6010,20 @@ textarea.hl-draft-pattern {
 .lectio-yt-pl-new { border-top: 1px solid var(--border); margin-top: 0.25rem; color: var(--accent); }
 .lectio-yt-pl-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
 .lectio-yt-pl-status { color: var(--muted); font-size: 0.8rem; }
+.entry-share-wrap { position: relative; display: inline-flex; }
+.entry-share-menu { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 1000; min-width: 160px; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+.share-menu-item { display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+.share-menu-item:hover:not(:disabled) { background: var(--hover-bg); }
+.share-menu-item--unavail, .share-menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.share-menu-item .material-symbols-rounded { font-size: 1rem; flex-shrink: 0; }
 .lectio-pin-menu { position: absolute; z-index: 1000; min-width: 200px; max-height: 320px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
 .lectio-pin-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; text-decoration: none; }
 .lectio-pin-item:hover { background: var(--hover-bg); }
 .lectio-pin-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
+.lectio-quire-menu { position: absolute; z-index: 1000; min-width: 200px; max-height: 320px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+.lectio-quire-item { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; }
+.lectio-quire-item:hover { background: var(--hover-bg); }
+.lectio-quire-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
 
 /* Pin the Save / action footer to the bottom of the scrolling settings panel so
    it's always reachable without scrolling to the end of a long tab. */

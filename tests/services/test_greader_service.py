@@ -137,6 +137,7 @@ def test_authenticate_email_format(tmp_path):
 def test_check_token_valid(tmp_path):
     svc = _build_service(tmp_path / "meta.sqlite")
     token = svc.authenticate(_USERNAME, _PASSWORD)
+    assert token is not None
     assert svc.check_token(token) is True
 
 

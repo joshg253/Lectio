@@ -59,13 +59,13 @@ def _service(background_user_ids):
 
     svc = StarredArchiveService(
         get_archive_connection=get_archive_connection,
-        get_meta_connection=lambda: None,
-        get_reader=lambda: None,
+        get_meta_connection=lambda: None,  # ty: ignore[invalid-argument-type]
+        get_reader=lambda: None,  # type: ignore[arg-type]
         user_agent="test",
         sanitize_readability_html=lambda h: h,
         background_user_ids=background_user_ids,
     )
-    svc._archive_entry = lambda feed_url, entry_id: seen.append(  # type: ignore[method-assign]
+    svc._archive_entry = lambda feed_url, entry_id: seen.append(  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         (tenancy.current_user_id(), feed_url)
     )
     return svc, seen

@@ -141,15 +141,11 @@
             <hr class="menu-divider" />
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
-            {% if multi_user or auth_enabled %}
             <hr class="menu-divider" />
-            {% if multi_user and is_admin %}
+            {% if is_admin %}
             <a class="menu-item" href="/administration"><span class="material-symbols-rounded" aria-hidden="true">admin_panel_settings</span> Administration</a>
             {% endif %}
-            {% if auth_enabled %}
             <a class="menu-item" href="/logout"><span class="material-symbols-rounded" aria-hidden="true">logout</span> Sign out</a>
-            {% endif %}
-            {% endif %}
           </div>
         </details>
         <a class="menu-brand topbar-brand" href="/">Lectio</a>
@@ -310,7 +306,12 @@
     <div class="pane-resizer" data-resizer="left-middle" role="separator" aria-label="Resize left and middle panes"></div>
 
     <section class="pane pane-posts">
-      {% if selected_read_filter == 'history' %}
+      {% if no_feeds %}
+      <div class="no-feeds-prompt">
+        <p class="no-feeds-prompt-text muted">No feeds yet. Add your first feed to get started.</p>
+        <button type="button" class="btn no-feeds-add-btn" id="no-feeds-add-btn">+ Add Feed</button>
+      </div>
+      {% elif selected_read_filter == 'history' %}
       <div class="pane-header history-pane-header">
         <span class="material-symbols-rounded history-header-icon" aria-hidden="true">history</span>
         <span class="history-header-label">History</span>
@@ -872,6 +873,7 @@
       if (appMenuDetails?.open) {
         appMenuDetails.removeAttribute('open');
       }
+      hideShareMenu();
     });
 
     // Folders pane in-pane collapse/expand + hover floater
@@ -1334,7 +1336,6 @@
               <label class="settings-label" for="sett-profile-email">Email</label>
               <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
             </div>
-            {% if multi_user %}
             <form class="settings-section settings-section--row" method="post" action="/account/username">
               {{ csrf_input(request) | safe }}
               <label class="settings-label" for="sett-new-username">Username</label>
@@ -1342,10 +1343,8 @@
               <button type="submit" class="settings-save-btn">Change</button>
               <p class="settings-hint">Changing your login name doesn't affect your data or API token.</p>
             </form>
-            {% endif %}
           </div>
         </div>
-        {% if multi_user %}
         <form class="settings-section settings-section--row settings-section--spaced" method="post" action="/account/password">
           {{ csrf_input(request) | safe }}
           <label class="settings-label" for="sett-current-password">Password</label>
@@ -1368,7 +1367,6 @@
             </div>
           </div>
         </form>
-        {% endif %}
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
         <div class="settings-section">
           <label class="settings-label">Theme</label>
@@ -1410,7 +1408,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint">Add your API key to show video durations in titles. Add your channel ID / handle (public subscriptions) to sync your subscriptions as feeds — filling both in starts a sync.</p>
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">API key enables video durations in titles. Add your channel ID / handle to sync subscriptions as feeds — both fields required.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-yt-key">API key</label>
             <input type="password" id="sett-yt-key" class="settings-input settings-input--secret" placeholder="AIza…" autocomplete="new-password" />
@@ -1420,32 +1418,38 @@
             <input type="text" id="sett-yt-channel" class="settings-input" placeholder="@yourhandle or UCxxxxxx" maxlength="200" />
           </div>
           <div class="settings-field">
-            <label class="settings-label" for="sett-yt-folder">Folder name</label>
+            <label class="settings-label" for="sett-yt-folder">Subscription folder</label>
             <input type="text" id="sett-yt-folder" class="settings-input" placeholder="YouTube Subscriptions" maxlength="200" />
           </div>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem">
-            <input type="checkbox" id="sett-yt-account-features" />
-            <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later)</span>
-          </label>
-          <p class="settings-hint" style="grid-column:1 / -1">Use the standard <code>youtube.com</code> player instead of the privacy-enhanced <code>youtube-nocookie.com</code> one, so the in-article player shows Share and Watch Later (these need your signed-in YouTube cookies). Off by default for privacy; turning it on lets YouTube set its usual cookies.</p>
-          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem">
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1">
             <input type="checkbox" id="sett-yt-hide-shorts" />
-            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds</span>
+            <span class="settings-label" style="margin:0">Hide Shorts on all YouTube feeds (overrides per-feed setting)</span>
           </label>
-          <p class="settings-hint" style="grid-column:1 / -1">Auto-marks YouTube Shorts as read across every YouTube feed at refresh, so they stay out of your unread list. Off by default. (Overrides the per-feed Shorts setting when on.)</p>
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your YouTube account to get an <strong>Add to playlist</strong> button on each video embed (uses the YouTube Data API with your own OAuth grant — tokens are stored only for you).</p>
+          <label class="settings-toggle-row" style="display:flex;align-items:center;gap:0.5rem;grid-column:1 / -1;margin-top:1rem">
+            <input type="checkbox" id="sett-yt-account-features" />
+            <span class="settings-label" style="margin:0">Account features in embeds (Share / Watch Later) — requires OAuth below</span>
+          </label>
+          <p class="settings-hint" style="grid-column:1 / -1">Register a Web app at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>, add redirect URI <code id="sett-yt-callback-url"></code>, then paste below and Save to enable account features and playlist adds.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-oauth-client-id">OAuth Client ID</label>
+            <input type="text" id="sett-yt-oauth-client-id" class="settings-input" placeholder="166660….apps.googleusercontent.com" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-yt-oauth-client-secret">OAuth Client Secret</label>
+            <input type="password" id="sett-yt-oauth-client-secret" class="settings-input settings-input--secret" placeholder="GOCSPX-…" autocomplete="new-password" />
+          </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-yt-oauth-row">
             <span id="sett-yt-oauth-status" class="settings-inline-status"></span>
-            <a id="sett-yt-oauth-connect" class="settings-inline-btn" href="/integrations/youtube/oauth/connect">Connect YouTube account</a>
+            <a id="sett-yt-oauth-connect" class="settings-inline-btn" href="/integrations/youtube/oauth/connect" hidden>Connect YouTube account</a>
             <button type="button" id="sett-yt-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
           <div id="sett-yt-quota" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
-          <p class="settings-hint" style="grid-column:1 / -1">Estimated YouTube API quota used today (durations, playlist adds, sub-sync) against the daily cap — Google gives no live quota read, so this is Lectio's own tally and resets midnight Pacific.</p>
+          <p class="settings-hint" style="grid-column:1 / -1" id="sett-yt-quota-hint" hidden>Lectio's own tally — Google gives no live quota read. Resets midnight Pacific.</p>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="deviantart" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/deviantart/callback</code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
+          <p class="settings-hint">Register an app at <a href="https://www.deviantart.com/studio/apps" target="_blank" rel="noopener">deviantart.com/studio/apps</a> (use a <strong>Confidential</strong> client so the secret stays visible) to get a Client ID + Secret, then Save. Add <code id="sett-da-callback-url"></code> to the app's OAuth2 Redirect URI whitelist to enable watch-list sync. Subscribe to a gallery by adding a <code>deviantart.com/&lt;user&gt;</code> URL like any feed. <button type="button" id="sett-da-verify" class="settings-inline-btn">Verify</button> <span id="sett-da-verify-status" class="settings-inline-status"></span></p>
           <div class="settings-field">
             <label class="settings-label" for="sett-da-id">Client ID</label>
             <input type="text" id="sett-da-id" class="settings-input" placeholder="12345" maxlength="200" autocomplete="off" />
@@ -1460,8 +1464,9 @@
           </div>
           <div class="settings-da-account" style="margin-top:0.5rem">
             <span id="sett-da-status" class="settings-inline-status"></span>
-            <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect">Connect DeviantArt account</a>
+            <a id="sett-da-connect" class="settings-inline-btn" href="/deviantart/connect" hidden>Connect DeviantArt account</a>
             <button type="button" id="sett-da-watchfeed" class="settings-inline-btn" hidden>Add Watch feed</button>
+            <button type="button" id="sett-da-sync" class="settings-inline-btn" hidden>Sync Watch List</button>
             <button type="button" id="sett-da-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
             <span id="sett-da-action-status" class="settings-inline-status"></span>
           </div>
@@ -1482,18 +1487,25 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="pinterest" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Uses the Pinterest API v5 with your own OAuth grant — tokens are stored only for you. Requires <code>PINTEREST_OAUTH_CLIENT_ID/SECRET</code> in the environment.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Pinterest account to get a <strong>Pin</strong> button on each article that saves it (its lead image, linked back to the source) to a board you pick. Register an app at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with redirect URI <code id="sett-pinterest-callback-url"></code>, or use the shared instance credentials set in the Administration panel.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-pinterest-client-id">OAuth Client ID</label>
+            <input type="text" id="sett-pinterest-client-id" class="settings-input" placeholder="your app ID" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-pinterest-client-secret">OAuth Client Secret</label>
+            <input type="password" id="sett-pinterest-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-pinterest-oauth-row">
             <span id="sett-pinterest-oauth-status" class="settings-inline-status"></span>
-            <a id="sett-pinterest-oauth-connect" class="settings-inline-btn" href="/integrations/pinterest/oauth/connect">Connect Pinterest account</a>
+            <a id="sett-pinterest-oauth-connect" class="settings-inline-btn" href="/integrations/pinterest/oauth/connect" hidden>Connect Pinterest account</a>
             <button type="button" id="sett-pinterest-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
-          <p class="settings-hint" id="sett-pinterest-not-configured" style="grid-column:1 / -1" hidden>Pinterest OAuth client is not configured — set <code>PINTEREST_OAUTH_CLIENT_ID</code> and <code>PINTEREST_OAUTH_CLIENT_SECRET</code> in the environment, then restart.</p>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="quire" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect <a href="https://quire.io" target="_blank" rel="noopener">Quire</a> to get an <strong>Add to Quire</strong> button on each article that creates a task in a project you pick. Register an app at <a href="https://quire.io/apps/dev" target="_blank" rel="noopener">quire.io/apps/dev</a> to get a Client ID + Secret, then Save. Add <code>https://lectio.catfork.win/quire/callback</code> to the app's Redirect URI whitelist.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect <a href="https://quire.io" target="_blank" rel="noopener">Quire</a> to get an <strong>Add to Quire</strong> button on each article that creates a task in a project you pick. Register an app at <a href="https://quire.io/apps/dev" target="_blank" rel="noopener">quire.io/apps/dev</a> to get a Client ID + Secret, then Save. Add <code id="sett-quire-callback-url"></code> to the app's Redirect URI whitelist.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-quire-id">Client ID</label>
             <input type="text" id="sett-quire-id" class="settings-input" placeholder="your client ID" maxlength="200" autocomplete="off" />
@@ -1504,7 +1516,7 @@
           </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.5rem">
             <span id="sett-quire-status" class="settings-inline-status"></span>
-            <a id="sett-quire-connect" class="settings-inline-btn" href="/quire/connect">Connect Quire account</a>
+            <a id="sett-quire-connect" class="settings-inline-btn" href="/quire/connect" hidden>Connect Quire account</a>
             <button type="button" id="sett-quire-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
           <div class="settings-field" id="sett-quire-project-row" style="grid-column:1 / -1" hidden>
@@ -2880,19 +2892,8 @@
       }
       const quireBtn = event.target instanceof Element && event.target.closest('[data-quire-feed-url]');
       if (quireBtn) {
-        quireBtn.disabled = true;
-        try {
-          const fd = new FormData();
-          fd.append('feed_url', quireBtn.getAttribute('data-quire-feed-url') || '');
-          fd.append('entry_id', quireBtn.getAttribute('data-quire-entry-id') || '');
-          const resp = await fetch('/entries/quire', { method: 'POST', body: fd, credentials: 'same-origin' });
-          const data = await resp.json();
-          showToastMessage(data.ok ? 'Added to Quire' : (data.error || 'Quire add failed'));
-        } catch (e) {
-          showToastMessage('Quire add failed');
-        } finally {
-          quireBtn.disabled = false;
-        }
+        event.preventDefault();
+        await openQuirePicker(quireBtn);
         return;
       }
     });
@@ -2961,6 +2962,74 @@
           _closePinMenu();
           try { await _doPin(feedUrl, entryId, b.id, b.name || 'board'); }
           catch (e) { showToastMessage(e.message || 'Pin failed'); }
+        });
+        menu.appendChild(item);
+      });
+    }
+
+    // --- Quire "Add to project" picker --------------------------------------
+    let _quireProjectsCache = null;   // null = not fetched; {ok, projects, error}
+    async function _fetchQuireProjects() {
+      if (_quireProjectsCache) return _quireProjectsCache;
+      try {
+        const r = await fetch('/api/quire/projects', { credentials: 'same-origin' });
+        _quireProjectsCache = (await r.json().catch(() => ({}))) || { ok: false, projects: [] };
+      } catch (e) {
+        _quireProjectsCache = { ok: false, projects: [], error: 'network' };
+      }
+      return _quireProjectsCache;
+    }
+
+    function _closeQuireMenu() {
+      document.querySelector('.lectio-quire-menu')?.remove();
+      document.removeEventListener('click', _quireOutsideClick, true);
+    }
+    function _quireOutsideClick(e) {
+      if (!(e.target instanceof Element) || !e.target.closest('.lectio-quire-menu, [data-quire-feed-url]')) _closeQuireMenu();
+    }
+
+    async function _doQuireAdd(feedUrl, entryId, projectOid, projectName) {
+      const fd = new FormData();
+      fd.append('feed_url', feedUrl);
+      fd.append('entry_id', entryId);
+      fd.append('project_oid', projectOid);
+      const r = await fetch('/entries/quire', { method: 'POST', body: fd, credentials: 'same-origin' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      showToastMessage(`Added to ${projectName}.`);
+    }
+
+    async function openQuirePicker(btn) {
+      const rect = btn.getBoundingClientRect();
+      hideShareMenu();
+      _closeQuireMenu();
+      const feedUrl = btn.getAttribute('data-quire-feed-url') || '';
+      const entryId = btn.getAttribute('data-quire-entry-id') || '';
+      const menu = document.createElement('div');
+      menu.className = 'lectio-quire-menu';
+      menu.innerHTML = '<div class="lectio-quire-loading">Loading projects…</div>';
+      document.body.appendChild(menu);
+      menu.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+      setTimeout(() => document.addEventListener('click', _quireOutsideClick, true), 0);
+
+      const data = await _fetchQuireProjects();
+      if (!data.ok) {
+        menu.innerHTML = `<div class="lectio-quire-loading">${data.error || 'Failed to load projects.'}</div>`;
+        return;
+      }
+      const projects = data.projects || [];
+      if (!projects.length) { menu.innerHTML = '<div class="lectio-quire-loading">No projects found.</div>'; return; }
+      menu.innerHTML = '';
+      projects.forEach(p => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'lectio-quire-item';
+        item.textContent = p.name || '(untitled)';
+        item.addEventListener('click', async () => {
+          _closeQuireMenu();
+          try { await _doQuireAdd(feedUrl, entryId, p.oid, p.name || 'Quire'); }
+          catch (e) { showToastMessage(e.message || 'Quire add failed'); }
         });
         menu.appendChild(item);
       });
@@ -3887,6 +3956,8 @@
     // --- YouTube "Add to playlist" embed enhancement ---------------------
     let _ytPlaylistsCache = null;        // null = not fetched; {connected, playlists, error}
     let _ytPlaylistsPromise = null;
+    let _ytFolderName = '';              // populated from settings; used for empty-folder sync detection
+    let _ytAccountFeaturesEnabled = false; // yt_embed_account_features setting
 
     async function _ytFetchPlaylists(force = false) {
       if (!force && _ytPlaylistsCache) return _ytPlaylistsCache;
@@ -4089,7 +4160,7 @@
         bindEntryPaneInteractions();
         bindEntryTagInteractions();
         bindPostListInteractions();
-        enhanceYoutubeEmbeds(nextPane);
+        if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane);
         if (typeof window.bindSwipeGestures === 'function') {
           window.bindSwipeGestures();
         }
@@ -4479,7 +4550,48 @@
       hidePostContextMenu();
       hideRootContextMenu();
       hideTagContextMenu();
+      hideShareMenu();
+      _closeQuireMenu();
     }
+
+    function hideShareMenu() {
+      const menu = document.getElementById('entry-share-menu');
+      if (menu) menu.setAttribute('hidden', '');
+      document.getElementById('entry-share-btn')?.setAttribute('aria-expanded', 'false');
+    }
+
+    document.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element)) return;
+      const shareBtn = event.target.closest('#entry-share-btn');
+      if (shareBtn) {
+        event.stopPropagation();
+        const menu = document.getElementById('entry-share-menu');
+        if (!menu) return;
+        const isOpen = !menu.hasAttribute('hidden');
+        if (isOpen) {
+          hideShareMenu();
+        } else {
+          _closePinMenu();
+          menu.removeAttribute('hidden');
+          shareBtn.setAttribute('aria-expanded', 'true');
+        }
+        return;
+      }
+      // Close share menu on any click outside
+      const menu = document.getElementById('entry-share-menu');
+      if (menu && !menu.hasAttribute('hidden') && !event.target.closest('.entry-share-wrap')) {
+        hideShareMenu();
+      }
+    }, true);
+
+    // Close share menu when an active item is clicked (before action handlers fire)
+    document.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element)) return;
+      const item = event.target.closest('.share-menu-item:not(:disabled)');
+      if (item && item.closest('.entry-share-menu')) {
+        hideShareMenu();
+      }
+    }, true);
 
     function closeFeedPropertiesModal() {
       feedPropertiesModal?.setAttribute('hidden', '');
@@ -5926,12 +6038,13 @@
         setMenuItemVisible(deleteFolderButton, true);
         setMenuItemVisible(disableFeedButton, false);
         // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
-        // so renaming the folder doesn't break "Sync Subscriptions"; fall back to the
-        // conventional name for an as-yet-empty folder.
+        // so renaming the folder doesn't break "Sync Subscriptions". Fall back to an
+        // exact match against the configured folder name (_ytFolderName, loaded from
+        // Settings) to handle an as-yet-empty folder before the first sync.
         const _ytFid = folderLink.getAttribute('data-folder-id');
         const _hasYtFeed = !!(_ytFid && document.querySelector(
           `.feed-link[data-folder-id="${CSS.escape(_ytFid)}"][data-feed-url*="youtube.com/feeds/videos.xml"]`));
-        const isYouTubeFolder = _hasYtFeed || contextFolderName.startsWith('YouTube');
+        const isYouTubeFolder = _hasYtFeed || (!!_ytFolderName && contextFolderName === _ytFolderName);
         setMenuItemVisible(youtubeSyncButton, isYouTubeFolder);
         if (isYouTubeFolder && youtubeSyncButton) {
           youtubeSyncButton.title = youtubeSyncLastAt
@@ -6419,7 +6532,7 @@
     }
 
     bindEntryPaneInteractions();
-    try { enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
+    try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
 
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
@@ -7935,7 +8048,7 @@
             if (ruleType === 'webhook') {
               const fmtBadge = document.createElement('span');
               fmtBadge.className = 'hl-rule-delivery-badge';
-              fmtBadge.textContent = (rule.webhook_format === 'ifttt') ? 'IFTTT' : 'JSON';
+              fmtBadge.textContent = (rule.webhook_format === 'ifttt') ? 'IFTTT' : (rule.webhook_batch ? 'JSON (batch)' : 'JSON');
               row.appendChild(fmtBadge);
               if (rule.webhook_url) {
                 const toSpan = document.createElement('span');
@@ -9019,6 +9132,22 @@
         webhookFormatSel.value = prefill.webhook_format || 'generic';
         webhookRow.appendChild(webhookFormatSel);
 
+        const whBatchLabel = document.createElement('label');
+        whBatchLabel.className = 'hl-draft-field-label';
+        whBatchLabel.style.display = 'flex';
+        whBatchLabel.style.alignItems = 'center';
+        whBatchLabel.style.gap = '0.25rem';
+        const webhookBatchCheck = document.createElement('input');
+        webhookBatchCheck.type = 'checkbox';
+        webhookBatchCheck.checked = !!prefill.webhook_batch;
+        whBatchLabel.appendChild(webhookBatchCheck);
+        whBatchLabel.appendChild(document.createTextNode('Batch'));
+        whBatchLabel.title = 'Send all matches in one request instead of one request per entry. Not available for IFTTT format.';
+        webhookRow.appendChild(whBatchLabel);
+        const toggleBatch = () => { whBatchLabel.style.display = webhookFormatSel.value === 'ifttt' ? 'none' : 'flex'; };
+        webhookFormatSel.addEventListener('change', toggleBatch);
+        toggleBatch();
+
         const webhookTestBtn = document.createElement('button');
         webhookTestBtn.type = 'button';
         webhookTestBtn.className = 'feed-prop-inline-btn';
@@ -9222,6 +9351,7 @@
           const batchCount = parseInt(batchCountInput.value || '0', 10) || 0;
           const ccMe = ccMeCheck.checked ? 1 : 0;
           const webhookFormat = webhookFormatSel.value || 'generic';
+          const webhookBatch = (webhookFormat !== 'ifttt' && webhookBatchCheck.checked) ? 1 : 0;
           let scope, scopeId;
           if (!folderId)                  { scope = 'global'; scopeId = ''; }
           else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
@@ -9231,7 +9361,7 @@
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
                          email_to: emailTo, batch_time: batchTime, batch_count: batchCount, cc_me: ccMe,
-                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat,
+                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat, webhook_batch: webhookBatch,
                          yt_playlist_id: ytPlSel.value || '',
                          yt_playlist_title: (ytPlOpt && ytPlOpt.dataset.title) || '',
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
@@ -9254,7 +9384,7 @@
           enabled: r.enabled !== undefined ? r.enabled : 0,
           dedup_window_hours: r.dedup_window_hours || 168,
           exclude_scope_ids: r.exclude_scope_ids || '',
-          webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic',
+          webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic', webhook_batch: r.webhook_batch ? 1 : 0,
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
@@ -9454,6 +9584,8 @@
         secretField('sett-yt-key', d.yt_api_key_set, d.yt_api_key_masked);
         v('sett-yt-channel', d.yt_channel_id);
         v('sett-yt-folder', d.yt_folder_name);
+        _ytFolderName = d.yt_folder_name || '';
+        _ytAccountFeaturesEnabled = !!d.yt_embed_account_features;
         { const el = document.getElementById('sett-yt-account-features'); if (el) el.checked = !!d.yt_embed_account_features; }
         { const el = document.getElementById('sett-yt-hide-shorts'); if (el) el.checked = !!d.yt_hide_shorts_global; }
         {
@@ -9466,6 +9598,8 @@
             el.className = 'settings-yt-quota settings-yt-quota--' + q.state;
             el.textContent = `Quota today: ${q.spent.toLocaleString()} / ${q.cap.toLocaleString()} (${q.remaining.toLocaleString()} left, ${pct}%)${word}`;
             el.hidden = false;
+            const qhint = document.getElementById('sett-yt-quota-hint');
+            if (qhint) qhint.hidden = false;
           } else if (el) {
             el.hidden = true;
           }
@@ -9509,6 +9643,10 @@
           }
           if (none) none.hidden = (ipOk || ytOk || emOk || quireOk);
         }
+        v('sett-yt-oauth-client-id', d.yt_oauth_client_id);
+        secretField('sett-yt-oauth-client-secret', d.yt_oauth_client_secret_set, d.yt_oauth_client_secret_masked);
+        v('sett-pinterest-client-id', d.pinterest_oauth_client_id);
+        secretField('sett-pinterest-client-secret', d.pinterest_oauth_client_secret_set, d.pinterest_oauth_client_secret_masked);
         // YouTube account (OAuth) connection status for Add-to-playlist.
         {
           const ytConfigured = !!d.yt_oauth_configured;
@@ -9531,9 +9669,7 @@
           const status = document.getElementById('sett-pinterest-oauth-status');
           const connect = document.getElementById('sett-pinterest-oauth-connect');
           const disconnect = document.getElementById('sett-pinterest-oauth-disconnect');
-          const notConf = document.getElementById('sett-pinterest-not-configured');
           if (row) row.hidden = !piConfigured;
-          if (notConf) notConf.hidden = piConfigured;
           if (status) status.textContent = piConnected ? 'Connected.' : 'Not connected.';
           if (connect) connect.hidden = piConnected;
           if (disconnect) disconnect.hidden = !piConnected;
@@ -9551,7 +9687,7 @@
           : 'Not connected.';
         const daConnect = document.getElementById('sett-da-connect');
         if (daConnect) daConnect.hidden = daConnected;
-        ['sett-da-watchfeed', 'sett-da-disconnect'].forEach(id => {
+        ['sett-da-watchfeed', 'sett-da-sync', 'sett-da-disconnect'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.hidden = !daConnected;
         });
@@ -9606,6 +9742,20 @@
             el.hidden = false;
             if (hint) hint.hidden = false;
           } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }
+        }
+        // Populate OAuth callback URL hints with the actual public URL.
+        {
+          const base = (d.public_url || window.location.origin).replace(/\/$/, '');
+          const cbMap = {
+            'sett-yt-callback-url':        base + '/youtube/oauth/callback',
+            'sett-da-callback-url':        base + '/deviantart/callback',
+            'sett-quire-callback-url':     base + '/quire/callback',
+            'sett-pinterest-callback-url': base + '/integrations/pinterest/oauth/callback',
+          };
+          for (const [id, url] of Object.entries(cbMap)) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = url;
+          }
         }
         settContacts = d.contacts || [];
         settDefaultAddress = d.email_to_default || '';
@@ -9719,6 +9869,10 @@
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
+            yt_oauth_client_id: g('sett-yt-oauth-client-id'),
+            yt_oauth_client_secret: g('sett-yt-oauth-client-secret'),
+            pinterest_oauth_client_id: g('sett-pinterest-client-id'),
+            pinterest_oauth_client_secret: g('sett-pinterest-client-secret'),
             deviantart_client_id: g('sett-da-id'),
             deviantart_client_secret: g('sett-da-secret'),
             deviantart_folder_name: g('sett-da-folder'),
@@ -9790,6 +9944,8 @@
       };
       document.getElementById('sett-da-watchfeed')?.addEventListener('click', () =>
         _daAction('/deviantart/add-watch-feed', 'Adding…', d => d.message || 'Added.'));
+      document.getElementById('sett-da-sync')?.addEventListener('click', () =>
+        _daAction('/deviantart/sync-watchlist', 'Syncing…', d => d.message || 'Sync started.'));
       document.getElementById('sett-da-disconnect')?.addEventListener('click', async () => {
         await fetch('/deviantart/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
@@ -11712,6 +11868,9 @@
       document.getElementById('menu-add-feed-btn')?.addEventListener('click', () => {
         window.openAddFeedDialog();
         document.getElementById('side-menu')?.removeAttribute('data-open');
+      });
+      document.getElementById('no-feeds-add-btn')?.addEventListener('click', () => {
+        window.openAddFeedDialog();
       });
     }());
 

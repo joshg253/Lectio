@@ -64,16 +64,26 @@ def _request(method: str, url: str, *, headers: dict, params: dict | None = None
     delay = _RETRY_BASE_DELAY
     # One client for the whole call: retries reuse the connection pool instead of
     # paying TCP/TLS setup again on every 429 backoff.
+    last_resp = None
     with httpx.Client(timeout=timeout, headers=headers) as client:
         for attempt in range(_MAX_RETRIES):
             resp = client.request(method, url, params=params, data=data)
             if resp.status_code != 429:
                 return resp
+            last_resp = resp
             if attempt < _MAX_RETRIES - 1:
+                try:
+                    delay = float(resp.headers.get("Retry-After") or delay)
+                except ValueError:
+                    pass
                 LOGGER.info("[deviantart] 429 rate-limited; backing off %.0fs", delay)
                 time.sleep(delay)
                 delay *= 2
-    raise DeviantArtRateLimited("DeviantArt per-user request limit reached")
+    retry_after = last_resp.headers.get("Retry-After") if last_resp is not None else None
+    msg = "DeviantArt per-user request limit reached"
+    if retry_after:
+        msg += f" (retry after {retry_after}s)"
+    raise DeviantArtRateLimited(msg)
 
 # Cache of client_id -> (access_token, expires_at_epoch). Tokens are app-scoped,
 # so one per client_id is correct even across users sharing creds.
@@ -262,7 +272,7 @@ def _deviation_to_entry(d: dict) -> dict | None:
             img = thumbs[-1].get("src", "")
     ts = d.get("published_time")
     try:
-        published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+        published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()  # ty: ignore[invalid-argument-type]
     except Exception:
         published_at = datetime.now(timezone.utc).isoformat()
     author = (d.get("author") or {}).get("username") or ""
@@ -563,7 +573,7 @@ def _post_token(payload: dict, client_secret: str, what: str) -> dict:
         if resp.status_code == 200 and data.get("access_token"):
             return data
         last = resp
-    raise RuntimeError(f"{what} failed: HTTP {last.status_code}: {last.text[:200]}")
+    raise RuntimeError(f"{what} failed: HTTP {last.status_code}: {last.text[:200]}" if last else f"{what} failed")
 
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str, code_verifier: str) -> dict:

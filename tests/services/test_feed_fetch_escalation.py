@@ -51,7 +51,7 @@ def test_no_escalation_on_success(monkeypatch):
     monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
     resp, escalated = fd._get_with_escalation("https://example.com/feed", timeout=5)
     assert escalated is False
-    assert resp.status_code == 200
+    assert resp is not None and resp.status_code == 200
 
 
 def test_escalates_on_timeout(monkeypatch):

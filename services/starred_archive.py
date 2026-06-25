@@ -885,7 +885,7 @@ class StarredArchiveService:
             scale = ARCHIVE_IMAGE_MAX_DIM / longest
             width = max(1, round(img.width * scale))
             height = max(1, round(img.height * scale))
-            img = img.resize((width, height), _PILImage.LANCZOS)
+            img = img.resize((width, height), _PILImage.Resampling.LANCZOS)
 
         # WebP supports both alpha and non-alpha; consistent format simplifies
         # serving later. Quality 80 is visibly close to source for most photos

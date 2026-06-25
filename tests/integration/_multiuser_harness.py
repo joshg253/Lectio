@@ -19,7 +19,6 @@ from services import tenancy
 
 
 def _scenario_multi() -> None:
-    assert main.MULTI_USER is True
     assert main.user_store is not None
 
     with TestClient(main.app) as client:  # runs lifespan → bootstrap_admin
@@ -27,7 +26,7 @@ def _scenario_multi() -> None:
         assert main.user_store.count() == 1, main.user_store.count()
         admin = os.environ["LECTIO_ADMIN_USERNAME"]
         assert [u["username"] for u in main.user_store.list_users()] == [admin]
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
         assert admin_id != admin  # the dir is keyed by the stable id, not the name
         admin_dir = tenancy.user_data_dir(admin_id)
         assert admin_dir.is_dir()
@@ -65,31 +64,6 @@ def _scenario_multi() -> None:
         assert r.status_code == 200, r.status_code  # authed home
 
 
-def _scenario_single() -> None:
-    assert main.MULTI_USER is False
-    assert main.user_store is None
-    # The tenancy context never leaves the default user in single mode.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-
-    with TestClient(main.app) as client:
-        # Env credential gate is active (LECTIO_USERNAME/PASSWORD set by caller).
-        r = client.get("/", follow_redirects=False)
-        assert r.status_code == 303, r.status_code
-
-        r = client.post(
-            "/login",
-            data={"username": os.environ["LECTIO_USERNAME"], "password": os.environ["LECTIO_PASSWORD"]},
-            follow_redirects=False,
-        )
-        assert r.status_code == 303, r.status_code
-
-        r = client.get("/", follow_redirects=False)
-        assert r.status_code == 200, r.status_code
-        # Still the default user after an authenticated single-mode request.
-        assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-        # Account/admin UI is multi-mode only → 404 in single mode (even authed).
-        assert client.get("/administration", follow_redirects=False).status_code == 404
-
 
 def _add_folder(user_id: str, folder_name: str) -> None:
     """Add a folder under the root for a user (so GReader tag-list has content)."""
@@ -109,11 +83,11 @@ def _add_folder(user_id: str, folder_name: str) -> None:
 def _scenario_multi_api() -> None:
     import hashlib
 
-    assert main.MULTI_USER and main.user_store is not None
+    assert main.user_store is not None
 
     with TestClient(main.app) as client:
         admin = os.environ["LECTIO_ADMIN_USERNAME"]
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
         bob_id = main.user_store.create("bob", "bob-pw", scheme=main.PASSWORD_HASH_SCHEME)
         main.provision_user_storage(bob_id)
 
@@ -182,7 +156,7 @@ def _csrf_token(html: str) -> str:
 
 
 def _scenario_account_ui() -> None:
-    assert main.MULTI_USER and main.user_store is not None
+    assert main.user_store is not None
     admin = os.environ["LECTIO_ADMIN_USERNAME"]
     admin_pw = os.environ["LECTIO_ADMIN_PASSWORD"]
 
@@ -192,7 +166,7 @@ def _scenario_account_ui() -> None:
 
         assert client.post("/login", data={"username": admin, "password": admin_pw},
                            follow_redirects=False).status_code == 303
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
 
         # The main UI exposes an Account link in multi mode.
         home = client.get("/")
@@ -221,7 +195,7 @@ def _scenario_account_ui() -> None:
                         data={"_csrf": tok, "user_id": carol_id, "new_username": "caroline"},
                         follow_redirects=False)
         assert r.status_code == 303
-        assert main.user_store.get_by_id(carol_id)["username"] == "caroline"
+        assert main.user_store.get_by_id(carol_id)["username"] == "caroline"  # ty: ignore[not-subscriptable]
         assert (tenancy.user_data_dir(carol_id) / "lectio_meta.sqlite3").exists()
 
         # Change own password.
@@ -255,7 +229,7 @@ def _scenario_account_ui() -> None:
                         data={"_csrf": tok, "username": "tempuser", "password": "temp-pw"},
                         follow_redirects=False)
         assert r.status_code == 303
-        temp_id = main.user_store.get("tempuser")["user_id"]
+        temp_id = main.user_store.get("tempuser")["user_id"]  # ty: ignore[not-subscriptable]
         temp_dir = tenancy.user_data_dir(temp_id)
         assert temp_dir.exists()
         tok = _csrf_token(client.get("/administration").text)
@@ -291,8 +265,6 @@ def main_entry() -> None:
     scenario = os.environ.get("SCENARIO", "")
     if scenario == "multi":
         _scenario_multi()
-    elif scenario == "single":
-        _scenario_single()
     elif scenario == "multi_api":
         _scenario_multi_api()
     elif scenario == "account_ui":

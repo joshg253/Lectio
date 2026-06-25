@@ -51,7 +51,7 @@ class _FakeReader:
     def update_feed(self, url):
         if url == FEED_ERR:
             exc = RuntimeError("404 Not Found")
-            exc.http_info = SimpleNamespace(status=404)
+            exc.http_info = SimpleNamespace(status=404)  # ty: ignore[unresolved-attribute]
             raise exc
         return SimpleNamespace(new=2, modified=0, unmodified=0)
 
@@ -108,7 +108,7 @@ def test_get_history_is_newest_first_and_limited(configured):
 
 
 def test_maintenance_prunes_per_feed_cap_and_age(configured, monkeypatch):
-    monkeypatch.setattr(main, "FEED_FETCH_HISTORY_KEEP", 3)
+    monkeypatch.setattr(main, "get_fetch_history_keep", lambda: 3)
     conn = main.get_meta_connection()
     now = time.time()
     # 5 recent rows (only newest 3 should survive the per-feed cap) ...

@@ -1,8 +1,8 @@
 """Multi-user mode: end-to-end via subprocess + in-process middleware units.
 
-The E2E scenarios run in a subprocess because main.py reads LECTIO_SECURITY_MODE
-at import time, so the mode can't be flipped within the already-imported test
-process. The middleware-binding logic is additionally unit-tested in-process.
+The E2E scenarios run in a subprocess so each harness starts with a fresh
+import of main.py (which sets module-level constants at import time).
+The middleware-binding logic is additionally unit-tested in-process.
 """
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ def test_multi_mode_e2e(tmp_path):
         "multi",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "joshg253",
             "LECTIO_ADMIN_PASSWORD": "real-admin-pw",
         },
@@ -63,7 +62,6 @@ def test_multi_api_per_user_e2e(tmp_path):
         "multi_api",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "adminuser",
             "LECTIO_ADMIN_PASSWORD": "admin-pw",
         },
@@ -77,23 +75,8 @@ def test_account_ui_e2e(tmp_path):
         "account_ui",
         tmp_path / "data",
         {
-            "LECTIO_SECURITY_MODE": "multi",
             "LECTIO_ADMIN_USERNAME": "adminuser",
             "LECTIO_ADMIN_PASSWORD": "admin-pw",
-        },
-    )
-    assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert proc.returncode == 0, proc.stderr
-
-
-def test_single_mode_invariance_e2e(tmp_path):
-    proc = _run_harness(
-        "single",
-        tmp_path / "data",
-        {
-            "LECTIO_SECURITY_MODE": "single",
-            "LECTIO_USERNAME": "solouser",
-            "LECTIO_PASSWORD": "solo-pw",
         },
     )
     assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -125,28 +108,19 @@ def _drive_middleware(session: dict) -> str:
 
 
 def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     uid = _drive_middleware({"authenticated": True, "user_id": "alice"})
     assert uid == "alice"
     # Context is restored after the request.
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
 
 
-def test_middleware_does_not_bind_in_single_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    # Even with a user_id present in the session, single mode ignores it.
-    uid = _drive_middleware({"authenticated": True, "user_id": "alice"})
-    assert uid == tenancy.DEFAULT_USER_ID
-
 
 def test_middleware_does_not_bind_unauthenticated(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     assert _drive_middleware({"user_id": "alice"}) == tenancy.DEFAULT_USER_ID
     assert _drive_middleware({}) == tenancy.DEFAULT_USER_ID
 
 
 def test_middleware_rejects_invalid_user_id(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
     uid = _drive_middleware({"authenticated": True, "user_id": "../evil"})
     assert uid == tenancy.DEFAULT_USER_ID
 
@@ -156,20 +130,12 @@ class _FakeReq:
         self.session = session
 
 
-def test_session_logged_in_requires_user_id_in_multi(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", True)
-    # Stale single-mode cookie: authenticated but no user_id → NOT logged in
-    # (this is what caused the /login redirect loop).
-    assert main._session_logged_in(_FakeReq({"authenticated": True})) is False
-    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True
-    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False
-    assert main._session_logged_in(_FakeReq({})) is False
-
-
-def test_session_logged_in_single_mode(monkeypatch):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    assert main._session_logged_in(_FakeReq({"authenticated": True})) is True
-    assert main._session_logged_in(_FakeReq({})) is False
+def test_session_logged_in_requires_user_id(monkeypatch):
+    # authenticated flag alone is not enough — must also have a valid user_id.
+    assert main._session_logged_in(_FakeReq({"authenticated": True})) is False  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({})) is False  # ty: ignore[invalid-argument-type]
 
 
 # --- in-process bootstrap / provisioning -------------------------------------
@@ -179,7 +145,6 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     from services.users import UserStore
 
     store = UserStore(tmp_path / "auth.sqlite")
-    monkeypatch.setattr(main, "MULTI_USER", True)
     monkeypatch.setattr(main, "user_store", store)
     monkeypatch.setattr(main, "BOOTSTRAP_ADMIN_USERNAME", "bootadmin")
     monkeypatch.setattr(main, "BOOTSTRAP_ADMIN_PASSWORD", "boot-pw")
@@ -197,7 +162,9 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     try:
         main.bootstrap_admin()
         assert store.count() == 1
-        admin_id = store.get("bootadmin")["user_id"]
+        _u = store.get("bootadmin")
+        assert _u is not None
+        admin_id = _u["user_id"]
         assert store.verify_login("bootadmin", "boot-pw") == admin_id
         # Storage is provisioned under the stable user_id, not the username.
         assert (tmp_path / "users" / admin_id / "lectio_meta.sqlite3").exists()
@@ -208,8 +175,3 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
         tenancy._layout = saved
 
 
-def test_bootstrap_noop_in_single_mode(monkeypatch, tmp_path):
-    monkeypatch.setattr(main, "MULTI_USER", False)
-    monkeypatch.setattr(main, "user_store", None)
-    # Must not raise.
-    main.bootstrap_admin()

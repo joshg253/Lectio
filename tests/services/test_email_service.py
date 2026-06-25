@@ -88,4 +88,4 @@ def test_send_article_email_returns_error_on_exception(monkeypatch):
 
     ok, err = send_article_email("key", "from@x.com", "to@x.com", "T", "F", "https://x.com", "")
     assert ok is False
-    assert "API down" in err
+    assert err and "API down" in err
