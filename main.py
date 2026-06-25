@@ -400,8 +400,6 @@ DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 LECTIO_PUBLIC_URL = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
 
 _FEVER_PASSWORD = os.getenv("LECTIO_FEVER_PASSWORD", "").strip()
-# Computed later (after AUTH_USERNAME is defined) — placeholder so it's in module scope.
-FEVER_API_KEY: str | None = None
 
 # --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
 _ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
@@ -706,7 +704,7 @@ def get_pinterest_oauth_token() -> str:
 def get_deviantart_credentials() -> tuple[str, str]:
     """Per-user DeviantArt API credentials (client_id, client_secret).
 
-    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    Stored per-user in app-settings; env vars are instance-wide fallbacks.
     """
     cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _ENV_DEVIANTART_CLIENT_ID)
     secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _ENV_DEVIANTART_CLIENT_SECRET)
@@ -753,7 +751,7 @@ def get_deviantart_user_token() -> str:
 def get_quire_credentials() -> tuple[str, str]:
     """Per-user Quire API credentials (client_id, client_secret).
 
-    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    Stored per-user in app-settings; env vars are instance-wide fallbacks.
     """
     cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _ENV_QUIRE_CLIENT_ID)
     secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _ENV_QUIRE_CLIENT_SECRET)
@@ -1041,47 +1039,28 @@ def get_img_cache_max_dim() -> int:
     return _ENV_IMG_CACHE_MAX_DIM
 
 # --- Auth config ---
-# Bootstrap / login credentials. LECTIO_ADMIN_USERNAME/PASSWORD are used for both
-# multi-mode admin bootstrap and the single-mode login gate. The legacy
-# LECTIO_USERNAME/PASSWORD vars are silent aliases for existing deployments.
-AUTH_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "") or os.getenv("LECTIO_USERNAME", "")
-AUTH_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", "") or os.getenv("LECTIO_PASSWORD", "")
 # When set, skip the login form and auto-authenticate as the admin on every request.
 # Intended for local/private-network installs that don't need a password prompt.
 AUTO_LOGIN = os.getenv("LECTIO_AUTO_LOGIN", "0") == "1"
 
-# --- Multi-user / security mode ---
-# LECTIO_SECURITY_MODE selects the tenancy & auth posture:
-#   single - legacy single-user; the LECTIO_USERNAME/PASSWORD env credential
-#            gates access, no per-user separation. Default.
-MULTI_USER = True  # always multi; single-user mode removed
-
-# Password hashing scheme for stored credentials (multi mode). scrypt and
-# pbkdf2_sha256 are stdlib; argon2 needs the optional argon2-cffi package.
+# Password hashing scheme for stored credentials. scrypt and pbkdf2_sha256 are stdlib;
+# argon2 needs the optional argon2-cffi package.
 PASSWORD_HASH_SCHEME = os.getenv("LECTIO_PASSWORD_HASH_SCHEME", passwords.DEFAULT_SCHEME).strip().lower()
-if MULTI_USER and PASSWORD_HASH_SCHEME not in passwords.available_schemes():
+if PASSWORD_HASH_SCHEME not in passwords.available_schemes():
     LOGGER.warning(
         "LECTIO_PASSWORD_HASH_SCHEME=%r not available (have: %s); using %s.",
         PASSWORD_HASH_SCHEME, ", ".join(passwords.available_schemes()), passwords.DEFAULT_SCHEME,
     )
     PASSWORD_HASH_SCHEME = passwords.DEFAULT_SCHEME
 
-# Bootstrap admin account, seeded on first startup in multi mode when the users
-# table is empty. CHANGE the default password before exposing the instance.
+# Bootstrap admin account, seeded on first startup when the users table is empty.
+# CHANGE the default password before exposing the instance.
 _DEFAULT_ADMIN_PASSWORD = "ChangeA$ap"
 BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
 
-# Auth is enabled by an env credential (single mode) OR whenever multi mode is on.
-AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD) or MULTI_USER
-
-# Global account registry; only instantiated in multi mode.
-user_store = UserStore(AUTH_DB_PATH) if MULTI_USER else None
-FEVER_API_KEY = (
-    hashlib.md5(f"{AUTH_USERNAME}:{_FEVER_PASSWORD}".encode()).hexdigest()
-    if _FEVER_PASSWORD and AUTH_USERNAME
-    else None
-)
+AUTH_ENABLED = True  # kept as a module-level bool so tests can monkeypatch it
+user_store = UserStore(AUTH_DB_PATH)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
@@ -1565,17 +1544,11 @@ app = FastAPI(title="Lectio", lifespan=lifespan)
 
 
 def _session_logged_in(request: Request) -> bool:
-    """Whether the session is fully authenticated.
-
-    In multi mode that requires a valid user_id, not just the authenticated flag —
-    otherwise a stale single-mode cookie (authenticated, no user_id) would pass the
-    gate but fail every per-user route, causing a /login redirect loop."""
+    """Whether the session is fully authenticated (requires a valid user_id)."""
     if not request.session.get("authenticated"):
         return False
-    if MULTI_USER:
-        uid = request.session.get("user_id")
-        return bool(uid and tenancy.is_valid_user_id(uid))
-    return True
+    uid = request.session.get("user_id")
+    return bool(uid and tenancy.is_valid_user_id(uid))
 
 
 class _AuthMiddleware(BaseHTTPMiddleware):
@@ -1664,7 +1637,7 @@ class _TenancyMiddleware:
     binding wraps the route handler. Sync handlers run via anyio's threadpool,
     which copies the current contextvars into the worker thread, so a value set
     here is visible to get_reader() / get_meta_connection() deep in the call
-    stack. In single mode this is a no-op and the context stays DEFAULT_USER_ID.
+    stack.
 
     Requests without a valid authenticated session user (static assets, the
     Fever/GReader APIs, unauthenticated hits) resolve to the default user; those
@@ -1695,7 +1668,7 @@ class _TenancyMiddleware:
         return user_store.resolve_greader_token(token)
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or not MULTI_USER:
+        if scope.get("type") != "http":
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         uid: str | None = None
@@ -2429,12 +2402,12 @@ def _seed_admin_integrations_from_env(admin_id: str) -> None:
 
 
 def bootstrap_admin() -> None:
-    """Seed the bootstrap admin on first startup in multi mode.
+    """Seed the bootstrap admin on first startup when no users exist.
 
-    No-op outside multi mode, or once any user exists. Provisions the new admin's
-    isolated storage and warns loudly if the default password is still in use.
+    No-op once any user exists. Provisions the new admin's isolated storage
+    and warns loudly if the default password is still in use.
     """
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return
     if user_store.count() > 0:
         return
@@ -7880,35 +7853,22 @@ websub_service: WebSubService | None = (
     else None
 )
 
-# In multi mode the protocol services are always constructed (auth is handled
-# per-user via user_store, not the service's own credential); their data methods
-# operate on whatever the tenancy context resolves to. In single mode they keep
-# the env-credential behavior and are only built when that credential exists.
-fever_service: FeverService | None = (
-    FeverService(
-        get_meta_connection=get_meta_connection,
-        get_reader=get_reader,
-        fever_api_key=FEVER_API_KEY or "",
-        root_folder_name=ROOT_FOLDER_NAME,
-        current_user=tenancy.current_user_id,
-        # In multi mode, skip the default-user pre-sync; each user syncs lazily
-        # under their bound context on first request.
-        presync=not MULTI_USER,
-    )
-    if (FEVER_API_KEY or MULTI_USER)
-    else None
+# Auth is per-user via user_store; each request runs under a bound tenancy context.
+fever_service: FeverService | None = FeverService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    fever_api_key="",
+    root_folder_name=ROOT_FOLDER_NAME,
+    current_user=tenancy.current_user_id,
+    presync=False,
 )
 
-greader_service: GReaderService | None = (
-    GReaderService(
-        get_meta_connection=get_meta_connection,
-        get_reader=get_reader,
-        username=AUTH_USERNAME,
-        password=_FEVER_PASSWORD,
-        root_folder_name=ROOT_FOLDER_NAME,
-    )
-    if ((_FEVER_PASSWORD and AUTH_USERNAME) or MULTI_USER)
-    else None
+greader_service: GReaderService | None = GReaderService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    username="",
+    password=_FEVER_PASSWORD,
+    root_folder_name=ROOT_FOLDER_NAME,
 )
 
 
@@ -11027,10 +10987,8 @@ _FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
 def _background_user_ids() -> list[str]:
     """Users that background work (scheduled refresh, maintenance) should run for.
 
-    Single mode: just the implicit default user. Multi mode: every enabled
-    account. Each is processed under its own tenancy context so the work hits
-    that user's databases."""
-    if not MULTI_USER or user_store is None:
+    Returns every enabled account; each is processed under its own tenancy context."""
+    if user_store is None:
         return [tenancy.DEFAULT_USER_ID]
     return [u["user_id"] for u in user_store.list_users() if not u["disabled"]]
 
@@ -11041,9 +10999,8 @@ def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
     Startup backfills, syncs and one-off cleanups touch per-user DBs through the
     context-bound ``get_reader()`` / ``get_meta_connection()`` helpers. Run bare,
     they resolve to :data:`tenancy.DEFAULT_USER_ID` and write the legacy
-    top-level DBs — wrong once multi-user is live. Wrapping the call here binds
-    each enabled user in turn (single mode still runs exactly once, for the
-    default user). One user's failure is logged and does not abort the rest."""
+    top-level DBs. Wrapping the call here binds each enabled user in turn.
+    One user's failure is logged and does not abort the rest."""
     for uid in _background_user_ids():
         with tenancy.user_context(uid):
             try:
@@ -11053,12 +11010,9 @@ def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
 
 
 def _effective_auto_refresh_minutes() -> int:
-    """Auto-refresh cadence for the currently-bound user. Multi mode reads the
-    user's own setting; single mode uses the cached app.state value."""
-    if MULTI_USER:
-        with get_meta_connection() as conn:
-            return get_auto_refresh_minutes(conn)
-    return getattr(app.state, "auto_refresh_minutes", 0)
+    """Auto-refresh cadence for the currently-bound user."""
+    with get_meta_connection() as conn:
+        return get_auto_refresh_minutes(conn)
 
 
 _scheduled_refresh_rotation = 0
@@ -11730,7 +11684,6 @@ def entry_frame_check(url: str):
 
 # ---------------------------------------------------------------------------
 # Auth routes (/login, /logout)
-# These are only active when LECTIO_USERNAME + LECTIO_PASSWORD are set.
 # ---------------------------------------------------------------------------
 
 
@@ -11813,23 +11766,16 @@ async def login_submit(request: Request, next: str = "/"):
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
-    if MULTI_USER:
-        # Multi-user: authenticate against the users table; bind the session to
-        # the resolved user_id so _TenancyMiddleware routes to their DBs.
-        resolved = (
-            user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
-            if user_store is not None
-            else None
-        )
-        if resolved is not None:
-            _clear_login_failures(ip)
-            request.session.clear()  # rotate session on login (anti-fixation)
-            request.session["authenticated"] = True
-            request.session["user_id"] = resolved
-            return RedirectResponse(url=_safe_next(next), status_code=303)
-    elif AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
+    resolved = (
+        user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
+        if user_store is not None
+        else None
+    )
+    if resolved is not None:
         _clear_login_failures(ip)
+        request.session.clear()  # rotate session on login (anti-fixation)
         request.session["authenticated"] = True
+        request.session["user_id"] = resolved
         return RedirectResponse(url=_safe_next(next), status_code=303)
     _record_login_failure(ip, now)
     return templates.TemplateResponse(
@@ -11846,12 +11792,12 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=303)
 
 
-# --- Account / user management (multi mode only) -----------------------------
+# --- Account / user management ---
 
 
 def _current_web_user(request: Request) -> str | None:
-    """The logged-in web session's user_id (multi mode), or None."""
-    if not MULTI_USER or not request.session.get("authenticated"):
+    """The logged-in web session's user_id, or None."""
+    if not request.session.get("authenticated"):
         return None
     uid = request.session.get("user_id")
     return uid if uid and tenancy.is_valid_user_id(uid) else None
@@ -11964,7 +11910,7 @@ def _admin_user_rows() -> list[dict]:
 @app.get("/administration")
 def account_page(request: Request, msg: str | None = None, error: str | None = None):
     """Admin page: user management + instance configuration. Admin-only."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -12021,7 +11967,7 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
 
 @app.post("/account/password")
 async def account_change_password(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -12047,7 +11993,7 @@ async def account_change_password(request: Request):
 
 @app.post("/account/api-token/regenerate")
 async def account_regenerate_token(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -12063,7 +12009,7 @@ async def account_regenerate_token(request: Request):
 async def account_change_username(request: Request):
     """Self-service username change. Identity (user_id) is unchanged, so the
     session stays valid and data/tokens are unaffected."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -12084,7 +12030,7 @@ async def account_change_username(request: Request):
 
 @app.post("/admin/users/create")
 async def admin_create_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12112,7 +12058,7 @@ async def admin_create_user(request: Request):
 
 @app.post("/admin/users/disable")
 async def admin_disable_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12134,7 +12080,7 @@ async def admin_delete_user(request: Request):
     """Permanently remove a user: drops the account row + GReader tokens and
     deletes the user's isolated data directory. Admin-only; cannot delete your
     own account or the last remaining admin."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12159,7 +12105,7 @@ async def admin_delete_user(request: Request):
 
 @app.post("/admin/users/reset-password")
 async def admin_reset_password(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12179,7 +12125,7 @@ async def admin_reset_password(request: Request):
 
 @app.post("/admin/users/rename")
 async def admin_rename_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12582,13 +12528,11 @@ def home(
         "profile_name": profile_name,
         "profile_email": profile_email,
         "profile_avatar_url": profile_avatar_url,
-        "multi_user": MULTI_USER,
-        "auth_enabled": AUTH_ENABLED,
         "current_user": _current_web_username(request),
         "is_admin": _is_web_admin(_current_web_user(request)),
         "current_api_token": (
             user_store.get_api_token(_current_web_user(request))
-            if (MULTI_USER and user_store and _current_web_user(request))
+            if (user_store and _current_web_user(request))
             else ""
         ),
         "no_feeds": len(all_feed_urls) == 0,
@@ -14809,7 +14753,7 @@ async def save_all_settings(request: Request):
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
     }
-    is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
+    is_admin = _is_web_admin(_current_web_user(request))
 
     # Detect a YouTube fill-in so we can kick off an immediate sync (rather than
     # waiting for daily maintenance) when it goes from unconfigured -> configured.
@@ -14874,8 +14818,8 @@ async def save_all_settings(request: Request):
 
 @app.post("/settings/maintenance/run-now")
 def run_maintenance_now(request: Request):
-    """Trigger daily maintenance immediately. Admin-only in multi mode."""
-    if MULTI_USER and not _is_web_admin(_current_web_user(request)):
+    """Trigger daily maintenance immediately. Admin-only."""
+    if not _is_web_admin(_current_web_user(request)):
         return JSONResponse({"ok": False, "error": "Admins only."}, status_code=403)
     threading.Thread(target=_run_daily_maintenance, daemon=True, name="maintenance-manual").start()
     return JSONResponse({"ok": True, "message": "Maintenance started in background."})
@@ -17000,17 +16944,13 @@ async def _fever_handler(request: Request) -> Response:
         return Response(status_code=404)
 
     api_key = params.get("api_key", "")
-    if MULTI_USER:
-        # Per-user: resolve the api_key (md5(username:api_token)) to a user_id and
-        # bind the tenancy context so the dispatch reads that user's data.
-        uid = user_store.fever_user_for_key(api_key) if user_store else None
-        if not uid:
-            return JSONResponse({"api_version": 3, "auth": 0})
-        with tenancy.user_context(uid):
-            return JSONResponse(_fever_build_result(params))
-    if not fever_service.check_auth(api_key):
+    # Resolve the api_key (md5(username:api_token)) to a user_id and bind
+    # the tenancy context so the dispatch reads that user's data.
+    uid = user_store.fever_user_for_key(api_key) if user_store else None
+    if not uid:
         return JSONResponse({"api_version": 3, "auth": 0})
-    return JSONResponse(_fever_build_result(params))
+    with tenancy.user_context(uid):
+        return JSONResponse(_fever_build_result(params))
 
 
 def _fever_build_result(params: dict) -> dict:
@@ -17091,7 +17031,7 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
 
     Manually-created threads do not inherit contextvars, so a request that
     captures its user and hands work to a daemon thread must re-bind the context
-    there or the work runs as the default user. No-op rebinding in single mode."""
+    there or the work runs as the default user."""
     with tenancy.user_context(uid):
         fn(*args, **kwargs)
 
@@ -17162,15 +17102,9 @@ def _greader_token(request: Request) -> str:
 def _resolve_greader_user(request: Request) -> str | None:
     """Username authorized for this GReader request, or None.
 
-    Multi mode: resolve the bearer token via the global token store. Single mode:
-    the legacy service validates the token and the user is the implicit default.
     """
     token = _greader_token(request)
-    if MULTI_USER:
-        return user_store.resolve_greader_token(token) if user_store else None
-    if greader_service and greader_service.check_token(token):
-        return tenancy.DEFAULT_USER_ID
-    return None
+    return user_store.resolve_greader_token(token) if user_store else None
 
 
 def _greader_ok(request: Request) -> bool:
@@ -17179,27 +17113,17 @@ def _greader_ok(request: Request) -> bool:
 
 @app.post("/greader/accounts/ClientLogin")
 async def greader_login(request: Request) -> Response:
-    """Authenticate and return a GReader auth token.
-
-    Multi mode: credentials are the username + the user's API token. Single mode:
-    the legacy service credential (LECTIO_FEVER_PASSWORD)."""
+    """Authenticate and return a GReader auth token (username + API token)."""
+    if user_store is None:
+        return Response("Error=ServiceUnavailable\n", status_code=503)
     form = await request.form()
     email = str(form.get("Email") or form.get("email") or "")
     passwd = str(form.get("Passwd") or form.get("passwd") or "")
-    if MULTI_USER:
-        if user_store is None:
-            return Response("Error=ServiceUnavailable\n", status_code=503)
-        local = email.split("@")[0] if "@" in email else email
-        uid = user_store.verify_api_token(local, passwd)
-        if not uid:
-            return Response("Error=BadAuthentication\n", status_code=403)
-        token = user_store.issue_greader_token(uid)
-        return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
-    if not greader_service:
-        return Response("Error=ServiceUnavailable\n", status_code=503)
-    token = greader_service.authenticate(email, passwd)
-    if not token:
+    local = email.split("@")[0] if "@" in email else email
+    uid = user_store.verify_api_token(local, passwd)
+    if not uid:
         return Response("Error=BadAuthentication\n", status_code=403)
+    token = user_store.issue_greader_token(uid)
     return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
 
 
@@ -17208,7 +17132,7 @@ def greader_user_info(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     display_name = None
-    if MULTI_USER and user_store is not None:
+    if user_store is not None:
         row = user_store.get_by_id(tenancy.current_user_id())
         display_name = row["username"] if row else tenancy.current_user_id()
     return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]

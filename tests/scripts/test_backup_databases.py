@@ -1,4 +1,4 @@
-"""Tests for scripts/backup_databases.py (multi-user aware)."""
+"""Tests for scripts/backup_databases.py."""
 
 from __future__ import annotations
 
@@ -36,27 +36,18 @@ def test_backup_one_writes_consistent_copy(tmp_path: Path):
         conn.close()
 
 
-def test_discover_sources_multiuser_skips_legacy(tmp_path: Path):
+def test_discover_sources_includes_auth_and_per_user_dbs(tmp_path: Path):
     _make_real_sqlite_db(tmp_path / "lectio_auth.sqlite", "auth")
     for fn in ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite"):
         _make_real_sqlite_db(tmp_path / "users" / "u_a" / fn, "a")
     _make_real_sqlite_db(tmp_path / "users" / "u_b" / "lectio_meta.sqlite3", "b")
-    _make_real_sqlite_db(tmp_path / "lectio_reader.sqlite", "stub")  # default-user stub
 
-    stems = sorted(stem for _p, stem in backup_databases.discover_sources(tmp_path, multi_mode=True))
+    stems = sorted(stem for _p, stem in backup_databases.discover_sources(tmp_path))
     assert "lectio_auth" in stems
     assert "users-u_a-lectio_reader" in stems
     assert "users-u_a-lectio_meta" in stems
     assert "users-u_a-lectio_starred_archive" in stems
     assert "users-u_b-lectio_meta" in stems
-    assert "lectio_reader" not in stems  # legacy top-level skipped in multi mode
-
-
-def test_discover_sources_single_mode_includes_legacy(tmp_path: Path):
-    for fn in ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite"):
-        _make_real_sqlite_db(tmp_path / fn, "x")
-    stems = sorted(stem for _p, stem in backup_databases.discover_sources(tmp_path, multi_mode=False))
-    assert stems == ["lectio_meta", "lectio_reader", "lectio_starred_archive"]
 
 
 def test_prune_old_keeps_n_most_recent(tmp_path: Path):

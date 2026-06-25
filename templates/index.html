@@ -141,15 +141,11 @@
             <hr class="menu-divider" />
             <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
-            {% if multi_user or auth_enabled %}
             <hr class="menu-divider" />
-            {% if multi_user and is_admin %}
+            {% if is_admin %}
             <a class="menu-item" href="/administration"><span class="material-symbols-rounded" aria-hidden="true">admin_panel_settings</span> Administration</a>
             {% endif %}
-            {% if auth_enabled %}
             <a class="menu-item" href="/logout"><span class="material-symbols-rounded" aria-hidden="true">logout</span> Sign out</a>
-            {% endif %}
-            {% endif %}
           </div>
         </details>
         <a class="menu-brand topbar-brand" href="/">Lectio</a>
@@ -1339,7 +1335,6 @@
               <label class="settings-label" for="sett-profile-email">Email</label>
               <input type="email" id="sett-profile-email" class="settings-input" placeholder="you@example.com" maxlength="200" />
             </div>
-            {% if multi_user %}
             <form class="settings-section settings-section--row" method="post" action="/account/username">
               {{ csrf_input(request) | safe }}
               <label class="settings-label" for="sett-new-username">Username</label>
@@ -1347,10 +1342,8 @@
               <button type="submit" class="settings-save-btn">Change</button>
               <p class="settings-hint">Changing your login name doesn't affect your data or API token.</p>
             </form>
-            {% endif %}
           </div>
         </div>
-        {% if multi_user %}
         <form class="settings-section settings-section--row settings-section--spaced" method="post" action="/account/password">
           {{ csrf_input(request) | safe }}
           <label class="settings-label" for="sett-current-password">Password</label>
@@ -1373,7 +1366,6 @@
             </div>
           </div>
         </form>
-        {% endif %}
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
         <div class="settings-section">
           <label class="settings-label">Theme</label>

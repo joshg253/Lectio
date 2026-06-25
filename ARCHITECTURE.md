@@ -1,6 +1,6 @@
 # Lectio Architecture
 
-Lectio is a local-first, single-user RSS reader built around the `reader` Python library. The goal is a fast triage workflow that can later grow into VPS deployment without a rewrite.
+Lectio is a self-hosted feed reader built around the `reader` Python library. The goal is a fast triage workflow with a clean multi-user architecture and VPS-friendly deployment.
 
 ## Layering
 
@@ -47,13 +47,12 @@ The priority is fast triage, not always showing three panes.
 
 ## Deployment path
 
-Current target is local-first single-user, with optional login auth behind a reverse proxy for VPS deployment. The next phase is multi-user (see "Multi-user tenancy"), introduced as a storage-layer strategy so the single-user path stays the zero-config default and the route layer does not require a rewrite.
+Lectio is designed for VPS deployment behind a reverse proxy. Auth is always active; access requires a user account. See `.env.example` for deployment configuration.
 
 ## Multi-user tenancy
 
-Lectio is single-user today. Multi-user is introduced as a **storage-layer
-strategy behind a resolver**, so the UI/API and service layers never learn which
-tenancy mode is active. Two modes, one interface:
+Lectio uses a **storage-layer resolver** so the UI/API and service layers are
+user-agnostic. One interface:
 
 ```
 get_current_user(request) -> user_id        # auth layer, resolved once per request
@@ -73,35 +72,28 @@ tenancy.meta_db_for(user_id)
   scale. Because routes/services go through the resolver, switching modes is a
   storage swap, not a route rewrite.
 
-Implementation status: the resolver and per-user connection pools exist
-(`services/tenancy.py`; `get_reader()` / `get_meta_connection()` /
-`get_starred_archive_connection()` in main.py resolve through it). The current
-user is a `contextvars.ContextVar` that defaults to `DEFAULT_USER_ID`.
+The resolver and per-user connection pools live in `services/tenancy.py`;
+`get_reader()` / `get_meta_connection()` / `get_starred_archive_connection()` in
+`main.py` resolve through it. The current user is a `contextvars.ContextVar` that
+defaults to `DEFAULT_USER_ID`.
 
-`LECTIO_SECURITY_MODE` selects the posture:
-
-- **single** (default) — legacy single-user; the `LECTIO_USERNAME`/`PASSWORD`
-  env credential gates the login. The tenancy context never leaves
-  `DEFAULT_USER_ID`, so behavior is identical to before multi-user existed.
-- **multi** — accounts live in a global users table (`lectio_auth.sqlite`,
-  `services/users.py`, NOT routed through tenancy). Each account has a stable,
-  immutable **`user_id`** (an opaque slug generated at creation) and a mutable
-  **`username`**. The `user_id` is the identity everything keys on — the tenancy
-  key, the on-disk directory (`users/<user_id>/`), the session value, and the
-  foreign key for API tokens — so a username can be renamed
-  (`UserStore.rename_user`, admin UI) without moving any data. Auth lookups take a
-  typed username and return a `user_id`; the rest of the system passes `user_id`.
-  Passwords are hashed by
-  `services/passwords.py` (scheme via `LECTIO_PASSWORD_HASH_SCHEME`: `scrypt`
-  default, `pbkdf2_sha256`, or `argon2` if `argon2-cffi` is installed; hashes are
-  self-describing and transparently re-hashed to the configured scheme on login).
-  On first startup with an empty table, an admin is seeded from
-  `LECTIO_ADMIN_USERNAME`/`LECTIO_ADMIN_PASSWORD` (default `admin`/`ChangeA$ap`,
-  with a loud warning if the default password is used). Login binds
-  `session["user_id"]`; `_TenancyMiddleware` (pure-ASGI, innermost) binds that
-  user into the tenancy context around the endpoint, so every storage access
-  routes to the user's own DBs. A username doubles as the tenancy `user_id` and a
-  path segment, so it must match the resolver's slug charset.
+Accounts live in a global users table (`lectio_auth.sqlite`, `services/users.py`,
+NOT routed through tenancy). Each account has a stable, immutable **`user_id`**
+(an opaque slug generated at creation) and a mutable **`username`**. The
+`user_id` is the identity everything keys on — the tenancy key, the on-disk
+directory (`users/<user_id>/`), the session value, and the foreign key for API
+tokens — so a username can be renamed (`UserStore.rename_user`, admin UI) without
+moving any data. Auth lookups take a typed username and return a `user_id`; the
+rest of the system passes `user_id`. Passwords are hashed by `services/passwords.py`
+(scheme via `LECTIO_PASSWORD_HASH_SCHEME`: `scrypt` default, `pbkdf2_sha256`, or
+`argon2` if `argon2-cffi` is installed; hashes are self-describing and
+transparently re-hashed to the configured scheme on login). On first startup with
+an empty table, an admin is seeded from `LECTIO_ADMIN_USERNAME`/`LECTIO_ADMIN_PASSWORD`
+(default `admin`/`ChangeA$ap`, with a loud warning if the default password is
+used). Login binds `session["user_id"]`; `_TenancyMiddleware` (pure-ASGI,
+innermost) binds that user into the tenancy context around the endpoint, so every
+storage access routes to the user's own DBs. A username doubles as the tenancy
+`user_id` and a path segment, so it must match the resolver's slug charset.
 
 Per-user API tokens (Fever + GReader): each user has an `api_token` in the auth
 DB, serving both protocols (as the single `LECTIO_FEVER_PASSWORD` did before).
@@ -128,10 +120,9 @@ the same reason and must likewise be wrapped in `_run_in_user_context` at the
 call site — otherwise its thumbnails persist to the default tenant and appear to
 "not stick" for the real user across refreshes.
 
-Account UI: `/account` (multi mode only; 404 in single) lets a user change their
-password and view/regenerate their API token; admins additionally create/disable
-users and reset passwords. New users are provisioned (`provision_user_storage`)
-on creation.
+Account UI: `/account` lets a user change their password and view/regenerate
+their API token; admins additionally create/disable users and reset passwords.
+New users are provisioned (`provision_user_storage`) on creation.
 
 Per-user background work: the scheduled refresh loop and the daily-maintenance
 loop both iterate every enabled user (`_background_user_ids`) and run each pass
@@ -153,11 +144,10 @@ binding itself to the default tenant. Work that is genuinely global runs once in
 `_run_global_maintenance` (thumb-cache VACUUM, YouTube sync — a single config).
 
 Remaining (see Plan.md): the WebSub push callback (a push carries only a feed URL
-and must fan out to its subscribers) still runs as the default user; linking
-`/account` from the main settings UI; and the data migration of the existing
-single-user DBs into a user. (SSRF hardening of `/api/img` and `/thumb` has
-landed — see "Security posture". The WebSub discover-on-subscribe spawned when a
-feed is added now re-binds the requesting user via `_run_in_user_context`.)
+and must fan out to its subscribers) still runs as the default user. (SSRF
+hardening of `/api/img` and `/thumb` has landed — see "Security posture". The
+WebSub discover-on-subscribe spawned when a feed is added now re-binds the
+requesting user via `_run_in_user_context`.)
 
 ### Per-user in-memory caches
 
@@ -173,7 +163,7 @@ counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
 purely by content (e.g. domain classification, source-HTML by URL) may stay
 global.
 
-### Integrations in multi mode
+### Integrations
 
 The Resend **API key** is instance-shared (`get_resend_api_key` keeps its env
 fallback) — one verified domain owned at the instance level. Everything else is
@@ -183,7 +173,7 @@ default recipient, contacts, profile, and Instapaper credentials. The env values
 (`_seed_admin_integrations_from_env`) and are then ignored for per-user reads, so
 one user's sender/account never becomes another's default.
 
-### What stays global in every mode
+### What stays global
 
 Content-addressed caches hold no per-user data and are shared across all users:
 
@@ -210,14 +200,9 @@ feeds must be excluded from the global caches.
 
 ### Security posture
 
-Multi-user makes these structural changes mandatory (not optional hardening):
-
-- **Per-user identity** — a users table with argon2/bcrypt hashing replaces the
-  single `LECTIO_USERNAME`/`PASSWORD` env credential, which is demoted to a
-  first-admin bootstrap seed. `session["authenticated"]` becomes
-  `session["user_id"]`.
-- **Per-user API tokens** — Fever/GReader cannot share one `LECTIO_FEVER_PASSWORD`
-  once there is more than one user; the protocols derive everything from it.
+- **Per-user identity** — accounts live in a users table with scrypt/argon2
+  hashing. `session["user_id"]` identifies the authenticated user.
+- **Per-user API tokens** — each user has their own Fever/GReader API token.
 - **Authorization** — every per-user route scopes by `user_id`. This is the
   largest code surface, but the resolver localizes it to the storage seam.
 - **SSRF hardening** — `url_guard.safe_get` / `safe_get_async` follow redirects
