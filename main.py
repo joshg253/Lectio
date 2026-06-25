@@ -15095,6 +15095,12 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
 
                                     if entry is None:
                                         # 3. Not in reader at all — synthesize and insert.
+                                        # Ensure the feed exists first (handles feeds that
+                                        # are broken/unfetchable but still need entries).
+                                        try:
+                                            reader.add_feed(feed_url, exist_ok=True)
+                                        except Exception:
+                                            pass
                                         pub = item.get("published")
                                         entry_dict: dict = {
                                             "feed_url": feed_url,
