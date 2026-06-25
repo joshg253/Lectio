@@ -11,7 +11,7 @@ Build order (promoted from Later — top first):
 3. ~~**YouTube quota meter**~~ — ✅ SHIPPED (per-user spend vs cap, Pacific reset, low/exhausted states).
 4. **Robust YT-folder identity + Integrations subtabs** — ✅ SHIPPED. Sync menu detects the YT folder by content (rename-safe); Integrations split into YouTube/DeviantArt/Instapaper subtabs (Settings→Feeds style) so the crowded YT section has its own tab. (Server-side connection gating of the YT subtab still possible later.)
 5. ~~**On-star → send to destination(s)**~~ — ✅ SHIPPED (Integrations → On Star: Instapaper / YouTube playlist / email; fires once on a genuine new star, async, one-way).
-6. **Bare media links → embedded players** — ✅ Part B (YT half) SHIPPED: a bare YouTube watch/youtu.be/shorts link that is the sole content of its paragraph becomes an inline player (`_embed_standalone_youtube_links`). ✅ Part A (source-page embed recovery) SHIPPED: when an entry's stored body has no `<iframe>` (older entries stripped at ingest, no placeholder figure) and it has a source link, the missing YouTube/Bandcamp/SoundCloud players are scraped from the source page (cached lead-image source-HTML) and re-attached **in context** — `_place_recovered_embeds` replaces the bare body link the feed showed instead, or fills the empty `<p></p>` slot left after a video-title heading, falling back to bottom-append (`_inject_recovered_source_embeds` / `_extract_source_embed_iframes`). Bandcamp standalone *link* → embed (numeric album id from the album page) still deferred (see Later).
+6. **Bare media links → embedded players** — ✅ Part B SHIPPED: a bare YouTube or Bandcamp album/track link that is the sole content of its paragraph becomes an inline player. YouTube (`_embed_standalone_youtube_links`): vid ID is in the URL. Bandcamp (`_embed_standalone_bandcamp_links`): numeric album/track ID scraped from the album page; cache-first (resolves immediately when cached, queues a background fetch otherwise so the embed appears next open). ✅ Part A (source-page embed recovery) SHIPPED: when an entry's stored body has no `<iframe>` and it has a source link, missing YouTube/Bandcamp/SoundCloud players are scraped from the cached source HTML and re-attached in context (`_inject_recovered_source_embeds` / `_extract_source_embed_iframes`).
 7. ~~**Save to Pinterest**~~ — ✅ SHIPPED (per-entry **Pin** button; per-user Pinterest API v5 OAuth; board picker; pins the entry's lead image linked to source. `services/pinterest_oauth.py`, `PINTEREST_OAUTH_CLIENT_ID/SECRET`).
 8. ~~**Add to Quire**~~ — ✅ SHIPPED (per-entry **Add to Quire** button + On-Star + `quire` automation rule; per-user OAuth `services/quire.py`, `QUIRE_CLIENT_ID/SECRET`; one default destination project; sliding-window per-minute/hour usage meter `quire_call_log` + `get_quire_usage_status`, per-run cap `_QUIRE_AUTO_PER_RUN_CAP`, 429 back-off).
 
@@ -160,14 +160,6 @@ Detailed specs follow.
     to the per-embed control (star a watched-later candidate, it lands in the
     playlist automatically).
 
-- **Convert bare media links into embedded players** — some feeds ship only a
-  Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
-  invisibleoranges.com: Bandcamp album links, 0 iframes in the feed). Detect known
-  player links in entry content and convert them to the host's embed iframe (already
-  allowlisted), so the player renders. Bandcamp needs the numeric album/track id,
-  which isn't in the album URL — scrape the album page's embed `<meta>`/oEmbed once
-  and cache it. Helps both the normal article view and Reader view. Larger than the
-  Reader-view re-inject (Now) since it needs per-host link→id resolution + caching.
 ## Later
 
 - **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button): batch/digest
@@ -192,12 +184,7 @@ Detailed specs follow.
   - **`ensure_meta_schema` (~585L)** — long but linear (CREATE + idempotent ALTERs),
     runs once at startup, low churn. A by-area split is cosmetic; low priority.
 - Multiuser stuff:
-  - **Performance investigation** — systematic baseline before enabling multi-user.
-    Per-request breakdown (DB time, enrich time, refresh contention) under realistic
-    load. Known hotspot: first-open of an og_scrape feed (e.g. mynorthwest) can take
-    several seconds on the **synchronous source-scrape caption fetch**
-    (`fetch_entry_image_caption` when source HTML isn't cached) — move it fully off
-    the request thread / cache-first like the lead-image fetch.
+  - **Performance investigation** — systematic baseline. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. ~~Sync source-scrape caption hotspot~~ ✅ already fixed: cache-first / background queue, no longer blocks `/entries/pane`.
   - **Shared-content tenancy mode** — one global feed/entry store + per-user overlays
     (read/star/folders/subs). Only worth building at real scale; biggest caching/
     refresh win (single refresh per feed, deduped storage). Umbrella for "a global

@@ -9280,6 +9280,11 @@ _YT_WATCH_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_BC_URL_RE = re.compile(
+    r'^https?://[^/]*\.bandcamp\.com/(album|track)/[^/?#\s]+',
+    re.IGNORECASE,
+)
+
 
 def _embed_standalone_youtube_links(content_html: str) -> str:
     """Turn a paragraph/anchor that is *only* a bare YouTube link into a player.
@@ -9318,6 +9323,76 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
             continue
         target.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
         changed = True
+    return str(soup) if changed else content_html
+
+
+def _extract_bc_numeric_id(page_html: str, embed_type: str) -> str | None:
+    """Extract the numeric Bandcamp album or track ID from page HTML.
+
+    Tries the EmbeddedPlayer URL (present in og:video and inline scripts) then
+    a data-album-id / data-track-id attribute as fallback."""
+    m = re.search(rf'EmbeddedPlayer/{embed_type}=(\d+)', page_html, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(rf'data-{embed_type}-id=["\'](\d+)["\']', page_html)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _bc_embed_html(embed_type: str, numeric_id: str, album_url: str) -> str:
+    height = "120px" if embed_type == "album" else "42px"
+    src = (
+        f"https://bandcamp.com/EmbeddedPlayer/{embed_type}={numeric_id}"
+        "/size=large/bgcol=ffffff/linkcol=0687f5/tracklist=false/transparent=true/"
+    )
+    safe_url = html.escape(album_url, quote=True)
+    return (
+        f'<p class="lectio-embed">'
+        f'<iframe style="border:0;width:100%;height:{height}"'
+        f' src="{src}" seamless>'
+        f'<a href="{safe_url}">{html.escape(album_url)}</a>'
+        f'</iframe></p>'
+    )
+
+
+def _embed_standalone_bandcamp_links(content_html: str) -> str:
+    """Turn a lone bare Bandcamp album/track link in its own paragraph into an embed.
+
+    Mirrors _embed_standalone_youtube_links but requires the album page to be
+    fetched first (the numeric ID is not in the public URL). Cache-first: if
+    the album page is already in _source_html_cache the embed is inlined on
+    this open; otherwise a background fetch is queued so it appears next open."""
+    if not isinstance(content_html, str) or "bandcamp.com" not in content_html.lower():
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    changed = False
+    for a in list(soup.find_all("a", href=True)):
+        href = (a.get("href") or "").strip()
+        m = _BC_URL_RE.match(href)
+        if not m:
+            continue
+        embed_type = m.group(1).lower()  # "album" or "track"
+        anchor_text = a.get_text(strip=True)
+        parent = a.parent
+        target = a
+        if parent is not None and parent.name == "p":
+            if parent.get_text(strip=True) != anchor_text:
+                continue  # inline mention — other text present
+            target = parent
+        cached = lead_image_service.get_cached_source_html(href)
+        if cached:
+            _, page_html = cached
+            numeric_id = _extract_bc_numeric_id(page_html, embed_type)
+            if numeric_id:
+                target.replace_with(BeautifulSoup(_bc_embed_html(embed_type, numeric_id, href), "html.parser"))
+                changed = True
+                continue
+        # Album page not cached or ID not extractable — queue background fetch;
+        # embed resolves on the next open once the fetch populates the cache.
+        lead_image_service.queue_source_html_fetch(href)
     return str(soup) if changed else content_html
 
 
@@ -9979,6 +10054,11 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # Standalone bare YouTube links (own paragraph / lone anchor) → inline player.
     # Covers feeds where the oEmbed iframe was stripped and only the link remains.
     content_html = _embed_standalone_youtube_links(content_html)
+
+    # Standalone bare Bandcamp album/track links → embed. Cache-first: resolves
+    # immediately when the album page HTML is already cached; otherwise queues a
+    # background fetch so the embed appears on the next open.
+    content_html = _embed_standalone_bandcamp_links(content_html)
 
     # Apply the per-user YouTube embed-host preference to feed-native players
     # (the recovered/injected player above already uses youtube_embed_host()).
