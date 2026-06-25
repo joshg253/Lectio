@@ -2892,19 +2892,8 @@
       }
       const quireBtn = event.target instanceof Element && event.target.closest('[data-quire-feed-url]');
       if (quireBtn) {
-        quireBtn.disabled = true;
-        try {
-          const fd = new FormData();
-          fd.append('feed_url', quireBtn.getAttribute('data-quire-feed-url') || '');
-          fd.append('entry_id', quireBtn.getAttribute('data-quire-entry-id') || '');
-          const resp = await fetch('/entries/quire', { method: 'POST', body: fd, credentials: 'same-origin' });
-          const data = await resp.json();
-          showToastMessage(data.ok ? 'Added to Quire' : (data.error || 'Quire add failed'));
-        } catch (e) {
-          showToastMessage('Quire add failed');
-        } finally {
-          quireBtn.disabled = false;
-        }
+        event.preventDefault();
+        await openQuirePicker(quireBtn);
         return;
       }
     });
@@ -2973,6 +2962,74 @@
           _closePinMenu();
           try { await _doPin(feedUrl, entryId, b.id, b.name || 'board'); }
           catch (e) { showToastMessage(e.message || 'Pin failed'); }
+        });
+        menu.appendChild(item);
+      });
+    }
+
+    // --- Quire "Add to project" picker --------------------------------------
+    let _quireProjectsCache = null;   // null = not fetched; {ok, projects, error}
+    async function _fetchQuireProjects() {
+      if (_quireProjectsCache) return _quireProjectsCache;
+      try {
+        const r = await fetch('/api/quire/projects', { credentials: 'same-origin' });
+        _quireProjectsCache = (await r.json().catch(() => ({}))) || { ok: false, projects: [] };
+      } catch (e) {
+        _quireProjectsCache = { ok: false, projects: [], error: 'network' };
+      }
+      return _quireProjectsCache;
+    }
+
+    function _closeQuireMenu() {
+      document.querySelector('.lectio-quire-menu')?.remove();
+      document.removeEventListener('click', _quireOutsideClick, true);
+    }
+    function _quireOutsideClick(e) {
+      if (!(e.target instanceof Element) || !e.target.closest('.lectio-quire-menu, [data-quire-feed-url]')) _closeQuireMenu();
+    }
+
+    async function _doQuireAdd(feedUrl, entryId, projectOid, projectName) {
+      const fd = new FormData();
+      fd.append('feed_url', feedUrl);
+      fd.append('entry_id', entryId);
+      fd.append('project_oid', projectOid);
+      const r = await fetch('/entries/quire', { method: 'POST', body: fd, credentials: 'same-origin' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      showToastMessage(`Added to ${projectName}.`);
+    }
+
+    async function openQuirePicker(btn) {
+      const rect = btn.getBoundingClientRect();
+      hideShareMenu();
+      _closeQuireMenu();
+      const feedUrl = btn.getAttribute('data-quire-feed-url') || '';
+      const entryId = btn.getAttribute('data-quire-entry-id') || '';
+      const menu = document.createElement('div');
+      menu.className = 'lectio-quire-menu';
+      menu.innerHTML = '<div class="lectio-quire-loading">Loading projects…</div>';
+      document.body.appendChild(menu);
+      menu.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+      setTimeout(() => document.addEventListener('click', _quireOutsideClick, true), 0);
+
+      const data = await _fetchQuireProjects();
+      if (!data.ok) {
+        menu.innerHTML = `<div class="lectio-quire-loading">${data.error || 'Failed to load projects.'}</div>`;
+        return;
+      }
+      const projects = data.projects || [];
+      if (!projects.length) { menu.innerHTML = '<div class="lectio-quire-loading">No projects found.</div>'; return; }
+      menu.innerHTML = '';
+      projects.forEach(p => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'lectio-quire-item';
+        item.textContent = p.name || '(untitled)';
+        item.addEventListener('click', async () => {
+          _closeQuireMenu();
+          try { await _doQuireAdd(feedUrl, entryId, p.oid, p.name || 'Quire'); }
+          catch (e) { showToastMessage(e.message || 'Quire add failed'); }
         });
         menu.appendChild(item);
       });
@@ -4492,6 +4549,7 @@
       hideRootContextMenu();
       hideTagContextMenu();
       hideShareMenu();
+      _closeQuireMenu();
     }
 
     function hideShareMenu() {

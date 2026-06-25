@@ -16511,12 +16511,13 @@ def _quire_add_entry(token: str, project_oid: str, title: str, link: str, feed_t
 def add_to_quire(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
+    project_oid: str | None = Form(None),
 ):
     if not is_quire_connected():
         return JSONResponse({"ok": False, "error": "Quire not connected."}, status_code=503)
-    project_oid = quire_project_oid()
+    project_oid = (project_oid or "").strip() or quire_project_oid()
     if not project_oid:
-        return JSONResponse({"ok": False, "error": "Pick a Quire destination project in Settings."}, status_code=503)
+        return JSONResponse({"ok": False, "error": "Pick a Quire destination project."}, status_code=503)
     if get_quire_usage_status()["state"] == "blocked":
         return JSONResponse({"ok": False, "error": "Quire rate limit reached — try again shortly."}, status_code=429)
     token = get_quire_user_token()
