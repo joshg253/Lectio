@@ -1,0 +1,284 @@
+"""Inoreader OAuth2 client and import helpers.
+
+Uses Inoreader's Google Reader–compatible API:
+  https://www.inoreader.com/developers/
+
+Auth: OAuth 2.0 authorization_code flow. Client credentials go in the token
+POST body (not HTTP Basic like Pinterest). API calls use Bearer token only.
+
+Rate limits: two zones tracked via response headers.
+  Zone 1: daily quota (free Pro = 250 calls/day)
+  Zone 2: per-minute burst limit
+Both are surfaced in the import checkpoint so the drip strategy can stay
+within limits automatically.
+"""
+from __future__ import annotations
+
+from urllib.parse import urlencode, quote
+
+import httpx
+
+_AUTHORIZE_URL = "https://www.inoreader.com/oauth2/auth"
+_TOKEN_URL = "https://www.inoreader.com/oauth2/token"
+_API_BASE = "https://www.inoreader.com/reader/api/0"
+_SCOPE = "read write"
+_USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
+_TIMEOUT = 20
+
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+class QuotaExceeded(RuntimeError):
+    """Raised when Inoreader returns HTTP 429 (rate limit / quota exhausted)."""
+    def __init__(self, msg: str, rate_limits: dict | None = None):
+        super().__init__(msg)
+        self.rate_limits = rate_limits or {}
+
+
+# ---------------------------------------------------------------------------
+# OAuth helpers
+# ---------------------------------------------------------------------------
+
+def authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
+    """Build the Inoreader consent-screen URL."""
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": _SCOPE,
+        "state": state,
+    }
+    return f"{_AUTHORIZE_URL}?{urlencode(params)}"
+
+
+def _post_token(payload: dict, what: str) -> dict:
+    with httpx.Client(timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT}) as client:
+        resp = client.post(
+            _TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    data = resp.json() if "json" in resp.headers.get("content-type", "") else {}
+    if resp.status_code == 200 and data.get("access_token"):
+        return data
+    raise RuntimeError(f"{what} failed: HTTP {resp.status_code}: {resp.text[:200]}")
+
+
+def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
+    """Exchange an authorization code for access + refresh tokens."""
+    return _post_token({
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+    }, "token exchange")
+
+
+def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> dict:
+    """Refresh an expired access token."""
+    return _post_token({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }, "token refresh")
+
+
+# ---------------------------------------------------------------------------
+# API helpers
+# ---------------------------------------------------------------------------
+
+def _headers(access_token: str) -> dict:
+    return {"Authorization": f"Bearer {access_token}", "User-Agent": _USER_AGENT}
+
+
+def _parse_rate_limits(resp_headers) -> dict:
+    """Extract zone1/zone2 quota info from response headers."""
+    def _int(v: str | None) -> int | None:
+        try:
+            return int(v) if v is not None else None
+        except ValueError:
+            return None
+    return {
+        "z1_limit": _int(resp_headers.get("x-reader-zone1-limit")),
+        "z1_usage": _int(resp_headers.get("x-reader-zone1-usage")),
+        "z2_limit": _int(resp_headers.get("x-reader-zone2-limit")),
+        "z2_usage": _int(resp_headers.get("x-reader-zone2-usage")),
+        "reset_after": resp_headers.get("x-reader-limits-reset-after"),
+    }
+
+
+def _z1_remaining(rl: dict) -> int | None:
+    lim, usage = rl.get("z1_limit"), rl.get("z1_usage")
+    if lim is None or usage is None:
+        return None
+    return lim - usage
+
+
+def get_user_info(access_token: str) -> dict:
+    """Return Inoreader user profile dict."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
+        resp = client.get(f"{_API_BASE}/user-info")
+    if resp.status_code != 200:
+        raise RuntimeError(f"user-info failed: HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.json()
+
+
+def get_subscriptions(access_token: str) -> tuple[list[dict], dict]:
+    """Return (subscriptions_list, rate_limits). Each sub has at minimum 'url', 'title'."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
+        resp = client.get(f"{_API_BASE}/subscription/list", params={"output": "json"})
+    rl = _parse_rate_limits(resp.headers)
+    if resp.status_code == 429:
+        raise QuotaExceeded("Inoreader quota exhausted", rate_limits=rl)
+    if resp.status_code != 200:
+        raise RuntimeError(f"subscription/list failed: HTTP {resp.status_code}: {resp.text[:200]}")
+    subs = resp.json().get("subscriptions", [])
+    # Normalise: extract the feed URL from the 'id' field (format: "feed/<url>")
+    for sub in subs:
+        raw_id = sub.get("id", "")
+        if raw_id.startswith("feed/"):
+            sub["feed_url"] = raw_id[len("feed/"):]
+        else:
+            sub["feed_url"] = raw_id
+    return subs, rl
+
+
+def get_tags(access_token: str) -> tuple[list[dict], dict]:
+    """Return (tags_list, rate_limits). Each tag has an 'id' field."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
+        resp = client.get(f"{_API_BASE}/tag/list", params={"output": "json"})
+    rl = _parse_rate_limits(resp.headers)
+    if resp.status_code == 429:
+        raise QuotaExceeded("Inoreader quota exhausted", rate_limits=rl)
+    if resp.status_code != 200:
+        raise RuntimeError(f"tag/list failed: HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.json().get("tags", []), rl
+
+
+def get_stream_contents(
+    access_token: str,
+    stream_id: str,
+    continuation: str | None = None,
+    n: int = 100,
+    ot: int | None = None,
+) -> tuple[list[dict], str | None, dict]:
+    """Page through a stream. Returns (items, next_continuation_or_None, rate_limits)."""
+    params: dict = {"n": n, "output": "json"}
+    if continuation:
+        params["c"] = continuation
+    if ot is not None:
+        params["ot"] = ot
+    url = f"{_API_BASE}/stream/contents/{quote(stream_id, safe='')}"
+    with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
+        resp = client.get(url, params=params)
+    rl = _parse_rate_limits(resp.headers)
+    if resp.status_code == 429:
+        raise QuotaExceeded("Inoreader quota exhausted", rate_limits=rl)
+    if resp.status_code != 200:
+        raise RuntimeError(f"stream/contents failed: HTTP {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    return data.get("items", []), data.get("continuation") or None, rl
+
+
+def edit_tag_remove(access_token: str, item_ids: list[str], tag: str) -> dict:
+    """Remove *tag* from one or more Inoreader items in one POST. Returns rate_limits."""
+    if not item_ids:
+        return {}
+    params = [("r", tag)] + [("i", iid) for iid in item_ids]
+    with httpx.Client(timeout=_TIMEOUT, headers=_headers(access_token)) as client:
+        resp = client.post(
+            f"{_API_BASE}/edit-tag",
+            data=params,
+        )
+    rl = _parse_rate_limits(resp.headers)
+    if resp.status_code == 429:
+        raise QuotaExceeded("Inoreader quota exhausted", rate_limits=rl)
+    if resp.status_code not in (200, 204):
+        raise RuntimeError(f"edit-tag failed: HTTP {resp.status_code}: {resp.text[:200]}")
+    return rl
+
+
+# ---------------------------------------------------------------------------
+# Label / stream ID helpers
+# ---------------------------------------------------------------------------
+
+STARRED_STREAM_ID = "user/-/state/com.google/starred"
+READ_STREAM_ID = "user/-/state/com.google/read"
+
+
+def label_name_from_tag_id(tag_id: str) -> str | None:
+    """Return the label name from 'user/.../label/NAME', or None if not a label."""
+    parts = tag_id.split("/label/")
+    return parts[1] if len(parts) == 2 else None
+
+
+def label_stream_id(label_name: str) -> str:
+    return f"user/-/label/{label_name}"
+
+
+def label_is_tag(label_name: str) -> bool:
+    """All-lowercase label → treat as article tag; Title Case → user folder name."""
+    return label_name == label_name.lower()
+
+
+# ---------------------------------------------------------------------------
+# JSON file import (Path B — no API calls needed)
+# ---------------------------------------------------------------------------
+
+def parse_export_json(data: list[dict]) -> list[dict]:
+    """Parse items from an InoreaderExportTool JSON blob into normalised records.
+
+    Each returned record:
+      url          — article canonical URL
+      title        — article title
+      published    — Unix timestamp (int) or None
+      feed_url     — feed subscription URL
+      feed_title   — feed display name
+      content      — article HTML (may be empty)
+      starred      — True if item has the google/like or google/starred state
+      labels       — list[str] of label names from categories
+      item_id      — Inoreader item ID (for delete-from-source mode)
+    """
+    out = []
+    for item in data:
+        cats = item.get("categories", [])
+        canonical = item.get("canonical") or []
+        url = canonical[0].get("href", "") if canonical else ""
+        origin = item.get("origin") or {}
+        raw_stream = origin.get("streamId", "")
+        feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+        starred = any(
+            ("state/com.google/like" in c or "state/com.google/starred" in c)
+            for c in cats
+        )
+        labels = []
+        for c in cats:
+            name = label_name_from_tag_id(c)
+            if name:
+                labels.append(name)
+        summary = item.get("summary") or {}
+        out.append({
+            "url": url,
+            "title": item.get("title", ""),
+            "published": item.get("published"),
+            "feed_url": feed_url,
+            "feed_title": origin.get("title", ""),
+            "content": summary.get("content", ""),
+            "starred": starred,
+            "labels": labels,
+            "item_id": item.get("id", ""),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit helpers for callers
+# ---------------------------------------------------------------------------
+
+def z1_remaining(rl: dict) -> int | None:
+    """Zone-1 calls remaining, or None if headers were absent."""
+    return _z1_remaining(rl)
