@@ -15006,8 +15006,8 @@ async def inoreader_import_upload(files: list[UploadFile] = File(...)):
                             out = tmp_dir / Path(member).name
                             out.write_bytes(zf.read(member))
                             json_paths.append(out)
-            except zipfile.BadZipFile as exc:
-                return JSONResponse({"ok": False, "error": f"Bad ZIP file: {exc}"}, status_code=400)
+            except zipfile.BadZipFile:
+                return JSONResponse({"ok": False, "error": "Invalid or corrupt ZIP file."}, status_code=400)
         elif name.lower().endswith(".json"):
             out = tmp_dir / name
             out.write_bytes(content)
@@ -15052,13 +15052,13 @@ async def inoreader_import_upload(files: list[UploadFile] = File(...)):
 
     _uid = tenancy.current_user_id()
     threading.Thread(
-        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_paths),
+        target=lambda: _run_in_user_context(_uid, _inoreader_local_import_worker, json_paths, tmp_dir),
         daemon=True,
     ).start()
     return JSONResponse({"ok": True, "files": len(json_paths)})
 
 
-def _inoreader_local_import_worker(json_files: list) -> None:
+def _inoreader_local_import_worker(json_files: list, cleanup_dir: Path | None = None) -> None:
     """Background worker: iterate JSON files and import all items."""
     with get_meta_connection() as conn:
         raw = get_setting(conn, SETTING_INOREADER_IMPORT_STATE) or "{}"
@@ -15079,6 +15079,9 @@ def _inoreader_local_import_worker(json_files: list) -> None:
         state["done"] = False
         _save()
         LOGGER.exception("[inoreader-local] worker crashed")
+    finally:
+        if cleanup_dir is not None:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def _run_import_loop(json_files: list, state: dict, _save) -> None:
@@ -17034,8 +17037,7 @@ def rename_manual_tag(
     count, merged = rename_manual_tag_everywhere(old_norm, new_norm)
     if is_ajax:
         return JSONResponse({"ok": True, "old_tag": old_norm, "new_tag": new_norm, "count": count, "merged": merged})
-    msg = f"Renamed #{old_norm} → #{new_norm} on {count} post{'' if count == 1 else 's'}."
-    return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/entries/mark-range-read")
