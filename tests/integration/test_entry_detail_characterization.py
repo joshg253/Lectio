@@ -133,6 +133,7 @@ def test_qwantz_nav_stripped(env):
     _add(feed="https://qwantz.com/rssfeed.php", link="http://www.qwantz.com/index.php?comic=1",
          summary=qw)
     d = main.get_entry_detail("https://qwantz.com/rssfeed.php", "e1")
+    assert d is not None
     assert "commentary" in d["content_html"]
     assert "archive.php" not in (d["content_html"] or "")
 
@@ -143,6 +144,7 @@ def test_blogger_untitled_recovers_title_from_slug(env):
     _add(feed="https://x.blogspot.com/feeds/posts/default", title="",
          link="https://x.blogspot.com/2026/06/gin-rummy-essential.html", content="<p>x</p>")
     d = main.get_entry_detail("https://x.blogspot.com/feeds/posts/default", "e1")
+    assert d is not None
     assert d["title"] == "Gin Rummy Essential"
 
 
@@ -151,6 +153,7 @@ def test_buzzsprout_link_derived_from_enclosure(env):
          summary="<p>notes</p>",
          enclosures=[{"href": "https://www.buzzsprout.com/1/episodes/2-x.mp3", "type": "audio/mpeg", "length": 9999999}])
     d = main.get_entry_detail("https://rss.buzzsprout.com/1.rss", "e1")
+    assert d is not None
     assert d["link"] == "https://www.buzzsprout.com/1/episodes/2-x"
 
 

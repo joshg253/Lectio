@@ -34,7 +34,7 @@ def _parse_month_first_pubdate(date_string: str):
 
 
 feedparser.registerDateHandler(_parse_month_first_pubdate)
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -57,7 +57,7 @@ from services import takeout_service
 from services import tenancy
 from services import youtube_embeds
 from services import url_guard
-from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
+from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
@@ -2864,6 +2864,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_format TEXT NOT NULL DEFAULT 'generic'")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_batch INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # youtube_playlist rule type: target playlist + behavior toggles.
         try:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_playlist_id TEXT NOT NULL DEFAULT ''")
@@ -3385,7 +3389,7 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
-        " webhook_url, webhook_format,"
+        " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         " yt_min_minutes, yt_max_minutes"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
@@ -3412,6 +3416,7 @@ def add_highlight_keyword(
     exclude_scope_ids: str = "",
     webhook_url: str = "",
     webhook_format: str = "generic",
+    webhook_batch: bool = False,
     yt_playlist_id: str = "",
     yt_playlist_title: str = "",
     yt_include_shorts: bool = False,
@@ -3435,15 +3440,15 @@ def add_highlight_keyword(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
-        "  webhook_url, webhook_format,"
+        "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
-         webhook_url.strip(), webhook_format,
+         webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
          max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
@@ -3853,7 +3858,7 @@ def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
     """
     with _meta_structure_lock:
         if _meta_structure_cache:
-            return _meta_structure_cache  # type: ignore[return-value]
+            return dict(_meta_structure_cache)
     raw_folder_rows = get_folder_rows(conn)
     direct_feed_urls_by_folder = get_direct_feed_urls_by_folder(conn)
     folder_options = get_folder_options(conn)
@@ -3882,7 +3887,7 @@ def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
 
 
 def get_unread_counts_by_folder(
-    folder_rows: Sequence[sqlite3.Row],
+    folder_rows: Sequence[sqlite3.Row | dict],
     unread_counts_by_feed: dict[str, int],
     direct_feed_urls_by_folder: dict[int, list[str]],
 ) -> dict[int, int]:
@@ -5456,9 +5461,11 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 search_in = str(rule.get("search_in") or "title")
                 webhook_url = str(rule.get("webhook_url") or "")
                 webhook_format = str(rule.get("webhook_format") or "generic")
+                webhook_batch = bool(rule.get("webhook_batch"))
 
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
+                    batch_articles: list[dict] = []
 
                     for feed_url in refreshed_feed_urls:
                         _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
@@ -5494,17 +5501,34 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 "published": published.isoformat() if published else "",
                                 "tags": get_manual_tags_for_entry(fu, str(entry.id)),
                             }
-                            payload = build_webhook_payload(article, webhook_format)
-                            ok, err = send_webhook(webhook_url, payload)
-                            if ok:
+
+                            if webhook_batch:
+                                batch_articles.append(article)
                                 sent += 1
-                                with get_meta_connection() as conn:
-                                    _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
-                                        "count": 1,
-                                        "entries": [article],
-                                    })
                             else:
-                                LOGGER.warning("[webhook-auto] POST failed: %s", err)
+                                payload = build_webhook_payload(article, webhook_format)
+                                ok, err = send_webhook(webhook_url, payload)
+                                if ok:
+                                    sent += 1
+                                    with get_meta_connection() as conn:
+                                        _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
+                                            "count": 1,
+                                            "entries": [article],
+                                        })
+                                else:
+                                    LOGGER.warning("[webhook-auto] POST failed: %s", err)
+
+                if webhook_batch and batch_articles:
+                    payload = build_webhook_batch_payload(batch_articles, webhook_format)
+                    ok, err = send_webhook(webhook_url, payload)
+                    if ok:
+                        with get_meta_connection() as conn:
+                            _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
+                                "count": len(batch_articles),
+                                "entries": batch_articles,
+                            })
+                    else:
+                        LOGGER.warning("[webhook-auto] batch POST failed: %s", err)
             except Exception:
                 LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
     except Exception:
@@ -7276,9 +7300,12 @@ def _fix_wp_post_footer(content_html: str) -> str:
         dup.decompose()
     # Remove literal "<p>"/"</p>" text artifacts (double-encoded tags) from the
     # kept footer, leaving the sentence intact.
+    from bs4 import NavigableString as _NS
     for s in list(keep.strings):
+        if not isinstance(s, _NS):
+            continue
         cleaned = re.sub(r"</?p\s*>", "", str(s), flags=re.IGNORECASE)
-        if cleaned != s:
+        if cleaned != str(s):
             s.replace_with(cleaned)
     return str(soup)
 
@@ -7481,7 +7508,7 @@ def _lookup_media_video(conn: sqlite3.Connection, feed_url: str, entry_id: str) 
     ).fetchone()
     if row is None:
         return None
-    return (row[0] or "").split()
+    return list(str(row[0] or "").split())
 
 
 def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
@@ -8215,7 +8242,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
             ("tag",   "main"),
         ]:
             if selector_type == "class":
-                elem = soup.find(class_=lambda c, v=value: c and v in c.split())
+                elem = soup.find(class_=lambda c, v=value: bool(c) and v in c.split())  # type: ignore[arg-type]
             else:
                 elem = soup.find(value)
             if elem:
@@ -8341,7 +8368,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
         soup = BeautifulSoup(content_html, "html.parser")
         target_img: object = None
         for img in soup.find_all("img"):
-            src = img.get("src", "")
+            src = str(img.get("src") or "")
             if src == lead_image_url or html.unescape(src) == lead_image_url:
                 target_img = img
                 break
@@ -8356,7 +8383,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
             if _lead_prefix_m:
                 _lead_prefix = _lead_prefix_m.group(1) + "/"
                 for img in soup.find_all("img"):
-                    src = img.get("src", "")
+                    src = str(img.get("src") or "")
                     if src.startswith(_lead_prefix):
                         target_img = img
                         break
@@ -8373,7 +8400,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
                 _lead_base = _lead_blogger_m.group(1)
                 _lead_file = _lead_blogger_m.group(2)
                 for img in soup.find_all("img"):
-                    src = img.get("src", "")
+                    src = str(img.get("src") or "")
                     _src_m = _BLOGGER_CDN_RE.match(src)
                     if _src_m and _src_m.group(1) == _lead_base and _src_m.group(2) == _lead_file:
                         target_img = img
@@ -9375,7 +9402,7 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     soup = BeautifulSoup(content_html, "html.parser")
     placeholders = []
     for tag in soup.find_all(["figure", "div"]):
-        classes = " ".join(tag.get("class", []))
+        classes = " ".join(tag.get("class") or [])  # type: ignore[arg-type]
         if tag.name == "figure" and _YT_EMBED_FIGURE_CLASS_RE.search(classes):
             placeholders.append(tag)
         elif (tag.name == "div" and "video-wrapper" in classes.lower()
@@ -9418,7 +9445,7 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     soup = BeautifulSoup(content_html, "html.parser")
     changed = False
     for a in list(soup.find_all("a")):
-        href = (a.get("href") or "").strip()
+        href = str(a.get("href") or "").strip()
         if not href or not _YT_WATCH_URL_RE.match(href):
             continue
         # The link must be the sole content of its block — convert a paragraph
@@ -9484,7 +9511,7 @@ def _embed_standalone_bandcamp_links(content_html: str) -> str:
     soup = BeautifulSoup(content_html, "html.parser")
     changed = False
     for a in list(soup.find_all("a", href=True)):
-        href = (a.get("href") or "").strip()
+        href = str(a.get("href") or "").strip()
         m = _BC_URL_RE.match(href)
         if not m:
             continue
@@ -9569,7 +9596,7 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
-def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]]) -> str:
+def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
     Three passes, in order: (1) replace a bare body link that points at the same
@@ -9590,7 +9617,7 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             continue
         target = None
         for a in soup.find_all("a"):
-            href = a.get("href") or ""
+            href = str(a.get("href") or "")
             if canonical.startswith("yt:"):
                 vid = canonical[3:]
                 if youtube_duration_service.extract_video_id(href) == vid or f"/embed/{vid}" in href:
@@ -10167,16 +10194,19 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
 
     # Standalone bare YouTube links (own paragraph / lone anchor) → inline player.
     # Covers feeds where the oEmbed iframe was stripped and only the link remains.
-    content_html = _embed_standalone_youtube_links(content_html)
+    if isinstance(content_html, str):
+        content_html = _embed_standalone_youtube_links(content_html)
 
     # Standalone bare Bandcamp album/track links → embed. Cache-first: resolves
     # immediately when the album page HTML is already cached; otherwise queues a
     # background fetch so the embed appears on the next open.
-    content_html = _embed_standalone_bandcamp_links(content_html)
+    if isinstance(content_html, str):
+        content_html = _embed_standalone_bandcamp_links(content_html)
 
     # Apply the per-user YouTube embed-host preference to feed-native players
     # (the recovered/injected player above already uses youtube_embed_host()).
-    content_html = _apply_youtube_embed_host(content_html)
+    if isinstance(content_html, str):
+        content_html = _apply_youtube_embed_host(content_html)
 
     return content_html
 
@@ -10320,7 +10350,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     _src_soup.body.decode_contents() if _src_soup.body else str(_src_soup)
                 ).strip() or None
             except Exception:
-                content_html = re.sub(r"<source\b[^>]*/?>", "", content_html, flags=re.IGNORECASE) or None
+                content_html = re.sub(r"<source\b[^>]*/?>", "", content_html or "", flags=re.IGNORECASE) or None
 
         # Steam CDN serves localized images as /hash/english.png (404s for non-English)
         # with an onerror fallback to /hash.png (200). Strip the language subfolder so
@@ -10433,21 +10463,23 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if image_title_text and not lead_image_url and isinstance(content_html, str):
             _caption_injected = False
 
+            _title_str: str = image_title_text  # narrowed by outer `if image_title_text`
+
             def _inject_alt(m: re.Match) -> str:
                 nonlocal _caption_injected
                 tag = m.group(0)
                 if re.search(r"\balt\s*=", tag, re.IGNORECASE):
                     tag = re.sub(
                         r'(\balt\s*=\s*)(?:"[^"]*"|\x27[^\x27]*\x27)',
-                        lambda a: a.group(1) + '"' + image_title_text.replace('"', "&quot;") + '"',
+                        lambda a: a.group(1) + '"' + _title_str.replace('"', "&quot;") + '"',
                         tag,
                         count=1,
                         flags=re.IGNORECASE,
                     )
                 else:
-                    tag = tag[:-1] + ' alt="' + image_title_text.replace('"', "&quot;") + '"' + tag[-1]
+                    tag = tag[:-1] + ' alt="' + _title_str.replace('"', "&quot;") + '"' + tag[-1]
                 _caption_injected = True
-                caption = f'<p class="entry-image-title-text">{html.escape(image_title_text)}</p>'
+                caption = f'<p class="entry-image-title-text">{html.escape(_title_str)}</p>'
                 return tag + caption
 
             content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
@@ -12066,7 +12098,7 @@ def _format_last_active(ts: float | None) -> str:
     if not ts:
         return "never"
     try:
-        return format_datetime_for_ui(datetime.fromtimestamp(float(ts), tz=timezone.utc))
+        return format_datetime_for_ui(datetime.fromtimestamp(float(ts), tz=timezone.utc)) or "—"
     except Exception:
         return "—"
 
@@ -12724,9 +12756,7 @@ def home(
         "current_user": _current_web_username(request),
         "is_admin": _is_web_admin(_current_web_user(request)),
         "current_api_token": (
-            user_store.get_api_token(_current_web_user(request))
-            if (user_store and _current_web_user(request))
-            else ""
+            user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""
         ),
         "no_feeds": len(all_feed_urls) == 0,
     }
@@ -13138,7 +13168,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 _sc_img = (
                     img.resize(
                         (max(1, round(iw * _sc_scale)), max(1, round(ih * _sc_scale))),
-                        _PILImage.BILINEAR,
+                        _PILImage.Resampling.BILINEAR,
                     )
                     if _sc_scale < 1.0
                     else img
@@ -13151,7 +13181,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 _x2 = min(iw, round((_c["x"] + _c["width"]) / _sc_scale))
                 _y2 = min(ih, round((_c["y"] + _c["height"]) / _sc_scale))
                 img = img.crop((_x1, _y1, _x2, _y2))
-                img = img.resize((_THUMB_W, _THUMB_H), _PILImage.LANCZOS)
+                img = img.resize((_THUMB_W, _THUMB_H), _PILImage.Resampling.LANCZOS)
                 _sc_done = True
             except Exception:
                 pass
@@ -13164,7 +13194,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 scale = max(contain_s, min(cover_s, cap_w, cap_h))
                 new_w = max(1, round(iw * scale))
                 new_h = max(1, round(ih * scale))
-                img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+                img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
                 if new_w > _THUMB_W or new_h > _THUMB_H:
                     left = max(0, (new_w - _THUMB_W) // 2)
                     top  = max(0, (new_h - _THUMB_H) // 2)
@@ -13176,7 +13206,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             scale = min(_THUMB_W / iw, _THUMB_H / ih)
             new_w = max(1, round(iw * scale))
             new_h = max(1, round(ih * scale))
-            img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+            img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
             if new_w > _THUMB_W or new_h > _THUMB_H:
                 left = max(0, (new_w - _THUMB_W) // 2)
                 top  = max(0, (new_h - _THUMB_H) // 2)
@@ -13187,7 +13217,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             scale = max(_THUMB_W / iw, _THUMB_H / ih) * _fill_zoom
             new_w = max(1, round(iw * scale))
             new_h = max(1, round(ih * scale))
-            img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+            img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
             if new_w >= _THUMB_W and new_h >= _THUMB_H:
                 # Zoom ≥ 1.0: image fills frame — crop with anchor position.
                 h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
@@ -14052,6 +14082,7 @@ def add_highlight_route(
     exclude_scope_ids: str = Form(""),
     webhook_url: str = Form(""),
     webhook_format: str = Form("generic"),
+    webhook_batch: int = Form(0),
     yt_playlist_id: str = Form(""),
     yt_playlist_title: str = Form(""),
     yt_include_shorts: int = Form(0),
@@ -14098,7 +14129,7 @@ def add_highlight_route(
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
-                              webhook_url, webhook_format,
+                              webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
                               yt_min_minutes, yt_max_minutes)
@@ -14110,6 +14141,7 @@ def add_highlight_route(
                          "dedup_window_hours": dedup_window_hours,
                          "exclude_scope_ids": exclude_scope_ids.strip(),
                          "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
+                         "webhook_batch": bool(webhook_batch),
                          "yt_playlist_id": yt_playlist_id.strip(),
                          "yt_playlist_title": yt_playlist_title.strip(),
                          "yt_include_shorts": bool(yt_include_shorts),
@@ -16781,18 +16813,18 @@ def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]
         if fmt == "JPEG":
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
-            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="JPEG", quality=90, optimize=True)
+            img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="JPEG", quality=90, optimize=True)
             return buf.getvalue(), "image/jpeg"
         if fmt == "PNG":
             # P/1-bit modes resize poorly; promote to RGBA to keep transparency.
             if img.mode in ("P", "1"):
                 img = img.convert("RGBA")
-            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="PNG", optimize=True)
+            img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="PNG", optimize=True)
             return buf.getvalue(), "image/png"
         # WEBP
         if img.mode == "P":
             img = img.convert("RGBA")
-        img.resize(new_size, _PILImage.LANCZOS).save(buf, format="WEBP", quality=90, method=4)
+        img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="WEBP", quality=90, method=4)
         return buf.getvalue(), "image/webp"
     except Exception:
         return raw, None
@@ -17150,6 +17182,7 @@ async def _fever_handler(request: Request) -> Response:
 def _fever_build_result(params: dict) -> dict:
     """Build the Fever response for an authenticated request. Runs under the
     caller's tenancy context (the bound user in multi mode)."""
+    assert fever_service is not None  # caller already checked
     result: dict = {
         "api_version": 3,
         "auth": 1,
@@ -17307,21 +17340,21 @@ def greader_user_info(request: Request) -> Response:
     if user_store is not None:
         row = user_store.get_by_id(tenancy.current_user_id())
         display_name = row["username"] if row else tenancy.current_user_id()
-    return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/tag/list")
 def greader_tag_list(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_tag_list())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_tag_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/subscription/list")
 def greader_subscription_list(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.post("/greader/reader/api/0/subscription/edit")
@@ -17342,7 +17375,7 @@ async def greader_subscription_quickadd(request: Request) -> Response:
 def greader_unread_count(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_unread_counts())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_unread_counts())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/token")
@@ -17368,7 +17401,7 @@ def greader_stream_item_ids(request: Request) -> Response:
     start_time = int(p["ot"]) if "ot" in p else None
     stop_time = int(p["nt"]) if "nt" in p else None
     oldest_first = p.get("r") == "o"
-    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
         stream_id, count=count, continuation=continuation,
         exclude_read=exclude_read, start_time=start_time,
         stop_time=stop_time, oldest_first=oldest_first,
@@ -17380,8 +17413,8 @@ async def greader_stream_items_contents(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     form = await request.form()
-    item_ids = list(form.getlist("i"))
-    return JSONResponse(greader_service.get_items_contents(item_ids))  # type: ignore[union-attr]
+    item_ids = [v for v in form.getlist("i") if isinstance(v, str)]
+    return JSONResponse(greader_service.get_items_contents(item_ids))  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/stream/contents/{stream_id:path}")
@@ -17395,7 +17428,7 @@ def greader_stream_contents_path(stream_id: str, request: Request) -> Response:
         count = min(int(p.get("n", "20")), 10_000)
     except ValueError:
         count = 20
-    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
         stream_id,
         count=count,
         continuation=p.get("c") or None,
@@ -17415,10 +17448,10 @@ async def greader_edit_tag(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     form = await request.form()
-    greader_service.edit_tag(  # type: ignore[union-attr]
-        list(form.getlist("i")),
-        list(form.getlist("a")),
-        list(form.getlist("r")),
+    greader_service.edit_tag(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+        [v for v in form.getlist("i") if isinstance(v, str)],
+        [v for v in form.getlist("a") if isinstance(v, str)],
+        [v for v in form.getlist("r") if isinstance(v, str)],
     )
     return Response("OK")
 
@@ -17431,10 +17464,10 @@ async def greader_mark_all_as_read(request: Request) -> Response:
     stream_id = str(form.get("s") or "user/-/state/com.google/reading-list")
     ts_raw = form.get("ts")
     # ts is in microseconds; convert to seconds for the service.
-    timestamp = int(ts_raw) // 1_000_000 if ts_raw else None
+    timestamp = int(str(ts_raw)) // 1_000_000 if ts_raw and isinstance(ts_raw, str) else None
     threading.Thread(
         target=_run_in_user_context,
-        args=(tenancy.current_user_id(), greader_service.mark_all_as_read, stream_id, timestamp),
+        args=(tenancy.current_user_id(), greader_service.mark_all_as_read, stream_id, timestamp),  # ty: ignore[unresolved-attribute]
         daemon=True,
     ).start()
     return Response("OK")
@@ -17491,7 +17524,7 @@ async def miniflux_auth_token(request: Request) -> Response:
         return JSONResponse({"error_message": "Invalid JSON."}, status_code=400)
     username = str(body.get("username", ""))
     password = str(body.get("password", ""))
-    uid = user_store.authenticate(username, password) if username and password else None
+    uid = user_store.verify_login(username, password) if username and password else None
     if not uid:
         return JSONResponse({"error_message": "Invalid credentials."}, status_code=401)
     with tenancy.user_context(uid):

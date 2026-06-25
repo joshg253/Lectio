@@ -39,6 +39,7 @@ class _FakeEntry:
         self.link = link
         self.summary = summary
         self._content_html = content_html
+        self.enclosures: tuple | list = ()
 
     def get_content(self, prefer_summary: bool = False):
         if self._content_html is None:
@@ -786,8 +787,8 @@ def test_backfill_webcomic_prefers_source_panel_over_enclosure(tmp_path: Path):
     service.store_feed_strategy(feed_url, "webcomic", manual=True)
 
     full_panel = "https://www.everblue-comic.com/comics/x-full.jpg"
-    calls: list[str] = []
-    service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel
+    calls: list[tuple] = []
+    service._fetch_source_lead_image = lambda link, **kw: calls.append((link, kw)) or full_panel  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     # Webcomic feeds must NOT fetch the feed XML for media thumbs.
     service._fetch_feed_media_thumbnails = lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("webcomic must skip _fetch_feed_media_thumbnails")

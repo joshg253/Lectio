@@ -134,7 +134,7 @@ def sanitize_svg(markup: str) -> str | None:
     # <img>, so derive width/height from the viewBox when absent.
     _attr_keys = {k.lower(): k for k in root.attrs}
     if "width" not in _attr_keys or "height" not in _attr_keys:
-        vb = root.attrs.get(_attr_keys.get("viewbox", ""), "")
+        vb = str(root.attrs.get(_attr_keys.get("viewbox", ""), ""))
         parts = vb.replace(",", " ").split()
         if len(parts) == 4:
             try:

@@ -272,7 +272,7 @@ def _deviation_to_entry(d: dict) -> dict | None:
             img = thumbs[-1].get("src", "")
     ts = d.get("published_time")
     try:
-        published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+        published_at = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()  # ty: ignore[invalid-argument-type]
     except Exception:
         published_at = datetime.now(timezone.utc).isoformat()
     author = (d.get("author") or {}).get("username") or ""
@@ -573,7 +573,7 @@ def _post_token(payload: dict, client_secret: str, what: str) -> dict:
         if resp.status_code == 200 and data.get("access_token"):
             return data
         last = resp
-    raise RuntimeError(f"{what} failed: HTTP {last.status_code}: {last.text[:200]}")
+    raise RuntimeError(f"{what} failed: HTTP {last.status_code}: {last.text[:200]}" if last else f"{what} failed")
 
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str, code_verifier: str) -> dict:

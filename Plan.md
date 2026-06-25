@@ -160,19 +160,7 @@ Detailed specs follow.
   moved to DB-backed settings in the Administration panel; dynamic OAuth callback URLs
   in Settings (populated from `public_url`).
 
-- **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button + README badge): batch/digest
-  delivery.
-
-- **Social embeds (Instagram, X/Twitter, etc.)** — harder subcase of the above.
-  These ship in feeds as `<blockquote class="instagram-media" / "twitter-tweet">` +
-  a platform `<script>`, not an iframe. We strip scripts (privacy/security + we don't
-  load third-party trackers), so they currently render as a plain quote. X/Twitter
-  iframes via `platform.twitter.com` ARE allowlisted, but the blockquote/widgets.js
-  form isn't an iframe; Instagram isn't allowlisted at all. To render these we'd
-  convert the blockquote/permalink to the platform's oEmbed/iframe — but Twitter and
-  Instagram oEmbed now require API auth, and IG embeds are increasingly login-walled,
-  so this may not be reliably doable without third-party scripts we don't want to
-  load. Assess feasibility before committing; may end up "won't fix" for privacy.
+- ~~**Webhook batch/digest delivery**~~ — ✅ **SHIPPED.** `batch_webhooks` rule option; refresh groups all matching entries per-rule into one `{entries:[...]}` payload instead of N single-entry calls. Toggle in rule editor; backward-compatible (off by default).
 - Code health (deferred — low value, no user impact):
   - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
     (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/
@@ -304,14 +292,6 @@ Detailed specs follow.
     **TODO before implementation:** user to provide a sample
     `backup/<label>.json` entry so the JSON field names are confirmed (starred flag,
     URL field name, etc.).
-  - **Supernote integration** (e-ink; user has a Manta) — Supernote devices sync via
-    their **Supernote Cloud** + a local Wi-Fi "Browse & Access" HTTP file interface;
-    there's no official public API, so options are limited. Plausible: export
-    saved/starred articles as documents (PDF or `.note`-friendly format) to a folder
-    the device picks up (Cloud folder or the device's WebDAV-ish local server). A
-    "send to Supernote" destination (like the send-to-destination family) that drops
-    a readable PDF of an article. Investigate the local Browse&Access API and whether
-    Supernote Cloud has any usable upload endpoint before committing.
 
 
 ## Known limitations (not bugs)
@@ -337,10 +317,8 @@ Detailed specs follow.
 
 ## Backburner
 
-- **selfh.st / paywalled-teaser reader-mode spike** — selfh.st & waynocartoons load
-  in Reader view; if Readability already extracts the full article from the page,
-  the "paywalled teaser" limitation may be moot. Confirm, then optionally a per-feed
-  "open in Reader by default" toggle.
+- ~~**selfh.st reader-mode spike**~~ — confirmed: Reader view already extracts the full
+  article. No action needed.
 - **Deployment genericization** (after multi-user phases) — make base
   `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels), move
   Traefik labels to an opt-in overlay; move security headers (HSTS/nosniff/
@@ -350,9 +328,11 @@ Detailed specs follow.
 - **Archive caps for starred entries** — only relevant after multi-user.
 - **Better tuning / live preview** — full entry preview pane, swappable strategy +
   display settings without saving.
-- **`ty` type-error backlog** — after upgrading to `ty` 0.0.53 (2026-06-24), 235
-  diagnostics surfaced. All appear pre-existing (Pillow `LANCZOS` stub gap,
-  `FeverService._synced` dynamic attr, test fake classes, `re.Match` narrowing,
-  `base64.binascii` access, etc.). Not blocking; address incrementally.
+- **Social embeds (Instagram, X/Twitter)** — both platforms now require API auth for
+  oEmbed; IG is increasingly login-walled. Likely "won't fix" for privacy; revisit if
+  a clean no-auth path appears.
+- **Supernote integration** — no confirmed public API. Revisit if the Browse&Access
+  HTTP interface proves usable.
+- ~~**`ty` type-error backlog**~~ — ✅ **SHIPPED.** 235 → 0 diagnostics. Fixed real bugs (`FeverService._synced` wrong attr, Pillow `LANCZOS` → `Resampling.LANCZOS`, `lead_images.py` None-before-raise_for_status); suppressed false positives and stub gaps with dual `# type: ignore  # ty: ignore` pattern.
 - **YunoHost or other packaging.**
 - **PWA / offline-first features.**

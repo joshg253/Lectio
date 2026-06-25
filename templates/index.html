@@ -8048,7 +8048,7 @@
             if (ruleType === 'webhook') {
               const fmtBadge = document.createElement('span');
               fmtBadge.className = 'hl-rule-delivery-badge';
-              fmtBadge.textContent = (rule.webhook_format === 'ifttt') ? 'IFTTT' : 'JSON';
+              fmtBadge.textContent = (rule.webhook_format === 'ifttt') ? 'IFTTT' : (rule.webhook_batch ? 'JSON (batch)' : 'JSON');
               row.appendChild(fmtBadge);
               if (rule.webhook_url) {
                 const toSpan = document.createElement('span');
@@ -9132,6 +9132,22 @@
         webhookFormatSel.value = prefill.webhook_format || 'generic';
         webhookRow.appendChild(webhookFormatSel);
 
+        const whBatchLabel = document.createElement('label');
+        whBatchLabel.className = 'hl-draft-field-label';
+        whBatchLabel.style.display = 'flex';
+        whBatchLabel.style.alignItems = 'center';
+        whBatchLabel.style.gap = '0.25rem';
+        const webhookBatchCheck = document.createElement('input');
+        webhookBatchCheck.type = 'checkbox';
+        webhookBatchCheck.checked = !!prefill.webhook_batch;
+        whBatchLabel.appendChild(webhookBatchCheck);
+        whBatchLabel.appendChild(document.createTextNode('Batch'));
+        whBatchLabel.title = 'Send all matches in one request instead of one request per entry. Not available for IFTTT format.';
+        webhookRow.appendChild(whBatchLabel);
+        const toggleBatch = () => { whBatchLabel.style.display = webhookFormatSel.value === 'ifttt' ? 'none' : 'flex'; };
+        webhookFormatSel.addEventListener('change', toggleBatch);
+        toggleBatch();
+
         const webhookTestBtn = document.createElement('button');
         webhookTestBtn.type = 'button';
         webhookTestBtn.className = 'feed-prop-inline-btn';
@@ -9335,6 +9351,7 @@
           const batchCount = parseInt(batchCountInput.value || '0', 10) || 0;
           const ccMe = ccMeCheck.checked ? 1 : 0;
           const webhookFormat = webhookFormatSel.value || 'generic';
+          const webhookBatch = (webhookFormat !== 'ifttt' && webhookBatchCheck.checked) ? 1 : 0;
           let scope, scopeId;
           if (!folderId)                  { scope = 'global'; scopeId = ''; }
           else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
@@ -9344,7 +9361,7 @@
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
                          email_to: emailTo, batch_time: batchTime, batch_count: batchCount, cc_me: ccMe,
-                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat,
+                         dedup_window_hours: 24, webhook_url: webhookUrl, webhook_format: webhookFormat, webhook_batch: webhookBatch,
                          yt_playlist_id: ytPlSel.value || '',
                          yt_playlist_title: (ytPlOpt && ytPlOpt.dataset.title) || '',
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
@@ -9367,7 +9384,7 @@
           enabled: r.enabled !== undefined ? r.enabled : 0,
           dedup_window_hours: r.dedup_window_hours || 168,
           exclude_scope_ids: r.exclude_scope_ids || '',
-          webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic',
+          webhook_url: r.webhook_url || '', webhook_format: r.webhook_format || 'generic', webhook_batch: r.webhook_batch ? 1 : 0,
           yt_playlist_id: r.yt_playlist_id || '', yt_playlist_title: r.yt_playlist_title || '',
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,

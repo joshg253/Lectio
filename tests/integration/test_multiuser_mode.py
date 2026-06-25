@@ -132,10 +132,10 @@ class _FakeReq:
 
 def test_session_logged_in_requires_user_id(monkeypatch):
     # authenticated flag alone is not enough — must also have a valid user_id.
-    assert main._session_logged_in(_FakeReq({"authenticated": True})) is False
-    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True
-    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False
-    assert main._session_logged_in(_FakeReq({})) is False
+    assert main._session_logged_in(_FakeReq({"authenticated": True})) is False  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "u_abc123"})) is True  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({"authenticated": True, "user_id": "../bad"})) is False  # ty: ignore[invalid-argument-type]
+    assert main._session_logged_in(_FakeReq({})) is False  # ty: ignore[invalid-argument-type]
 
 
 # --- in-process bootstrap / provisioning -------------------------------------
@@ -162,7 +162,9 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     try:
         main.bootstrap_admin()
         assert store.count() == 1
-        admin_id = store.get("bootadmin")["user_id"]
+        _u = store.get("bootadmin")
+        assert _u is not None
+        admin_id = _u["user_id"]
         assert store.verify_login("bootadmin", "boot-pw") == admin_id
         # Storage is provisioned under the stable user_id, not the username.
         assert (tmp_path / "users" / admin_id / "lectio_meta.sqlite3").exists()

@@ -26,7 +26,7 @@ def _scenario_multi() -> None:
         assert main.user_store.count() == 1, main.user_store.count()
         admin = os.environ["LECTIO_ADMIN_USERNAME"]
         assert [u["username"] for u in main.user_store.list_users()] == [admin]
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
         assert admin_id != admin  # the dir is keyed by the stable id, not the name
         admin_dir = tenancy.user_data_dir(admin_id)
         assert admin_dir.is_dir()
@@ -87,7 +87,7 @@ def _scenario_multi_api() -> None:
 
     with TestClient(main.app) as client:
         admin = os.environ["LECTIO_ADMIN_USERNAME"]
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
         bob_id = main.user_store.create("bob", "bob-pw", scheme=main.PASSWORD_HASH_SCHEME)
         main.provision_user_storage(bob_id)
 
@@ -166,7 +166,7 @@ def _scenario_account_ui() -> None:
 
         assert client.post("/login", data={"username": admin, "password": admin_pw},
                            follow_redirects=False).status_code == 303
-        admin_id = main.user_store.get(admin)["user_id"]
+        admin_id = main.user_store.get(admin)["user_id"]  # ty: ignore[not-subscriptable]
 
         # The main UI exposes an Account link in multi mode.
         home = client.get("/")
@@ -195,7 +195,7 @@ def _scenario_account_ui() -> None:
                         data={"_csrf": tok, "user_id": carol_id, "new_username": "caroline"},
                         follow_redirects=False)
         assert r.status_code == 303
-        assert main.user_store.get_by_id(carol_id)["username"] == "caroline"
+        assert main.user_store.get_by_id(carol_id)["username"] == "caroline"  # ty: ignore[not-subscriptable]
         assert (tenancy.user_data_dir(carol_id) / "lectio_meta.sqlite3").exists()
 
         # Change own password.
@@ -229,7 +229,7 @@ def _scenario_account_ui() -> None:
                         data={"_csrf": tok, "username": "tempuser", "password": "temp-pw"},
                         follow_redirects=False)
         assert r.status_code == 303
-        temp_id = main.user_store.get("tempuser")["user_id"]
+        temp_id = main.user_store.get("tempuser")["user_id"]  # ty: ignore[not-subscriptable]
         temp_dir = tenancy.user_data_dir(temp_id)
         assert temp_dir.exists()
         tok = _csrf_token(client.get("/administration").text)

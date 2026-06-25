@@ -232,7 +232,7 @@ def test_get_items_returns_entry(tmp_path):
     mock_reader.get_entries.return_value = [entry]
     mock_reader.get_entry.return_value = entry
     svc = _build_service(db, mock_reader)
-    svc._synced = True  # skip background sync
+    svc._synced_users.add(svc._current_user())  # skip background sync
 
     result = svc.get_items()
 
@@ -258,7 +258,7 @@ def test_get_items_since_id(tmp_path):
         entry1 if key[1] == _ENTRY_ID else entry2
     )
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     result = svc.get_items(since_id=id1)
 
@@ -278,7 +278,7 @@ def test_get_items_with_ids(tmp_path):
     mock_reader.get_entries.return_value = []
     mock_reader.get_entry.return_value = entry1
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     result = svc.get_items(with_ids=str(id1))
 
@@ -296,7 +296,7 @@ def test_get_items_is_read_flag(tmp_path):
     mock_reader.get_entries.return_value = []
     mock_reader.get_entry.return_value = entry
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     result = svc.get_items()
     assert result["items"][0]["is_read"] == 1
@@ -316,7 +316,7 @@ def test_get_items_is_saved_flag(tmp_path):
     mock_reader.get_entries.return_value = []
     mock_reader.get_entry.return_value = entry
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     result = svc.get_items()
     assert result["items"][0]["is_saved"] == 1
@@ -331,7 +331,7 @@ def test_get_unread_item_ids(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = [entry]
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     ids_str = svc.get_unread_item_ids()
 
@@ -346,7 +346,7 @@ def test_get_unread_item_ids_empty(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     assert svc.get_unread_item_ids() == ""
 
@@ -363,7 +363,7 @@ def test_get_saved_item_ids(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     ids_str = svc.get_saved_item_ids()
     assert ids_str != ""
@@ -380,7 +380,7 @@ def test_mark_item_read(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_item(item_id, "read")
     mock_reader.mark_entry_as_read.assert_called_once_with((_FEED_URL, _ENTRY_ID))
@@ -394,7 +394,7 @@ def test_mark_item_unread(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_item(item_id, "unread")
     mock_reader.mark_entry_as_unread.assert_called_once_with((_FEED_URL, _ENTRY_ID))
@@ -408,7 +408,7 @@ def test_mark_item_saved(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_item(item_id, "saved")
 
@@ -429,7 +429,7 @@ def test_mark_item_unsaved(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_item(item_id, "unsaved")
 
@@ -444,7 +444,7 @@ def test_mark_item_unknown_id_is_noop(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = []
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_item(99999, "read")  # should not raise
     mock_reader.mark_entry_as_read.assert_not_called()
@@ -466,7 +466,7 @@ def test_mark_feed_read_before_cutoff(tmp_path):
     mock_reader.get_feeds.return_value = []
     mock_reader.get_entries.return_value = [old_entry, new_entry]
     svc = _build_service(db, mock_reader)
-    svc._synced = True
+    svc._synced_users.add(svc._current_user())
 
     svc.mark_feed_read(feed_id, int(cutoff_dt.timestamp()))
 

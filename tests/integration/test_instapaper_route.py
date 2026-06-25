@@ -58,7 +58,7 @@ def _make_entry(link: str = "https://example.com/article", tags=None):
         tags = None
 
     e = _Entry()
-    e.link = link
+    e.link = link  # ty: ignore[unresolved-attribute]
     e.tags = [_Tag(t) for t in (tags or [])]
     return e
 

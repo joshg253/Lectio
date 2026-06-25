@@ -679,7 +679,7 @@ class LeadImageService:
         for cache in (self._cache, self._alt_cache, self._title_cache, self._fetched_at_cache):
             old_keys = [k for k in cache if k[0] == old_url]
             for k in old_keys:
-                cache[(new_url, k[1])] = cache.pop(k)
+                cache[(new_url, k[1])] = cache.pop(k)  # type: ignore[index,assignment]  # ty: ignore[invalid-assignment]
         if old_url in self._debug_bypass_feeds:
             self._debug_bypass_feeds.discard(old_url)
             self._debug_bypass_feeds.add(new_url)
@@ -706,7 +706,7 @@ class LeadImageService:
             keys_to_drop = [k for k in self._cache if k[0] == feed_url]
         else:
             keys_to_drop = list(self._cache.keys())
-        evicted_urls = [self._cache[k] for k in keys_to_drop if self._cache.get(k)]
+        evicted_urls: list[str] = [u for k in keys_to_drop if (u := self._cache.get(k))]
 
         try:
             with self._get_meta_connection() as conn:
@@ -2437,7 +2437,9 @@ class LeadImageService:
                         break  # served (or a non-WAF error) — don't escalate
             # Still refused after escalating → the site is WAF-blocking us. Record a
             # cooldown so we stop re-fetching it on every entry open.
-            if response is not None and response.status_code in (403, 503):
+            if response is None:
+                return None
+            if response.status_code in (403, 503):
                 self._waf_block_until[_domain] = time.monotonic() + self._WAF_BLOCK_COOLDOWN
                 return None
             response.raise_for_status()
@@ -2461,6 +2463,7 @@ class LeadImageService:
             except Exception:
                 return None
 
+        assert response is not None
         return response.text, str(response.url), _corp_restricted
 
     def _is_image_url_fetchable(
