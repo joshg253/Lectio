@@ -5,6 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![WebSub](https://img.shields.io/badge/realtime-WebSub-FF5700)
+![Webhooks](https://img.shields.io/badge/automation-Webhooks-FF5700)
 ![GReader API](https://img.shields.io/badge/API-Google%20Reader-FF5700)
 ![Fever API](https://img.shields.io/badge/API-Fever-FF5700)
 ![Miniflux API](https://img.shields.io/badge/API-Miniflux%20v1-FF5700)

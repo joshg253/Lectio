@@ -1,4 +1,10 @@
-"""WebSub (PubSubHubbub) subscriber: hub discovery, subscription, push verification, renewal."""
+"""WebSub (PubSubHubbub) subscriber: hub discovery, subscription, push verification, renewal.
+
+Subscriptions are stored in a shared (non-per-user) SQLite DB so that N users
+subscribed to the same feed produce exactly ONE HTTP subscription to the hub,
+with ONE shared secret. Push fan-out to all per-user reader DBs is handled by
+the caller (main.py) via get_subscribers().
+"""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +20,6 @@ from urllib.parse import quote
 
 import httpx
 
-from services import tenancy
 from services.url_guard import is_safe_outbound_url, safe_get
 
 
@@ -36,12 +41,12 @@ class WebSubService:
     def __init__(
         self,
         *,
-        get_meta_connection: Callable[[], sqlite3.Connection],
+        get_shared_connection: Callable[[], sqlite3.Connection],
         public_url: str,
         user_agent: str,
         logger: logging.Logger,
     ) -> None:
-        self._get_meta = get_meta_connection
+        self._get_shared = get_shared_connection
         self._public_url = public_url.rstrip("/")
         self._user_agent = user_agent
         self._logger = logger
@@ -67,19 +72,33 @@ class WebSubService:
             self._logger.debug("[websub] hub discovery error for %s: %s", feed_url, exc)
         return None
 
-    def _discover_and_subscribe(self, feed_url: str) -> None:
-        """Discover hub for feed_url and subscribe if found; records the attempt either way."""
+    def _discover_and_subscribe(self, feed_url: str, user_id: str) -> None:
+        """Register user_id as a subscriber and subscribe to the hub if not already."""
+        # Register the subscriber immediately so pushes work before hub responds.
+        with self._get_shared() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO websub_subscribers (feed_url, user_id) VALUES (?, ?)",
+                (feed_url, user_id),
+            )
+
+        # If we already have a subscription row (even pending), skip re-discovery.
+        with self._get_shared() as conn:
+            existing = conn.execute(
+                "SELECT hub_url FROM websub_subscriptions WHERE feed_url=?", (feed_url,)
+            ).fetchone()
+        if existing is not None:
+            return
+
         hub_url = self._discover_hub_url(feed_url)
         now = time.time()
-        with self._get_meta() as conn:
+        with self._get_shared() as conn:
             if hub_url:
                 conn.execute(
-                    "INSERT OR REPLACE INTO websub_subscriptions "
+                    "INSERT OR IGNORE INTO websub_subscriptions "
                     "(feed_url, hub_url, hub_tried_at) VALUES (?, ?, ?)",
                     (feed_url, hub_url, now),
                 )
             else:
-                # Record "no hub found" so we don't retry for _HUB_RETRY_SECONDS.
                 conn.execute(
                     "INSERT OR IGNORE INTO websub_subscriptions (feed_url, hub_tried_at) VALUES (?, ?)",
                     (feed_url, now),
@@ -92,34 +111,28 @@ class WebSubService:
         if hub_url:
             self.subscribe(feed_url, hub_url)
 
-    def _spawn_in_context(self, target: Callable[..., None], *args) -> None:
-        """Spawn a daemon thread that re-binds the *current* tenancy user.
+    def maybe_discover_hubs(self, feed_urls: list[str], user_id: str) -> None:
+        """Spawn background hub discovery for feeds not yet tried (or stale).
 
-        Bare threading.Thread starts with the default (empty) tenant, so background
-        subscribe/discover work would write the subscription row to the wrong meta DB
-        — the verification fanout (over real users) then 404s and pushes never arrive.
-        Capture the caller's user and restore it inside the thread."""
-        uid = tenancy.current_user_id()
-
-        def _run() -> None:
-            with tenancy.user_context(uid):
-                target(*args)
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    def maybe_discover_hubs(self, feed_urls: list[str]) -> None:
-        """Spawn background hub discovery for feeds not yet tried (or stale)."""
+        Also registers user_id as a subscriber for each feed that already has a
+        known hub subscription."""
         if not feed_urls:
             return
         retry_before = time.time() - self._HUB_RETRY_SECONDS
         placeholders = ",".join("?" * len(feed_urls))
-        with self._get_meta() as conn:
-            # Feeds we already know about (have a row).
+        with self._get_shared() as conn:
             known_rows = conn.execute(
                 f"SELECT feed_url, hub_tried_at, hub_url FROM websub_subscriptions "
                 f"WHERE feed_url IN ({placeholders})",
                 feed_urls,
             ).fetchall()
+            # Register user as subscriber for feeds that already have a subscription.
+            already_subbed = [r["feed_url"] for r in known_rows if r["hub_url"] is not None]
+            if already_subbed:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO websub_subscribers (feed_url, user_id) VALUES (?, ?)",
+                    [(fu, user_id) for fu in already_subbed],
+                )
         known = {r["feed_url"]: r for r in known_rows}
         needs = []
         for url in feed_urls:
@@ -128,9 +141,12 @@ class WebSubService:
                 needs.append(url)  # never tried
             elif row["hub_url"] is None and (row["hub_tried_at"] or 0) < retry_before:
                 needs.append(url)  # previously found no hub; retry
-            # skip: active subscription or pending sub (hub_url IS NOT NULL)
         for url in needs[: self._MAX_DISCOVERY_PER_BATCH]:
-            self._spawn_in_context(self._discover_and_subscribe, url)
+            threading.Thread(
+                target=self._discover_and_subscribe,
+                args=(url, user_id),
+                daemon=True,
+            ).start()
 
     # ------------------------------------------------------------------ subscription
 
@@ -138,7 +154,7 @@ class WebSubService:
         """POST a subscription request to the hub (synchronous; call from a thread)."""
         secret = secrets.token_hex(32)
         now = time.time()
-        with self._get_meta() as conn:
+        with self._get_shared() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO websub_subscriptions "
                 "(feed_url, hub_url, secret, subscribed_at, verified, hub_tried_at) "
@@ -164,18 +180,30 @@ class WebSubService:
         except Exception as exc:
             self._logger.warning("[websub] subscribe POST failed for %s: %s", feed_url, exc)
 
-    def unsubscribe(self, feed_url: str) -> None:
-        """Send unsubscription request to hub and delete the subscription row."""
-        with self._get_meta() as conn:
-            row = conn.execute(
-                "SELECT hub_url FROM websub_subscriptions WHERE feed_url=? AND hub_url IS NOT NULL",
-                (feed_url,),
-            ).fetchone()
-            conn.execute("DELETE FROM websub_subscriptions WHERE feed_url=?", (feed_url,))
-        if row and is_safe_outbound_url(row["hub_url"]):
+    def unsubscribe(self, feed_url: str, user_id: str) -> None:
+        """Remove user_id as a subscriber. Unsubscribes from hub when no subscribers remain."""
+        hub_url: str | None = None
+        with self._get_shared() as conn:
+            conn.execute(
+                "DELETE FROM websub_subscribers WHERE feed_url=? AND user_id=?",
+                (feed_url, user_id),
+            )
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM websub_subscribers WHERE feed_url=?", (feed_url,)
+            ).fetchone()[0]
+            if remaining == 0:
+                row = conn.execute(
+                    "SELECT hub_url FROM websub_subscriptions "
+                    "WHERE feed_url=? AND hub_url IS NOT NULL",
+                    (feed_url,),
+                ).fetchone()
+                if row:
+                    hub_url = row["hub_url"]
+                conn.execute("DELETE FROM websub_subscriptions WHERE feed_url=?", (feed_url,))
+        if hub_url and is_safe_outbound_url(hub_url):
             try:
                 with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": self._user_agent}) as client:
-                    client.post(row["hub_url"], data={
+                    client.post(hub_url, data={
                         "hub.mode": "unsubscribe",
                         "hub.topic": feed_url,
                         "hub.callback": self.callback_url_for(feed_url),
@@ -195,7 +223,7 @@ class WebSubService:
         """Return the challenge string to confirm subscription, or None to reject."""
         if hub_topic != feed_url:
             return None
-        with self._get_meta() as conn:
+        with self._get_shared() as conn:
             row = conn.execute(
                 "SELECT 1 FROM websub_subscriptions WHERE feed_url=? AND hub_url IS NOT NULL",
                 (feed_url,),
@@ -205,28 +233,28 @@ class WebSubService:
             now = time.time()
             expires = now + (lease_seconds or self._LEASE_SECONDS)
             conn.execute(
-                "UPDATE websub_subscriptions SET verified=1, expires_at=?, lease_seconds=? WHERE feed_url=?",
+                "UPDATE websub_subscriptions SET verified=1, expires_at=?, lease_seconds=? "
+                "WHERE feed_url=?",
                 (expires, lease_seconds or self._LEASE_SECONDS, feed_url),
             )
         return challenge
 
     # ------------------------------------------------------------------ push HMAC verification (POST callback)
 
-    def has_verified_subscription(self, feed_url: str) -> bool:
-        """True if the current tenant has a verified subscription (with a secret)
-        for this topic. Used to fan a push out to every subscribing user."""
-        with self._get_meta() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM websub_subscriptions WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
-                (feed_url,),
-            ).fetchone()
-        return row is not None
+    def get_subscribers(self, feed_url: str) -> list[str]:
+        """Return the list of user_ids subscribed to this feed."""
+        with self._get_shared() as conn:
+            rows = conn.execute(
+                "SELECT user_id FROM websub_subscribers WHERE feed_url=?", (feed_url,)
+            ).fetchall()
+        return [r["user_id"] for r in rows]
 
     def verify_push_signature(self, feed_url: str, body: bytes, signature_header: str) -> bool:
         """Return True if the X-Hub-Signature header is valid for this subscription's secret."""
-        with self._get_meta() as conn:
+        with self._get_shared() as conn:
             row = conn.execute(
-                "SELECT secret FROM websub_subscriptions WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
+                "SELECT secret FROM websub_subscriptions "
+                "WHERE feed_url=? AND verified=1 AND secret IS NOT NULL",
                 (feed_url,),
             ).fetchone()
         if not row:
@@ -249,11 +277,13 @@ class WebSubService:
     def renew_expiring_subscriptions(self) -> None:
         """Re-subscribe to verified subscriptions expiring within the renewal window."""
         cutoff = time.time() + self._RENEW_BEFORE_SECONDS
-        with self._get_meta() as conn:
+        with self._get_shared() as conn:
             rows = conn.execute(
                 "SELECT feed_url, hub_url FROM websub_subscriptions "
                 "WHERE verified=1 AND expires_at > 0 AND expires_at < ? AND hub_url IS NOT NULL",
                 (cutoff,),
             ).fetchall()
         for row in rows:
-            self._spawn_in_context(self.subscribe, row["feed_url"], row["hub_url"])
+            threading.Thread(
+                target=self.subscribe, args=(row["feed_url"], row["hub_url"]), daemon=True
+            ).start()

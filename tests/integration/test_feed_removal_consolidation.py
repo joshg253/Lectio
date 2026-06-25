@@ -36,6 +36,7 @@ BASE = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
 def _reset_pools() -> None:
     main._reader_thread_local.pool = None
     main._meta_conn_local.pool = None
+    main._websub_conn_local.pool = None
 
 
 @pytest.fixture
@@ -49,7 +50,9 @@ def env(tmp_path, monkeypatch):
         legacy_meta=tmp_path / "meta.sqlite3",
         legacy_starred=tmp_path / "starred.sqlite",
     )
+    monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     main.ensure_meta_schema()
+    main.ensure_websub_schema()
     try:
         yield tmp_path
     finally:
@@ -99,7 +102,7 @@ class TestPurgeOrphanedFeed:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED, archive_pending=True)
         archive_mock.assert_called_once_with(FEED)
-        ws_mock.unsubscribe.assert_called_once_with(FEED)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
         # Feed should be gone from reader.
         with main.get_reader() as reader:
             assert not any(True for _ in reader.get_feeds())
@@ -216,7 +219,7 @@ class TestUnsubscribeRoute:
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED, archive_pending=True)
-        ws_mock.unsubscribe.assert_called_once_with(FEED)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
 
     def test_unsubscribe_via_remove_feed_from_folder_calls_websub(self, env, monkeypatch):
         """remove_feed_from_folder (used by the unsubscribe route helper) calls websub."""
@@ -226,7 +229,7 @@ class TestUnsubscribeRoute:
         monkeypatch.setattr(main, "websub_service", ws_mock)
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.remove_feed_from_folder(FEED, fid)
-        ws_mock.unsubscribe.assert_called_once_with(FEED)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
 
     def test_unsubscribe_via_remove_feed_calls_da_delete(self, env, monkeypatch):
         """remove_feed_from_folder routes DA feeds through deviantart_service.delete_deviantart_feed."""
@@ -285,7 +288,7 @@ class TestDeleteFolder:
         monkeypatch.setattr(main, "websub_service", ws_mock)
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.delete_folder(fid)
-        ws_mock.unsubscribe.assert_called_once_with(FEED)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
 
     def test_delete_folder_force_archives_before_deletion(self, env, monkeypatch):
         fid = _make_child_folder("ToDelete2")
@@ -338,7 +341,7 @@ class TestDeduplicateWebSub:
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED2, archive_pending=False, rescue_to=FEED)
-        ws_mock.unsubscribe.assert_called_once_with(FEED2)
+        ws_mock.unsubscribe.assert_called_once_with(FEED2, tenancy.DEFAULT_USER_ID)
 
     def test_dedup_does_not_archive_pending_for_removed_url(self, env, monkeypatch):
         """archive_pending=False means force_archive is NOT called on dedup removal."""
@@ -370,7 +373,7 @@ class TestPushActiveFeedUrls:
     def test_returns_verified_feed_with_hub(self, env, monkeypatch):
         # Ensure websub_service is truthy (value just needs to be non-None).
         monkeypatch.setattr(main, "websub_service", MagicMock())
-        conn = main.get_meta_connection()
+        conn = main.get_websub_connection()
         conn.execute(
             "INSERT OR REPLACE INTO websub_subscriptions"
             " (feed_url, hub_url, secret, subscribed_at, verified, expires_at, lease_seconds, hub_tried_at)"
@@ -383,7 +386,7 @@ class TestPushActiveFeedUrls:
 
     def test_excludes_unverified_subscription(self, env, monkeypatch):
         monkeypatch.setattr(main, "websub_service", MagicMock())
-        conn = main.get_meta_connection()
+        conn = main.get_websub_connection()
         conn.execute(
             "INSERT OR REPLACE INTO websub_subscriptions"
             " (feed_url, hub_url, secret, subscribed_at, verified, expires_at, lease_seconds, hub_tried_at)"
@@ -396,7 +399,7 @@ class TestPushActiveFeedUrls:
 
     def test_excludes_verified_without_hub(self, env, monkeypatch):
         monkeypatch.setattr(main, "websub_service", MagicMock())
-        conn = main.get_meta_connection()
+        conn = main.get_websub_connection()
         conn.execute(
             "INSERT OR REPLACE INTO websub_subscriptions"
             " (feed_url, hub_url, secret, subscribed_at, verified, expires_at, lease_seconds, hub_tried_at)"
@@ -409,7 +412,7 @@ class TestPushActiveFeedUrls:
 
     def test_returns_empty_set_on_db_error(self, env, monkeypatch):
         monkeypatch.setattr(main, "websub_service", MagicMock())
-        # Override get_meta_connection to raise.
-        monkeypatch.setattr(main, "get_meta_connection", lambda: (_ for _ in ()).throw(Exception("db gone")))
+        # Override get_websub_connection to raise.
+        monkeypatch.setattr(main, "get_websub_connection", lambda: (_ for _ in ()).throw(Exception("db gone")))
         result = main.get_push_active_feed_urls()
         assert result == set()

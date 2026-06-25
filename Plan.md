@@ -155,8 +155,8 @@ Detailed specs follow.
 
 ## Later
 
-- **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button): batch/digest
-  delivery, a Webhooks README badge.
+- **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button + README badge): batch/digest
+  delivery.
 
 - **Social embeds (Instagram, X/Twitter, etc.)** — harder subcase of the above.
   These ship in feeds as `<blockquote class="instagram-media" / "twitter-tweet">` +
@@ -190,12 +190,11 @@ Detailed specs follow.
     Current Lectio layout fetches each feed once per user (N users = N fetches) — fine
     for 1–3 trusted users, but the natural limit before shared-content mode becomes
     worth building.
-  - **Global WebSub subscriptions** — the callback URL is already global, but
-    subscription rows + secrets live per-user, so subscribe/renew POSTs and verify/
-    push fanout are duplicated across users. Move to one shared subscription store
-    keyed by topic (single secret, single subscribe/renew per feed) + a topic→
-    subscribers map for push fan-out. Standalone first step toward shared-content
-    mode; needs a migration of the existing per-user rows.
+  - ~~**Global WebSub subscriptions**~~ — ✅ **SHIPPED.** Subscription rows + secrets
+    moved to a shared `lectio_websub.sqlite` with a `websub_subscribers` join table.
+    One subscribe/renew HTTP call per feed regardless of subscriber count; push fan-out
+    verifies the signature once then refreshes each subscriber's per-user reader DB.
+    Startup migration copies legacy per-user rows idempotently.
   - **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, thumb
     generation. Not needed for trusted users; hooks left in the seam.
   - **Write-abuse protection (read-state spam)** — an untrusted user flip-flopping
