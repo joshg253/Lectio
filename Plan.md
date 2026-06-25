@@ -44,10 +44,7 @@ Detailed specs follow.
 
   Planned pieces:
 
-  1. **Robust YT-folder identity.** Stop relying on the folder name. Mark the synced
-     folder (the one `sync_youtube_folder` populates) as the canonical YouTube area,
-     or derive "YT area" = any folder whose feeds are all `is_youtube_feed`. Drives
-     where the special settings/automation panel shows up.
+  1. ~~**Robust YT-folder identity.**~~ ✅ **SHIPPED.** `_hasYtFeed` (content-based) is now the primary check; the name-based fallback is an exact match against `_ytFolderName` (loaded from settings) instead of the fragile `startsWith('YouTube')`. Rename-safe, and avoids false-positives on unrelated folders named "YouTube-adjacent".
 
   2. **Global "skip Shorts" toggle** — ✅ **SHIPPED.** `yt_hide_shorts_global` setting
      (Integrations toggle, off by default); the hide-shorts pass targets every
@@ -60,10 +57,7 @@ Detailed specs follow.
      dedup guard, rule-type gated on a connected account. (Remaining YT-area work is
      items 1, 2, and the quota meter below.)
 
-  4. **Connection gating** — partially done: the `youtube_playlist` rule-type option
-     and the per-embed control are gated on `yt_oauth_connected`. Still to do once the
-     **YT special-area panel** (items 1–2) exists: gate that panel too and surface a
-     single "Connect YouTube account" prompt when not connected. Gate server-side.
+  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on; the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
 
   5. **Quota meter — "tokens left" with low alerts.** — ✅ **SHIPPED.** Per-user
      `yt_quota_spend` table keyed by Pacific date; each billed call reports its unit
