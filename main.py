@@ -51,6 +51,7 @@ from services import deviantart as deviantart_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
 from services import quire as quire_service
+from services import reddit as reddit_service
 from services import inoreader as inoreader_service
 from services import passwords
 from services import podcast_audio
@@ -312,6 +313,17 @@ SETTING_INOREADER_TOKEN_EXPIRES_AT = "inoreader_token_expires_at"
 SETTING_INOREADER_OAUTH_STATE = "inoreader_oauth_state"
 SETTING_INOREADER_IMPORT_STATE = "inoreader_import_state"
 SETTING_INOREADER_EXPORT_DIR = "inoreader_export_dir"  # server-side path to JSON export files
+# Reddit OAuth integration.
+SETTING_REDDIT_CLIENT_ID = "reddit_client_id"
+SETTING_REDDIT_CLIENT_SECRET = "reddit_client_secret"
+SETTING_REDDIT_ACCESS_TOKEN = "reddit_oauth_access_token"
+SETTING_REDDIT_REFRESH_TOKEN = "reddit_oauth_refresh_token"
+SETTING_REDDIT_TOKEN_EXPIRES_AT = "reddit_oauth_token_expires_at"
+SETTING_REDDIT_OAUTH_STATE = "reddit_oauth_state"
+SETTING_REDDIT_USERNAME = "reddit_username"
+SETTING_SHARED_REDDIT_CLIENT_ID = "shared_reddit_client_id"
+SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
+SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
@@ -716,6 +728,66 @@ def get_pinterest_oauth_token() -> str:
             set_setting(conn, SETTING_PINTEREST_OAUTH_REFRESH_TOKEN, data["refresh_token"])
         set_setting(conn, SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
     return data["access_token"]
+
+
+def get_reddit_credentials() -> tuple[str, str]:
+    """Reddit OAuth client (client_id, client_secret).
+
+    Resolution: per-user setting → shared-instance (admin's settings) → empty.
+    No env-var fallback — credentials are DB-only for this integration.
+    """
+    cid = (get_runtime_setting(SETTING_REDDIT_CLIENT_ID)
+           or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_ID)
+           or "")
+    secret = (get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET)
+              or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_SECRET)
+              or "")
+    return cid, secret
+
+
+def reddit_connected() -> bool:
+    """True if the current user has connected their Reddit account."""
+    with get_meta_connection() as conn:
+        return bool(get_setting(conn, SETTING_REDDIT_REFRESH_TOKEN))
+
+
+def get_reddit_user_token() -> str:
+    """Return a valid Reddit access token, refreshing if needed.
+
+    Empty string if not connected or refresh failed — caller must prompt reconnect.
+    """
+    with get_meta_connection() as conn:
+        access = get_setting(conn, SETTING_REDDIT_ACCESS_TOKEN) or ""
+        refresh = get_setting(conn, SETTING_REDDIT_REFRESH_TOKEN) or ""
+        try:
+            expires_at = float(get_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT) or 0)
+        except (TypeError, ValueError):
+            expires_at = 0.0
+    if not refresh:
+        return ""
+    if access and time.time() < expires_at - 60:
+        return access
+    cid, secret = get_reddit_credentials()
+    if not cid or not secret:
+        return ""
+    try:
+        data = reddit_service.refresh_access_token(cid, secret, refresh)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[reddit] token refresh failed; reconnect required: %s", exc)
+        return ""
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_REDDIT_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_REDDIT_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+    return data["access_token"]
+
+
+def _reddit_redirect_uri(request: Request) -> str:
+    base = os.getenv("LECTIO_PUBLIC_URL", "").rstrip("/")
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/integrations/reddit/oauth/callback"
 
 
 def get_inoreader_credentials() -> tuple[str, str]:
@@ -10807,6 +10879,7 @@ def entry_pane(
             "instapaper_configured": is_instapaper_configured(),
             "pinterest_connected": pinterest_oauth_connected(),
             "quire_configured": is_quire_configured(),
+            "reddit_connected": reddit_connected(),
         },
     )
 
@@ -11431,6 +11504,13 @@ def _scheduled_refresh_tick() -> None:
                 scraper_service.refresh_all_scraped_feeds(_sc)
                 _da_cid, _da_secret = get_deviantart_credentials()
                 deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
+                _reddit_token = get_reddit_user_token()
+                if _reddit_token:
+                    try:
+                        with get_reader() as _rdr:
+                            reddit_service.refresh_all_reddit_feeds(_sc, _rdr, _reddit_token)
+                    except Exception:
+                        LOGGER.exception("[reddit] feed sync error in scheduler")
             if inoreader_connected():
                 try:
                     _inoreader_drip_step()
@@ -12847,6 +12927,7 @@ def home(
         "email_to_default": email_to_default,
         "instapaper_configured": is_instapaper_configured(),
         "quire_configured": is_quire_configured(),
+        "reddit_connected": reddit_connected(),
         "youtube_sync_last_at": youtube_sync_last_at,
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
@@ -14769,6 +14850,108 @@ def pinterest_oauth_disconnect():
 
 
 # ---------------------------------------------------------------------------
+# Reddit OAuth routes
+# ---------------------------------------------------------------------------
+
+@app.get("/integrations/reddit/oauth/connect")
+def reddit_oauth_connect(request: Request):
+    """Kick off the Reddit OAuth flow → redirect to Reddit's consent page."""
+    cid, secret = get_reddit_credentials()
+    if not cid or not secret:
+        return RedirectResponse(url="/?message=" + quote_plus("Reddit OAuth client is not configured (enter client ID and secret in Integrations → Reddit)."), status_code=303)
+    state = secrets.token_urlsafe(24)
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_REDDIT_OAUTH_STATE, state)
+    url = reddit_service.authorize_url(cid, _reddit_redirect_uri(request), state)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.get("/integrations/reddit/oauth/callback")
+def reddit_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    """OAuth redirect target: exchange the code for tokens and store them per-user."""
+    if error:
+        return RedirectResponse(url="/?message=" + quote_plus(f"Reddit authorization failed: {error}"), status_code=303)
+    with get_meta_connection() as conn:
+        expected = get_setting(conn, SETTING_REDDIT_OAUTH_STATE) or ""
+    if not code or not state or state != expected:
+        return RedirectResponse(url="/?message=" + quote_plus("Reddit authorization failed (bad state)."), status_code=303)
+    cid, secret = get_reddit_credentials()
+    try:
+        data = reddit_service.exchange_code(cid, secret, code, _reddit_redirect_uri(request))
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url="/?message=" + quote_plus(f"Reddit connect failed: {exc}"), status_code=303)
+    username = ""
+    try:
+        me = reddit_service.get_me(data["access_token"])
+        username = me.get("name", "")
+    except Exception:  # noqa: BLE001
+        pass
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_REDDIT_ACCESS_TOKEN, data["access_token"])
+        if data.get("refresh_token"):
+            set_setting(conn, SETTING_REDDIT_REFRESH_TOKEN, data["refresh_token"])
+        set_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
+        if username:
+            set_setting(conn, SETTING_REDDIT_USERNAME, username)
+        delete_setting(conn, SETTING_REDDIT_OAUTH_STATE)
+    msg = f"Reddit connected as /u/{username}." if username else "Reddit account connected."
+    return RedirectResponse(url="/?message=" + quote_plus(msg), status_code=303)
+
+
+@app.post("/integrations/reddit/oauth/disconnect")
+def reddit_oauth_disconnect():
+    with get_meta_connection() as conn:
+        for key in (SETTING_REDDIT_ACCESS_TOKEN, SETTING_REDDIT_REFRESH_TOKEN,
+                    SETTING_REDDIT_TOKEN_EXPIRES_AT, SETTING_REDDIT_OAUTH_STATE,
+                    SETTING_REDDIT_USERNAME):
+            delete_setting(conn, key)
+    return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Reddit submit route
+# ---------------------------------------------------------------------------
+
+@app.post("/api/reddit/submit")
+async def reddit_submit_route(request: Request):
+    """Submit an article link to a subreddit."""
+    body = await request.json()
+    subreddit = str(body.get("subreddit", "")).strip().lstrip("r/").strip("/")
+    title = str(body.get("title", "")).strip()
+    url = str(body.get("url", "")).strip()
+    feed_url_param = str(body.get("feed_url", "")).strip()
+    entry_id_param = str(body.get("entry_id", "")).strip()
+
+    if not subreddit:
+        return JSONResponse({"ok": False, "error": "subreddit is required"}, status_code=400)
+
+    token = get_reddit_user_token()
+    if not token:
+        return JSONResponse({"connected": False, "error": "Reddit not connected"}, status_code=401)
+
+    # Resolve link and title from entry if not provided directly.
+    if feed_url_param and entry_id_param and not url:
+        try:
+            with get_reader() as reader:
+                entry = reader.get_entry((feed_url_param, entry_id_param))
+            url = str(getattr(entry, "link", "") or "")
+            if not title:
+                title = str(getattr(entry, "title", "") or url)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not url:
+        return JSONResponse({"ok": False, "error": "could not determine article URL"}, status_code=400)
+
+    title = title or url
+    try:
+        result = reddit_service.submit_link(token, subreddit, title, url)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "post_url": result.get("url", "")})
+
+
+# ---------------------------------------------------------------------------
 # Inoreader OAuth + import routes
 # ---------------------------------------------------------------------------
 
@@ -15741,6 +15924,17 @@ def get_all_settings():
         "inoreader_export_dir": get_runtime_setting(SETTING_INOREADER_EXPORT_DIR, ""),
         "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
         "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+        # Reddit OAuth
+        "reddit_client_id": get_runtime_setting(SETTING_REDDIT_CLIENT_ID, ""),
+        "reddit_client_secret_set": bool(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET)),
+        "reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET, "")),
+        "reddit_configured": all(get_reddit_credentials()),
+        "reddit_connected": reddit_connected(),
+        "reddit_username": get_runtime_setting(SETTING_REDDIT_USERNAME, ""),
+        "shared_reddit_client_id": get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_ID, ""),
+        "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
+        "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
+        "star_send_reddit_subreddit": get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT, ""),
         "resend_api_key_set": bool(resend_key),
         "resend_api_key_masked": _masked(resend_key),
         "email_from": get_resend_from(),
@@ -15795,7 +15989,8 @@ async def save_all_settings(request: Request):
                   SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
                   SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
                   SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
-                  SETTING_INOREADER_CLIENT_SECRET}
+                  SETTING_INOREADER_CLIENT_SECRET,
+                  SETTING_REDDIT_CLIENT_SECRET, SETTING_SHARED_REDDIT_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
@@ -15817,6 +16012,9 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
         SETTING_INOREADER_EXPORT_DIR,
+        SETTING_REDDIT_CLIENT_ID, SETTING_REDDIT_CLIENT_SECRET,
+        SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
+        SETTING_STAR_SEND_REDDIT_SUBREDDIT,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -15830,6 +16028,7 @@ async def save_all_settings(request: Request):
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
@@ -16848,6 +17047,15 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
                     ok, err = _quire_add_entry(token, quire_project_oid(), title, link, feed_title)
                     if not ok:
                         LOGGER.warning("[on-star] quire add failed: %s", err)
+
+        reddit_sub = (get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT) or "").strip().lstrip("r/").strip("/")
+        if reddit_sub and link:
+            reddit_token = get_reddit_user_token()
+            if reddit_token:
+                try:
+                    reddit_service.submit_link(reddit_token, reddit_sub, title, link)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("[on-star] reddit submit failed: %s", exc)
     except Exception:
         LOGGER.exception("[on-star] error for %s/%s", feed_url, entry_id)
 

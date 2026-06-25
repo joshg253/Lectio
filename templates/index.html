@@ -1328,6 +1328,28 @@
   </div>
   {% endif %}
 
+  <div id="reddit-submit-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="reddit-submit-modal-title">
+      <div class="modal-header-row">
+        <h3 id="reddit-submit-modal-title" class="action-modal-title">Submit to Reddit</h3>
+        <button type="button" class="modal-close" aria-label="Close" onclick="document.getElementById('reddit-submit-modal').setAttribute('hidden','')"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-form">
+        <label class="action-modal-label" for="reddit-submit-sub">Subreddit</label>
+        <input type="text" id="reddit-submit-sub" class="action-modal-input" placeholder="r/subreddit" maxlength="100" autocomplete="off" />
+        <label class="action-modal-label" for="reddit-submit-title">Title</label>
+        <input type="text" id="reddit-submit-title" class="action-modal-input" placeholder="Post title" maxlength="300" autocomplete="off" />
+        <label class="action-modal-label" for="reddit-submit-url">URL</label>
+        <input type="url" id="reddit-submit-url" class="action-modal-input" placeholder="https://…" maxlength="2000" autocomplete="off" />
+        <p id="reddit-submit-error" class="action-modal-error" style="color:var(--color-error,#c33);margin:0.25rem 0 0"></p>
+        <div class="action-modal-actions">
+          <button type="button" class="action-modal-cancel" id="reddit-submit-cancel">Cancel</button>
+          <button type="button" id="reddit-submit-confirm">Submit</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="settings-modal" class="action-modal" hidden>
     <div class="action-modal-panel settings-modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
       <div class="settings-modal-header">
@@ -1423,6 +1445,7 @@
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
+          <button type="button" class="feeds-tab-btn" data-int-view="reddit" role="tab" aria-selected="false">Reddit</button>
           <button type="button" class="feeds-tab-btn" data-int-view="onstar" role="tab" aria-selected="false">On Star</button>
         </div>
         <div class="feeds-tab-panel" data-int-panel="youtube">
@@ -1546,6 +1569,33 @@
           <p class="settings-hint" id="sett-quire-usage-hint" style="grid-column:1 / -1" hidden>Quire limits API calls per organization by minute and hour; this is Lectio's own running tally of its calls in the last minute/hour. Automations back off as it fills.</p>
         </div>
         </div>
+        <div class="feeds-tab-panel" data-int-panel="reddit" hidden>
+        <div class="settings-section settings-section--inline">
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Reddit account to get a <strong>Submit to Reddit</strong> button on each article, and to fetch Reddit feeds via the authenticated API (60 req/min instead of anonymous limits). Create a <strong>web app</strong> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with redirect URI <code id="sett-reddit-callback-url"></code>, then enter the client ID and secret below and Save.</p>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-reddit-client-id">Client ID</label>
+            <input type="text" id="sett-reddit-client-id" class="settings-input" placeholder="your app client ID" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="sett-reddit-client-secret">Client Secret</label>
+            <input type="password" id="sett-reddit-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
+          </div>
+          <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-reddit-oauth-row">
+            <span id="sett-reddit-oauth-status" class="settings-inline-status"></span>
+            <a id="sett-reddit-oauth-connect" class="settings-inline-btn" href="/integrations/reddit/oauth/connect" hidden>Connect Reddit account</a>
+            <button type="button" id="sett-reddit-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
+          </div>
+          {% if is_admin %}
+          <div class="settings-field settings-field--admin" style="grid-column:1 / -1" id="sett-shared-reddit-row">
+            <p class="settings-hint" style="margin-top:0.5rem">Shared instance credentials (admin only) — used when a user hasn't entered their own:</p>
+            <label class="settings-label" for="sett-shared-reddit-client-id">Shared Client ID</label>
+            <input type="text" id="sett-shared-reddit-client-id" class="settings-input" placeholder="shared app client ID" maxlength="200" autocomplete="off" />
+            <label class="settings-label" for="sett-shared-reddit-client-secret">Shared Client Secret</label>
+            <input type="password" id="sett-shared-reddit-client-secret" class="settings-input settings-input--secret" placeholder="shared client secret" autocomplete="new-password" />
+          </div>
+          {% endif %}
+        </div>
+        </div>
         <div class="feeds-tab-panel" data-int-panel="onstar" hidden>
         <div class="settings-section">
           <p class="settings-hint" style="grid-column:1 / -1">When you ★ star an article, also send it to these destinations. One-way — un-starring doesn't remove it. Each is available once its integration is configured/connected.</p>
@@ -1564,6 +1614,10 @@
           <div class="settings-field" id="sett-star-email-row" style="grid-column:1 / -1" hidden>
             <label class="settings-label" for="sett-star-email">Email to (blank = off)</label>
             <input type="email" id="sett-star-email" class="settings-input" placeholder="you@example.com" maxlength="200" autocomplete="off" />
+          </div>
+          <div class="settings-field" id="sett-star-reddit-row" style="grid-column:1 / -1" hidden>
+            <label class="settings-label" for="sett-star-reddit-sub">Submit to subreddit (blank = off)</label>
+            <input type="text" id="sett-star-reddit-sub" class="settings-input" placeholder="r/subreddit" maxlength="100" autocomplete="off" />
           </div>
           <p class="settings-hint" id="sett-star-none" style="grid-column:1 / -1" hidden>Configure Instapaper, connect YouTube, or set up Email (above / in Settings) to enable on-star destinations.</p>
         </div>
@@ -2989,6 +3043,12 @@
         await openQuirePicker(quireBtn);
         return;
       }
+      const redditBtn = event.target instanceof Element && event.target.closest('[data-reddit-feed-url]');
+      if (redditBtn) {
+        event.preventDefault();
+        await openRedditSubmitModal(redditBtn);
+        return;
+      }
     });
 
     // --- Pinterest "Pin to board" picker -----------------------------------
@@ -3127,6 +3187,72 @@
         menu.appendChild(item);
       });
     }
+
+    // --- Reddit "Submit to subreddit" modal ----------------------------------
+    async function openRedditSubmitModal(btn) {
+      hideShareMenu();
+      const feedUrl = btn.getAttribute('data-reddit-feed-url') || '';
+      const entryId = btn.getAttribute('data-reddit-entry-id') || '';
+      const prefillTitle = btn.getAttribute('data-reddit-title') || '';
+      const prefillUrl = btn.getAttribute('data-reddit-url') || '';
+
+      // Pre-fill subreddit from feed URL if it's a reddit feed.
+      let prefillSub = '';
+      const subMatch = feedUrl.match(/\/r\/([A-Za-z0-9_]+)/);
+      if (subMatch) prefillSub = 'r/' + subMatch[1];
+
+      const modal = document.getElementById('reddit-submit-modal');
+      if (!modal) return;
+      const subInput = document.getElementById('reddit-submit-sub');
+      const titleInput = document.getElementById('reddit-submit-title');
+      const urlInput = document.getElementById('reddit-submit-url');
+      const errEl = document.getElementById('reddit-submit-error');
+      if (subInput) subInput.value = prefillSub;
+      if (titleInput) titleInput.value = prefillTitle;
+      if (urlInput) urlInput.value = prefillUrl;
+      if (errEl) errEl.textContent = '';
+      modal.dataset.feedUrl = feedUrl;
+      modal.dataset.entryId = entryId;
+      modal.removeAttribute('hidden');
+      if (subInput) subInput.focus();
+    }
+
+    document.getElementById('reddit-submit-confirm')?.addEventListener('click', async () => {
+      const modal = document.getElementById('reddit-submit-modal');
+      if (!modal) return;
+      const subInput = document.getElementById('reddit-submit-sub');
+      const titleInput = document.getElementById('reddit-submit-title');
+      const urlInput = document.getElementById('reddit-submit-url');
+      const errEl = document.getElementById('reddit-submit-error');
+      const subreddit = (subInput?.value || '').trim();
+      const title = (titleInput?.value || '').trim();
+      const url = (urlInput?.value || '').trim();
+      if (!subreddit) { if (errEl) errEl.textContent = 'Subreddit is required.'; return; }
+      if (!url) { if (errEl) errEl.textContent = 'URL is required.'; return; }
+      const btn = document.getElementById('reddit-submit-confirm');
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch('/api/reddit/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ subreddit, title, url,
+            feed_url: modal.dataset.feedUrl || '',
+            entry_id: modal.dataset.entryId || '' }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        modal.setAttribute('hidden', '');
+        showToastMessage(`Submitted to r/${subreddit.replace(/^r\//, '')}.`);
+      } catch (e) {
+        if (errEl) errEl.textContent = e.message || 'Submit failed.';
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    document.getElementById('reddit-submit-cancel')?.addEventListener('click', () => {
+      document.getElementById('reddit-submit-modal')?.setAttribute('hidden', '');
+    });
 
     document.addEventListener('click', (event) => {
       const btn = event.target instanceof Element && event.target.closest('[data-open-email-modal]');
@@ -9775,8 +9901,11 @@
           const quireRow = document.getElementById('sett-star-quire-row');
           const ipOk = !!window.INSTAPAPER_CONFIGURED, ytOk = !!d.yt_oauth_connected, emOk = !!window.EMAIL_CONFIGURED;
           const quireOk = !!d.quire_connected && !!d.quire_project_oid;
+          const redditOk = !!d.reddit_connected;
           if (ipRow) { ipRow.hidden = !ipOk; const c = document.getElementById('sett-star-ip'); if (c) c.checked = !!d.star_send_instapaper; }
           if (quireRow) { quireRow.hidden = !quireOk; const c = document.getElementById('sett-star-quire'); if (c) c.checked = !!d.star_send_quire; }
+          const redditRow = document.getElementById('sett-star-reddit-row');
+          if (redditRow) { redditRow.hidden = !redditOk; const i = document.getElementById('sett-star-reddit-sub'); if (i) i.value = d.star_send_reddit_subreddit || ''; }
           if (emRow) { emRow.hidden = !emOk; const i = document.getElementById('sett-star-email'); if (i) i.value = d.star_send_email || ''; }
           if (ytRow) {
             ytRow.hidden = !ytOk;
@@ -9803,7 +9932,7 @@
               })();
             }
           }
-          if (none) none.hidden = (ipOk || ytOk || emOk || quireOk);
+          if (none) none.hidden = (ipOk || ytOk || emOk || quireOk || redditOk);
         }
         v('sett-yt-oauth-client-id', d.yt_oauth_client_id);
         secretField('sett-yt-oauth-client-secret', d.yt_oauth_client_secret_set, d.yt_oauth_client_secret_masked);
@@ -9924,6 +10053,28 @@
             if (hint) hint.hidden = false;
           } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }
         }
+        // Reddit integration: creds + connection status.
+        v('sett-reddit-client-id', d.reddit_client_id);
+        secretField('sett-reddit-client-secret', d.reddit_client_secret_set, d.reddit_client_secret_masked);
+        if (d.is_admin) {
+          v('sett-shared-reddit-client-id', d.shared_reddit_client_id);
+          secretField('sett-shared-reddit-client-secret', d.shared_reddit_client_secret_set, d.shared_reddit_client_secret_masked);
+        }
+        {
+          const rdConfigured = !!d.reddit_configured;
+          const rdConnected = !!d.reddit_connected;
+          window.REDDIT_CONNECTED = rdConnected;
+          const row = document.getElementById('sett-reddit-oauth-row');
+          const status = document.getElementById('sett-reddit-oauth-status');
+          const connect = document.getElementById('sett-reddit-oauth-connect');
+          const disconnect = document.getElementById('sett-reddit-oauth-disconnect');
+          if (row) row.hidden = !rdConfigured;
+          if (status) status.textContent = rdConnected
+            ? `Connected as /u/${d.reddit_username || 'Reddit'}.`
+            : rdConfigured ? 'Not connected.' : '';
+          if (connect) connect.hidden = rdConnected || !rdConfigured;
+          if (disconnect) disconnect.hidden = !rdConnected;
+        }
         // Populate OAuth callback URL hints with the actual public URL.
         {
           const base = (d.public_url || window.location.origin).replace(/\/$/, '');
@@ -9933,6 +10084,7 @@
             'sett-quire-callback-url':     base + '/quire/callback',
             'sett-pinterest-callback-url': base + '/integrations/pinterest/oauth/callback',
             'sett-inoreader-callback-url': base + '/inoreader/oauth/callback',
+            'sett-reddit-callback-url':    base + '/integrations/reddit/oauth/callback',
           };
           for (const [id, url] of Object.entries(cbMap)) {
             const el = document.getElementById(id);
@@ -10067,6 +10219,11 @@
             star_send_yt_playlist: (document.getElementById('sett-star-yt-playlist')?.value || ''),
             star_send_yt_playlist_title: (() => { const s = document.getElementById('sett-star-yt-playlist'); const o = s && s.options[s.selectedIndex]; return (o && o.dataset.title) || ''; })(),
             star_send_email: (document.getElementById('sett-star-email')?.value || '').trim(),
+            star_send_reddit_subreddit: (document.getElementById('sett-star-reddit-sub')?.value || '').trim(),
+            reddit_client_id: g('sett-reddit-client-id'),
+            reddit_client_secret: g('sett-reddit-client-secret'),
+            shared_reddit_client_id: g('sett-shared-reddit-client-id'),
+            shared_reddit_client_secret: g('sett-shared-reddit-client-secret'),
           };
         }
         try {
@@ -10142,6 +10299,10 @@
       });
       document.getElementById('sett-quire-disconnect')?.addEventListener('click', async () => {
         await fetch('/quire/disconnect', { method: 'POST', credentials: 'same-origin' });
+        loadSettingsData();
+      });
+      document.getElementById('sett-reddit-oauth-disconnect')?.addEventListener('click', async () => {
+        await fetch('/integrations/reddit/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
 

@@ -368,6 +368,14 @@
               title="{% if quire_configured %}Add to Quire{% else %}Connect Quire in Settings{% endif %}"
               role="menuitem"
             ><span class="material-symbols-rounded" aria-hidden="true">add_task</span> Quire</button>
+            <button
+              type="button"
+              id="entry-reddit-button"
+              class="share-menu-item{% if not reddit_connected %} share-menu-item--unavail{% endif %}"
+              {% if reddit_connected %}data-reddit-feed-url="{{ selected_entry.feed_url }}" data-reddit-entry-id="{{ selected_entry.id }}" data-reddit-title="{{ selected_entry.title | e }}" data-reddit-url="{{ selected_entry.link | e }}"{% else %}disabled{% endif %}
+              title="{% if reddit_connected %}Submit to Reddit{% else %}Connect Reddit in Settings{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">forum</span> Reddit</button>
           </div>
         </div>
         {% endif %}

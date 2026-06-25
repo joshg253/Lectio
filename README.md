@@ -85,7 +85,8 @@ The short version:
   (deduplicate can run across a selected set of feeds, not just a whole folder),
   with a Duplicate button to clone one quickly; all fire at refresh time with a
   manual "Run Now". **Starring** an article can also auto-send it to Instapaper, a
-  YouTube playlist, email, and/or Quire (Integrations → On Star).
+  YouTube playlist, email, Quire, and/or Reddit (Integrations → On Star).
+- **Submit to Reddit** — connect a Reddit account (per-user OAuth) via Integrations → Reddit; a **Reddit** button appears in each article's share menu to post a link to any subreddit you choose. Once connected, Reddit feeds are also fetched via the authenticated API (60 req/min vs. anonymous limits), which helps with subreddits that 429 on anonymous RSS polling. Register a **web app** at reddit.com/prefs/apps; the shared-instance credential pattern is supported (admin sets instance-wide creds, users can override per-account). On Star can auto-submit starred articles to a configured subreddit.
 - **Save to Pinterest** — connect a Pinterest account (per-user OAuth) and a
   **Pin** button appears on each article, saving its lead image (linked back to
   the source) to a board you pick. Needs `PINTEREST_OAUTH_CLIENT_ID/SECRET`;
