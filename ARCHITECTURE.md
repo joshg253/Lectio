@@ -597,7 +597,7 @@ Storage: `fever_feed_map`, `fever_group_map`, `fever_entry_map` in the meta DB. 
 4. **Push callback** (`POST /websub/callback`) — hub delivers content; `verify_push_signature` checks HMAC-SHA256 (or SHA1 fallback) against the stored secret. On success, `feed_refresh_service.update_feeds([feed_url])` runs so the full pipeline (dedup, automation, lead images) runs on the fresh content.
 5. **Lease renewal** — `renew_expiring_subscriptions()` re-subscribes any verified row whose `expires_at` is within 24 hours. Called each refresh cycle.
 
-**Multi-user fan-out:** the callback URL carries only the topic (no user), and `websub_subscriptions` is a per-user meta table, so both callbacks fan out across `_background_user_ids()` rather than acting on a single tenant. `_websub_verify_fanout` confirms the handshake for whichever user(s) have a matching pending subscription; `_process_websub_push` collects every user with a verified subscription for the topic, confirms the push is authentic against *any* of their secrets (a forged push matches none), then refreshes each subscriber under its own tenancy context in a daemon thread. Because the shared callback means the hub only retains the most recent subscriber's secret, validating against any one secret and fanning the refresh out to all subscribers is what lets several users share a single hub subscription.
+**Multi-user fan-out:** the callback URL carries only the topic (no user). `websub_subscribers` lists every user subscribed to a feed; both callbacks fan out across those rows rather than acting on a single tenant. `_websub_verify_fanout` confirms the handshake for whichever user(s) have a matching pending subscription; `_process_websub_push` collects every user with a verified subscription for the topic, confirms the push is authentic against *any* of their secrets (a forged push matches none), then refreshes each subscriber under its own tenancy context in a daemon thread. Because the shared callback means the hub only retains the most recent subscriber's secret, validating against any one secret and fanning the refresh out to all subscribers is what lets several users share a single hub subscription.
 
 The service is initialized only when `LECTIO_PUBLIC_URL` is set; all integration points in `main.py` guard on `if websub_service`. On feed removal, `purge_orphaned_feed` sends an active unsubscription request to the hub (best-effort HTTP POST; hubs expire leases anyway if the request is lost).
 
@@ -605,7 +605,11 @@ The service is initialized only when `LECTIO_PUBLIC_URL` is set; all integration
 
 **Push indicator:** `get_push_active_feed_urls()` queries `websub_subscriptions` for `verified=1 AND hub_url IS NOT NULL` in one pass and returns a `set[str]`; the index route threads this into the template context so both the sidebar feed tree and Settings → Feeds can render the ⚡ glyph without per-feed queries.
 
-Storage: `websub_subscriptions (feed_url TEXT PK, hub_url TEXT, secret TEXT, lease_seconds INTEGER, subscribed_at REAL, expires_at REAL, verified INTEGER, hub_tried_at REAL)` in the per-user meta DB.
+Storage: **shared** `lectio_websub.sqlite` (not per-user), two tables:
+- `websub_subscriptions (feed_url TEXT PK, hub_url, secret, lease_seconds, subscribed_at, expires_at, verified, hub_tried_at)` — one row per feed, one active hub subscription regardless of how many users subscribe to that feed.
+- `websub_subscribers (feed_url, user_id, PRIMARY KEY (feed_url, user_id))` — the N-user fan-out list; push and verification callbacks iterate this table.
+
+Startup migration copies legacy per-user `websub_subscriptions` rows idempotently into the shared DB.
 
 ## Security direction
 
