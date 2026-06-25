@@ -3278,8 +3278,12 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
 
 
 _DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts", "inject_source_images"})
-# Explicit column-name mapping so static analysis can confirm no unsanitized input reaches SQL.
+# Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
+_DISPLAY_PREF_SQLS: dict[str, str] = {
+    k: f"UPDATE feed_display_prefs SET {k} = ? WHERE feed_url = ?"
+    for k in _DISPLAY_PREF_KEYS
+}
 _DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
@@ -3316,7 +3320,7 @@ def upsert_feed_display_pref(conn: sqlite3.Connection, feed_url: str, key: str, 
         "INSERT INTO feed_display_prefs (feed_url) VALUES (?) ON CONFLICT(feed_url) DO NOTHING",
         (feed_url,),
     )
-    conn.execute(f"UPDATE feed_display_prefs SET {col} = ? WHERE feed_url = ?", (value, feed_url))
+    conn.execute(_DISPLAY_PREF_SQLS[col], (value, feed_url))
 
 
 def upsert_feed_thumbnail_url(conn: sqlite3.Connection, feed_url: str, thumbnail_url: str | None) -> None:
