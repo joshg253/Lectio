@@ -139,21 +139,18 @@ Build order (promoted from Later — top first):
     optional delete-from-source) generalises to any reader. Platforms to add
     after Inoreader, roughly in priority order:
 
-    | Platform | OPML | Export format | API auth | Notes |
-    |----------|------|--------------|----------|-------|
-    | Feedly | ✅ | OPML only (starred locked to paid) | OAuth | Aggressive feature-locking; many want out |
-    | NewsBlur | ✅ | JSON (stories/starred) | OAuth | Open source; self-host or hosted |
-    | FeedBin | ✅ | JSON entries/starred | API token (simple) | Paid-only, no free tier |
-    | The Old Reader | ✅ | Google Reader format | Google Reader API | Popular GReader-era refugees |
-    | **Miniflux** | ✅ | via API | REST API token / Basic | Self-hosted; Path B skipped (API is clean) |
-    | **FreshRSS** | ✅ | via API | Google Reader API compat | Self-hosted; `inoreader.py` largely reusable — just swap base URL |
-    | **tt-rss** | ✅ | via API | JSON-RPC (tt-rss specific) | Self-hosted; own API shape |
+    | Platform | OPML | API auth | Notes |
+    |----------|------|----------|-------|
+    | **Miniflux** | ✅ | REST API token / Basic | Self-hosted; no rate limits so single-run import, no drip needed |
+    | **FreshRSS** | ✅ | Google Reader API compat | Self-hosted; `inoreader.py` largely reusable — just swap base URL |
+    | **tt-rss** | ✅ | JSON-RPC (tt-rss specific) | Self-hosted; own API shape |
 
-    FreshRSS re-uses the Google Reader API (same endpoints as Inoreader), so
-    its `services/freshrss.py` would be a thin wrapper around the same client
-    with a user-supplied base URL instead of `inoreader.com`. Miniflux already
-    has a clean REST API and no rate limits (self-hosted), so the drip strategy
-    isn't needed — a single import run is fine.
+    Paid platforms (Feedly, FeedBin, NewsBlur, The Old Reader) deferred — not
+    in use, no urgency.
+
+    FreshRSS speaks the same Google Reader API as Inoreader, so its service
+    would be a thin wrapper around the same client with a user-supplied base URL.
+    Miniflux has no rate limits (self-hosted), so the drip strategy isn't needed.
 
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
