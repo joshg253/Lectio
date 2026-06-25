@@ -118,4 +118,4 @@ def test_audio_video_kept():
 
 def test_empty_and_none_safe():
     assert H.sanitize_html("") == ""
-    assert H.sanitize_html(None) is None
+    assert H.sanitize_html(None) is None  # ty: ignore[invalid-argument-type]

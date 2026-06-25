@@ -40,7 +40,7 @@ def _make_stub(responses: list[httpx.Response | Exception]):
     A value of type Exception is raised; anything else is returned.
     Tracks total call count in stub.calls.
     """
-    stub = {"calls": 0, "queue": list(responses)}
+    stub: dict = {"calls": 0, "queue": list(responses)}
 
     async def _fetch(client, url, **kw):
         stub["calls"] += 1

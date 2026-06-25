@@ -62,6 +62,7 @@ def test_deviation_to_entry_embeds_image():
         "is_mature": False,
     }
     e = da._deviation_to_entry(dev)
+    assert e is not None
     assert e["id"] == "DID1"
     assert e["title"] == "My <Art>"
     assert "images/x.jpg" in e["content"] and "<img" in e["content"]
@@ -74,6 +75,7 @@ def test_deviation_to_entry_falls_back_to_thumb():
         "published_time": "x", "thumbs": [{"src": "https://t/small.jpg"}],
     }
     e = da._deviation_to_entry(dev)
+    assert e is not None
     assert "small.jpg" in e["content"]
 
 

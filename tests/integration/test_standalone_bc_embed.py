@@ -89,4 +89,4 @@ def test_no_bandcamp_is_noop():
 
 
 def test_non_string_content_is_noop():
-    assert main._embed_standalone_bandcamp_links(None) is None  # type: ignore[arg-type]
+    assert main._embed_standalone_bandcamp_links(None) is None  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]

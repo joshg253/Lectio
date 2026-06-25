@@ -285,7 +285,7 @@ def test_renew_expiring_subscriptions_spawns_thread(tmp_path):
     def fake_subscribe(feed_url, hub_url):
         calls.append(feed_url)
 
-    svc.subscribe = fake_subscribe  # type: ignore[method-assign]
+    svc.subscribe = fake_subscribe  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
     svc.renew_expiring_subscriptions()
@@ -308,7 +308,7 @@ def test_renew_skips_not_expiring(tmp_path):
 
     svc = _build_service(db)
     calls: list[str] = []
-    svc.subscribe = lambda f, h: calls.append(f)  # type: ignore[method-assign]
+    svc.subscribe = lambda f, h: calls.append(f)  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     svc.renew_expiring_subscriptions()
 
     assert calls == []
@@ -336,7 +336,7 @@ def test_discover_hub_refuses_internal_redirect(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
     assert svc._discover_hub_url(_FEED_URL) is None
@@ -353,7 +353,7 @@ def test_subscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
     svc.subscribe(_FEED_URL, _INTERNAL)
@@ -373,7 +373,7 @@ def test_unsubscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(db)
     svc.unsubscribe(_FEED_URL, "alice")
@@ -398,7 +398,7 @@ def test_maybe_discover_hubs_skips_known_active(tmp_path):
 
     svc = _build_service(db)
     discoveries: list[str] = []
-    svc._discover_and_subscribe = lambda u, uid: discoveries.append(u)  # type: ignore[method-assign]
+    svc._discover_and_subscribe = lambda u, uid: discoveries.append(u)  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     svc.maybe_discover_hubs([_FEED_URL], "alice")
 
     assert discoveries == []
@@ -415,7 +415,7 @@ def test_discover_passes_user_id_to_thread(tmp_path):
     def fake_discover(url, uid):
         seen.append((url, uid))
 
-    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
     svc.maybe_discover_hubs([_FEED_URL], "u_test_websub")
@@ -433,7 +433,7 @@ def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
     def fake_discover(url, uid):
         discoveries.append(url)
 
-    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
     svc.maybe_discover_hubs([_FEED_URL], "alice")

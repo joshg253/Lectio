@@ -61,7 +61,7 @@ def test_cf_challenge_returns_bot_page(monkeypatch):
     )
     monkeypatch.setattr(httpx, "Client", _make_mock_client(_MockHTTPXResponse(cf_html)))
     resp = main.build_source_proxy_response("https://example.com/page")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     assert "Bot verification required" in body
     assert "Open in new tab" in body
     # Must NOT contain the CF script
@@ -76,7 +76,7 @@ def test_paywall_returns_subscription_page(monkeypatch):
     )
     monkeypatch.setattr(httpx, "Client", _make_mock_client(_MockHTTPXResponse(paywall_html)))
     resp = main.build_source_proxy_response("https://example.com/page")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     assert "Subscription required" in body
     assert "Open in new tab" in body
 
@@ -87,7 +87,7 @@ def test_http_error_returns_error_page(monkeypatch):
         _make_mock_client(_MockHTTPXResponse("Not found", status_code=404)),
     )
     resp = main.build_source_proxy_response("https://example.com/page")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     assert "Could not load" in body
     assert "Open original page" in body
 
@@ -99,7 +99,7 @@ def test_normal_page_includes_base_tag(monkeypatch):
         _make_mock_client(_MockHTTPXResponse(page_html, url="https://example.com/article")),
     )
     resp = main.build_source_proxy_response("https://example.com/article")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     assert '<base href="https://example.com/article"' in body
 
 
@@ -110,7 +110,7 @@ def test_normal_page_includes_proxy_bar(monkeypatch):
         _make_mock_client(_MockHTTPXResponse(page_html, url="https://example.com/article")),
     )
     resp = main.build_source_proxy_response("https://example.com/article")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     assert "lectio-bar" in body
     assert "Open original" in body
 
@@ -127,7 +127,7 @@ def test_proxy_bar_injected_before_closing_body(monkeypatch):
         _make_mock_client(_MockHTTPXResponse(page_html)),
     )
     resp = main.build_source_proxy_response("https://example.com/page")
-    body = resp.body.decode()
+    body = bytes(resp.body).decode()
     bar_pos = body.find("lectio-bar")
     body_close_pos = body.lower().rfind("</body>")
     assert bar_pos != -1 and body_close_pos != -1

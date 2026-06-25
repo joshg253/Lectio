@@ -459,7 +459,7 @@ class MinifluxService:
             except Exception:
                 pass
 
-    def toggle_bookmark(self, entry_id: int) -> dict | None:
+    def toggle_bookmark(self, entry_id: int) -> bool | None:
         """Star/unstar an entry and return 204 (caller ignores return value)."""
         with self._get_meta() as conn:
             row = conn.execute(

@@ -20,12 +20,14 @@ def test_empty_returns_none(value):
 
 def test_bare_url_is_linkified():
     out = main._promote_plaintext_summary("See https://example.com/news for details")
+    assert isinstance(out, str)
     assert '<a href="https://example.com/news"' in out
     assert 'target="_blank"' in out and 'rel="noopener noreferrer"' in out
 
 
 def test_double_escaped_breaks_become_br():
     out = main._promote_plaintext_summary("line one&lt;br&gt;line two&lt;br&gt;line three")
+    assert isinstance(out, str)
     assert "&lt;br" not in out
     assert out.count("<br>") == 2
 
@@ -37,12 +39,14 @@ def test_literal_br_becomes_real_break():
 
 def test_url_and_breaks_together():
     out = main._promote_plaintext_summary("title&lt;br&gt;https://a.test/x&lt;br&gt;end")
+    assert isinstance(out, str)
     assert '<a href="https://a.test/x"' in out
     assert out.count("<br>") == 2
 
 
 def test_html_is_escaped_no_injection():
     out = main._promote_plaintext_summary("<script>alert(1)</script> https://x.test")
+    assert isinstance(out, str)
     assert "<script>" not in out
     assert "&lt;script&gt;" in out
     assert '<a href="https://x.test"' in out
@@ -50,6 +54,7 @@ def test_html_is_escaped_no_injection():
 
 def test_bare_image_url_becomes_img():
     out = main._promote_plaintext_summary("https://i.ibb.co/abc/pic.jpg&lt;br&gt;caption")
+    assert isinstance(out, str)
     assert '<img src="https://i.ibb.co/abc/pic.jpg"' in out
     assert 'referrerpolicy="no-referrer"' in out
     # An image URL is NOT also wrapped in an anchor.
@@ -59,6 +64,7 @@ def test_bare_image_url_becomes_img():
 @pytest.mark.parametrize("ext", ["png", "JPG", "jpeg", "gif", "webp"])
 def test_image_extensions_detected(ext):
     out = main._promote_plaintext_summary(f"art: https://h.test/a.{ext}")
+    assert isinstance(out, str)
     assert f'<img src="https://h.test/a.{ext}"' in out
 
 
@@ -68,6 +74,7 @@ def test_double_escaped_ampersands_collapse_to_single():
     out = main._promote_plaintext_summary(
         "https://o.test/x.php?a=1&amp;amp;b=2 more"
     )
+    assert isinstance(out, str)
     assert "href=\"https://o.test/x.php?a=1&amp;b=2\"" in out
     assert "&amp;amp;" not in out
 
@@ -75,6 +82,7 @@ def test_double_escaped_ampersands_collapse_to_single():
 def test_excessive_break_runs_are_collapsed():
     # Each break paired with a newline shouldn't produce 4+ <br> in a row.
     out = main._promote_plaintext_summary("a&lt;br&gt;\n&lt;br&gt;\nb")
+    assert isinstance(out, str)
     assert "<br><br><br>" not in out
 
 

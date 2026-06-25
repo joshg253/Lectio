@@ -151,7 +151,7 @@ def test_unsubscribe_removes_subscriber_only(fanout):
     _add_subscriber(wconn, "alice")
     _add_subscriber(wconn, "bob")
 
-    svc: WebSubService = main.websub_service  # type: ignore[assignment]
+    svc: WebSubService = main.websub_service  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     svc.unsubscribe(FEED, "alice")
 
     subs = wconn.execute(
@@ -171,7 +171,7 @@ def test_unsubscribe_last_subscriber_clears_subscription(fanout):
     _seed_subscription(wconn, secret="sec")
     _add_subscriber(wconn, "alice")
 
-    svc: WebSubService = main.websub_service  # type: ignore[assignment]
+    svc: WebSubService = main.websub_service  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     svc.unsubscribe(FEED, "alice")
 
     subs = wconn.execute(

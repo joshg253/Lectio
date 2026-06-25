@@ -139,7 +139,7 @@ class ReaderApi:
         # our hook first in the list → it gets popped last → runs after post_init.
         def _add_response_hook(parser: object) -> None:
             for prefix in ('https://', 'http://'):
-                retr = parser.retrievers.get(prefix)  # type: ignore[union-attr]
+                retr = parser.retrievers.get(prefix)  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
                 if retr is None:
                     continue
                 # FRB080/082/086: identify as Lectio, not as the underlying library.
