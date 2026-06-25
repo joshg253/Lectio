@@ -134,6 +134,27 @@ Build order (promoted from Later — top first):
     drip step hooked into `scheduled_refresh_loop`.
     **No new DB table** — checkpoint in existing `app_settings` KV store.
 
+    **Template for other platform migrators (Later):**
+    The three-path shape (OPML upload · export JSON upload · live API drip +
+    optional delete-from-source) generalises to any reader. Platforms to add
+    after Inoreader, roughly in priority order:
+
+    | Platform | OPML | Export format | API auth | Notes |
+    |----------|------|--------------|----------|-------|
+    | Feedly | ✅ | OPML only (starred locked to paid) | OAuth | Aggressive feature-locking; many want out |
+    | NewsBlur | ✅ | JSON (stories/starred) | OAuth | Open source; self-host or hosted |
+    | FeedBin | ✅ | JSON entries/starred | API token (simple) | Paid-only, no free tier |
+    | The Old Reader | ✅ | Google Reader format | Google Reader API | Popular GReader-era refugees |
+    | **Miniflux** | ✅ | via API | REST API token / Basic | Self-hosted; Path B skipped (API is clean) |
+    | **FreshRSS** | ✅ | via API | Google Reader API compat | Self-hosted; `inoreader.py` largely reusable — just swap base URL |
+    | **tt-rss** | ✅ | via API | JSON-RPC (tt-rss specific) | Self-hosted; own API shape |
+
+    FreshRSS re-uses the Google Reader API (same endpoints as Inoreader), so
+    its `services/freshrss.py` would be a thin wrapper around the same client
+    with a user-supplied base URL instead of `inoreader.com`. Miniflux already
+    has a clean REST API and no rate limits (self-hosted), so the drip strategy
+    isn't needed — a single import run is fine.
+
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
 - ~~**Per-click Quire project picker**~~ — ✅ SHIPPED. Quire button now opens a project-picker menu (mirrors Pinterest board picker); POST `/entries/quire` accepts optional `project_oid` form param that overrides the settings default. On-Star and automation rules still use the settings default project; adding a per-rule project field is a future follow-up if needed.
