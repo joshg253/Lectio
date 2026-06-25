@@ -254,7 +254,7 @@ def send_article_email(
     if reply_to:
         payload["reply_to"] = reply_to
     try:
-        resend.Emails.send(payload)
+        resend.Emails.send(payload)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         return True, None
     except Exception as exc:
         return False, str(exc)
@@ -286,7 +286,7 @@ def send_digest_email(
     if cc_addr:
         payload["cc"] = [cc_addr]
     try:
-        resend.Emails.send(payload)
+        resend.Emails.send(payload)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         return True, None
     except Exception as exc:
         return False, str(exc)

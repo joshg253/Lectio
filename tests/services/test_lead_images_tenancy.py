@@ -94,8 +94,8 @@ def test_queued_source_fetch_persists_under_the_requesting_user(configured):
         user_agent="test",
         extract_video_id=lambda link: None,
     )
-    svc._fetch_source_lead_image = lambda link, **kw: "https://cdn.example/hero.jpg"  # type: ignore[method-assign]
-    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]
+    svc._fetch_source_lead_image = lambda link, **kw: "https://cdn.example/hero.jpg"  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     feed, entry = "https://alice.example/feed", "e1"
     with tenancy.user_context("alice"):
@@ -127,8 +127,8 @@ def test_queued_source_fetch_does_not_persist_a_none_result(configured):
         user_agent="test",
         extract_video_id=lambda link: None,
     )
-    svc._fetch_source_lead_image = lambda link, **kw: None  # type: ignore[method-assign]
-    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]
+    svc._fetch_source_lead_image = lambda link, **kw: None  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     feed, entry = "https://alice.example/feed", "e1"
     with tenancy.user_context("alice"):
@@ -154,9 +154,9 @@ def test_chunk_backfill_persists_under_the_active_user(configured):
         user_agent="test",
         extract_video_id=lambda link: None,
     )
-    svc._fetch_source_lead_image = lambda link, **kw: "https://cdn.example/hero.jpg"  # type: ignore[method-assign]
-    svc._fetch_feed_media_thumbnails = lambda feed_url: {}  # type: ignore[method-assign]
-    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]
+    svc._fetch_source_lead_image = lambda link, **kw: "https://cdn.example/hero.jpg"  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    svc._fetch_feed_media_thumbnails = lambda feed_url: {}  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    svc._maybe_store_alt_from_cache = lambda *a, **kw: None  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     feed, entry = "https://alice.example/feed", "e1"
     posts = [{"feed_url": feed, "id": entry, "link": "https://alice.example/post"}]

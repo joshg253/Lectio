@@ -97,8 +97,9 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
         with TestClient(main.app) as client:
             client.get("/healthz")
             cookie = client.cookies.get("session")
+            assert cookie is not None
             tok = _json.loads(base64.b64decode(
-                TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)
+                TimestampSigner(main.SESSION_SECRET_KEY).unsign(cookie, max_age=main.SESSION_MAX_AGE_SECONDS)  # ty: ignore[no-matching-overload]
             ))["csrf_token"]
             r = client.post("/highlights/add", data={
                 "_csrf": tok, "scope": "feed", "scope_id": FEED, "keyword": "",

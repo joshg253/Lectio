@@ -34,7 +34,7 @@ def _parse_month_first_pubdate(date_string: str):
 
 
 feedparser.registerDateHandler(_parse_month_first_pubdate)
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -57,7 +57,7 @@ from services import takeout_service
 from services import tenancy
 from services import youtube_embeds
 from services import url_guard
-from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
+from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_batch_payload, build_webhook_payload, send_webhook
 from services.users import UserExistsError, UserStore
 from services.email import send_article_email, send_digest_email
 from services.feed_discovery import discover_feed_urls, discover_feed_urls_ex
@@ -69,6 +69,7 @@ from services.youtube import YouTubeDurationService
 from services.websub import WebSubService
 from services.fever import FeverService
 from services.greader import GReaderService
+from services.miniflux import MinifluxService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -279,15 +280,31 @@ SETTING_DEVIANTART_OAUTH_STATE = "deviantart_oauth_state"
 SETTING_DEVIANTART_OAUTH_VERIFIER = "deviantart_oauth_verifier"
 SETTING_DEVIANTART_FOLDER_NAME = "deviantart_folder_name"
 SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
+SETTING_YT_OAUTH_CLIENT_ID = "yt_oauth_client_id"
+SETTING_YT_OAUTH_CLIENT_SECRET = "yt_oauth_client_secret"
 SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
 SETTING_YT_OAUTH_REFRESH_TOKEN = "yt_oauth_refresh_token"
 SETTING_YT_OAUTH_TOKEN_EXPIRES_AT = "yt_oauth_token_expires_at"
 SETTING_YT_OAUTH_STATE = "yt_oauth_state"
+# Shared-instance YouTube OAuth creds stored in the admin's app_settings.
+SETTING_SHARED_YT_OAUTH_CLIENT_ID = "shared_yt_oauth_client_id"
+SETTING_SHARED_YT_OAUTH_CLIENT_SECRET = "shared_yt_oauth_client_secret"
 # Pinterest outbound (save / pin an article to a board).
+SETTING_PINTEREST_OAUTH_CLIENT_ID = "pinterest_oauth_client_id"
+SETTING_PINTEREST_OAUTH_CLIENT_SECRET = "pinterest_oauth_client_secret"
 SETTING_PINTEREST_OAUTH_ACCESS_TOKEN = "pinterest_oauth_access_token"
 SETTING_PINTEREST_OAUTH_REFRESH_TOKEN = "pinterest_oauth_refresh_token"
 SETTING_PINTEREST_OAUTH_TOKEN_EXPIRES_AT = "pinterest_oauth_token_expires_at"
 SETTING_PINTEREST_OAUTH_STATE = "pinterest_oauth_state"
+# Shared-instance Pinterest OAuth creds stored in the admin's app_settings.
+SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID = "shared_pinterest_oauth_client_id"
+SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET = "shared_pinterest_oauth_client_secret"
+# Instance tuning settings (admin-only, stored in admin's app_settings).
+SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
+SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
+SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
+SETTING_LOGIN_WINDOW_SECONDS = "login_window_seconds"
+SETTING_DEFAULT_AUTO_REFRESH_MINUTES = "default_auto_refresh_minutes"
 # Quire outbound (turn an article into a task in a chosen Quire project).
 SETTING_QUIRE_CLIENT_ID = "quire_client_id"
 SETTING_QUIRE_CLIENT_SECRET = "quire_client_secret"
@@ -311,10 +328,7 @@ SCHEDULER_POLL_SECONDS = 30
 DEFAULT_SORT_BY = "post"
 DEFAULT_SORT_DIR = "asc"
 CHUNK_SIZE = 10
-# feed_fetch_history retention (pruned in daily maintenance): keep at most this
-# many rows per feed, and drop anything older than the age cap regardless.
-FEED_FETCH_HISTORY_KEEP = int(os.getenv("LECTIO_FETCH_HISTORY_KEEP", "50"))
-FEED_FETCH_HISTORY_MAX_AGE_DAYS = int(os.getenv("LECTIO_FETCH_HISTORY_MAX_AGE_DAYS", "30"))
+# feed_fetch_history retention configured via the Administration panel.
 READABILITY_USER_AGENT = "Lectio/0.1 (+https://localhost)"
 # Honest identifier for outbound fetches — names the app and links to the repo,
 # the good-citizen behavior some hosts (e.g. rachelbythebay.com) explicitly
@@ -387,8 +401,6 @@ DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 LECTIO_PUBLIC_URL = os.getenv("LECTIO_PUBLIC_URL", "").strip().rstrip("/")
 
 _FEVER_PASSWORD = os.getenv("LECTIO_FEVER_PASSWORD", "").strip()
-# Computed later (after AUTH_USERNAME is defined) — placeholder so it's in module scope.
-FEVER_API_KEY: str | None = None
 
 # --- Email (Resend) config — env vars are fallbacks; DB settings take precedence at runtime ---
 _ENV_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
@@ -451,24 +463,16 @@ if _yt_sync_hour_raw:
         pass
 
 
-# YouTube is per-user (each user's own key for durations + own channel for sub
-# sync). In multi mode the env YOUTUBE_* vars seed only the bootstrap admin and
-# are NOT a read-time fallback, so one user's key never leaks to another. In
-# single mode (one implicit user) env remains the config source.
-def _env_yt_fallback(env_val: str) -> str:
-    return "" if MULTI_USER else env_val
-
-
 def get_yt_api_key() -> str:
-    return get_runtime_setting(SETTING_YT_API_KEY, _env_yt_fallback(_ENV_YT_API_KEY))
+    return get_runtime_setting(SETTING_YT_API_KEY, _ENV_YT_API_KEY)
 
 
 def get_yt_channel_id() -> str:
-    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _env_yt_fallback(_ENV_YT_CHANNEL_ID))
+    return get_runtime_setting(SETTING_YT_CHANNEL_ID, _ENV_YT_CHANNEL_ID)
 
 
 def get_yt_folder_name() -> str:
-    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _env_yt_fallback(_ENV_YT_FOLDER_NAME)) or "YouTube Subscriptions"
+    return get_runtime_setting(SETTING_YT_FOLDER_NAME, _ENV_YT_FOLDER_NAME) or "YouTube Subscriptions"
 
 
 def youtube_embed_account_features_enabled() -> bool:
@@ -557,9 +561,57 @@ def youtube_embed_host() -> str:
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
+def _get_shared_credential(key: str) -> str:
+    """Read a shared-instance credential from the first admin user's settings.
+
+    Shared-instance OAuth creds are stored in the admin's own app_settings
+    under a namespaced key (e.g. shared_yt_oauth_client_id) and are used as a
+    middle tier: per-user setting → shared-instance → env var.
+    """
+    if user_store is None:
+        return ""
+    for u in user_store.list_users():
+        if u.get("is_admin") and not u.get("disabled"):
+            with tenancy.user_context(u["user_id"]):
+                val = get_runtime_setting(key)
+                if val:
+                    return val
+    return ""
+
+
+def get_fetch_history_keep() -> int:
+    return int(get_runtime_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
+
+
+def get_fetch_history_max_age_days() -> int:
+    return int(get_runtime_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+def get_login_max_failures() -> int:
+    return int(get_runtime_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
+
+
+def get_login_window_seconds() -> int:
+    return int(get_runtime_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
+
+
+def get_instance_default_auto_refresh() -> int:
+    raw = int(get_runtime_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
+    return 0 if raw <= 0 else max(raw, MIN_AUTO_REFRESH_MINUTES)
+
+
 def get_youtube_oauth_credentials() -> tuple[str, str]:
-    """App-level YouTube OAuth client (client_id, client_secret) from env."""
-    return _ENV_YT_OAUTH_CLIENT_ID, _ENV_YT_OAUTH_CLIENT_SECRET
+    """YouTube OAuth client (client_id, client_secret).
+
+    Resolution: per-user setting → shared-instance (admin's settings) → env var.
+    """
+    cid = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID)
+           or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_ID)
+           or _ENV_YT_OAUTH_CLIENT_ID)
+    secret = (get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)
+              or _get_shared_credential(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)
+              or _ENV_YT_OAUTH_CLIENT_SECRET)
+    return cid, secret
 
 
 def youtube_oauth_connected() -> bool:
@@ -601,8 +653,17 @@ def get_youtube_oauth_token() -> str:
 
 
 def get_pinterest_oauth_credentials() -> tuple[str, str]:
-    """App-level Pinterest OAuth client (client_id, client_secret) from env."""
-    return _ENV_PINTEREST_OAUTH_CLIENT_ID, _ENV_PINTEREST_OAUTH_CLIENT_SECRET
+    """Pinterest OAuth client (client_id, client_secret).
+
+    Resolution: per-user setting → shared-instance (admin's settings) → env var.
+    """
+    cid = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID)
+           or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID)
+           or _ENV_PINTEREST_OAUTH_CLIENT_ID)
+    secret = (get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)
+              or _get_shared_credential(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)
+              or _ENV_PINTEREST_OAUTH_CLIENT_SECRET)
+    return cid, secret
 
 
 def pinterest_oauth_connected() -> bool:
@@ -644,10 +705,10 @@ def get_pinterest_oauth_token() -> str:
 def get_deviantart_credentials() -> tuple[str, str]:
     """Per-user DeviantArt API credentials (client_id, client_secret).
 
-    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    Stored per-user in app-settings; env vars are instance-wide fallbacks.
     """
-    cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_ID))
-    secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _env_yt_fallback(_ENV_DEVIANTART_CLIENT_SECRET))
+    cid = get_runtime_setting(SETTING_DEVIANTART_CLIENT_ID, _ENV_DEVIANTART_CLIENT_ID)
+    secret = get_runtime_setting(SETTING_DEVIANTART_CLIENT_SECRET, _ENV_DEVIANTART_CLIENT_SECRET)
     return cid, secret
 
 
@@ -691,10 +752,10 @@ def get_deviantart_user_token() -> str:
 def get_quire_credentials() -> tuple[str, str]:
     """Per-user Quire API credentials (client_id, client_secret).
 
-    Stored per-user in app-settings; env vars are a single-user-only fallback.
+    Stored per-user in app-settings; env vars are instance-wide fallbacks.
     """
-    cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _env_yt_fallback(_ENV_QUIRE_CLIENT_ID))
-    secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _env_yt_fallback(_ENV_QUIRE_CLIENT_SECRET))
+    cid = get_runtime_setting(SETTING_QUIRE_CLIENT_ID, _ENV_QUIRE_CLIENT_ID)
+    secret = get_runtime_setting(SETTING_QUIRE_CLIENT_SECRET, _ENV_QUIRE_CLIENT_SECRET)
     return cid, secret
 
 
@@ -860,6 +921,8 @@ def sync_deviantart_watchlist() -> dict:
     try:
         username = get_runtime_setting(SETTING_DEVIANTART_USERNAME) or deviantart_service.whoami(token)
         watching = deviantart_service.list_watching(token, username)
+    except deviantart_service.DeviantArtRateLimited as exc:
+        return {"added": 0, "total": 0, "error": f"DeviantArt rate limit hit — try again in a few minutes. ({exc})"}
     except Exception as exc:  # noqa: BLE001
         return {"added": 0, "total": 0, "error": f"Could not read your watch list: {exc}"}
 
@@ -907,7 +970,13 @@ def sync_deviantart_watchlist() -> dict:
         final = (f"Rate limited — added {added} so far, ~{remaining} left. "
                  "DeviantArt caps requests; click Sync again later to continue.")
     else:
-        final = f"Done: added {added} of {len(to_add)} watched" + (f", {failed} failed" if failed else "")
+        already = len(watching) - len(to_add)
+        parts = [f"Added {added} of {len(watching)} watched"]
+        if already:
+            parts.append(f"{already} already subscribed")
+        if failed:
+            parts.append(f"{failed} failed")
+        final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
     return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
@@ -971,65 +1040,34 @@ def get_img_cache_max_dim() -> int:
     return _ENV_IMG_CACHE_MAX_DIM
 
 # --- Auth config ---
-# Set LECTIO_USERNAME and LECTIO_PASSWORD to enable authentication.
-# If either is absent, auth is disabled (safe for local-only use).
-# LECTIO_SECRET_KEY is used to sign session cookies; generate one with:
-#   python -c "import secrets; print(secrets.token_hex(32))"
-# If not set a random key is generated at startup (sessions won't survive restarts).
-AUTH_USERNAME = os.getenv("LECTIO_USERNAME", "")
-AUTH_PASSWORD = os.getenv("LECTIO_PASSWORD", "")
+# When set, skip the login form and auto-authenticate as the admin on every request.
+# Intended for local/private-network installs that don't need a password prompt.
+AUTO_LOGIN = os.getenv("LECTIO_AUTO_LOGIN", "0") == "1"
 
-# --- Multi-user / security mode ---
-# LECTIO_SECURITY_MODE selects the tenancy & auth posture:
-#   single - legacy single-user; the LECTIO_USERNAME/PASSWORD env credential
-#            gates access, no per-user separation. Default.
-#   multi  - multi-user with isolated per-user databases (the tenancy "isolated"
-#            mode). Accounts live in a users table; each user gets their own
-#            reader/meta/starred DBs under DATA_DIR/users/<username>/.
-# A future "shared-content" mode is documented in ARCHITECTURE.md.
-_SECURITY_MODE_RAW = os.getenv("LECTIO_SECURITY_MODE", "single").strip().lower()
-if _SECURITY_MODE_RAW not in {"single", "multi"}:
-    LOGGER.warning(
-        "LECTIO_SECURITY_MODE=%r unrecognized; using 'single'. Valid: single, multi.",
-        _SECURITY_MODE_RAW,
-    )
-    _SECURITY_MODE_RAW = "single"
-SECURITY_MODE = _SECURITY_MODE_RAW
-MULTI_USER = SECURITY_MODE == "multi"
-
-# Password hashing scheme for stored credentials (multi mode). scrypt and
-# pbkdf2_sha256 are stdlib; argon2 needs the optional argon2-cffi package.
+# Password hashing scheme for stored credentials. scrypt and pbkdf2_sha256 are stdlib;
+# argon2 needs the optional argon2-cffi package.
 PASSWORD_HASH_SCHEME = os.getenv("LECTIO_PASSWORD_HASH_SCHEME", passwords.DEFAULT_SCHEME).strip().lower()
-if MULTI_USER and PASSWORD_HASH_SCHEME not in passwords.available_schemes():
+if PASSWORD_HASH_SCHEME not in passwords.available_schemes():
     LOGGER.warning(
         "LECTIO_PASSWORD_HASH_SCHEME=%r not available (have: %s); using %s.",
         PASSWORD_HASH_SCHEME, ", ".join(passwords.available_schemes()), passwords.DEFAULT_SCHEME,
     )
     PASSWORD_HASH_SCHEME = passwords.DEFAULT_SCHEME
 
-# Bootstrap admin account, seeded on first startup in multi mode when the users
-# table is empty. CHANGE the default password before exposing the instance.
+# Bootstrap admin account, seeded on first startup when the users table is empty.
+# CHANGE the default password before exposing the instance.
 _DEFAULT_ADMIN_PASSWORD = "ChangeA$ap"
 BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
 
-# Auth is enabled by an env credential (single mode) OR whenever multi mode is on.
-AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD) or MULTI_USER
-
-# Global account registry; only instantiated in multi mode.
-user_store = UserStore(AUTH_DB_PATH) if MULTI_USER else None
-FEVER_API_KEY = (
-    hashlib.md5(f"{AUTH_USERNAME}:{_FEVER_PASSWORD}".encode()).hexdigest()
-    if _FEVER_PASSWORD and AUTH_USERNAME
-    else None
-)
+AUTH_ENABLED = True  # kept as a module-level bool so tests can monkeypatch it
+user_store = UserStore(AUTH_DB_PATH)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
         "LECTIO_SECRET_KEY is not set — using a random key. Sessions will not survive server restarts. Set a stable key in your .env."
     )
-# Cookie lifetime: 1 year. Changing this requires users to log in again.
-SESSION_MAX_AGE_SECONDS = int(os.getenv("LECTIO_SESSION_MAX_AGE", str(365 * 24 * 3600)))
+SESSION_MAX_AGE_SECONDS = 365 * 24 * 3600  # 1 year; baked into SessionMiddleware at startup
 # Set LECTIO_HTTPS_ONLY=1 when running behind a TLS-terminating reverse proxy.
 _HTTPS_ONLY = os.getenv("LECTIO_HTTPS_ONLY", "0") == "1"
 # Proxies trusted for X-Forwarded-* headers. "*" (default) trusts any upstream —
@@ -1044,8 +1082,6 @@ _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
 _AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
-_configured_refresh_minutes = int(os.getenv("LECTIO_AUTO_REFRESH_MINUTES", str(DEFAULT_AUTO_REFRESH_MINUTES)))
-AUTO_REFRESH_MINUTES = 0 if _configured_refresh_minutes <= 0 else max(_configured_refresh_minutes, MIN_AUTO_REFRESH_MINUTES)
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
 updating_feeds_lock = threading.Lock()
@@ -1190,6 +1226,7 @@ async def lifespan(app: FastAPI):
     ensure_img_cache_schema()
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
+    ensure_websub_schema()
     ensure_reader_indexes()
     bootstrap_admin()
 
@@ -1204,6 +1241,9 @@ async def lifespan(app: FastAPI):
         ensure_starred_archive_schema()
         ensure_reader_indexes()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
+
+    if LECTIO_PUBLIC_URL:
+        _migrate_websub_to_shared()
 
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
@@ -1509,17 +1549,11 @@ app = FastAPI(title="Lectio", lifespan=lifespan)
 
 
 def _session_logged_in(request: Request) -> bool:
-    """Whether the session is fully authenticated.
-
-    In multi mode that requires a valid user_id, not just the authenticated flag —
-    otherwise a stale single-mode cookie (authenticated, no user_id) would pass the
-    gate but fail every per-user route, causing a /login redirect loop."""
+    """Whether the session is fully authenticated (requires a valid user_id)."""
     if not request.session.get("authenticated"):
         return False
-    if MULTI_USER:
-        uid = request.session.get("user_id")
-        return bool(uid and tenancy.is_valid_user_id(uid))
-    return True
+    uid = request.session.get("user_id")
+    return bool(uid and tenancy.is_valid_user_id(uid))
 
 
 class _AuthMiddleware(BaseHTTPMiddleware):
@@ -1531,6 +1565,16 @@ class _AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if _session_logged_in(request):
             return await call_next(request)
+        if AUTO_LOGIN and user_store is not None:
+            # Auto-authenticate as the first non-disabled admin user without
+            # showing the login form. Intended for local/private-network installs.
+            for _u in user_store.list_users():
+                if _u.get("is_admin") and not _u.get("disabled"):
+                    request.session["authenticated"] = True
+                    request.session["user_id"] = _u["user_id"]
+                    break
+            if _session_logged_in(request):
+                return await call_next(request)
         next_url = str(request.url)
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
 
@@ -1598,7 +1642,7 @@ class _TenancyMiddleware:
     binding wraps the route handler. Sync handlers run via anyio's threadpool,
     which copies the current contextvars into the worker thread, so a value set
     here is visible to get_reader() / get_meta_connection() deep in the call
-    stack. In single mode this is a no-op and the context stays DEFAULT_USER_ID.
+    stack.
 
     Requests without a valid authenticated session user (static assets, the
     Fever/GReader APIs, unauthenticated hits) resolve to the default user; those
@@ -1629,7 +1673,7 @@ class _TenancyMiddleware:
         return user_store.resolve_greader_token(token)
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or not MULTI_USER:
+        if scope.get("type") != "http":
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         uid: str | None = None
@@ -2125,10 +2169,90 @@ def get_meta_connection() -> sqlite3.Connection:
     return conn
 
 
+_websub_conn_local = threading.local()
+WEBSUB_DB_PATH = DATA_DIR / "lectio_websub.sqlite"
+
+
+def get_websub_connection() -> sqlite3.Connection:
+    """Per-thread connection to the shared (non-per-user) WebSub subscription DB."""
+    pool = getattr(_websub_conn_local, "pool", None)
+    if pool is not None:
+        return pool
+    conn = sqlite3.connect(str(WEBSUB_DB_PATH), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA wal_autocheckpoint=200")
+    _websub_conn_local.pool = conn
+    return conn
+
+
 def get_thumb_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(THUMB_DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def ensure_websub_schema() -> None:
+    """Create the shared (non-per-user) WebSub tables if they don't exist."""
+    with get_websub_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS websub_subscriptions (
+                feed_url      TEXT PRIMARY KEY,
+                hub_url       TEXT,
+                secret        TEXT,
+                subscribed_at REAL,
+                verified      INTEGER DEFAULT 0,
+                expires_at    REAL,
+                lease_seconds INTEGER,
+                hub_tried_at  REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS websub_subscribers (
+                feed_url TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                PRIMARY KEY (feed_url, user_id)
+            )
+            """
+        )
+
+
+def _migrate_websub_to_shared() -> None:
+    """One-time migration: copy per-user websub_subscriptions rows to the shared DB.
+
+    Idempotent (INSERT OR IGNORE) so safe to re-run on every startup.
+    After this runs, the service only writes to the shared DB."""
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                conn = get_meta_connection()
+                rows = conn.execute(
+                    "SELECT feed_url, hub_url, secret, subscribed_at, verified, "
+                    "expires_at, lease_seconds, hub_tried_at "
+                    "FROM websub_subscriptions"
+                ).fetchall()
+            except Exception:
+                continue  # table may not exist for new users
+            if not rows:
+                continue
+            with get_websub_connection() as wconn:
+                for r in rows:
+                    wconn.execute(
+                        "INSERT OR IGNORE INTO websub_subscriptions "
+                        "(feed_url, hub_url, secret, subscribed_at, verified, "
+                        "expires_at, lease_seconds, hub_tried_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (r["feed_url"], r["hub_url"], r["secret"], r["subscribed_at"],
+                         r["verified"], r["expires_at"], r["lease_seconds"], r["hub_tried_at"]),
+                    )
+                    wconn.execute(
+                        "INSERT OR IGNORE INTO websub_subscribers (feed_url, user_id) VALUES (?, ?)",
+                        (r["feed_url"], uid),
+                    )
 
 
 def ensure_thumb_schema() -> None:
@@ -2363,12 +2487,12 @@ def _seed_admin_integrations_from_env(admin_id: str) -> None:
 
 
 def bootstrap_admin() -> None:
-    """Seed the bootstrap admin on first startup in multi mode.
+    """Seed the bootstrap admin on first startup when no users exist.
 
-    No-op outside multi mode, or once any user exists. Provisions the new admin's
-    isolated storage and warns loudly if the default password is still in use.
+    No-op once any user exists. Provisions the new admin's isolated storage
+    and warns loudly if the default password is still in use.
     """
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return
     if user_store.count() > 0:
         return
@@ -2740,6 +2864,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_format TEXT NOT NULL DEFAULT 'generic'")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN webhook_batch INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # youtube_playlist rule type: target playlist + behavior toggles.
         try:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN yt_playlist_id TEXT NOT NULL DEFAULT ''")
@@ -3015,6 +3143,28 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS miniflux_feed_map (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT UNIQUE NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS miniflux_entry_map (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                UNIQUE(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_miniflux_entry_map_feed"
+            " ON miniflux_entry_map(feed_url)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS greader_tokens (
                 token      TEXT PRIMARY KEY,
                 expires_at REAL NOT NULL
@@ -3042,7 +3192,7 @@ def ensure_meta_schema() -> None:
                 )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
-            (AUTO_REFRESH_SETTING_KEY, str(AUTO_REFRESH_MINUTES)),
+            (AUTO_REFRESH_SETTING_KEY, str(get_instance_default_auto_refresh())),
         )
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
@@ -3239,7 +3389,7 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
-        " webhook_url, webhook_format,"
+        " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         " yt_min_minutes, yt_max_minutes"
         " FROM highlight_keywords ORDER BY sort_order ASC, rowid ASC"
@@ -3266,6 +3416,7 @@ def add_highlight_keyword(
     exclude_scope_ids: str = "",
     webhook_url: str = "",
     webhook_format: str = "generic",
+    webhook_batch: bool = False,
     yt_playlist_id: str = "",
     yt_playlist_title: str = "",
     yt_include_shorts: bool = False,
@@ -3289,15 +3440,15 @@ def add_highlight_keyword(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
-        "  webhook_url, webhook_format,"
+        "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
          max(1, int(dedup_window_hours or 168)), exclude_scope_ids.strip(),
-         webhook_url.strip(), webhook_format,
+         webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
          max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
@@ -3392,11 +3543,11 @@ def parse_epoch_setting(value: str | None) -> float | None:
 def get_auto_refresh_minutes(conn: sqlite3.Connection) -> int:
     raw_value = get_setting(conn, AUTO_REFRESH_SETTING_KEY)
     if raw_value is None:
-        return AUTO_REFRESH_MINUTES
+        return get_instance_default_auto_refresh()
     try:
         return normalize_auto_refresh_minutes(int(raw_value))
     except ValueError:
-        return AUTO_REFRESH_MINUTES
+        return get_instance_default_auto_refresh()
 
 
 def purge_lower_level_folders(conn: sqlite3.Connection) -> None:
@@ -3707,7 +3858,7 @@ def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
     """
     with _meta_structure_lock:
         if _meta_structure_cache:
-            return _meta_structure_cache  # type: ignore[return-value]
+            return dict(_meta_structure_cache)
     raw_folder_rows = get_folder_rows(conn)
     direct_feed_urls_by_folder = get_direct_feed_urls_by_folder(conn)
     folder_options = get_folder_options(conn)
@@ -3736,7 +3887,7 @@ def get_meta_structure_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
 
 
 def get_unread_counts_by_folder(
-    folder_rows: Sequence[sqlite3.Row],
+    folder_rows: Sequence[sqlite3.Row | dict],
     unread_counts_by_feed: dict[str, int],
     direct_feed_urls_by_folder: dict[int, list[str]],
 ) -> dict[int, int]:
@@ -5310,9 +5461,11 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 search_in = str(rule.get("search_in") or "title")
                 webhook_url = str(rule.get("webhook_url") or "")
                 webhook_format = str(rule.get("webhook_format") or "generic")
+                webhook_batch = bool(rule.get("webhook_batch"))
 
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
+                    batch_articles: list[dict] = []
 
                     for feed_url in refreshed_feed_urls:
                         _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
@@ -5348,17 +5501,34 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 "published": published.isoformat() if published else "",
                                 "tags": get_manual_tags_for_entry(fu, str(entry.id)),
                             }
-                            payload = build_webhook_payload(article, webhook_format)
-                            ok, err = send_webhook(webhook_url, payload)
-                            if ok:
+
+                            if webhook_batch:
+                                batch_articles.append(article)
                                 sent += 1
-                                with get_meta_connection() as conn:
-                                    _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
-                                        "count": 1,
-                                        "entries": [article],
-                                    })
                             else:
-                                LOGGER.warning("[webhook-auto] POST failed: %s", err)
+                                payload = build_webhook_payload(article, webhook_format)
+                                ok, err = send_webhook(webhook_url, payload)
+                                if ok:
+                                    sent += 1
+                                    with get_meta_connection() as conn:
+                                        _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
+                                            "count": 1,
+                                            "entries": [article],
+                                        })
+                                else:
+                                    LOGGER.warning("[webhook-auto] POST failed: %s", err)
+
+                if webhook_batch and batch_articles:
+                    payload = build_webhook_batch_payload(batch_articles, webhook_format)
+                    ok, err = send_webhook(webhook_url, payload)
+                    if ok:
+                        with get_meta_connection() as conn:
+                            _log_auto_run(conn, now_str, "webhook", scope, scope_id, keyword, {
+                                "count": len(batch_articles),
+                                "entries": batch_articles,
+                            })
+                    else:
+                        LOGGER.warning("[webhook-auto] batch POST failed: %s", err)
             except Exception:
                 LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
     except Exception:
@@ -7130,9 +7300,12 @@ def _fix_wp_post_footer(content_html: str) -> str:
         dup.decompose()
     # Remove literal "<p>"/"</p>" text artifacts (double-encoded tags) from the
     # kept footer, leaving the sentence intact.
+    from bs4 import NavigableString as _NS
     for s in list(keep.strings):
+        if not isinstance(s, _NS):
+            continue
         cleaned = re.sub(r"</?p\s*>", "", str(s), flags=re.IGNORECASE)
-        if cleaned != s:
+        if cleaned != str(s):
             s.replace_with(cleaned)
     return str(soup)
 
@@ -7335,7 +7508,7 @@ def _lookup_media_video(conn: sqlite3.Connection, feed_url: str, entry_id: str) 
     ).fetchone()
     if row is None:
         return None
-    return (row[0] or "").split()
+    return list(str(row[0] or "").split())
 
 
 def _media_scan_due(conn: sqlite3.Connection, feed_url: str) -> bool:
@@ -7805,7 +7978,7 @@ feed_refresh_service = FeedRefreshService(
 
 websub_service: WebSubService | None = (
     WebSubService(
-        get_meta_connection=get_meta_connection,
+        get_shared_connection=get_websub_connection,
         public_url=LECTIO_PUBLIC_URL,
         user_agent=READABILITY_USER_AGENT,
         logger=LOGGER,
@@ -7814,35 +7987,29 @@ websub_service: WebSubService | None = (
     else None
 )
 
-# In multi mode the protocol services are always constructed (auth is handled
-# per-user via user_store, not the service's own credential); their data methods
-# operate on whatever the tenancy context resolves to. In single mode they keep
-# the env-credential behavior and are only built when that credential exists.
-fever_service: FeverService | None = (
-    FeverService(
-        get_meta_connection=get_meta_connection,
-        get_reader=get_reader,
-        fever_api_key=FEVER_API_KEY or "",
-        root_folder_name=ROOT_FOLDER_NAME,
-        current_user=tenancy.current_user_id,
-        # In multi mode, skip the default-user pre-sync; each user syncs lazily
-        # under their bound context on first request.
-        presync=not MULTI_USER,
-    )
-    if (FEVER_API_KEY or MULTI_USER)
-    else None
+# Auth is per-user via user_store; each request runs under a bound tenancy context.
+fever_service: FeverService | None = FeverService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    fever_api_key="",
+    root_folder_name=ROOT_FOLDER_NAME,
+    current_user=tenancy.current_user_id,
+    presync=False,
 )
 
-greader_service: GReaderService | None = (
-    GReaderService(
-        get_meta_connection=get_meta_connection,
-        get_reader=get_reader,
-        username=AUTH_USERNAME,
-        password=_FEVER_PASSWORD,
-        root_folder_name=ROOT_FOLDER_NAME,
-    )
-    if ((_FEVER_PASSWORD and AUTH_USERNAME) or MULTI_USER)
-    else None
+greader_service: GReaderService | None = GReaderService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    username="",
+    password=_FEVER_PASSWORD,
+    root_folder_name=ROOT_FOLDER_NAME,
+)
+
+miniflux_service = MinifluxService(
+    get_meta_connection=get_meta_connection,
+    get_reader=get_reader,
+    root_folder_name=ROOT_FOLDER_NAME,
+    current_user=tenancy.current_user_id,
 )
 
 
@@ -8075,7 +8242,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
             ("tag",   "main"),
         ]:
             if selector_type == "class":
-                elem = soup.find(class_=lambda c, v=value: c and v in c.split())
+                elem = soup.find(class_=lambda c, v=value: bool(c) and v in c.split())  # type: ignore[arg-type]
             else:
                 elem = soup.find(value)
             if elem:
@@ -8201,7 +8368,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
         soup = BeautifulSoup(content_html, "html.parser")
         target_img: object = None
         for img in soup.find_all("img"):
-            src = img.get("src", "")
+            src = str(img.get("src") or "")
             if src == lead_image_url or html.unescape(src) == lead_image_url:
                 target_img = img
                 break
@@ -8216,7 +8383,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
             if _lead_prefix_m:
                 _lead_prefix = _lead_prefix_m.group(1) + "/"
                 for img in soup.find_all("img"):
-                    src = img.get("src", "")
+                    src = str(img.get("src") or "")
                     if src.startswith(_lead_prefix):
                         target_img = img
                         break
@@ -8233,7 +8400,7 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
                 _lead_base = _lead_blogger_m.group(1)
                 _lead_file = _lead_blogger_m.group(2)
                 for img in soup.find_all("img"):
-                    src = img.get("src", "")
+                    src = str(img.get("src") or "")
                     _src_m = _BLOGGER_CDN_RE.match(src)
                     if _src_m and _src_m.group(1) == _lead_base and _src_m.group(2) == _lead_file:
                         target_img = img
@@ -9235,7 +9402,7 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
     soup = BeautifulSoup(content_html, "html.parser")
     placeholders = []
     for tag in soup.find_all(["figure", "div"]):
-        classes = " ".join(tag.get("class", []))
+        classes = " ".join(tag.get("class") or [])  # type: ignore[arg-type]
         if tag.name == "figure" and _YT_EMBED_FIGURE_CLASS_RE.search(classes):
             placeholders.append(tag)
         elif (tag.name == "div" and "video-wrapper" in classes.lower()
@@ -9251,6 +9418,11 @@ def _inject_recovered_youtube_embeds(content_html: str, video_ids: list[str]) ->
 _YT_WATCH_URL_RE = re.compile(
     r'^(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?[^\s]*\bv=|youtu\.be/|'
     r'youtube\.com/shorts/)[\w-]+',
+    re.IGNORECASE,
+)
+
+_BC_URL_RE = re.compile(
+    r'^https?://[^/]*\.bandcamp\.com/(album|track)/[^/?#\s]+',
     re.IGNORECASE,
 )
 
@@ -9273,7 +9445,7 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
     soup = BeautifulSoup(content_html, "html.parser")
     changed = False
     for a in list(soup.find_all("a")):
-        href = (a.get("href") or "").strip()
+        href = str(a.get("href") or "").strip()
         if not href or not _YT_WATCH_URL_RE.match(href):
             continue
         # The link must be the sole content of its block — convert a paragraph
@@ -9292,6 +9464,76 @@ def _embed_standalone_youtube_links(content_html: str) -> str:
             continue
         target.replace_with(BeautifulSoup(_youtube_embed_html(vid), "html.parser"))
         changed = True
+    return str(soup) if changed else content_html
+
+
+def _extract_bc_numeric_id(page_html: str, embed_type: str) -> str | None:
+    """Extract the numeric Bandcamp album or track ID from page HTML.
+
+    Tries the EmbeddedPlayer URL (present in og:video and inline scripts) then
+    a data-album-id / data-track-id attribute as fallback."""
+    m = re.search(rf'EmbeddedPlayer/{embed_type}=(\d+)', page_html, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(rf'data-{embed_type}-id=["\'](\d+)["\']', page_html)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _bc_embed_html(embed_type: str, numeric_id: str, album_url: str) -> str:
+    height = "120px" if embed_type == "album" else "42px"
+    src = (
+        f"https://bandcamp.com/EmbeddedPlayer/{embed_type}={numeric_id}"
+        "/size=large/bgcol=ffffff/linkcol=0687f5/tracklist=false/transparent=true/"
+    )
+    safe_url = html.escape(album_url, quote=True)
+    return (
+        f'<p class="lectio-embed">'
+        f'<iframe style="border:0;width:100%;height:{height}"'
+        f' src="{src}" seamless>'
+        f'<a href="{safe_url}">{html.escape(album_url)}</a>'
+        f'</iframe></p>'
+    )
+
+
+def _embed_standalone_bandcamp_links(content_html: str) -> str:
+    """Turn a lone bare Bandcamp album/track link in its own paragraph into an embed.
+
+    Mirrors _embed_standalone_youtube_links but requires the album page to be
+    fetched first (the numeric ID is not in the public URL). Cache-first: if
+    the album page is already in _source_html_cache the embed is inlined on
+    this open; otherwise a background fetch is queued so it appears next open."""
+    if not isinstance(content_html, str) or "bandcamp.com" not in content_html.lower():
+        return content_html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    changed = False
+    for a in list(soup.find_all("a", href=True)):
+        href = str(a.get("href") or "").strip()
+        m = _BC_URL_RE.match(href)
+        if not m:
+            continue
+        embed_type = m.group(1).lower()  # "album" or "track"
+        anchor_text = a.get_text(strip=True)
+        parent = a.parent
+        target = a
+        if parent is not None and parent.name == "p":
+            if parent.get_text(strip=True) != anchor_text:
+                continue  # inline mention — other text present
+            target = parent
+        cached = lead_image_service.get_cached_source_html(href)
+        if cached:
+            _, page_html = cached
+            numeric_id = _extract_bc_numeric_id(page_html, embed_type)
+            if numeric_id:
+                target.replace_with(BeautifulSoup(_bc_embed_html(embed_type, numeric_id, href), "html.parser"))
+                changed = True
+                continue
+        # Album page not cached or ID not extractable — queue background fetch;
+        # embed resolves on the next open once the fetch populates the cache.
+        lead_image_service.queue_source_html_fetch(href)
     return str(soup) if changed else content_html
 
 
@@ -9354,7 +9596,7 @@ def _norm_media_link(url: str | None) -> str:
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 
 
-def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]]) -> str:
+def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
     Three passes, in order: (1) replace a bare body link that points at the same
@@ -9375,7 +9617,7 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             continue
         target = None
         for a in soup.find_all("a"):
-            href = a.get("href") or ""
+            href = str(a.get("href") or "")
             if canonical.startswith("yt:"):
                 vid = canonical[3:]
                 if youtube_duration_service.extract_video_id(href) == vid or f"/embed/{vid}" in href:
@@ -9952,11 +10194,19 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
 
     # Standalone bare YouTube links (own paragraph / lone anchor) → inline player.
     # Covers feeds where the oEmbed iframe was stripped and only the link remains.
-    content_html = _embed_standalone_youtube_links(content_html)
+    if isinstance(content_html, str):
+        content_html = _embed_standalone_youtube_links(content_html)
+
+    # Standalone bare Bandcamp album/track links → embed. Cache-first: resolves
+    # immediately when the album page HTML is already cached; otherwise queues a
+    # background fetch so the embed appears on the next open.
+    if isinstance(content_html, str):
+        content_html = _embed_standalone_bandcamp_links(content_html)
 
     # Apply the per-user YouTube embed-host preference to feed-native players
     # (the recovered/injected player above already uses youtube_embed_host()).
-    content_html = _apply_youtube_embed_host(content_html)
+    if isinstance(content_html, str):
+        content_html = _apply_youtube_embed_host(content_html)
 
     return content_html
 
@@ -10100,7 +10350,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                     _src_soup.body.decode_contents() if _src_soup.body else str(_src_soup)
                 ).strip() or None
             except Exception:
-                content_html = re.sub(r"<source\b[^>]*/?>", "", content_html, flags=re.IGNORECASE) or None
+                content_html = re.sub(r"<source\b[^>]*/?>", "", content_html or "", flags=re.IGNORECASE) or None
 
         # Steam CDN serves localized images as /hash/english.png (404s for non-English)
         # with an onerror fallback to /hash.png (200). Strip the language subfolder so
@@ -10213,21 +10463,23 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if image_title_text and not lead_image_url and isinstance(content_html, str):
             _caption_injected = False
 
+            _title_str: str = image_title_text  # narrowed by outer `if image_title_text`
+
             def _inject_alt(m: re.Match) -> str:
                 nonlocal _caption_injected
                 tag = m.group(0)
                 if re.search(r"\balt\s*=", tag, re.IGNORECASE):
                     tag = re.sub(
                         r'(\balt\s*=\s*)(?:"[^"]*"|\x27[^\x27]*\x27)',
-                        lambda a: a.group(1) + '"' + image_title_text.replace('"', "&quot;") + '"',
+                        lambda a: a.group(1) + '"' + _title_str.replace('"', "&quot;") + '"',
                         tag,
                         count=1,
                         flags=re.IGNORECASE,
                     )
                 else:
-                    tag = tag[:-1] + ' alt="' + image_title_text.replace('"', "&quot;") + '"' + tag[-1]
+                    tag = tag[:-1] + ' alt="' + _title_str.replace('"', "&quot;") + '"' + tag[-1]
                 _caption_injected = True
-                caption = f'<p class="entry-image-title-text">{html.escape(image_title_text)}</p>'
+                caption = f'<p class="entry-image-title-text">{html.escape(_title_str)}</p>'
                 return tag + caption
 
             content_html = re.sub(r"<img\b[^>]*/?>", _inject_alt, content_html, count=1, flags=re.IGNORECASE)
@@ -10661,12 +10913,10 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         )
     invalidate_meta_structure_cache()
     if websub_service:
-        # websub_subscriptions lives in the per-user meta DB; the bare thread
-        # would lose the request's tenancy context, so capture it and re-bind.
         _uid = tenancy.current_user_id()
         threading.Thread(
-            target=_run_in_user_context,
-            args=(_uid, websub_service._discover_and_subscribe, feed_url),
+            target=websub_service._discover_and_subscribe,
+            args=(feed_url, _uid),
             daemon=True,
         ).start()
 
@@ -10743,7 +10993,7 @@ def purge_orphaned_feed(
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
-        websub_service.unsubscribe(feed_url)
+        websub_service.unsubscribe(feed_url, tenancy.current_user_id())
 
     return rescued
 
@@ -10772,15 +11022,14 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
 def get_push_active_feed_urls() -> set[str]:
     """Return the set of feed URLs with a verified, active WebSub push subscription.
 
-    Runs one query against the per-user meta DB.  Returns an empty set when
-    WebSub is disabled (``LECTIO_PUBLIC_URL`` not set) or the table is empty.
-    Only feeds with ``verified=1 AND hub_url IS NOT NULL`` are included —
-    pending/unconfirmed subscriptions are excluded.
+    Queries the shared (non-per-user) websub DB. Returns an empty set when
+    WebSub is disabled (LECTIO_PUBLIC_URL not set) or the table is empty.
+    Only feeds with verified=1 AND hub_url IS NOT NULL are included.
     """
     if not websub_service:
         return set()
     try:
-        conn = get_meta_connection()
+        conn = get_websub_connection()
         rows = conn.execute(
             "SELECT feed_url FROM websub_subscriptions"
             " WHERE verified=1 AND hub_url IS NOT NULL"
@@ -10961,10 +11210,8 @@ _FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
 def _background_user_ids() -> list[str]:
     """Users that background work (scheduled refresh, maintenance) should run for.
 
-    Single mode: just the implicit default user. Multi mode: every enabled
-    account. Each is processed under its own tenancy context so the work hits
-    that user's databases."""
-    if not MULTI_USER or user_store is None:
+    Returns every enabled account; each is processed under its own tenancy context."""
+    if user_store is None:
         return [tenancy.DEFAULT_USER_ID]
     return [u["user_id"] for u in user_store.list_users() if not u["disabled"]]
 
@@ -10975,9 +11222,8 @@ def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
     Startup backfills, syncs and one-off cleanups touch per-user DBs through the
     context-bound ``get_reader()`` / ``get_meta_connection()`` helpers. Run bare,
     they resolve to :data:`tenancy.DEFAULT_USER_ID` and write the legacy
-    top-level DBs — wrong once multi-user is live. Wrapping the call here binds
-    each enabled user in turn (single mode still runs exactly once, for the
-    default user). One user's failure is logged and does not abort the rest."""
+    top-level DBs. Wrapping the call here binds each enabled user in turn.
+    One user's failure is logged and does not abort the rest."""
     for uid in _background_user_ids():
         with tenancy.user_context(uid):
             try:
@@ -10987,12 +11233,9 @@ def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
 
 
 def _effective_auto_refresh_minutes() -> int:
-    """Auto-refresh cadence for the currently-bound user. Multi mode reads the
-    user's own setting; single mode uses the cached app.state value."""
-    if MULTI_USER:
-        with get_meta_connection() as conn:
-            return get_auto_refresh_minutes(conn)
-    return getattr(app.state, "auto_refresh_minutes", 0)
+    """Auto-refresh cadence for the currently-bound user."""
+    with get_meta_connection() as conn:
+        return get_auto_refresh_minutes(conn)
 
 
 _scheduled_refresh_rotation = 0
@@ -11025,6 +11268,9 @@ def _run_scheduled_refresh_for_all_users() -> None:
                 _scheduled_refresh_tick()
             except Exception:
                 LOGGER.exception("scheduled refresh failed for user %r", uid)
+    # Renewal is global (shared DB) — run once per scheduler tick, not per user.
+    if websub_service:
+        websub_service.renew_expiring_subscriptions()
 
 
 def scheduled_refresh_loop(stop_event: threading.Event) -> None:
@@ -11092,8 +11338,7 @@ def _scheduled_refresh_tick() -> None:
     feed_refresh_service.update_feeds(feeds_to_refresh)
     _run_automation_after_refresh(feeds_to_refresh)
     if websub_service:
-        websub_service.renew_expiring_subscriptions()
-        websub_service.maybe_discover_hubs(list(feeds_to_refresh))
+        websub_service.maybe_discover_hubs(list(feeds_to_refresh), tenancy.current_user_id())
 
 
 def _run_daily_maintenance() -> None:
@@ -11136,7 +11381,7 @@ def _daily_maintenance_for_user() -> None:
     # rows per feed and drop anything older than the age cap, so the diagnostic
     # log can't grow without limit on busy installs.
     try:
-        cutoff = time.time() - FEED_FETCH_HISTORY_MAX_AGE_DAYS * 86400
+        cutoff = time.time() - get_fetch_history_max_age_days() * 86400
         with get_meta_connection() as conn:
             cur = conn.execute(
                 """
@@ -11148,7 +11393,7 @@ def _daily_maintenance_for_user() -> None:
                     ) WHERE rn > ?
                 )
                 """,
-                (FEED_FETCH_HISTORY_KEEP,),
+                (get_fetch_history_keep(),),
             )
             pruned = cur.rowcount
             cur = conn.execute("DELETE FROM feed_fetch_history WHERE fetched_at < ?", (cutoff,))
@@ -11664,7 +11909,6 @@ def entry_frame_check(url: str):
 
 # ---------------------------------------------------------------------------
 # Auth routes (/login, /logout)
-# These are only active when LECTIO_USERNAME + LECTIO_PASSWORD are set.
 # ---------------------------------------------------------------------------
 
 
@@ -11679,8 +11923,6 @@ def login_page(request: Request, next: str = "/"):
     )
 
 
-_LOGIN_RATE_LIMIT_MAX = int(os.getenv("LECTIO_LOGIN_MAX_FAILURES", "5"))
-_LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("LECTIO_LOGIN_WINDOW_SECONDS", "300"))
 _login_failures: dict[str, list[float]] = {}
 _login_failures_lock = threading.Lock()
 
@@ -11698,11 +11940,12 @@ def _client_ip_for_rate_limit(request: Request) -> str:
 def _login_attempt_blocked(ip: str, now: float) -> bool:
     if DEBUG_MODE:
         return False
-    cutoff = now - _LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    window = get_login_window_seconds()
+    cutoff = now - window
     with _login_failures_lock:
         timestamps = [t for t in _login_failures.get(ip, []) if t >= cutoff]
         _login_failures[ip] = timestamps
-        return len(timestamps) >= _LOGIN_RATE_LIMIT_MAX
+        return len(timestamps) >= get_login_max_failures()
 
 
 def _record_login_failure(ip: str, now: float) -> None:
@@ -11739,7 +11982,7 @@ async def login_submit(request: Request, next: str = "/"):
             "login.html",
             {
                 "next": next,
-                "error": f"Too many failed login attempts. Try again in {_LOGIN_RATE_LIMIT_WINDOW_SECONDS // 60} minutes.",
+                "error": f"Too many failed login attempts. Try again in {get_login_window_seconds() // 60} minutes.",
                 "static_asset_version": STATIC_ASSET_VERSION,
             },
             status_code=429,
@@ -11748,23 +11991,16 @@ async def login_submit(request: Request, next: str = "/"):
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
-    if MULTI_USER:
-        # Multi-user: authenticate against the users table; bind the session to
-        # the resolved user_id so _TenancyMiddleware routes to their DBs.
-        resolved = (
-            user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
-            if user_store is not None
-            else None
-        )
-        if resolved is not None:
-            _clear_login_failures(ip)
-            request.session.clear()  # rotate session on login (anti-fixation)
-            request.session["authenticated"] = True
-            request.session["user_id"] = resolved
-            return RedirectResponse(url=_safe_next(next), status_code=303)
-    elif AUTH_ENABLED and secrets.compare_digest(username, AUTH_USERNAME) and secrets.compare_digest(password, AUTH_PASSWORD):
+    resolved = (
+        user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
+        if user_store is not None
+        else None
+    )
+    if resolved is not None:
         _clear_login_failures(ip)
+        request.session.clear()  # rotate session on login (anti-fixation)
         request.session["authenticated"] = True
+        request.session["user_id"] = resolved
         return RedirectResponse(url=_safe_next(next), status_code=303)
     _record_login_failure(ip, now)
     return templates.TemplateResponse(
@@ -11781,12 +12017,12 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=303)
 
 
-# --- Account / user management (multi mode only) -----------------------------
+# --- Account / user management ---
 
 
 def _current_web_user(request: Request) -> str | None:
-    """The logged-in web session's user_id (multi mode), or None."""
-    if not MULTI_USER or not request.session.get("authenticated"):
+    """The logged-in web session's user_id, or None."""
+    if not request.session.get("authenticated"):
         return None
     uid = request.session.get("user_id")
     return uid if uid and tenancy.is_valid_user_id(uid) else None
@@ -11862,7 +12098,7 @@ def _format_last_active(ts: float | None) -> str:
     if not ts:
         return "never"
     try:
-        return format_datetime_for_ui(datetime.fromtimestamp(float(ts), tz=timezone.utc))
+        return format_datetime_for_ui(datetime.fromtimestamp(float(ts), tz=timezone.utc)) or "—"
     except Exception:
         return "—"
 
@@ -11899,7 +12135,7 @@ def _admin_user_rows() -> list[dict]:
 @app.get("/administration")
 def account_page(request: Request, msg: str | None = None, error: str | None = None):
     """Admin page: user management + instance configuration. Admin-only."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -11935,6 +12171,20 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
             "maintenance_last": maint_last,
             "img_cache_days": get_img_cache_days(),
             "img_cache_max_dim": get_img_cache_max_dim(),
+            # Shared OAuth apps (stored in admin's own app_settings).
+            "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
+            "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
+            "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
+            "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+            "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
+            "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+            # Instance tuning
+            "fetch_history_keep": get_fetch_history_keep(),
+            "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+            "login_max_failures": get_login_max_failures(),
+            "login_window_seconds": get_login_window_seconds(),
+            "instance_auto_refresh": get_instance_default_auto_refresh(),
+            "public_url": LECTIO_PUBLIC_URL,
             "static_asset_version": STATIC_ASSET_VERSION,
         },
     )
@@ -11942,7 +12192,7 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
 
 @app.post("/account/password")
 async def account_change_password(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -11968,7 +12218,7 @@ async def account_change_password(request: Request):
 
 @app.post("/account/api-token/regenerate")
 async def account_regenerate_token(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -11984,7 +12234,7 @@ async def account_regenerate_token(request: Request):
 async def account_change_username(request: Request):
     """Self-service username change. Identity (user_id) is unchanged, so the
     session stays valid and data/tokens are unaffected."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
@@ -12005,7 +12255,7 @@ async def account_change_username(request: Request):
 
 @app.post("/admin/users/create")
 async def admin_create_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12033,7 +12283,7 @@ async def admin_create_user(request: Request):
 
 @app.post("/admin/users/disable")
 async def admin_disable_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12055,7 +12305,7 @@ async def admin_delete_user(request: Request):
     """Permanently remove a user: drops the account row + GReader tokens and
     deletes the user's isolated data directory. Admin-only; cannot delete your
     own account or the last remaining admin."""
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12080,7 +12330,7 @@ async def admin_delete_user(request: Request):
 
 @app.post("/admin/users/reset-password")
 async def admin_reset_password(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12100,7 +12350,7 @@ async def admin_reset_password(request: Request):
 
 @app.post("/admin/users/rename")
 async def admin_rename_user(request: Request):
-    if not MULTI_USER or user_store is None:
+    if user_store is None:
         return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
@@ -12451,71 +12701,68 @@ def home(
     # Auto-refresh cadence shown in the menu: the bound user's own value in multi
     # mode (the menu form posts to set *their* setting), the cached global in single.
     _arm = _effective_auto_refresh_minutes()
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "folder_rows": folder_rows,
-            "root_folder_row": root_folder_row,
-            "child_folder_rows": child_folder_rows,
-            "folder_failing_counts": folder_failing_counts,
-            "folder_options": folder_options,
-            "feeds_by_folder": feeds_by_folder,
-            "settings_feeds_by_folder": settings_feeds_by_folder,
-            "feed_to_folder": feed_to_folder,
-            "push_feed_urls": get_push_active_feed_urls(),
-            "tag_rows": tag_rows,
-            "selected_folder_id": selected_folder_id,
-            "selected_feed_url": selected_feed_url,
-            "selected_tag": selected_tag,
-            "selected_query": selected_query,
-            "problematic_feeds": problematic_feeds,
-            "problematic_feed_count": len(problematic_feeds),
-            "problematic_unseen_count": problematic_unseen_count,
-            "selected_sort_by": selected_sort_by,
-            "selected_sort_dir": selected_sort_dir,
-            "selected_read_filter": selected_read_filter,
-            "selected_star_only": selected_star_only,
-            "selected_resume_read_filter": selected_resume_read_filter,
-            "global_note": global_note,
-            "email_configured": is_email_configured(),
-            "yt_oauth_connected": youtube_oauth_connected(),
-            "pinterest_oauth_connected": pinterest_oauth_connected(),
-            "pinterest_connected": pinterest_oauth_connected(),
-            "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
-            "email_to_default": email_to_default,
-            "instapaper_configured": is_instapaper_configured(),
-            "quire_configured": is_quire_configured(),
-            "youtube_sync_last_at": youtube_sync_last_at,
-            "youtube_sync_last_result": youtube_sync_last_result,
-            "inactive_feeds": inactive_feeds,
-            "inactive_feed_count": len(inactive_feeds),
-            "posts": posts,
-            "selected_entry": selected_entry,
-            "message": message,
-            "no_rss_url": no_rss_url,
-            "auto_refresh_enabled": _arm > 0,
-            "auto_refresh_minutes": _arm,
-            "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
-            "static_asset_version": STATIC_ASSET_VERSION,
-            "debug_mode": DEBUG_MODE,
-            "highlight_rules": highlight_rules,
-            "email_contacts": email_contacts,
-            "email_bcc": email_bcc,
-            "profile_name": profile_name,
-            "profile_email": profile_email,
-            "profile_avatar_url": profile_avatar_url,
-            "multi_user": MULTI_USER,
-            "auth_enabled": AUTH_ENABLED,
-            "current_user": _current_web_username(request),
-            "is_admin": _is_web_admin(_current_web_user(request)),
-            "current_api_token": (
-                user_store.get_api_token(_current_web_user(request))
-                if (MULTI_USER and user_store and _current_web_user(request))
-                else ""
-            ),
-        },
-    )
+    _tmpl_ctx = {
+        "request": request,
+        "folder_rows": folder_rows,
+        "root_folder_row": root_folder_row,
+        "child_folder_rows": child_folder_rows,
+        "folder_failing_counts": folder_failing_counts,
+        "folder_options": folder_options,
+        "feeds_by_folder": feeds_by_folder,
+        "settings_feeds_by_folder": settings_feeds_by_folder,
+        "feed_to_folder": feed_to_folder,
+        "push_feed_urls": get_push_active_feed_urls(),
+        "tag_rows": tag_rows,
+        "selected_folder_id": selected_folder_id,
+        "selected_feed_url": selected_feed_url,
+        "selected_tag": selected_tag,
+        "selected_query": selected_query,
+        "problematic_feeds": problematic_feeds,
+        "problematic_feed_count": len(problematic_feeds),
+        "problematic_unseen_count": problematic_unseen_count,
+        "selected_sort_by": selected_sort_by,
+        "selected_sort_dir": selected_sort_dir,
+        "selected_read_filter": selected_read_filter,
+        "selected_star_only": selected_star_only,
+        "selected_resume_read_filter": selected_resume_read_filter,
+        "global_note": global_note,
+        "email_configured": is_email_configured(),
+        "yt_oauth_connected": youtube_oauth_connected(),
+        "pinterest_oauth_connected": pinterest_oauth_connected(),
+        "pinterest_connected": pinterest_oauth_connected(),
+        "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
+        "email_to_default": email_to_default,
+        "instapaper_configured": is_instapaper_configured(),
+        "quire_configured": is_quire_configured(),
+        "youtube_sync_last_at": youtube_sync_last_at,
+        "youtube_sync_last_result": youtube_sync_last_result,
+        "inactive_feeds": inactive_feeds,
+        "inactive_feed_count": len(inactive_feeds),
+        "posts": posts,
+        "selected_entry": selected_entry,
+        "message": message,
+        "no_rss_url": no_rss_url,
+        "auto_refresh_enabled": _arm > 0,
+        "auto_refresh_minutes": _arm,
+        "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
+        "static_asset_version": STATIC_ASSET_VERSION,
+        "debug_mode": DEBUG_MODE,
+        "highlight_rules": highlight_rules,
+        "email_contacts": email_contacts,
+        "email_bcc": email_bcc,
+        "profile_name": profile_name,
+        "profile_email": profile_email,
+        "profile_avatar_url": profile_avatar_url,
+        "current_user": _current_web_username(request),
+        "is_admin": _is_web_admin(_current_web_user(request)),
+        "current_api_token": (
+            user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""
+        ),
+        "no_feeds": len(all_feed_urls) == 0,
+    }
+    _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
+    _stream.enable_buffering(50)
+    return StreamingResponse(_stream, media_type="text/html")
 
 
 @app.get("/dev/feeds/email-match.xml")
@@ -12921,7 +13168,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 _sc_img = (
                     img.resize(
                         (max(1, round(iw * _sc_scale)), max(1, round(ih * _sc_scale))),
-                        _PILImage.BILINEAR,
+                        _PILImage.Resampling.BILINEAR,
                     )
                     if _sc_scale < 1.0
                     else img
@@ -12934,7 +13181,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 _x2 = min(iw, round((_c["x"] + _c["width"]) / _sc_scale))
                 _y2 = min(ih, round((_c["y"] + _c["height"]) / _sc_scale))
                 img = img.crop((_x1, _y1, _x2, _y2))
-                img = img.resize((_THUMB_W, _THUMB_H), _PILImage.LANCZOS)
+                img = img.resize((_THUMB_W, _THUMB_H), _PILImage.Resampling.LANCZOS)
                 _sc_done = True
             except Exception:
                 pass
@@ -12947,7 +13194,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
                 scale = max(contain_s, min(cover_s, cap_w, cap_h))
                 new_w = max(1, round(iw * scale))
                 new_h = max(1, round(ih * scale))
-                img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+                img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
                 if new_w > _THUMB_W or new_h > _THUMB_H:
                     left = max(0, (new_w - _THUMB_W) // 2)
                     top  = max(0, (new_h - _THUMB_H) // 2)
@@ -12959,7 +13206,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             scale = min(_THUMB_W / iw, _THUMB_H / ih)
             new_w = max(1, round(iw * scale))
             new_h = max(1, round(ih * scale))
-            img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+            img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
             if new_w > _THUMB_W or new_h > _THUMB_H:
                 left = max(0, (new_w - _THUMB_W) // 2)
                 top  = max(0, (new_h - _THUMB_H) // 2)
@@ -12970,7 +13217,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             scale = max(_THUMB_W / iw, _THUMB_H / ih) * _fill_zoom
             new_w = max(1, round(iw * scale))
             new_h = max(1, round(ih * scale))
-            img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+            img = img.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
             if new_w >= _THUMB_W and new_h >= _THUMB_H:
                 # Zoom ≥ 1.0: image fills frame — crop with anchor position.
                 h_frac, v_frac = _THUMB_COVER_POS.get(crop, (0.5, 0.5))
@@ -13835,6 +14082,7 @@ def add_highlight_route(
     exclude_scope_ids: str = Form(""),
     webhook_url: str = Form(""),
     webhook_format: str = Form("generic"),
+    webhook_batch: int = Form(0),
     yt_playlist_id: str = Form(""),
     yt_playlist_title: str = Form(""),
     yt_include_shorts: int = Form(0),
@@ -13881,7 +14129,7 @@ def add_highlight_route(
         add_highlight_keyword(conn, scope, scope_id, keyword, color, bool(is_regex),
                               type, search_in, delivery, email_to, batch_time, batch_count,
                               bool(cc_me), enabled, dedup_window_hours, exclude_scope_ids,
-                              webhook_url, webhook_format,
+                              webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
                               yt_min_minutes, yt_max_minutes)
@@ -13893,6 +14141,7 @@ def add_highlight_route(
                          "dedup_window_hours": dedup_window_hours,
                          "exclude_scope_ids": exclude_scope_ids.strip(),
                          "webhook_url": webhook_url.strip(), "webhook_format": webhook_format,
+                         "webhook_batch": bool(webhook_batch),
                          "yt_playlist_id": yt_playlist_id.strip(),
                          "yt_playlist_title": yt_playlist_title.strip(),
                          "yt_include_shorts": bool(yt_include_shorts),
@@ -14623,10 +14872,22 @@ def get_all_settings():
         "star_send_yt_playlist": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST) or "",
         "star_send_yt_playlist_title": get_runtime_setting(SETTING_STAR_SEND_YT_PLAYLIST_TITLE) or "",
         "star_send_email": get_runtime_setting(SETTING_STAR_SEND_EMAIL) or "",
-        "yt_oauth_configured": bool(_ENV_YT_OAUTH_CLIENT_ID and _ENV_YT_OAUTH_CLIENT_SECRET),
+        "yt_oauth_client_id": get_runtime_setting(SETTING_YT_OAUTH_CLIENT_ID, ""),
+        "yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET)),
+        "yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_YT_OAUTH_CLIENT_SECRET, "")),
+        "yt_oauth_configured": all(get_youtube_oauth_credentials()),
         "yt_oauth_connected": bool(get_runtime_setting(SETTING_YT_OAUTH_REFRESH_TOKEN)),
-        "pinterest_oauth_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
+        "shared_yt_oauth_client_id": get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_ID, ""),
+        "shared_yt_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET)),
+        "shared_yt_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, "")),
+        "pinterest_oauth_client_id": get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_ID, ""),
+        "pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET)),
+        "pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_PINTEREST_OAUTH_CLIENT_SECRET, "")),
+        "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
         "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
+        "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+        "shared_pinterest_oauth_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET)),
+        "shared_pinterest_oauth_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET, "")),
         "resend_api_key_set": bool(resend_key),
         "resend_api_key_masked": _masked(resend_key),
         "email_from": get_resend_from(),
@@ -14652,6 +14913,12 @@ def get_all_settings():
         "star_send_quire": get_runtime_setting(SETTING_STAR_SEND_QUIRE, "0") == "1",
         "contacts": contacts,
         "email_to_default": email_to_default,
+        "public_url": LECTIO_PUBLIC_URL,
+        "fetch_history_keep": get_fetch_history_keep(),
+        "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "login_max_failures": get_login_max_failures(),
+        "login_window_seconds": get_login_window_seconds(),
+        "instance_auto_refresh": get_instance_default_auto_refresh(),
     })
 
 
@@ -14672,13 +14939,16 @@ async def save_all_settings(request: Request):
     body = await request.json()
 
     _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
-                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET}
+                  SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
+                  SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+                  SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
+        SETTING_YT_OAUTH_CLIENT_ID, SETTING_YT_OAUTH_CLIENT_SECRET,
         SETTING_STAR_SEND_INSTAPAPER, SETTING_STAR_SEND_YT_PLAYLIST,
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
@@ -14688,6 +14958,12 @@ async def save_all_settings(request: Request):
         SETTING_QUIRE_CLIENT_ID, SETTING_QUIRE_CLIENT_SECRET,
         SETTING_QUIRE_PROJECT_OID, SETTING_QUIRE_PROJECT_NAME, SETTING_STAR_SEND_QUIRE,
         SETTING_QUIRE_RATE_CAP_MIN, SETTING_QUIRE_RATE_CAP_HOUR,
+        SETTING_PINTEREST_OAUTH_CLIENT_ID, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         "email_contacts", EMAIL_TO_SETTING_KEY,
     }
     # Instance-level config — only admins may change it (in multi mode). Non-admin
@@ -14696,8 +14972,13 @@ async def save_all_settings(request: Request):
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
+        SETTING_SHARED_YT_OAUTH_CLIENT_ID, SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
+        SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
+        SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
+        SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
     }
-    is_admin = (not MULTI_USER) or _is_web_admin(_current_web_user(request))
+    is_admin = _is_web_admin(_current_web_user(request))
 
     # Detect a YouTube fill-in so we can kick off an immediate sync (rather than
     # waiting for daily maintenance) when it goes from unconfigured -> configured.
@@ -14762,8 +15043,8 @@ async def save_all_settings(request: Request):
 
 @app.post("/settings/maintenance/run-now")
 def run_maintenance_now(request: Request):
-    """Trigger daily maintenance immediately. Admin-only in multi mode."""
-    if MULTI_USER and not _is_web_admin(_current_web_user(request)):
+    """Trigger daily maintenance immediately. Admin-only."""
+    if not _is_web_admin(_current_web_user(request)):
         return JSONResponse({"ok": False, "error": "Admins only."}, status_code=403)
     threading.Thread(target=_run_daily_maintenance, daemon=True, name="maintenance-manual").start()
     return JSONResponse({"ok": True, "message": "Maintenance started in background."})
@@ -16375,12 +16656,13 @@ def _quire_add_entry(token: str, project_oid: str, title: str, link: str, feed_t
 def add_to_quire(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
+    project_oid: str | None = Form(None),
 ):
     if not is_quire_connected():
         return JSONResponse({"ok": False, "error": "Quire not connected."}, status_code=503)
-    project_oid = quire_project_oid()
+    project_oid = (project_oid or "").strip() or quire_project_oid()
     if not project_oid:
-        return JSONResponse({"ok": False, "error": "Pick a Quire destination project in Settings."}, status_code=503)
+        return JSONResponse({"ok": False, "error": "Pick a Quire destination project."}, status_code=503)
     if get_quire_usage_status()["state"] == "blocked":
         return JSONResponse({"ok": False, "error": "Quire rate limit reached — try again shortly."}, status_code=429)
     token = get_quire_user_token()
@@ -16419,6 +16701,12 @@ async def opml_import(opml_file: Annotated[UploadFile, File(...)]):
     )
 
 
+# Limit concurrent takeout exports to 1: each one reads the full reader DB + meta DB
+# and builds an in-memory ZIP, so letting them pile up would multiply RAM + lock
+# contention. OPML export is fast/small and is not gated by this semaphore.
+_takeout_export_sem = threading.Semaphore(1)
+
+
 @app.get("/opml/export")
 def opml_export():
     with get_meta_connection() as conn:
@@ -16432,17 +16720,26 @@ def opml_export():
 
 @app.get("/takeout/export")
 def takeout_export():
-    with get_meta_connection() as conn:
-        opml_text = export_opml_text(conn)
-        zip_bytes = takeout_service.build_takeout_zip(
-            conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
+    if not _takeout_export_sem.acquire(blocking=False):
+        return Response(
+            content="An export is already in progress. Please wait and try again.",
+            status_code=429,
+            media_type="text/plain",
         )
-    date_str = datetime.now().strftime("%Y%m%d")
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=lectio-takeout-{date_str}.zip"},
-    )
+    try:
+        with get_meta_connection() as conn:
+            opml_text = export_opml_text(conn)
+            zip_bytes = takeout_service.build_takeout_zip(
+                conn, tenancy.reader_db_path(), opml_text, app_version=STATIC_ASSET_VERSION
+            )
+        date_str = datetime.now().strftime("%Y%m%d")
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename=lectio-takeout-{date_str}.zip"},
+        )
+    finally:
+        _takeout_export_sem.release()
 
 
 @app.post("/takeout/import")
@@ -16516,18 +16813,18 @@ def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]
         if fmt == "JPEG":
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
-            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="JPEG", quality=90, optimize=True)
+            img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="JPEG", quality=90, optimize=True)
             return buf.getvalue(), "image/jpeg"
         if fmt == "PNG":
             # P/1-bit modes resize poorly; promote to RGBA to keep transparency.
             if img.mode in ("P", "1"):
                 img = img.convert("RGBA")
-            img.resize(new_size, _PILImage.LANCZOS).save(buf, format="PNG", optimize=True)
+            img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="PNG", optimize=True)
             return buf.getvalue(), "image/png"
         # WEBP
         if img.mode == "P":
             img = img.convert("RGBA")
-        img.resize(new_size, _PILImage.LANCZOS).save(buf, format="WEBP", quality=90, method=4)
+        img.resize(new_size, _PILImage.Resampling.LANCZOS).save(buf, format="WEBP", quality=90, method=4)
         return buf.getvalue(), "image/webp"
     except Exception:
         return raw, None
@@ -16873,22 +17170,19 @@ async def _fever_handler(request: Request) -> Response:
         return Response(status_code=404)
 
     api_key = params.get("api_key", "")
-    if MULTI_USER:
-        # Per-user: resolve the api_key (md5(username:api_token)) to a user_id and
-        # bind the tenancy context so the dispatch reads that user's data.
-        uid = user_store.fever_user_for_key(api_key) if user_store else None
-        if not uid:
-            return JSONResponse({"api_version": 3, "auth": 0})
-        with tenancy.user_context(uid):
-            return JSONResponse(_fever_build_result(params))
-    if not fever_service.check_auth(api_key):
+    # Resolve the api_key (md5(username:api_token)) to a user_id and bind
+    # the tenancy context so the dispatch reads that user's data.
+    uid = user_store.fever_user_for_key(api_key) if user_store else None
+    if not uid:
         return JSONResponse({"api_version": 3, "auth": 0})
-    return JSONResponse(_fever_build_result(params))
+    with tenancy.user_context(uid):
+        return JSONResponse(_fever_build_result(params))
 
 
 def _fever_build_result(params: dict) -> dict:
     """Build the Fever response for an authenticated request. Runs under the
     caller's tenancy context (the bound user in multi mode)."""
+    assert fever_service is not None  # caller already checked
     result: dict = {
         "api_version": 3,
         "auth": 1,
@@ -16964,56 +17258,34 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
 
     Manually-created threads do not inherit contextvars, so a request that
     captures its user and hands work to a daemon thread must re-bind the context
-    there or the work runs as the default user. No-op rebinding in single mode."""
+    there or the work runs as the default user."""
     with tenancy.user_context(uid):
         fn(*args, **kwargs)
 
 
 def _websub_verify_fanout(feed: str, hub_topic: str, challenge: str, lease: int | None) -> str | None:
-    """Confirm a WebSub subscription handshake for whichever user(s) initiated it.
-
-    The callback URL carries only the topic, so the hub's verification GET can't
-    name a user. Subscriptions live in per-user meta DBs, so try each background
-    user under its own context; any user with a matching pending subscription
-    gets verified. Returns the challenge to echo if at least one matched."""
-    confirmed = None
-    for uid in _background_user_ids():
-        with tenancy.user_context(uid):
-            try:
-                if websub_service.handle_verification(feed, hub_topic, challenge, lease) is not None:
-                    confirmed = challenge
-            except Exception:
-                LOGGER.exception("[websub] verification failed for user %r", uid)
-    return confirmed
+    """Confirm a WebSub subscription handshake against the shared subscription store."""
+    if websub_service is None:
+        return None
+    try:
+        return websub_service.handle_verification(feed, hub_topic, challenge, lease)
+    except Exception:
+        LOGGER.exception("[websub] verification failed for %r", feed)
+        return None
 
 
 def _process_websub_push(feed: str, body: bytes, sig: str) -> None:
     """Fan a WebSub push out to every user subscribed to the topic.
 
-    The shared callback means a push can match subscriptions in several per-user
-    DBs, each with its own secret. Confirm the push is authentic against any
-    subscriber's secret (a forged push matches none), then refresh every
-    subscriber under its own tenancy context so the content lands in that user's
-    reader DB."""
-    subscribers: list[str] = []
-    authentic = False
-    for uid in _background_user_ids():
-        with tenancy.user_context(uid):
-            try:
-                if not websub_service.has_verified_subscription(feed):
-                    continue
-                subscribers.append(uid)
-                if not authentic and websub_service.verify_push_signature(feed, body, sig):
-                    authentic = True
-            except Exception:
-                LOGGER.exception("[websub] push pre-check failed for user %r", uid)
+    Verifies the push signature once against the shared subscription secret,
+    then refreshes each subscriber's reader DB under its own tenancy context."""
+    if not websub_service:
+        return
+    subscribers = websub_service.get_subscribers(feed)
     if not subscribers:
         return
-    if not authentic:
-        LOGGER.warning(
-            "[websub] push for %s failed signature against all %d subscriber(s); ignoring",
-            feed, len(subscribers),
-        )
+    if not websub_service.verify_push_signature(feed, body, sig):
+        LOGGER.warning("[websub] push for %s failed signature check; ignoring", feed)
         return
     for uid in subscribers:
         with tenancy.user_context(uid):
@@ -17035,15 +17307,9 @@ def _greader_token(request: Request) -> str:
 def _resolve_greader_user(request: Request) -> str | None:
     """Username authorized for this GReader request, or None.
 
-    Multi mode: resolve the bearer token via the global token store. Single mode:
-    the legacy service validates the token and the user is the implicit default.
     """
     token = _greader_token(request)
-    if MULTI_USER:
-        return user_store.resolve_greader_token(token) if user_store else None
-    if greader_service and greader_service.check_token(token):
-        return tenancy.DEFAULT_USER_ID
-    return None
+    return user_store.resolve_greader_token(token) if user_store else None
 
 
 def _greader_ok(request: Request) -> bool:
@@ -17052,27 +17318,17 @@ def _greader_ok(request: Request) -> bool:
 
 @app.post("/greader/accounts/ClientLogin")
 async def greader_login(request: Request) -> Response:
-    """Authenticate and return a GReader auth token.
-
-    Multi mode: credentials are the username + the user's API token. Single mode:
-    the legacy service credential (LECTIO_FEVER_PASSWORD)."""
+    """Authenticate and return a GReader auth token (username + API token)."""
+    if user_store is None:
+        return Response("Error=ServiceUnavailable\n", status_code=503)
     form = await request.form()
     email = str(form.get("Email") or form.get("email") or "")
     passwd = str(form.get("Passwd") or form.get("passwd") or "")
-    if MULTI_USER:
-        if user_store is None:
-            return Response("Error=ServiceUnavailable\n", status_code=503)
-        local = email.split("@")[0] if "@" in email else email
-        uid = user_store.verify_api_token(local, passwd)
-        if not uid:
-            return Response("Error=BadAuthentication\n", status_code=403)
-        token = user_store.issue_greader_token(uid)
-        return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
-    if not greader_service:
-        return Response("Error=ServiceUnavailable\n", status_code=503)
-    token = greader_service.authenticate(email, passwd)
-    if not token:
+    local = email.split("@")[0] if "@" in email else email
+    uid = user_store.verify_api_token(local, passwd)
+    if not uid:
         return Response("Error=BadAuthentication\n", status_code=403)
+    token = user_store.issue_greader_token(uid)
     return Response(f"SID={token}\nLSID={token}\nAuth={token}\n", media_type="text/plain")
 
 
@@ -17081,24 +17337,24 @@ def greader_user_info(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     display_name = None
-    if MULTI_USER and user_store is not None:
+    if user_store is not None:
         row = user_store.get_by_id(tenancy.current_user_id())
         display_name = row["username"] if row else tenancy.current_user_id()
-    return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/tag/list")
 def greader_tag_list(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_tag_list())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_tag_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/subscription/list")
 def greader_subscription_list(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.post("/greader/reader/api/0/subscription/edit")
@@ -17119,7 +17375,7 @@ async def greader_subscription_quickadd(request: Request) -> Response:
 def greader_unread_count(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    return JSONResponse(greader_service.get_unread_counts())  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_unread_counts())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/token")
@@ -17145,7 +17401,7 @@ def greader_stream_item_ids(request: Request) -> Response:
     start_time = int(p["ot"]) if "ot" in p else None
     stop_time = int(p["nt"]) if "nt" in p else None
     oldest_first = p.get("r") == "o"
-    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_stream_item_ids(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
         stream_id, count=count, continuation=continuation,
         exclude_read=exclude_read, start_time=start_time,
         stop_time=stop_time, oldest_first=oldest_first,
@@ -17157,8 +17413,8 @@ async def greader_stream_items_contents(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     form = await request.form()
-    item_ids = list(form.getlist("i"))
-    return JSONResponse(greader_service.get_items_contents(item_ids))  # type: ignore[union-attr]
+    item_ids = [v for v in form.getlist("i") if isinstance(v, str)]
+    return JSONResponse(greader_service.get_items_contents(item_ids))  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
 @app.get("/greader/reader/api/0/stream/contents/{stream_id:path}")
@@ -17172,7 +17428,7 @@ def greader_stream_contents_path(stream_id: str, request: Request) -> Response:
         count = min(int(p.get("n", "20")), 10_000)
     except ValueError:
         count = 20
-    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]
+    return JSONResponse(greader_service.get_stream_contents(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
         stream_id,
         count=count,
         continuation=p.get("c") or None,
@@ -17192,10 +17448,10 @@ async def greader_edit_tag(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
     form = await request.form()
-    greader_service.edit_tag(  # type: ignore[union-attr]
-        list(form.getlist("i")),
-        list(form.getlist("a")),
-        list(form.getlist("r")),
+    greader_service.edit_tag(  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+        [v for v in form.getlist("i") if isinstance(v, str)],
+        [v for v in form.getlist("a") if isinstance(v, str)],
+        [v for v in form.getlist("r") if isinstance(v, str)],
     )
     return Response("OK")
 
@@ -17208,13 +17464,226 @@ async def greader_mark_all_as_read(request: Request) -> Response:
     stream_id = str(form.get("s") or "user/-/state/com.google/reading-list")
     ts_raw = form.get("ts")
     # ts is in microseconds; convert to seconds for the service.
-    timestamp = int(ts_raw) // 1_000_000 if ts_raw else None
+    timestamp = int(str(ts_raw)) // 1_000_000 if ts_raw and isinstance(ts_raw, str) else None
     threading.Thread(
         target=_run_in_user_context,
-        args=(tenancy.current_user_id(), greader_service.mark_all_as_read, stream_id, timestamp),
+        args=(tenancy.current_user_id(), greader_service.mark_all_as_read, stream_id, timestamp),  # ty: ignore[unresolved-attribute]
         daemon=True,
     ).start()
     return Response("OK")
+
+
+# ================================================================== Miniflux v1 API
+
+
+def _resolve_miniflux_user(request: Request) -> str | None:
+    """Resolve a Miniflux X-Auth-Token header to a tenancy user_id.
+
+    Returns the user_id on success, None on missing/invalid token."""
+    if not user_store:
+        return None
+    token = request.headers.get("X-Auth-Token", "").strip()
+    if not token:
+        # Basic auth: username:api_token (some clients send token as password)
+        import base64
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode()
+                _, _, token = decoded.partition(":")
+                token = token.strip()
+            except Exception:
+                token = ""
+    if not token:
+        return None
+    return user_store.miniflux_user_for_token(token)
+
+
+def _miniflux_ok(request: Request) -> str | None:
+    """Return the user_id if the request carries a valid Miniflux token, else None."""
+    return _resolve_miniflux_user(request)
+
+
+@app.get("/v1/version")
+def miniflux_version() -> Response:
+    """Version endpoint — some clients call this to detect Miniflux compatibility."""
+    return JSONResponse({"version": "2.2.0"})
+
+
+@app.post("/v1/auth/token")
+async def miniflux_auth_token(request: Request) -> Response:
+    """Token login endpoint for clients that prefer JWT-style auth.
+
+    We return the user's api_token as a plain bearer token (not a real JWT)
+    since we use X-Auth-Token for all subsequent requests."""
+    if not user_store:
+        return JSONResponse({"error_message": "Auth not available."}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error_message": "Invalid JSON."}, status_code=400)
+    username = str(body.get("username", ""))
+    password = str(body.get("password", ""))
+    uid = user_store.verify_login(username, password) if username and password else None
+    if not uid:
+        return JSONResponse({"error_message": "Invalid credentials."}, status_code=401)
+    with tenancy.user_context(uid):
+        with get_meta_connection() as conn:
+            tok = get_runtime_setting(conn, "api_token") if False else None
+    # Resolve the api_token directly from the auth DB
+    with user_store._connect() as conn:
+        row = conn.execute(
+            "SELECT api_token FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
+    if not row or not row["api_token"]:
+        return JSONResponse({"error_message": "API token not set."}, status_code=403)
+    return JSONResponse({"token": row["api_token"]})
+
+
+@app.get("/v1/me")
+def miniflux_me(request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    with tenancy.user_context(uid):
+        with user_store._connect() as conn:
+            row = conn.execute(
+                "SELECT username, is_admin FROM users WHERE user_id=?", (uid,)
+            ).fetchone()
+    if not row:
+        return JSONResponse({"error_message": "User not found."}, status_code=404)
+    return JSONResponse({
+        "id": 1,
+        "username": row["username"],
+        "is_admin": bool(row["is_admin"]),
+        "theme": "system_serif",
+        "language": "en_US",
+        "timezone": "UTC",
+        "entry_direction": "asc",
+        "entries_per_page": 100,
+        "keyboard_shortcuts": True,
+        "show_reading_time": True,
+        "entry_swipe": True,
+        "gesture_nav": "tap",
+        "last_login_at": datetime.now(timezone.utc).isoformat(),
+        "display_mode": "standalone",
+        "default_reading_speed": 265,
+        "cjk_reading_speed": 500,
+        "default_home_page": "unread",
+        "categories_sorting_order": "alphabetical",
+        "mark_read_on_view": False,
+        "media_playback_rate": 1,
+    })
+
+
+@app.get("/v1/categories")
+def miniflux_categories(request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    with tenancy.user_context(uid):
+        cats = miniflux_service.get_categories()
+    return JSONResponse(cats)
+
+
+@app.get("/v1/feeds")
+def miniflux_feeds(request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    with tenancy.user_context(uid):
+        feeds = miniflux_service.get_feeds()
+    return JSONResponse(feeds)
+
+
+def _miniflux_entries_response(request: Request, *, feed_id: int | None = None, category_id: int | None = None) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    p = request.query_params
+    status = p.get("status") or None
+    starred_str = p.get("starred")
+    starred: bool | None = None
+    if starred_str == "true":
+        starred = True
+    elif starred_str == "false":
+        starred = False
+    try:
+        limit = max(1, min(int(p.get("limit", 100)), 200))
+        after_id = int(p["after_entry_id"]) if "after_entry_id" in p else None
+        before_id = int(p["before_entry_id"]) if "before_entry_id" in p else None
+    except (ValueError, TypeError):
+        return JSONResponse({"error_message": "Invalid parameter."}, status_code=400)
+    direction = p.get("direction", "desc")
+    with tenancy.user_context(uid):
+        result = miniflux_service.get_entries(
+            status=status,
+            feed_id=feed_id,
+            category_id=category_id,
+            starred=starred,
+            limit=limit,
+            direction=direction,
+            after_entry_id=after_id,
+            before_entry_id=before_id,
+        )
+    return JSONResponse(result)
+
+
+@app.get("/v1/entries")
+def miniflux_entries(request: Request) -> Response:
+    return _miniflux_entries_response(request)
+
+
+@app.get("/v1/feeds/{feed_id}/entries")
+def miniflux_feed_entries(feed_id: int, request: Request) -> Response:
+    return _miniflux_entries_response(request, feed_id=feed_id)
+
+
+@app.get("/v1/categories/{category_id}/entries")
+def miniflux_category_entries(category_id: int, request: Request) -> Response:
+    return _miniflux_entries_response(request, category_id=category_id)
+
+
+@app.get("/v1/entries/{entry_id}")
+def miniflux_entry(entry_id: int, request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    with tenancy.user_context(uid):
+        entry = miniflux_service.get_entry(entry_id)
+    if entry is None:
+        return JSONResponse({"error_message": "Entry not found."}, status_code=404)
+    return JSONResponse(entry)
+
+
+@app.put("/v1/entries")
+async def miniflux_update_entries(request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error_message": "Invalid JSON."}, status_code=400)
+    entry_ids = [int(x) for x in (body.get("entry_ids") or []) if str(x).isdigit() or isinstance(x, int)]
+    status = str(body.get("status", ""))
+    if not entry_ids or status not in ("read", "unread"):
+        return JSONResponse({"error_message": "entry_ids and status (read|unread) required."}, status_code=400)
+    with tenancy.user_context(uid):
+        miniflux_service.update_entries(entry_ids, status)
+    return Response(status_code=204)
+
+
+@app.put("/v1/entries/{entry_id}/bookmark")
+def miniflux_toggle_bookmark(entry_id: int, request: Request) -> Response:
+    uid = _miniflux_ok(request)
+    if not uid:
+        return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
+    with tenancy.user_context(uid):
+        result = miniflux_service.toggle_bookmark(entry_id)
+    if result is None:
+        return JSONResponse({"error_message": "Entry not found."}, status_code=404)
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":

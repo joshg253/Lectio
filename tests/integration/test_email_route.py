@@ -55,16 +55,16 @@ def _make_entry(title="Test Article", link="https://example.com/article", feed_t
     class _Feed:
         pass
     feed = _Feed()
-    feed.title = feed_title
+    feed.title = feed_title  # ty: ignore[unresolved-attribute]
 
     class _Entry:
         pass
     e = _Entry()
-    e.title = title
-    e.link = link
-    e.feed = feed
-    e.summary = summary
-    e.content = None
+    e.title = title  # ty: ignore[unresolved-attribute]
+    e.link = link  # ty: ignore[unresolved-attribute]
+    e.feed = feed  # ty: ignore[unresolved-attribute]
+    e.summary = summary  # ty: ignore[unresolved-attribute]
+    e.content = None  # ty: ignore[unresolved-attribute]
     return e
 
 

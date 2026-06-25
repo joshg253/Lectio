@@ -11,20 +11,15 @@ Build order (promoted from Later — top first):
 3. ~~**YouTube quota meter**~~ — ✅ SHIPPED (per-user spend vs cap, Pacific reset, low/exhausted states).
 4. **Robust YT-folder identity + Integrations subtabs** — ✅ SHIPPED. Sync menu detects the YT folder by content (rename-safe); Integrations split into YouTube/DeviantArt/Instapaper subtabs (Settings→Feeds style) so the crowded YT section has its own tab. (Server-side connection gating of the YT subtab still possible later.)
 5. ~~**On-star → send to destination(s)**~~ — ✅ SHIPPED (Integrations → On Star: Instapaper / YouTube playlist / email; fires once on a genuine new star, async, one-way).
-6. **Bare media links → embedded players** — ✅ Part B (YT half) SHIPPED: a bare YouTube watch/youtu.be/shorts link that is the sole content of its paragraph becomes an inline player (`_embed_standalone_youtube_links`). ✅ Part A (source-page embed recovery) SHIPPED: when an entry's stored body has no `<iframe>` (older entries stripped at ingest, no placeholder figure) and it has a source link, the missing YouTube/Bandcamp/SoundCloud players are scraped from the source page (cached lead-image source-HTML) and re-attached **in context** — `_place_recovered_embeds` replaces the bare body link the feed showed instead, or fills the empty `<p></p>` slot left after a video-title heading, falling back to bottom-append (`_inject_recovered_source_embeds` / `_extract_source_embed_iframes`). Bandcamp standalone *link* → embed (numeric album id from the album page) still deferred (see Later).
+6. **Bare media links → embedded players** — ✅ Part B SHIPPED: a bare YouTube or Bandcamp album/track link that is the sole content of its paragraph becomes an inline player. YouTube (`_embed_standalone_youtube_links`): vid ID is in the URL. Bandcamp (`_embed_standalone_bandcamp_links`): numeric album/track ID scraped from the album page; cache-first (resolves immediately when cached, queues a background fetch otherwise so the embed appears next open). ✅ Part A (source-page embed recovery) SHIPPED: when an entry's stored body has no `<iframe>` and it has a source link, missing YouTube/Bandcamp/SoundCloud players are scraped from the cached source HTML and re-attached in context (`_inject_recovered_source_embeds` / `_extract_source_embed_iframes`).
 7. ~~**Save to Pinterest**~~ — ✅ SHIPPED (per-entry **Pin** button; per-user Pinterest API v5 OAuth; board picker; pins the entry's lead image linked to source. `services/pinterest_oauth.py`, `PINTEREST_OAUTH_CLIENT_ID/SECRET`).
 8. ~~**Add to Quire**~~ — ✅ SHIPPED (per-entry **Add to Quire** button + On-Star + `quire` automation rule; per-user OAuth `services/quire.py`, `QUIRE_CLIENT_ID/SECRET`; one default destination project; sliding-window per-minute/hour usage meter `quire_call_log` + `get_quire_usage_status`, per-run cap `_QUIRE_AUTO_PER_RUN_CAP`, 429 back-off).
 
+9. ~~**Miniflux v1 API compatibility**~~ — ✅ SHIPPED. `services/miniflux.py` + `/v1/*` routes in `main.py`. Covers: `/v1/version`, `/v1/me`, `/v1/categories`, `/v1/feeds`, `/v1/entries` (with status/feed/category/starred/limit/cursor params), `/v1/feeds/{id}/entries`, `/v1/categories/{id}/entries`, `/v1/entries/{id}`, `PUT /v1/entries` (bulk read/unread), `PUT /v1/entries/{id}/bookmark` (star toggle). Auth via `X-Auth-Token` header (user's raw `api_token`) or HTTP Basic password. Fever pre-sync race was already fixed (`presync=False`). README badge added.
+
 ### Deferred follow-ups (Quire / destinations)
-- **Share-dropdown consolidation** — collapse the per-entry destination glyphs
-  (Email, Instapaper, Pinterest, Quire) into a single far-right **share** dropdown,
-  with unavailable destinations greyed out + a tooltip ("connect X in Settings…").
-  Destination glyphs should use the service logo/favicon. (Original ask; deferred so
-  this PR stays focused on the Quire backend + standalone button.)
-- **Per-click Quire project picker** — let the entry button choose a project each
-  time (Pinterest-board-style menu) and offer a project list in Automations/On-Star,
-  instead of the single default project. The `/api/quire/projects` endpoint already
-  exists to back this.
+- ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
+- ~~**Per-click Quire project picker**~~ — ✅ SHIPPED. Quire button now opens a project-picker menu (mirrors Pinterest board picker); POST `/entries/quire` accepts optional `project_oid` form param that overrides the settings default. On-Star and automation rules still use the settings default project; adding a per-rule project field is a future follow-up if needed.
 
 Detailed specs follow.
 
@@ -51,10 +46,7 @@ Detailed specs follow.
 
   Planned pieces:
 
-  1. **Robust YT-folder identity.** Stop relying on the folder name. Mark the synced
-     folder (the one `sync_youtube_folder` populates) as the canonical YouTube area,
-     or derive "YT area" = any folder whose feeds are all `is_youtube_feed`. Drives
-     where the special settings/automation panel shows up.
+  1. ~~**Robust YT-folder identity.**~~ ✅ **SHIPPED.** `_hasYtFeed` (content-based) is now the primary check; the name-based fallback is an exact match against `_ytFolderName` (loaded from settings) instead of the fragile `startsWith('YouTube')`. Rename-safe, and avoids false-positives on unrelated folders named "YouTube-adjacent".
 
   2. **Global "skip Shorts" toggle** — ✅ **SHIPPED.** `yt_hide_shorts_global` setting
      (Integrations toggle, off by default); the hide-shorts pass targets every
@@ -67,10 +59,7 @@ Detailed specs follow.
      dedup guard, rule-type gated on a connected account. (Remaining YT-area work is
      items 1, 2, and the quota meter below.)
 
-  4. **Connection gating** — partially done: the `youtube_playlist` rule-type option
-     and the per-embed control are gated on `yt_oauth_connected`. Still to do once the
-     **YT special-area panel** (items 1–2) exists: gate that panel too and surface a
-     single "Connect YouTube account" prompt when not connected. Gate server-side.
+  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on; the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
 
   5. **Quota meter — "tokens left" with low alerts.** — ✅ **SHIPPED.** Per-user
      `yt_quota_spend` table keyed by Pacific date; each billed call reports its unit
@@ -164,29 +153,14 @@ Detailed specs follow.
     to the per-embed control (star a watched-later candidate, it lands in the
     playlist automatically).
 
-- **Convert bare media links into embedded players** — some feeds ship only a
-  Bandcamp/Spotify/etc. *link* (`<a href>`), not the embed iframe (e.g. theobelisk.net,
-  invisibleoranges.com: Bandcamp album links, 0 iframes in the feed). Detect known
-  player links in entry content and convert them to the host's embed iframe (already
-  allowlisted), so the player renders. Bandcamp needs the numeric album/track id,
-  which isn't in the album URL — scrape the album page's embed `<meta>`/oEmbed once
-  and cache it. Helps both the normal article view and Reader view. Larger than the
-  Reader-view re-inject (Now) since it needs per-host link→id resolution + caching.
 ## Later
 
-- **Webhook follow-ups** (shipped: `webhook` rule type + Send-test button): batch/digest
-  delivery, a Webhooks README badge.
+- ~~**Security-mode removal / admin tuning panel**~~ — ✅ **SHIPPED** (prior session).
+  `MULTI_USER = True` hardcoded; fetch-history / login-rate-limit / auto-refresh tuning
+  moved to DB-backed settings in the Administration panel; dynamic OAuth callback URLs
+  in Settings (populated from `public_url`).
 
-- **Social embeds (Instagram, X/Twitter, etc.)** — harder subcase of the above.
-  These ship in feeds as `<blockquote class="instagram-media" / "twitter-tweet">` +
-  a platform `<script>`, not an iframe. We strip scripts (privacy/security + we don't
-  load third-party trackers), so they currently render as a plain quote. X/Twitter
-  iframes via `platform.twitter.com` ARE allowlisted, but the blockquote/widgets.js
-  form isn't an iframe; Instagram isn't allowlisted at all. To render these we'd
-  convert the blockquote/permalink to the platform's oEmbed/iframe — but Twitter and
-  Instagram oEmbed now require API auth, and IG embeds are increasingly login-walled,
-  so this may not be reliably doable without third-party scripts we don't want to
-  load. Assess feasibility before committing; may end up "won't fix" for privacy.
+- ~~**Webhook batch/digest delivery**~~ — ✅ **SHIPPED.** `batch_webhooks` rule option; refresh groups all matching entries per-rule into one `{entries:[...]}` payload instead of N single-entry calls. Toggle in rule editor; backward-compatible (off by default).
 - Code health (deferred — low value, no user impact):
   - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
     (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/
@@ -196,23 +170,24 @@ Detailed specs follow.
   - **`ensure_meta_schema` (~585L)** — long but linear (CREATE + idempotent ALTERs),
     runs once at startup, low churn. A by-area split is cosmetic; low priority.
 - Multiuser stuff:
-  - **Performance investigation** — systematic baseline before enabling multi-user.
-    Per-request breakdown (DB time, enrich time, refresh contention) under realistic
-    load. Known hotspot: first-open of an og_scrape feed (e.g. mynorthwest) can take
-    several seconds on the **synchronous source-scrape caption fetch**
-    (`fetch_entry_image_caption` when source HTML isn't cached) — move it fully off
-    the request thread / cache-first like the lead-image fetch.
+  - **Performance investigation** — systematic baseline. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. ~~Sync source-scrape caption hotspot~~ ✅ already fixed: cache-first / background queue, no longer blocks `/entries/pane`.
   - **Shared-content tenancy mode** — one global feed/entry store + per-user overlays
     (read/star/folders/subs). Only worth building at real scale; biggest caching/
     refresh win (single refresh per feed, deduped storage). Umbrella for "a global
     mechanism for all non-private feeds to reduce strain/storage." Pushes unread
     counts to an incrementally-maintained per-user table instead of live scans.
-  - **Global WebSub subscriptions** — the callback URL is already global, but
-    subscription rows + secrets live per-user, so subscribe/renew POSTs and verify/
-    push fanout are duplicated across users. Move to one shared subscription store
-    keyed by topic (single secret, single subscribe/renew per feed) + a topic→
-    subscribers map for push fan-out. Standalone first step toward shared-content
-    mode; needs a migration of the existing per-user rows.
+    reader 3.24 documented the canonical layout: `shared.sqlite` holds all feed/entry
+    content (updated once per feed regardless of N subscribers), per-user DBs hold
+    only personal state, a routing layer merges at query time. `update_feeds_iter()`
+    yields per-feed results which could fan out into user-specific tables.
+    Current Lectio layout fetches each feed once per user (N users = N fetches) — fine
+    for 1–3 trusted users, but the natural limit before shared-content mode becomes
+    worth building.
+  - ~~**Global WebSub subscriptions**~~ — ✅ **SHIPPED.** Subscription rows + secrets
+    moved to a shared `lectio_websub.sqlite` with a `websub_subscribers` join table.
+    One subscribe/renew HTTP call per feed regardless of subscriber count; push fan-out
+    verifies the signature once then refreshes each subscriber's per-user reader DB.
+    Startup migration copies legacy per-user rows idempotently.
   - **Per-user resource fairness** — rate-limits/quotas on refresh, scraping, thumb
     generation. Not needed for trusted users; hooks left in the seam.
   - **Write-abuse protection (read-state spam)** — an untrusted user flip-flopping
@@ -233,39 +208,90 @@ Detailed specs follow.
   - **Authenticated/private feeds** — none supported today, so all feed/image content
     is safe to global-cache. If added, exclude those feeds from the global caches.
 
-- **Tag management — remove / delete tags** — manual tagging is currently **add-only**.
-  The article-pane tag editor submits in append mode (`append_mode=1` in
-  `_entry_pane.html`), merging typed tags with the existing set, and the displayed
-  `#tags` are filter links with no remove control. There is no tag-management screen, so
-  a tag only leaves the sidebar once it's gone from every post. The `/entries/tags` route
-  already supports replace (`append_mode=0`, which deletes any omitted tag) — the UI just
-  never uses it.
-  - **Per-post remove** — an `×` on each tag chip in the article pane that removes that
-    one tag from the post (submit the reduced set via `append_mode=0`).
-  - **Delete everywhere** — a bulk action to strip a tag from every post that has it; the
-    sidebar entry disappears once its count hits zero.
+- ~~**Tag management — remove / delete tags**~~ — ✅ ALREADY SHIPPED. `×` on each article-pane tag chip removes it (append_mode=0); right-click any tag (sidebar or chip) → "Delete tag everywhere" via `/tags/delete`. Both fully wired.
 
 - **Integrations to investigate** (ideas; feasibility unconfirmed):
-  - **Inoreader import (complete)** — Inoreader's own OPML/"takeout" omits *disabled*
-    feeds, tags, and other state. The user maintains
-    [InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool): OAuth 2.0
-    against the Inoreader API, backing up **tagged items per label** to JSON
-    (`backup/<label>.json` cumulative + dated batches; lowercase = tags, Title Case =
-    folders by convention). Two ways to leverage it: (a) ingest its JSON output —
-    map each label → a Lectio tag and import the items (URL/title/tags) so tags
-    survive the move; (b) go further and talk to the Inoreader API directly to also
-    recover subscriptions incl. **disabled feeds** + folder structure (OPML misses
-    the disabled ones). Likely an importer in `services/` that reads the tool's JSON
-    first (lowest effort, already have it), with a direct-API path as a follow-up.
-    Decide scope: tags-only vs full (feeds+folders+tags+read/star state).
-  - **Supernote integration** (e-ink; user has a Manta) — Supernote devices sync via
-    their **Supernote Cloud** + a local Wi-Fi "Browse & Access" HTTP file interface;
-    there's no official public API, so options are limited. Plausible: export
-    saved/starred articles as documents (PDF or `.note`-friendly format) to a folder
-    the device picks up (Cloud folder or the device's WebDAV-ish local server). A
-    "send to Supernote" destination (like the send-to-destination family) that drops
-    a readable PDF of an article. Investigate the local Browse&Access API and whether
-    Supernote Cloud has any usable upload endpoint before committing.
+  - **Inoreader import (in-app, all sources, with rate-limit tracking)**
+
+    Goal: import everything recoverable from an Inoreader account — feeds + folders
+    (incl. disabled), tagged/starred items, and whatever the export tool captured —
+    into the current Lectio user. Three complementary input sources, each optional:
+
+    **Source A — Inoreader OPML export**
+    Standard OPML; feeds + folder structure for *active* subscriptions only. Reuse
+    the existing `import_opml()` / `/opml/import` machinery. User uploads the file.
+
+    **Source B — InoreaderExportTool JSON files**
+    [joshg253/InoreaderExportTool](https://github.com/joshg253/InoreaderExportTool)
+    produces `backup/<label>.json` — one file per Inoreader label (lowercase label =
+    tag, Title Case = folder by convention). Each file contains a list of items with
+    at minimum: entry URL, title, and the label. User uploads one or more files.
+    → Map each label: lowercase → Lectio tag applied to those entries; Title Case →
+      also add the entry's feed to that folder.
+    → Mark starred items as starred in Lectio (if an `isStarred` / starred flag
+      exists in the JSON — **schema TBD: user to provide sample files**).
+    → For each entry URL, find the matching Lectio entry (by URL) and apply tags/star;
+      entries not yet in Lectio are skipped (API source below fills that gap).
+
+    **Source C — Inoreader API**
+    Fills in what OPML and JSON miss: disabled/inactive subscriptions, complete
+    label/folder list, starred items not captured in JSON batches, and items for
+    labels that weren't exported.
+
+    Auth: Inoreader API uses **AppId + AppKey** headers plus a **ClientLogin token**
+    (POST `/accounts/ClientLogin` with email + password → token). No OAuth redirect
+    needed. User enters App ID, App Key, Inoreader email, and password in Settings;
+    Lectio exchanges them for a token at import time. Credentials stored per-user
+    (`inoreader_app_id`, `inoreader_app_key`, `inoreader_email`, `inoreader_password`
+    — password treated as sensitive/masked).
+
+    **Rate limit and checkpoint:**
+    - Inoreader free tier: **250 API calls/day** (developer accounts: higher, but
+      treat 250 as the safe floor).
+    - Store per-user import state in a `inoreader_import` meta row:
+      `{calls_today, date, continuation_token, phase, label_cursor}`.
+    - On each API call: increment `calls_today`; if ≥ limit, pause and surface
+      "quota reached — resume tomorrow" in the UI. Show a quota meter in the import
+      panel (calls used / 250 today).
+    - Each resume picks up from the stored `continuation_token` and `label_cursor`
+      so nothing restarts from scratch.
+
+    **Import phases (for Source C):**
+    1. `GET /reader/api/0/subscription/list` → all subscriptions (incl. disabled);
+       add missing feeds + their folder assignments. (1 call)
+    2. For each label (from `/reader/api/0/tag/list`): page through
+       `/reader/api/0/stream/contents/<label_id>` with continuation token; for each
+       item, find the Lectio entry by URL and apply the tag. (N calls — pauses when
+       quota runs out; resumes at the stored continuation.)
+    3. Starred items stream (`user/-/state/com.google/starred`) — same paging
+       approach; mark matching entries as starred in Lectio.
+
+    **Settings keys (per-user, all in `_ALLOWED`):**
+    ```
+    SETTING_INOREADER_APP_ID       = "inoreader_app_id"
+    SETTING_INOREADER_APP_KEY      = "inoreader_app_key"      # sensitive
+    SETTING_INOREADER_EMAIL        = "inoreader_email"
+    SETTING_INOREADER_PASSWORD     = "inoreader_password"     # sensitive
+    ```
+    (No refresh token needed — the import is one-shot; the ClientLogin token is
+    short-lived and re-exchanged each session.)
+
+    **UI — per-user Settings → new "Inoreader Import" section** (separate from
+    Integrations; this is a one-time migration, not an ongoing connection):
+    - Credentials fields (App ID, App Key, email, password) + Save.
+    - Upload OPML file → immediate import, show count added.
+    - Upload JSON label files (multi-select) → immediate import, show tags/stars applied.
+    - "Sync via API" button → starts Phase 1–3 with progress bar + quota meter.
+    - Quota meter: "X / 250 API calls used today. Resets midnight UTC."
+    - "Resume" button appears if prior run hit the quota mid-import.
+
+    **New files:** `services/inoreader.py` (API client + import logic).
+    **`main.py` changes:** 4 new SETTING constants, new `/inoreader/import/*`
+    routes, settings added to `_ALLOWED`/`_SENSITIVE`, checkpoint state helpers.
+
+    **TODO before implementation:** user to provide a sample
+    `backup/<label>.json` entry so the JSON field names are confirmed (starred flag,
+    URL field name, etc.).
 
 
 ## Known limitations (not bugs)
@@ -291,26 +317,22 @@ Detailed specs follow.
 
 ## Backburner
 
-- **selfh.st / paywalled-teaser reader-mode spike** — selfh.st & waynocartoons load
-  in Reader view; if Readability already extracts the full article from the page,
-  the "paywalled teaser" limitation may be moot. Confirm, then optionally a per-feed
-  "open in Reader by default" toggle.
+- ~~**selfh.st reader-mode spike**~~ — confirmed: Reader view already extracts the full
+  article. No action needed.
 - **Deployment genericization** (after multi-user phases) — make base
   `docker-compose.yml` proxy-agnostic (publish `:8000`, no Traefik labels), move
   Traefik labels to an opt-in overlay; move security headers (HSTS/nosniff/
   frameDeny/referrer) from Traefik into app middleware; make trusted-proxy IPs
   configurable instead of `--forwarded-allow-ips=*`. Document Traefik + one
   alternative now; expand later.
-- **Miniflux API compatibility** — Fever and GReader are done. Miniflux is the
-  remaining candidate for broader client support (Fluent Reader, ReadKit). Assess
-  multi-user requirement and cost first. When adding this (or any new API), revisit
-  the README API badge cluster (WebSub / GReader / Fever) to keep it accurate.
-- **Fever pre-sync startup race** (cosmetic) — `FeverService` starts its pre-sync
-  thread in `__init__` at import, before `lifespan` runs `ensure_meta_schema()`, so
-  a brand-new data dir logs one `no such table: fever_entry_map` on first boot
-  (harmless). Defer the thread until after schema init, or tolerate the missing table.
 - **Archive caps for starred entries** — only relevant after multi-user.
 - **Better tuning / live preview** — full entry preview pane, swappable strategy +
   display settings without saving.
+- **Social embeds (Instagram, X/Twitter)** — both platforms now require API auth for
+  oEmbed; IG is increasingly login-walled. Likely "won't fix" for privacy; revisit if
+  a clean no-auth path appears.
+- **Supernote integration** — no confirmed public API. Revisit if the Browse&Access
+  HTTP interface proves usable.
+- ~~**`ty` type-error backlog**~~ — ✅ **SHIPPED.** 235 → 0 diagnostics. Fixed real bugs (`FeverService._synced` wrong attr, Pillow `LANCZOS` → `Resampling.LANCZOS`, `lead_images.py` None-before-raise_for_status); suppressed false positives and stub gaps with dual `# type: ignore  # ty: ignore` pattern.
 - **YunoHost or other packaging.**
 - **PWA / offline-first features.**

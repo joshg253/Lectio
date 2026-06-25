@@ -1,14 +1,12 @@
-"""Online SQLite backup for Lectio's databases (single- and multi-user aware).
+"""Online SQLite backup for Lectio's databases.
 
 Uses `VACUUM INTO` so backups are consistent even while the app is running
 (WAL/-shm files don't need to be copied — `VACUUM INTO` produces a single
 self-contained DB file at the destination).
 
 What it backs up:
-  - the global auth DB (`lectio_auth.sqlite`) — the user registry (multi mode),
-  - every user's databases under `data/users/<user_id>/`,
-  - the legacy top-level DBs (single-user / pre-migration) when present and
-    non-empty (the post-migration empty stubs are skipped).
+  - the global auth DB (`lectio_auth.sqlite`) — the user registry,
+  - every user's databases under `data/users/<user_id>/`.
 
 Regenerable caches (thumbnails, YouTube durations, reader FTS `.search`) are NOT
 backed up.
@@ -37,19 +35,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(ROOT))).resolve()
 DEFAULT_DEST = DATA_DIR / "backups"
 
-# Per-user / single-user DB filenames worth backing up (source-of-truth data).
+# Per-user DB filenames worth backing up (source-of-truth data).
 _USER_DBS = ("lectio_reader.sqlite", "lectio_meta.sqlite3", "lectio_starred_archive.sqlite")
 
 
-def discover_sources(data_dir: Path, multi_mode: bool | None = None) -> list[tuple[Path, str]]:
+def discover_sources(data_dir: Path) -> list[tuple[Path, str]]:
     """Return [(src_path, dest_stem)] for every DB worth backing up. dest_stem is
-    unique per source so multiple users' identically-named files don't collide.
-
-    In multi mode the top-level DBs are empty default-user stubs (real data lives
-    under users/<id>/), so they're skipped; in single mode they hold the data."""
-    if multi_mode is None:
-        multi_mode = os.getenv("LECTIO_SECURITY_MODE", "single").strip().lower() == "multi"
-
+    unique per source so multiple users' identically-named files don't collide."""
     items: list[tuple[Path, str]] = []
 
     auth = data_dir / "lectio_auth.sqlite"
@@ -63,12 +55,6 @@ def discover_sources(data_dir: Path, multi_mode: bool | None = None) -> list[tup
                 p = udir / fn
                 if p.exists():
                     items.append((p, f"users-{udir.name}-{Path(fn).stem}"))
-
-    if not multi_mode:
-        for fn in _USER_DBS:
-            p = data_dir / fn
-            if p.exists():
-                items.append((p, Path(fn).stem))
 
     return items
 

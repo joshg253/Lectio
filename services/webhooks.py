@@ -7,9 +7,10 @@ image proxy / WebSub): the target must resolve to a public address and redirects
 are never followed.
 
 Two payload formats:
-- ``generic`` — a flat JSON object with the article fields.
+- ``generic`` — a flat JSON object with the article fields (single) or
+               ``{"entries": [...]}`` (batch).
 - ``ifttt``   — IFTTT Maker's ``value1``/``value2``/``value3`` shape
-  (title / link / feed title), which IFTTT Webhooks specifically expect.
+  (title / link / feed title). Batch mode not available for IFTTT.
 """
 from __future__ import annotations
 
@@ -45,6 +46,15 @@ def build_webhook_payload(article: dict, fmt: str = "generic") -> dict:
         "published": str(article.get("published") or ""),
         "tags": list(article.get("tags") or []),
     }
+
+
+def build_webhook_batch_payload(articles: list[dict], fmt: str = "generic") -> dict:
+    """Return a single JSON body wrapping all matched entries.
+
+    Only meaningful for ``generic`` format — IFTTT rules should use
+    ``build_webhook_payload`` per-entry instead.
+    """
+    return {"entries": [build_webhook_payload(a, fmt) for a in articles]}
 
 
 def send_webhook(url: str, payload: dict) -> tuple[bool, str | None]:

@@ -5,7 +5,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlparse
 
 
@@ -196,8 +196,8 @@ class FeedRefreshService:
         skipped_count = 0
         now_ts = time.time()
 
-        feed_state_map: dict[str, dict[str, object]] = {}
-        domain_state_map: dict[str, dict[str, object]] = {}
+        feed_state_map: dict[str, dict[str, int | float | None]] = {}
+        domain_state_map: dict[str, dict[str, int | float | None]] = {}
         # Short read transaction: load backoff state, then release the lock
         # immediately so the per-feed HTTP fetches below don't hold it open.
         with self._get_meta_connection() as conn:
@@ -235,8 +235,8 @@ class FeedRefreshService:
                     domain_state = domain_state_map.get(domain) or {}
 
                     # Skip if either the feed-level or domain-level backoff is active.
-                    feed_next_retry = cast(float | None, feed_state.get("next_retry_at"))
-                    domain_next_retry = cast(float | None, domain_state.get("next_retry_at"))
+                    feed_next_retry = feed_state.get("next_retry_at")
+                    domain_next_retry = domain_state.get("next_retry_at")
 
                     # Also respect reader's built-in update_after, which captures
                     # Retry-After from 429/503 responses and Cache-Control max-age.

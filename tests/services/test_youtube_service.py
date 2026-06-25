@@ -140,6 +140,7 @@ def test_get_video_durations_batch_parses_multiple(tmp_path: Path, monkeypatch):
             ]}
 
     def _fake_get(url, params=None, timeout=None):
+        assert params is not None
         captured["ids"] = params["id"]
         return _Resp()
 

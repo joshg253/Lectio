@@ -52,15 +52,24 @@ def _make_conn(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS websub_subscribers (
+            feed_url TEXT NOT NULL,
+            user_id  TEXT NOT NULL,
+            PRIMARY KEY (feed_url, user_id)
+        )
+        """
+    )
     return conn
 
 
 def _build_service(db_path: Path) -> WebSubService:
-    def get_meta():
+    def get_shared():
         return _make_conn(db_path)
 
     return WebSubService(
-        get_meta_connection=get_meta,
+        get_shared_connection=get_shared,
         public_url=_PUBLIC_URL,
         user_agent="LectioTest/1.0",
         logger=MagicMock(),
@@ -276,7 +285,7 @@ def test_renew_expiring_subscriptions_spawns_thread(tmp_path):
     def fake_subscribe(feed_url, hub_url):
         calls.append(feed_url)
 
-    svc.subscribe = fake_subscribe  # type: ignore[method-assign]
+    svc.subscribe = fake_subscribe  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
     svc.renew_expiring_subscriptions()
@@ -299,7 +308,7 @@ def test_renew_skips_not_expiring(tmp_path):
 
     svc = _build_service(db)
     calls: list[str] = []
-    svc.subscribe = lambda f, h: calls.append(f)  # type: ignore[method-assign]
+    svc.subscribe = lambda f, h: calls.append(f)  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     svc.renew_expiring_subscriptions()
 
     assert calls == []
@@ -327,7 +336,7 @@ def test_discover_hub_refuses_internal_redirect(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
     assert svc._discover_hub_url(_FEED_URL) is None
@@ -344,7 +353,7 @@ def test_subscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(tmp_path / "meta.sqlite")
     svc.subscribe(_FEED_URL, _INTERNAL)
@@ -364,12 +373,12 @@ def test_unsubscribe_refuses_unsafe_hub(tmp_path, monkeypatch):
     real_client = httpx.Client
     monkeypatch.setattr(
         websub_mod.httpx, "Client",
-        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),
+        lambda *a, **k: real_client(*a, **{**k, "transport": httpx.MockTransport(handler)}),  # ty: ignore[invalid-argument-type]
     )
     svc = _build_service(db)
-    svc.unsubscribe(_FEED_URL)
+    svc.unsubscribe(_FEED_URL, "alice")
     assert posted == []  # no POST to internal hub
-    # row still removed regardless
+    # row still removed regardless (no other subscribers)
     row = _make_conn(db).execute(
         "SELECT 1 FROM websub_subscriptions WHERE feed_url=?", (_FEED_URL,)
     ).fetchone()
@@ -389,37 +398,30 @@ def test_maybe_discover_hubs_skips_known_active(tmp_path):
 
     svc = _build_service(db)
     discoveries: list[str] = []
-    svc._discover_and_subscribe = lambda u: discoveries.append(u)  # type: ignore[method-assign]
-    svc.maybe_discover_hubs([_FEED_URL])
+    svc._discover_and_subscribe = lambda u, uid: discoveries.append(u)  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    svc.maybe_discover_hubs([_FEED_URL], "alice")
 
     assert discoveries == []
 
 
-def test_discover_runs_in_caller_tenancy(tmp_path):
-    # Regression: background discover/subscribe threads lost tenancy and wrote the
-    # subscription row to the default tenant → verification fanout 404'd. The thread
-    # must re-bind the user active when maybe_discover_hubs was called.
-    from services import tenancy
-
+def test_discover_passes_user_id_to_thread(tmp_path):
+    # The user_id is passed explicitly to _discover_and_subscribe so it can
+    # register the subscriber row — no tenancy rebinding required.
     db = tmp_path / "meta.sqlite"
     _make_conn(db)
     svc = _build_service(db)
-    seen: list[str] = []
+    seen: list[tuple[str, str]] = []
 
-    def fake_discover(url):
-        seen.append(tenancy.current_user_id())
+    def fake_discover(url, uid):
+        seen.append((url, uid))
 
-    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
-    token = tenancy.set_current_user("u_test_websub")
-    try:
-        svc.maybe_discover_hubs([_FEED_URL])
-        _join_new_daemon_threads(_before)
-    finally:
-        tenancy.reset_current_user(token)
+    svc.maybe_discover_hubs([_FEED_URL], "u_test_websub")
+    _join_new_daemon_threads(_before)
 
-    assert seen == ["u_test_websub"]
+    assert seen == [(_FEED_URL, "u_test_websub")]
 
 
 def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
@@ -428,13 +430,13 @@ def test_maybe_discover_hubs_triggers_for_unknown(tmp_path):
     svc = _build_service(db)
     discoveries: list[str] = []
 
-    def fake_discover(url):
+    def fake_discover(url, uid):
         discoveries.append(url)
 
-    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]
+    svc._discover_and_subscribe = fake_discover  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     import threading
     _before = set(threading.enumerate())
-    svc.maybe_discover_hubs([_FEED_URL])
+    svc.maybe_discover_hubs([_FEED_URL], "alice")
 
     _join_new_daemon_threads(_before)
 

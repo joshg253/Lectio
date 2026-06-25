@@ -121,7 +121,16 @@ class ReaderApi:
         storage = _LectioReaderStorage(self._db_path, timeout=30.0)
         # feed_root='' enables file:// URI support (absolute paths) for
         # scraped page-feeds whose XML files are written to DATA_DIR/scraped-feeds/.
-        r = make_reader(self._db_path, feed_root='', _storage=storage)
+        # plugins=[] disables the default .ua_fallback plugin — Lectio's own per-feed
+        # browser-UA escalation (full header set, not just UA) is a strict superset.
+        # .entry_dedupe merges user state when feed entry IDs change (slug rewrites,
+        # CMS migrations). .enclosure_dedupe drops duplicate enclosure URLs per entry.
+        r = make_reader(
+            self._db_path,
+            feed_root='',
+            _storage=storage,
+            plugins=['.entry_dedupe', '.enclosure_dedupe'],
+        )
 
         # lazy_init callbacks are popped from the END of the list (LIFO order).
         # reader's own post_init (which creates the HTTPRetriever) is registered
@@ -130,7 +139,7 @@ class ReaderApi:
         # our hook first in the list → it gets popped last → runs after post_init.
         def _add_response_hook(parser: object) -> None:
             for prefix in ('https://', 'http://'):
-                retr = parser.retrievers.get(prefix)  # type: ignore[union-attr]
+                retr = parser.retrievers.get(prefix)  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
                 if retr is None:
                     continue
                 # FRB080/082/086: identify as Lectio, not as the underlying library.

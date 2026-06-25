@@ -56,9 +56,9 @@ for m in _IMG_TAG_RE.finditer(html):
     alt = attrs.get("alt",""); title_a = attrs.get("title","")
     alt_title = (alt + " " + title_a).strip()
     w_str=attrs.get("width",""); h_str=attrs.get("height","")
-    try: w_int=int(re.match(r"^([0-9]{1,4})",w_str).group(1)) if w_str else None
+    try: w_int=int(re.match(r"^([0-9]{1,4})",w_str).group(1)) if w_str else None  # ty: ignore[unresolved-attribute]
     except: w_int=None
-    try: h_int=int(re.match(r"^([0-9]{1,4})",h_str).group(1)) if h_str else None
+    try: h_int=int(re.match(r"^([0-9]{1,4})",h_str).group(1)) if h_str else None  # ty: ignore[unresolved-attribute]
     except: h_int=None
     
     if w_int is not None and w_int < _LEAD_IMAGE_MIN_WIDTH: 

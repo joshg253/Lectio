@@ -62,10 +62,10 @@ for tag_m in _IMG_TAG_RE.finditer(html):
     w_str = attrs.get("width","")
     h_str = attrs.get("height","")
     try:
-        w_int = int(re.match(r"^([0-9]{1,4})", w_str).group(1)) if w_str and re.match(r"^([0-9]{1,4})", w_str) else None
+        w_int = int(re.match(r"^([0-9]{1,4})", w_str).group(1)) if w_str and re.match(r"^([0-9]{1,4})", w_str) else None  # ty: ignore[unresolved-attribute]
     except: w_int = None
     try:
-        h_int = int(re.match(r"^([0-9]{1,4})", h_str).group(1)) if h_str and re.match(r"^([0-9]{1,4})", h_str) else None
+        h_int = int(re.match(r"^([0-9]{1,4})", h_str).group(1)) if h_str and re.match(r"^([0-9]{1,4})", h_str) else None  # ty: ignore[unresolved-attribute]
     except: h_int = None
     if w_int is not None and w_int < _LEAD_IMAGE_MIN_WIDTH:
         print(f"SKIP (width too small {w_int}): {src[:60]}")

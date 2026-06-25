@@ -146,6 +146,11 @@ def user_context(user_id: str) -> Iterator[str]:
 # --- per-user path resolution ---------------------------------------------
 
 
+def websub_db_path() -> Path:
+    """Shared (non-per-user) WebSub subscription store: ``DATA_DIR/lectio_websub.sqlite``."""
+    return _layout_or_raise().data_dir / "lectio_websub.sqlite"
+
+
 def user_data_dir(user_id: str | None = None) -> Path:
     """Directory holding a non-default user's DBs: ``DATA_DIR/users/{uid}``.
 

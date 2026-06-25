@@ -5,13 +5,15 @@
 ![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![WebSub](https://img.shields.io/badge/realtime-WebSub-FF5700)
+![Webhooks](https://img.shields.io/badge/automation-Webhooks-FF5700)
 ![GReader API](https://img.shields.io/badge/API-Google%20Reader-FF5700)
 ![Fever API](https://img.shields.io/badge/API-Fever-FF5700)
+![Miniflux API](https://img.shields.io/badge/API-Miniflux%20v1-FF5700)
 ![Last commit](https://img.shields.io/github/last-commit/joshg253/Lectio)
 
 > **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
 
-Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS, supports optional multi-user deployments, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
+Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS with full multi-user support, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
 
 ---
 
@@ -52,8 +54,10 @@ The short version:
   the album player so they actually stream. Titles that arrive HTML-encoded (or
   double-encoded, as Tumblr does — `Magus&rsquo; Castle`) are decoded so they read
   correctly instead of showing the raw entity. A bare
-  YouTube link sitting alone in its own paragraph (common when a feed strips the
-  oEmbed iframe) is turned into an inline player. Reader view re-injects
+  YouTube or Bandcamp album/track link sitting alone in its own paragraph (common
+  when a feed strips the oEmbed iframe) is turned into an inline player. (Bandcamp
+  resolves the numeric embed ID from the album page on first open and caches it; the
+  embed appears on the next open when the page isn't yet cached.) Reader view re-injects
   allowlisted players (YouTube/Spotify/Bandcamp) that the readability extractor
   would otherwise strip — audio players (Bandcamp/SoundCloud/Spotify) keep their
   proper fixed height instead of a 16:9 video box — and de-duplicates a repeated
@@ -70,7 +74,9 @@ The short version:
   thumbnails fall back to a direct browser load when the server-side image proxy
   is refused (some hosts IP-block the server but serve your own IP fine).
 - **Automation** — highlight, mark-as-read, deduplicate, email-article,
-  outbound-webhook, **save-to-Instapaper**, **add-to-YouTube-playlist**, and
+  outbound-webhook (with an optional **batch mode** that groups all matches from
+  one refresh run into a single `{entries:[...]}` request instead of one call per
+  entry), **save-to-Instapaper**, **add-to-YouTube-playlist**, and
   **add-to-Quire** rules (the YouTube rule auto-adds new
   videos — including those embedded in any feed's article — to a chosen playlist,
   with include-Shorts, mark-read, and **min/max-duration** options; quota-capped,
@@ -92,15 +98,15 @@ The short version:
   Settings, and automation runs are capped and back off on a 429. Register an app
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
-  `QUIRE_CLIENT_ID/SECRET` as a single-user fallback).
+  `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.
-- **Optional multi-user** — isolated per-user databases with shared content caches;
-  **GReader** and **Fever** API compatibility; Instapaper & email integrations.
+- **Multi-user** — isolated per-user databases with shared content caches;
+  **GReader**, **Fever**, and **Miniflux v1** API compatibility; Instapaper & email integrations.
 - **Data portability** — Takeout-style ZIP export/import and online-safe backups.
 
 ---

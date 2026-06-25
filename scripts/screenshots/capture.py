@@ -63,7 +63,7 @@ def capture_admin(base_url: str, out_dir: Path, admin_user: str, admin_pw: str) 
     out_dir.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
-        ctx = browser.new_context(viewport=_VIEWPORT, device_scale_factor=2)
+        ctx = browser.new_context(viewport=_VIEWPORT, device_scale_factor=2)  # ty: ignore[invalid-argument-type]
         page = ctx.new_page()
         _set_theme(page, "dark")
 
@@ -93,7 +93,7 @@ def capture(base_url: str, out_dir: Path) -> None:
         browser = pw.chromium.launch()
 
         def new_page(theme: str):
-            ctx = browser.new_context(viewport=_VIEWPORT, device_scale_factor=2)
+            ctx = browser.new_context(viewport=_VIEWPORT, device_scale_factor=2)  # ty: ignore[invalid-argument-type]
             pg = ctx.new_page()
             _set_theme(pg, theme)
             return ctx, pg
