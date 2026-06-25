@@ -68,11 +68,14 @@ Build order (promoted from Later — top first):
     over multiple days, respecting Inoreader's hateful quota.
 
     Auth: **OAuth 2.0** — same pattern as Pinterest/Quire, no password stored.
-    - User registers an app at `inoreader.com/developers` → App ID + App Key.
-    - Enters them in Lectio → "Connect Inoreader" → OAuth redirect →
-      `inoreader.com/oauth2/auth` → callback at `/inoreader/oauth/callback` →
-      exchange code for access + refresh tokens, stored per-user.
-    - API calls: `Authorization: GoogleLogin auth=<access_token>`.
+    - One Inoreader OAuth app (1-app limit on Pro); redirect URI registered as
+      `https://lectio.catfork.win/inoreader/oauth/callback`.
+    - User enters App ID + App Key in Lectio → "Connect Inoreader" → OAuth
+      redirect → `inoreader.com/oauth2/auth` → callback at
+      `/inoreader/oauth/callback` → exchange code for access + refresh tokens,
+      stored per-user.
+    - API calls: `Authorization: Bearer <access_token>` +
+      `AppId: <client_id>` + `AppKey: <client_secret>` headers.
     - Access token auto-refreshed from refresh token as needed.
 
     **Rate limit strategy — drip, don't rush:**
