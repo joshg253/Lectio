@@ -1226,6 +1226,7 @@ async def lifespan(app: FastAPI):
     ensure_img_cache_schema()
     ensure_yt_duration_schema()
     ensure_starred_archive_schema()
+    ensure_websub_schema()
     ensure_reader_indexes()
     bootstrap_admin()
 
@@ -1240,6 +1241,9 @@ async def lifespan(app: FastAPI):
         ensure_starred_archive_schema()
         ensure_reader_indexes()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
+
+    if LECTIO_PUBLIC_URL:
+        _migrate_websub_to_shared()
 
     with get_meta_connection() as conn:
         purge_lower_level_folders(conn)
@@ -2165,10 +2169,90 @@ def get_meta_connection() -> sqlite3.Connection:
     return conn
 
 
+_websub_conn_local = threading.local()
+WEBSUB_DB_PATH = DATA_DIR / "lectio_websub.sqlite"
+
+
+def get_websub_connection() -> sqlite3.Connection:
+    """Per-thread connection to the shared (non-per-user) WebSub subscription DB."""
+    pool = getattr(_websub_conn_local, "pool", None)
+    if pool is not None:
+        return pool
+    conn = sqlite3.connect(str(WEBSUB_DB_PATH), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA wal_autocheckpoint=200")
+    _websub_conn_local.pool = conn
+    return conn
+
+
 def get_thumb_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(THUMB_DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def ensure_websub_schema() -> None:
+    """Create the shared (non-per-user) WebSub tables if they don't exist."""
+    with get_websub_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS websub_subscriptions (
+                feed_url      TEXT PRIMARY KEY,
+                hub_url       TEXT,
+                secret        TEXT,
+                subscribed_at REAL,
+                verified      INTEGER DEFAULT 0,
+                expires_at    REAL,
+                lease_seconds INTEGER,
+                hub_tried_at  REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS websub_subscribers (
+                feed_url TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                PRIMARY KEY (feed_url, user_id)
+            )
+            """
+        )
+
+
+def _migrate_websub_to_shared() -> None:
+    """One-time migration: copy per-user websub_subscriptions rows to the shared DB.
+
+    Idempotent (INSERT OR IGNORE) so safe to re-run on every startup.
+    After this runs, the service only writes to the shared DB."""
+    for uid in _background_user_ids():
+        with tenancy.user_context(uid):
+            try:
+                conn = get_meta_connection()
+                rows = conn.execute(
+                    "SELECT feed_url, hub_url, secret, subscribed_at, verified, "
+                    "expires_at, lease_seconds, hub_tried_at "
+                    "FROM websub_subscriptions"
+                ).fetchall()
+            except Exception:
+                continue  # table may not exist for new users
+            if not rows:
+                continue
+            with get_websub_connection() as wconn:
+                for r in rows:
+                    wconn.execute(
+                        "INSERT OR IGNORE INTO websub_subscriptions "
+                        "(feed_url, hub_url, secret, subscribed_at, verified, "
+                        "expires_at, lease_seconds, hub_tried_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (r["feed_url"], r["hub_url"], r["secret"], r["subscribed_at"],
+                         r["verified"], r["expires_at"], r["lease_seconds"], r["hub_tried_at"]),
+                    )
+                    wconn.execute(
+                        "INSERT OR IGNORE INTO websub_subscribers (feed_url, user_id) VALUES (?, ?)",
+                        (r["feed_url"], uid),
+                    )
 
 
 def ensure_thumb_schema() -> None:
@@ -7867,7 +7951,7 @@ feed_refresh_service = FeedRefreshService(
 
 websub_service: WebSubService | None = (
     WebSubService(
-        get_meta_connection=get_meta_connection,
+        get_shared_connection=get_websub_connection,
         public_url=LECTIO_PUBLIC_URL,
         user_agent=READABILITY_USER_AGENT,
         logger=LOGGER,
@@ -10797,12 +10881,10 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         )
     invalidate_meta_structure_cache()
     if websub_service:
-        # websub_subscriptions lives in the per-user meta DB; the bare thread
-        # would lose the request's tenancy context, so capture it and re-bind.
         _uid = tenancy.current_user_id()
         threading.Thread(
-            target=_run_in_user_context,
-            args=(_uid, websub_service._discover_and_subscribe, feed_url),
+            target=websub_service._discover_and_subscribe,
+            args=(feed_url, _uid),
             daemon=True,
         ).start()
 
@@ -10879,7 +10961,7 @@ def purge_orphaned_feed(
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
-        websub_service.unsubscribe(feed_url)
+        websub_service.unsubscribe(feed_url, tenancy.current_user_id())
 
     return rescued
 
@@ -10908,15 +10990,14 @@ def remove_feed_from_folder(feed_url: str, folder_id: int) -> None:
 def get_push_active_feed_urls() -> set[str]:
     """Return the set of feed URLs with a verified, active WebSub push subscription.
 
-    Runs one query against the per-user meta DB.  Returns an empty set when
-    WebSub is disabled (``LECTIO_PUBLIC_URL`` not set) or the table is empty.
-    Only feeds with ``verified=1 AND hub_url IS NOT NULL`` are included —
-    pending/unconfirmed subscriptions are excluded.
+    Queries the shared (non-per-user) websub DB. Returns an empty set when
+    WebSub is disabled (LECTIO_PUBLIC_URL not set) or the table is empty.
+    Only feeds with verified=1 AND hub_url IS NOT NULL are included.
     """
     if not websub_service:
         return set()
     try:
-        conn = get_meta_connection()
+        conn = get_websub_connection()
         rows = conn.execute(
             "SELECT feed_url FROM websub_subscriptions"
             " WHERE verified=1 AND hub_url IS NOT NULL"
@@ -11155,6 +11236,9 @@ def _run_scheduled_refresh_for_all_users() -> None:
                 _scheduled_refresh_tick()
             except Exception:
                 LOGGER.exception("scheduled refresh failed for user %r", uid)
+    # Renewal is global (shared DB) — run once per scheduler tick, not per user.
+    if websub_service:
+        websub_service.renew_expiring_subscriptions()
 
 
 def scheduled_refresh_loop(stop_event: threading.Event) -> None:
@@ -11222,8 +11306,7 @@ def _scheduled_refresh_tick() -> None:
     feed_refresh_service.update_feeds(feeds_to_refresh)
     _run_automation_after_refresh(feeds_to_refresh)
     if websub_service:
-        websub_service.renew_expiring_subscriptions()
-        websub_service.maybe_discover_hubs(list(feeds_to_refresh))
+        websub_service.maybe_discover_hubs(list(feeds_to_refresh), tenancy.current_user_id())
 
 
 def _run_daily_maintenance() -> None:
@@ -17148,50 +17231,28 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
 
 
 def _websub_verify_fanout(feed: str, hub_topic: str, challenge: str, lease: int | None) -> str | None:
-    """Confirm a WebSub subscription handshake for whichever user(s) initiated it.
-
-    The callback URL carries only the topic, so the hub's verification GET can't
-    name a user. Subscriptions live in per-user meta DBs, so try each background
-    user under its own context; any user with a matching pending subscription
-    gets verified. Returns the challenge to echo if at least one matched."""
-    confirmed = None
-    for uid in _background_user_ids():
-        with tenancy.user_context(uid):
-            try:
-                if websub_service.handle_verification(feed, hub_topic, challenge, lease) is not None:
-                    confirmed = challenge
-            except Exception:
-                LOGGER.exception("[websub] verification failed for user %r", uid)
-    return confirmed
+    """Confirm a WebSub subscription handshake against the shared subscription store."""
+    if websub_service is None:
+        return None
+    try:
+        return websub_service.handle_verification(feed, hub_topic, challenge, lease)
+    except Exception:
+        LOGGER.exception("[websub] verification failed for %r", feed)
+        return None
 
 
 def _process_websub_push(feed: str, body: bytes, sig: str) -> None:
     """Fan a WebSub push out to every user subscribed to the topic.
 
-    The shared callback means a push can match subscriptions in several per-user
-    DBs, each with its own secret. Confirm the push is authentic against any
-    subscriber's secret (a forged push matches none), then refresh every
-    subscriber under its own tenancy context so the content lands in that user's
-    reader DB."""
-    subscribers: list[str] = []
-    authentic = False
-    for uid in _background_user_ids():
-        with tenancy.user_context(uid):
-            try:
-                if not websub_service.has_verified_subscription(feed):
-                    continue
-                subscribers.append(uid)
-                if not authentic and websub_service.verify_push_signature(feed, body, sig):
-                    authentic = True
-            except Exception:
-                LOGGER.exception("[websub] push pre-check failed for user %r", uid)
+    Verifies the push signature once against the shared subscription secret,
+    then refreshes each subscriber's reader DB under its own tenancy context."""
+    if not websub_service:
+        return
+    subscribers = websub_service.get_subscribers(feed)
     if not subscribers:
         return
-    if not authentic:
-        LOGGER.warning(
-            "[websub] push for %s failed signature against all %d subscriber(s); ignoring",
-            feed, len(subscribers),
-        )
+    if not websub_service.verify_push_signature(feed, body, sig):
+        LOGGER.warning("[websub] push for %s failed signature check; ignoring", feed)
         return
     for uid in subscribers:
         with tenancy.user_context(uid):
