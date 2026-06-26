@@ -1571,7 +1571,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="reddit" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Connect your Reddit account to get a <strong>Submit to Reddit</strong> button on each article, and to fetch Reddit feeds via the authenticated API (60 req/min instead of anonymous limits). Create a <strong>web app</strong> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with redirect URI <code id="sett-reddit-callback-url"></code>, then enter the client ID and secret below and Save.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Connect your Reddit account to get a <strong>Submit to Reddit</strong> button on each article, and to fetch Reddit feeds via the authenticated API (60 req/min instead of anonymous limits). Create a <strong>web app</strong> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with redirect URI <code id="sett-reddit-callback-url"></code>, then enter the client ID and secret below and Save. Shared instance credentials are set in the <a href="/administration">Administration panel</a>.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-reddit-client-id">Client ID</label>
             <input type="text" id="sett-reddit-client-id" class="settings-input" placeholder="your app client ID" maxlength="200" autocomplete="off" />
@@ -1585,15 +1585,6 @@
             <a id="sett-reddit-oauth-connect" class="settings-inline-btn" href="/integrations/reddit/oauth/connect" hidden>Connect Reddit account</a>
             <button type="button" id="sett-reddit-oauth-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
           </div>
-          {% if is_admin %}
-          <div class="settings-field settings-field--admin" style="grid-column:1 / -1" id="sett-shared-reddit-row">
-            <p class="settings-hint" style="margin-top:0.5rem">Shared instance credentials (admin only) — used when a user hasn't entered their own:</p>
-            <label class="settings-label" for="sett-shared-reddit-client-id">Shared Client ID</label>
-            <input type="text" id="sett-shared-reddit-client-id" class="settings-input" placeholder="shared app client ID" maxlength="200" autocomplete="off" />
-            <label class="settings-label" for="sett-shared-reddit-client-secret">Shared Client Secret</label>
-            <input type="password" id="sett-shared-reddit-client-secret" class="settings-input settings-input--secret" placeholder="shared client secret" autocomplete="new-password" />
-          </div>
-          {% endif %}
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="onstar" hidden>
@@ -10056,10 +10047,6 @@
         // Reddit integration: creds + connection status.
         v('sett-reddit-client-id', d.reddit_client_id);
         secretField('sett-reddit-client-secret', d.reddit_client_secret_set, d.reddit_client_secret_masked);
-        if (d.is_admin) {
-          v('sett-shared-reddit-client-id', d.shared_reddit_client_id);
-          secretField('sett-shared-reddit-client-secret', d.shared_reddit_client_secret_set, d.shared_reddit_client_secret_masked);
-        }
         {
           const rdConfigured = !!d.reddit_configured;
           const rdConnected = !!d.reddit_connected;
@@ -10222,8 +10209,6 @@
             star_send_reddit_subreddit: (document.getElementById('sett-star-reddit-sub')?.value || '').trim(),
             reddit_client_id: g('sett-reddit-client-id'),
             reddit_client_secret: g('sett-reddit-client-secret'),
-            shared_reddit_client_id: g('sett-shared-reddit-client-id'),
-            shared_reddit_client_secret: g('sett-shared-reddit-client-secret'),
           };
         }
         try {
