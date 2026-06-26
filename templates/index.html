@@ -2139,6 +2139,10 @@
             <span class="feed-prop-strategy-hint">🌐 This feed fetches with a browser identity (its server refused the default client).</span>
             <button type="button" id="feed-prop-browser-ua-reset" class="feed-prop-inline-btn" title="Go back to the honest default identity for this feed">Reset to default identity</button>
           </div>
+          <div id="feed-prop-browser-ua-force-row" hidden style="margin-top:0.5rem;">
+            <span class="feed-prop-strategy-hint">Server returns a valid feed in a browser but fails with the default client? Force browser identity:</span>
+            <button type="button" id="feed-prop-browser-ua-force" class="feed-prop-inline-btn" title="Fetch this feed using a browser User-Agent and headers">Use browser identity</button>
+          </div>
         </div>
         <!-- Dev feed: manual batch flush -->
         <div id="feed-prop-dev-section" hidden>
@@ -4959,6 +4963,8 @@
         if (feedPropImgSection) feedPropImgSection.hidden = isYoutubeFeed;
         if (feedPropDevSection) feedPropDevSection.hidden = !isDevFeed;
         if (feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = !data.browser_ua;
+        const feedPropBrowserUaForceRow = document.getElementById('feed-prop-browser-ua-force-row');
+        if (feedPropBrowserUaForceRow) feedPropBrowserUaForceRow.hidden = !!data.browser_ua;
 
         setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
@@ -5891,9 +5897,33 @@
         const body = new URLSearchParams({ feed_url: feedUrl, enabled: '0' });
         const resp = await fetch('/feeds/browser-ua', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
         const json = await resp.json();
-        if (json.ok && feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = true;
+        if (json.ok) {
+          if (feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = true;
+          const forceRow = document.getElementById('feed-prop-browser-ua-force-row');
+          if (forceRow) forceRow.hidden = false;
+        }
       } catch { /* leave row visible on error */ } finally {
         feedPropBrowserUaReset.disabled = false;
+      }
+    });
+
+    document.getElementById('feed-prop-browser-ua-force')?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      if (!feedUrl) return;
+      const btn = document.getElementById('feed-prop-browser-ua-force');
+      if (btn) btn.disabled = true;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, enabled: '1' });
+        const resp = await fetch('/feeds/browser-ua', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (json.ok) {
+          const forceRow = document.getElementById('feed-prop-browser-ua-force-row');
+          if (forceRow) forceRow.hidden = true;
+          if (feedPropBrowserUaRow) feedPropBrowserUaRow.hidden = false;
+          showToastMessage('Browser identity enabled — feed will retry on next refresh.');
+        }
+      } catch { showToastMessage('Failed to update feed identity.'); } finally {
+        if (btn) btn.disabled = false;
       }
     });
 
