@@ -15923,8 +15923,6 @@ def miniflux_import_start():
         "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
         "done": False, "error": None, "started_at": now, "updated_at": now,
     }
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_MINIFLUX_IMPORT_STATE, json.dumps(state))
     _uid = tenancy.current_user_id()
     threading.Thread(
         target=lambda: _run_in_user_context(_uid, _miniflux_import_worker),
@@ -15945,17 +15943,19 @@ def _miniflux_import_worker() -> None:
         base_url = get_setting(conn, SETTING_MINIFLUX_IMPORT_URL) or ""
         token = get_setting(conn, SETTING_MINIFLUX_IMPORT_TOKEN) or ""
 
-    with get_meta_connection() as conn:
-        raw = get_setting(conn, SETTING_MINIFLUX_IMPORT_STATE) or "{}"
-    try:
-        state = json.loads(raw)
-    except Exception:
-        state = {}
+    now = datetime.now(timezone.utc).isoformat()
+    state: dict = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
 
     def _save():
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         with get_meta_connection() as c:
             set_setting(c, SETTING_MINIFLUX_IMPORT_STATE, json.dumps(state))
+
+    _save()
 
     try:
         feeds = miniflux_import_service.get_feeds(base_url, token)
@@ -16036,8 +16036,6 @@ def freshrss_import_start():
         "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
         "done": False, "error": None, "started_at": now, "updated_at": now,
     }
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_FRESHRSS_IMPORT_STATE, json.dumps(state))
     _uid = tenancy.current_user_id()
     threading.Thread(
         target=lambda: _run_in_user_context(_uid, _freshrss_import_worker),
@@ -16059,17 +16057,19 @@ def _freshrss_import_worker() -> None:
         username = get_setting(conn, SETTING_FRESHRSS_USERNAME) or ""
         password = get_setting(conn, SETTING_FRESHRSS_PASSWORD) or ""
 
-    with get_meta_connection() as conn:
-        raw = get_setting(conn, SETTING_FRESHRSS_IMPORT_STATE) or "{}"
-    try:
-        state = json.loads(raw)
-    except Exception:
-        state = {}
+    now = datetime.now(timezone.utc).isoformat()
+    state: dict = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
 
     def _save():
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         with get_meta_connection() as c:
             set_setting(c, SETTING_FRESHRSS_IMPORT_STATE, json.dumps(state))
+
+    _save()
 
     try:
         token = freshrss_service.login(url, username, password)
@@ -16196,8 +16196,6 @@ def ttrss_import_start():
         "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
         "done": False, "error": None, "started_at": now, "updated_at": now,
     }
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_TTRSS_IMPORT_STATE, json.dumps(state))
     _uid = tenancy.current_user_id()
     threading.Thread(
         target=lambda: _run_in_user_context(_uid, _ttrss_import_worker),
@@ -16219,17 +16217,19 @@ def _ttrss_import_worker() -> None:
         username = get_setting(conn, SETTING_TTRSS_USERNAME) or ""
         password = get_setting(conn, SETTING_TTRSS_PASSWORD) or ""
 
-    with get_meta_connection() as conn:
-        raw = get_setting(conn, SETTING_TTRSS_IMPORT_STATE) or "{}"
-    try:
-        state = json.loads(raw)
-    except Exception:
-        state = {}
+    now = datetime.now(timezone.utc).isoformat()
+    state: dict = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
 
     def _save():
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         with get_meta_connection() as c:
             set_setting(c, SETTING_TTRSS_IMPORT_STATE, json.dumps(state))
+
+    _save()
 
     try:
         sid = ttrss_service.login(url, username, password)
