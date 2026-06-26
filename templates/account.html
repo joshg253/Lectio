@@ -92,6 +92,14 @@
           <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
                  placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
         </label>
+        <p class="account-hint"><strong>Reddit:</strong> Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a>. Add <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
+        <label class="fld">Reddit OAuth Client ID
+          <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
+        </label>
+        <label class="fld">Reddit OAuth Client Secret
+          <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
+        </label>
 
         <h3>Maintenance</h3>
         <label class="fld">Hour (0–23, server local time)
@@ -277,6 +285,10 @@
         if (ytSecret) payload.shared_yt_oauth_client_secret = ytSecret;
         const piSecret = $('adm-pinterest-oauth-client-secret')?.value.trim();
         if (piSecret) payload.shared_pinterest_oauth_client_secret = piSecret;
+        const rdId = $('adm-reddit-client-id')?.value.trim();
+        if (rdId !== undefined) payload.shared_reddit_client_id = rdId;
+        const rdSecret = $('adm-reddit-client-secret')?.value.trim();
+        if (rdSecret) payload.shared_reddit_client_secret = rdSecret;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
       });
