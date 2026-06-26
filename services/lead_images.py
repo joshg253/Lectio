@@ -136,7 +136,10 @@ class LeadImageService:
         # comic but are never the post's image: shields.io status badges
         # (e.g. img.shields.io/twitter/follow/…) and Ko-fi tip buttons
         # (storage.ko-fi.com/cdn/kofi3.png).
-        r"|shields\.io|ko-fi\.com)",
+        r"|shields\.io|ko-fi\.com"
+        # Microsoft Unified Header/Footer serves site-wide chrome assets (RE1Mu3b.png etc),
+        # not article content.
+        r"|uhf\.microsoft\.com)",
         re.IGNORECASE,
     )
     # Keep old name as alias so callers outside this class still work.
