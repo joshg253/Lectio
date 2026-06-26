@@ -45,6 +45,7 @@ from PIL import Image as _PILImage
 from readability import Document
 from reader.exceptions import InvalidFeedURLError
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from services import deviantart as deviantart_service
@@ -2198,6 +2199,11 @@ app.add_middleware(_RejectPrefetchMiddleware)
 # response regardless of which inner middleware produced it.
 if _SECURITY_HEADERS_ENABLED:
     app.add_middleware(_SecurityHeadersMiddleware, hsts=_HTTPS_ONLY)
+# Compress responses before they reach Traefik so Traefik's own compress
+# middleware sees Content-Encoding: gzip and passes through without buffering.
+# Buffering the full 500KB page before sending a single byte was the main
+# culprit for slow first-byte times on variable connections.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Access log replaces uvicorn's built-in (disabled via --no-access-log) so we
 # can suppress prefetch 204/503 noise. Add LAST so it sees the final response.
 app.add_middleware(_AccessLogMiddleware)
