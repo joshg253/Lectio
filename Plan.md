@@ -352,6 +352,15 @@ Detailed specs follow.
 
 ## Known limitations (not bugs)
 
+- **Reddit OAuth app registration blocked** — Reddit killed free OAuth2 app
+  registration as part of the 2023 API crackdown. The Integrations → Reddit panel
+  and all supporting code (`services/reddit.py`, routes, scheduler hook, submit
+  button) are fully implemented and will work once credentials are available, but
+  Reddit now requires either Devvit (their proprietary in-Reddit app platform, not
+  applicable) or a formal API access request. The old.reddit.com feed switch is the
+  practical mitigation for 429s in the meantime. Revisit if Reddit reopens app
+  registration or the access request is approved.
+
 - **Hard JS bot-walls** (e.g. seattletimes — HTTP 202 + empty body) — some feeds sit
   behind a challenge that returns success-with-no-body to *any* non-headless client,
   so even the browser-identity escalation can't fetch them. Lectio escalates on
