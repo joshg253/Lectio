@@ -8837,10 +8837,24 @@ def list_entries_for_feeds(
         # actual site domain rather than the feed host (e.g. hnrss.org).
         # Single get_feeds() call instead of one get_feed() per feed.
         fetch_start = time.perf_counter()
+        # Build feed_url → site homepage URL map via direct SQL rather than
+        # iterating all feed objects via reader. Keeps this O(feeds in view)
+        # instead of O(all feeds in the library).
         feed_site_map: dict[str, str | None] = {url: None for url in feed_urls}
-        for feed_obj in reader.get_feeds():
-            if feed_obj.url in feed_site_map:
-                feed_site_map[feed_obj.url] = getattr(feed_obj, "link", None) or None
+        if feed_urls:
+            _sm_conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+            _sm_conn.row_factory = sqlite3.Row
+            try:
+                _sm_list = list(feed_urls)
+                for _i in range(0, len(_sm_list), 999):
+                    _chunk = _sm_list[_i:_i + 999]
+                    _ph = ",".join("?" for _ in _chunk)
+                    for _row in _sm_conn.execute(
+                        f"SELECT url, link FROM feeds WHERE url IN ({_ph})", _chunk
+                    ).fetchall():
+                        feed_site_map[str(_row["url"])] = _row["link"] or None
+            finally:
+                _sm_conn.close()
 
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
@@ -8855,6 +8869,7 @@ def list_entries_for_feeds(
             if normalized_selected_tag
             else None
         )
+        PER_FEED_QUERY_THRESHOLD = 32
 
         if history_fast_keys:
             # Fast history path: fetch each entry by primary key (indexed lookup)
@@ -8863,7 +8878,7 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
-        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > 32 and not tag_filter:
+        elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > PER_FEED_QUERY_THRESHOLD and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
             # direct SQL query sorted ASC and fetch Entry objects only for matched rows.
@@ -8918,28 +8933,63 @@ def list_entries_for_feeds(
                     if entry.feed_url not in feed_urls:
                         continue
                     all_feed_entries.append(entry)
-        else:
-            # Two strategies:
-            #   - few feeds (e.g. user clicked one feed): query per feed with the
-            #     SQL feed= filter. Avoids scanning every entry across the library.
-            #   - many feeds (root / large folder): one global query and filter in
-            #     Python. Avoids 2000+ tiny queries with their per-call overhead.
-            PER_FEED_QUERY_THRESHOLD = 32
-            if len(feed_urls) <= PER_FEED_QUERY_THRESHOLD:
-                for feed_url in feed_urls:
-                    for entry in reader.get_entries(feed=feed_url, read=reader_read_filter, tags=tag_filter):
-                        all_feed_entries.append(entry)
-                        if not need_all and len(all_feed_entries) >= fetch_limit:
-                            break
-                    if not need_all and len(all_feed_entries) >= fetch_limit:
+        elif not search_terms and len(feed_urls) > PER_FEED_QUERY_THRESHOLD and not tag_filter:
+            # DESC (newest-first) with many feeds: same SQL-batch approach as the
+            # ASC path. Avoids a Python-side global scan of every entry in the DB.
+            # "post" sort uses the entry publish date; "received" uses the time
+            # reader first observed the entry (recent_sort).
+            read_sql = {None: "", True: " AND read IS NOT NULL", False: " AND (read IS NULL OR read != 1)"}
+            read_clause = read_sql.get(reader_read_filter, "")
+            sort_col = "recent_sort" if normalized_sort_by == "received" else "coalesce(published, first_updated)"
+            try:
+                _rconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+                _rconn.row_factory = sqlite3.Row
+                _feed_list = list(feed_urls)
+                if len(_feed_list) <= 999:
+                    _placeholders = ",".join("?" for _ in _feed_list)
+                    rows = _rconn.execute(
+                        f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
+                        f" ORDER BY {sort_col} DESC LIMIT ?",
+                        _feed_list + [fetch_limit],
+                    ).fetchall()
+                else:
+                    batch_rows_desc: list = []
+                    for _i in range(0, len(_feed_list), 999):
+                        _chunk = _feed_list[_i:_i + 999]
+                        _ph = ",".join("?" for _ in _chunk)
+                        chunk_rows = _rconn.execute(
+                            f"SELECT feed, id, {sort_col} AS sort_val FROM entries"
+                            f" WHERE feed IN ({_ph}){read_clause}"
+                            f" ORDER BY {sort_col} DESC LIMIT ?",
+                            _chunk + [fetch_limit],
+                        ).fetchall()
+                        batch_rows_desc.extend(chunk_rows)
+                    batch_rows_desc.sort(key=lambda r: r["sort_val"] or "", reverse=True)
+                    rows = batch_rows_desc[:fetch_limit]
+                _rconn.close()
+                for row in rows:
+                    e = reader.get_entry((str(row["feed"]), str(row["id"])), None)
+                    if e is not None:
+                        all_feed_entries.append(e)
+                    if len(all_feed_entries) >= fetch_limit:
                         break
-            else:
+            except Exception:
+                LOGGER.exception("[perf] desc-sql fast path failed, falling back")
                 for entry in reader.get_entries(read=reader_read_filter, tags=tag_filter):
                     if entry.feed_url not in feed_urls:
                         continue
                     all_feed_entries.append(entry)
                     if not need_all and len(all_feed_entries) >= fetch_limit:
                         break
+        else:
+            # Few feeds: query per feed with the SQL feed= filter.
+            for feed_url in feed_urls:
+                for entry in reader.get_entries(feed=feed_url, read=reader_read_filter, tags=tag_filter):
+                    all_feed_entries.append(entry)
+                    if not need_all and len(all_feed_entries) >= fetch_limit:
+                        break
+                if not need_all and len(all_feed_entries) >= fetch_limit:
+                    break
 
         fetch_ms = int((time.perf_counter() - fetch_start) * 1000)
         LOGGER.info(

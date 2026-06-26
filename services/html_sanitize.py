@@ -197,6 +197,23 @@ def sanitize_html(content: str) -> str:
     for math in soup.find_all("math"):
         _sanitize_mathml(math)
 
+    # Convert <object type="image/svg+xml" data="url"> to <img src="url">.
+    # Sphinx-based blogs (e.g. eli.thegreenplace.net) emit math formulas this way;
+    # the element text is the LaTeX source used as alt. Other <object> types stay
+    # in _DROP_TAGS and are decomposed below.
+    for obj in soup.find_all("object"):
+        obj_type = str(obj.attrs.get("type", "")).strip().lower()
+        data_url = str(obj.attrs.get("data", "")).strip()
+        if obj_type == "image/svg+xml" and data_url and _is_safe_attr_url("src", data_url):
+            img = soup.new_tag("img", src=data_url)
+            alt = obj.get_text(strip=True)
+            if alt:
+                img.attrs["alt"] = alt
+            obj_class = obj.attrs.get("class")
+            if obj_class:
+                img.attrs["class"] = obj_class
+            obj.replace_with(img)
+
     for tag in soup.find_all(True):
         if tag.parent is None:
             continue  # already removed along with a decomposed ancestor
