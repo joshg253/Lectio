@@ -143,7 +143,7 @@ Build order (promoted from Later — top first):
 
     | Platform | Status | Notes |
     |----------|--------|-------|
-    | **Miniflux** | ✅ SHIPPED | `services/miniflux_import.py`; REST API token; single-pass |
+    | **Miniflux** | ✅ SHIPPED (untested e2e — no live instance) | `services/miniflux_import.py`; REST API token; single-pass |
     | **FreshRSS** | ✅ SHIPPED | `services/freshrss.py`; ClientLogin → GoogleLogin; single-pass |
     | **tt-rss** | ✅ SHIPPED | `services/ttrss.py`; JSON-RPC session; single-pass |
 
