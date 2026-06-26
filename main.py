@@ -15846,10 +15846,11 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
 
 @app.post("/integrations/miniflux/import/test")
 async def miniflux_import_test(request: Request):
-    """Test connection to a Miniflux instance. Body: {url, token}."""
+    """Test connection to a Miniflux instance. Body: {url, token} (empty fields fall back to stored settings)."""
     body = await request.json()
-    base_url = (body.get("url") or "").strip()
-    token = (body.get("token") or "").strip()
+    with get_meta_connection() as conn:
+        base_url = (body.get("url") or "").strip() or (get_setting(conn, SETTING_MINIFLUX_IMPORT_URL) or "")
+        token = (body.get("token") or "").strip() or (get_setting(conn, SETTING_MINIFLUX_IMPORT_TOKEN) or "")
     if not base_url or not token:
         return JSONResponse({"ok": False, "error": "url and token are required"}, status_code=400)
     try:
@@ -15956,11 +15957,12 @@ def _miniflux_import_worker() -> None:
 
 @app.post("/integrations/freshrss/import/test")
 async def freshrss_import_test(request: Request):
-    """Test connection to a FreshRSS instance. Body: {url, username, password}."""
+    """Test connection to a FreshRSS instance. Body: {url, username, password} (empty fields fall back to stored settings)."""
     body = await request.json()
-    url = (body.get("url") or "").strip()
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
+    with get_meta_connection() as conn:
+        url = (body.get("url") or "").strip() or (get_setting(conn, SETTING_FRESHRSS_URL) or "")
+        username = (body.get("username") or "").strip() or (get_setting(conn, SETTING_FRESHRSS_USERNAME) or "")
+        password = (body.get("password") or "").strip() or (get_setting(conn, SETTING_FRESHRSS_PASSWORD) or "")
     if not url or not username or not password:
         return JSONResponse({"ok": False, "error": "url, username and password are required"}, status_code=400)
     try:
@@ -16115,11 +16117,12 @@ def _freshrss_import_worker() -> None:
 
 @app.post("/integrations/ttrss/import/test")
 async def ttrss_import_test(request: Request):
-    """Test connection to a tt-rss instance. Body: {url, username, password}."""
+    """Test connection to a tt-rss instance. Body: {url, username, password} (empty fields fall back to stored settings)."""
     body = await request.json()
-    url = (body.get("url") or "").strip()
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
+    with get_meta_connection() as conn:
+        url = (body.get("url") or "").strip() or (get_setting(conn, SETTING_TTRSS_URL) or "")
+        username = (body.get("username") or "").strip() or (get_setting(conn, SETTING_TTRSS_USERNAME) or "")
+        password = (body.get("password") or "").strip() or (get_setting(conn, SETTING_TTRSS_PASSWORD) or "")
     if not url or not username or not password:
         return JSONResponse({"ok": False, "error": "url, username and password are required"}, status_code=400)
     try:
