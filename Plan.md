@@ -17,7 +17,9 @@ Build order (promoted from Later — top first):
 
 9. ~~**Miniflux v1 API compatibility**~~ — ✅ SHIPPED. `services/miniflux.py` + `/v1/*` routes in `main.py`. Covers: `/v1/version`, `/v1/me`, `/v1/categories`, `/v1/feeds`, `/v1/entries` (with status/feed/category/starred/limit/cursor params), `/v1/feeds/{id}/entries`, `/v1/categories/{id}/entries`, `/v1/entries/{id}`, `PUT /v1/entries` (bulk read/unread), `PUT /v1/entries/{id}/bookmark` (star toggle). Auth via `X-Auth-Token` header (user's raw `api_token`) or HTTP Basic password. Fever pre-sync race was already fixed (`presync=False`). README badge added.
 
-10. **Inoreader migration (in-app)**
+10. ~~**Inoreader migration (in-app)**~~ — ✅ SHIPPED (file upload + OAuth drip + optional delete-from-source). ~~**Miniflux / FreshRSS / tt-rss migrations**~~ — ✅ SHIPPED (single-pass REST/GReader/JSON-RPC; subscriptions + folders + starred + tags; Import/Export → platform subtab).
+
+10. **Inoreader migration (in-app)** [shipped above]
 
     Goal: fully migrate an Inoreader account into Lectio — feeds + folders (incl.
     disabled ones OPML can't export), tags, starred items — filling in only what
@@ -137,23 +139,16 @@ Build order (promoted from Later — top first):
     drip step hooked into `scheduled_refresh_loop`.
     **No new DB table** — checkpoint in existing `app_settings` KV store.
 
-    **Template for other platform migrators (Later):**
-    The three-path shape (OPML upload · export JSON upload · live API drip +
-    optional delete-from-source) generalises to any reader. Platforms to add
-    after Inoreader, roughly in priority order:
+    **Platform migrators — all shipped:**
 
-    | Platform | OPML | API auth | Notes |
-    |----------|------|----------|-------|
-    | **Miniflux** | ✅ | REST API token / Basic | Self-hosted; no rate limits so single-run import, no drip needed |
-    | **FreshRSS** | ✅ | Google Reader API compat | Self-hosted; `inoreader.py` largely reusable — just swap base URL |
-    | **tt-rss** | ✅ | JSON-RPC (tt-rss specific) | Self-hosted; own API shape |
+    | Platform | Status | Notes |
+    |----------|--------|-------|
+    | **Miniflux** | ✅ SHIPPED | `services/miniflux_import.py`; REST API token; single-pass |
+    | **FreshRSS** | ✅ SHIPPED | `services/freshrss.py`; ClientLogin → GoogleLogin; single-pass |
+    | **tt-rss** | ✅ SHIPPED | `services/ttrss.py`; JSON-RPC session; single-pass |
 
     Paid platforms (Feedly, FeedBin, NewsBlur, The Old Reader) deferred — not
     in use, no urgency.
-
-    FreshRSS speaks the same Google Reader API as Inoreader, so its service
-    would be a thin wrapper around the same client with a user-supplied base URL.
-    Miniflux has no rate limits (self-hosted), so the drip strategy isn't needed.
 
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
