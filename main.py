@@ -2040,21 +2040,8 @@ class _RejectPrefetchMiddleware:
             await response(scope, receive, send)
             return
 
-        # Backstop: concurrency cap. Non-blocking acquire — if N home renders
-        # are already in flight, drop the request with 503 + Retry-After.
         if path == "/" or path.startswith("/?"):
-            acquired = _home_request_semaphore.acquire(blocking=False)
-            if not acquired:
-                response = Response(
-                    status_code=503,
-                    headers={"Retry-After": "2", "Cache-Control": "no-store"},
-                )
-                await response(scope, receive, send)
-                return
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                _home_request_semaphore.release()
+            await self.app(scope, receive, send)
             return
 
         await self.app(scope, receive, send)
@@ -12588,6 +12575,55 @@ async def admin_rename_user(request: Request):
 
 @app.get("/")
 def home(
+    request: Request,
+    folder_id: int | None = None,
+    list_feed_url: str | None = None,
+    tag: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    read_filter: str | None = None,
+    star_only: str | None = None,
+    resume_read_filter: str | None = None,
+    feed_url: str | None = None,
+    entry_id: str | None = None,
+    q: str | None = None,
+    message: str | None = None,
+    no_rss_url: str | None = None,
+    chunk: int | None = None,
+    chunk_delta: str | None = None,
+):
+    # Limit concurrent expensive home renders (DB queries + context building).
+    # Release before returning StreamingResponse so slow network delivery on the
+    # client side doesn't hold the semaphore and block new renders with 503s.
+    if not _home_request_semaphore.acquire(blocking=False):
+        return Response(
+            status_code=503,
+            headers={"Retry-After": "2", "Cache-Control": "no-store"},
+        )
+    try:
+        return _home_inner(
+            request=request,
+            folder_id=folder_id,
+            list_feed_url=list_feed_url,
+            tag=tag,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            read_filter=read_filter,
+            star_only=star_only,
+            resume_read_filter=resume_read_filter,
+            feed_url=feed_url,
+            entry_id=entry_id,
+            q=q,
+            message=message,
+            no_rss_url=no_rss_url,
+            chunk=chunk,
+            chunk_delta=chunk_delta,
+        )
+    finally:
+        _home_request_semaphore.release()
+
+
+def _home_inner(
     request: Request,
     folder_id: int | None = None,
     list_feed_url: str | None = None,
