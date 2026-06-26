@@ -415,9 +415,12 @@ FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
 def _static_asset_version() -> str:
     try:
-        return hashlib.md5(
-            (Path(__file__).parent / "static" / "style.css").read_bytes()
-        ).hexdigest()[:10]
+        _static = Path(__file__).parent / "static"
+        combined = b"".join(
+            (_static / name).read_bytes()
+            for name in ("style.css", "themes/dark.css")
+        )
+        return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
         return "dev"
 

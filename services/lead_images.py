@@ -2146,6 +2146,11 @@ class LeadImageService:
             except ValueError:
                 pass
 
+        # WordPress uploads are user-submitted content images (dated sub-paths).
+        # A compound filename like "pvclogo.webp" is an article subject, not a site logo.
+        if not skip_logo_patterns and "/wp-content/uploads/" in parsed.path:
+            skip_logo_patterns = True
+
         if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
             # Allow logo-pattern URLs when the path encodes a large enough dimension —
             # publisher-sized content images are valid even when "logo" appears in the name.
