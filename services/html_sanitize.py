@@ -73,6 +73,16 @@ _GLOBAL_ALLOWED_ATTRS = frozenset({"class"})
 # are multi-URL and not validated here, matching the existing srcset handling.)
 _URL_ATTRS = frozenset({"href", "src", "poster", "data-src", "data-lazy-src", "data-original", "data-image"})
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
+# Feeds sometimes embed HTML as entity-escaped text inside element text nodes
+# (e.g. &lt;em&gt;Title&lt;/em&gt; stored as literal "<em>Title</em>" in the
+# NavigableString). Strip these from non-code contexts to prevent raw tag names
+# appearing as visible page text.
+_PSEUDO_TAG_IN_TEXT_RE = re.compile(
+    r"</?(?:a|abbr|b|cite|code|del|em|i|ins|mark|q|s|small|span|strong|sub|sup|u)"
+    r"(?:\s[^>]{0,100})?/?>",
+    re.IGNORECASE,
+)
+_NO_STRIP_ANCESTORS = frozenset({"code", "pre", "samp", "kbd", "var"})
 
 # Hosts whose <iframe> embeds are allowed. Matched against the iframe src host by
 # exact match or dot-suffix (so "www.youtube.com" and "youtube.com" both match
@@ -206,7 +216,7 @@ def sanitize_html(content: str) -> str:
         data_url = str(obj.attrs.get("data", "")).strip()
         if obj_type == "image/svg+xml" and data_url and _is_safe_attr_url("src", data_url):
             img = soup.new_tag("img", src=data_url)
-            alt = obj.get_text(strip=True)
+            alt = " ".join(obj.get_text(separator=" ", strip=True).split())
             if alt:
                 img.attrs["alt"] = alt
             obj_class = obj.attrs.get("class")
@@ -239,4 +249,18 @@ def sanitize_html(content: str) -> str:
                 continue
             if la in _URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
                 del tag.attrs[attr_name]
+
+    # Strip pseudo-HTML tags that feeds sometimes embed as text inside elements
+    # (e.g. &lt;em&gt;title&lt;/em&gt; in link text, stored as literal "<em>" in
+    # the NavigableString). Skip code/pre contexts where the literal text is intentional.
+    for text_node in soup.find_all(string=True):
+        text = str(text_node)
+        if "<" not in text or isinstance(text_node, Comment):
+            continue
+        if any((p.name or "").lower() in _NO_STRIP_ANCESTORS for p in text_node.parents):
+            continue
+        cleaned = _PSEUDO_TAG_IN_TEXT_RE.sub("", text)
+        if cleaned != text:
+            text_node.replace_with(cleaned)
+
     return str(soup)
