@@ -1693,6 +1693,13 @@ class LeadImageService:
         if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
             return False
 
+        # Inline math-formula glyphs from Sphinx/RST blogs use class="valign-*"
+        # (e.g. valign-m4, valign-0). They are tiny inline symbols — never article
+        # lead images.
+        img_class = attrs.get("class", "")
+        if re.search(r"\bvalign-", img_class):
+            return False
+
         # Percentage-based height (e.g. height="60%") marks decorative dividers
         # or banner images sized by CSS — not article content images.
         raw_height = attrs.get("height", "").strip()
