@@ -110,6 +110,42 @@ def test_mathml_kept_attributes_stripped():
     assert "onclick" not in out.lower()
 
 
+def test_math_svg_object_height_promoted():
+    # Sphinx/dvisvgm inline math: <object> becomes <img>, the true rendered px height
+    # is lifted off the (stripped) inline style onto a real height attr, and the
+    # valign baseline class is preserved.
+    out = H.sanitize_html(
+        '<object type="image/svg+xml" data="https://x.test/a_n.svg" '
+        'class="valign-m3" style="height: 11px;">a_n</object>'
+    ).lower()
+    assert "<img" in out and "<object" not in out
+    assert 'height="11"' in out
+    assert "valign-m3" in out and "lectio-math-svg" in out
+    assert 'alt="a_n"' in out
+    assert "style=" not in out
+
+
+def test_math_png_img_height_promoted():
+    # Pre-existing PNG inline math <img> keeps its valign class and gains a height
+    # attr from the inline style (which is then stripped).
+    out = H.sanitize_html(
+        '<img class="valign-m4" src="https://x.test/f.png" style="height: 18px;">'
+    ).lower()
+    assert 'height="18"' in out
+    assert "valign-m4" in out
+    assert "style=" not in out
+
+
+def test_math_block_equation_height_promoted():
+    out = H.sanitize_html(
+        '<object type="image/svg+xml" data="https://x.test/eq.svg" '
+        'class="align-center" style="height: 49px;">\\[f(x)\\]</object>'
+    ).lower()
+    assert "<img" in out
+    assert 'height="49"' in out
+    assert "align-center" in out
+
+
 def test_audio_video_kept():
     out = H.sanitize_html('<video src="https://x.test/v.mp4" controls></video>'
                           '<audio src="https://x.test/a.mp3" controls></audio>')

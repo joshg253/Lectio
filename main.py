@@ -8476,7 +8476,18 @@ def _looks_like_bbcode(text: str) -> bool:
     where <br> tags pushed the HTML count above the BBCode count even though
     the article body is primarily BBCode.  _bbcode_to_html() already handles
     mixed content safely (it skips html.escape when HTML tags are present).
+
+    But genuine authored HTML — anything with block structure (<p>, <div>,
+    headings, lists, tables) — is never BBCode, even when stray brackets trip the
+    signal. Sphinx/Pelican math blogs (eli.thegreenplace.net) carry LaTeX alt text
+    like "[I=\\int ...]" / "[s(x)=...]" that reads as a "[i]"/"[s]" tag. Treating
+    such HTML as BBCode runs _bbcode_to_html's newline->\\<br\\> step over its
+    newline-formatted source, shredding every paragraph into one line per break
+    ("poem" layout). BBCode feeds use <br> for breaks, not these tags, so the guard
+    is safe for them.
     """
+    if re.search(r"<(?:p|div|h[1-6]|ul|ol|table|blockquote|section|article)\b", text, re.IGNORECASE):
+        return False
     return len(_BBCODE_SIGNAL_RE.findall(text)) >= 2
 
 

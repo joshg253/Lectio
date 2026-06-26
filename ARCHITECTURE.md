@@ -265,6 +265,14 @@ feeds must be excluded from the global caches.
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **Sphinx/dvisvgm math sizing** — blogs like eli.thegreenplace.net emit formulas
+  as `<object type="image/svg+xml">` / `<img>` whose *true* rendered height rides on
+  an inline `style="height: Npx"` (the SVGs' intrinsic dimensions are in `pt`, which
+  renders tiny) plus a `valign-mN` baseline class. Since the allowlist strips inline
+  `style`, `_promote_math_height` lifts that px height onto a real `height` attribute
+  (already allowlisted) before the strip; CSS then honors the per-glyph height and
+  `valign-*` baseline instead of flattening every formula to one size. `_MATH_SCALE`
+  (default 1.0) is the single knob to enlarge all math (requires re-ingest to apply).
 - **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
   so Lectio estimates spend itself: each billed call reports its documented unit cost
   through a sink (`playlists.list`/`videos.list`/sub-sync = 1, `playlistItems.insert`/

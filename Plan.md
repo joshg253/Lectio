@@ -302,6 +302,15 @@ Detailed specs follow.
     under-tested, needs broader characterization tests first.
   - **`ensure_meta_schema` (~585L)** — long but linear (CREATE + idempotent ALTERs),
     runs once at startup, low churn. A by-area split is cosmetic; low priority.
+  - **Backfill Sphinx-math height on already-stored entries** — the math
+    height/baseline fix (`_promote_math_height`) applies at ingest, so entries stored
+    before it keep their flattened math until re-ingested. A one-off that re-fetches
+    each Sphinx-math feed and re-sanitizes affected entries would retroactively fix
+    them; low value (math articles are few), do on demand. NB: `entries.content` is
+    stored as reader JSON (`json.dumps([Content._asdict()])`, i.e.
+    `[{"value":html,"type":...,"language":...}]`), **not** raw HTML — a backfill must
+    rewrite that structure (or go through reader's API), not overwrite the column with
+    a bare HTML string.
 - Multiuser stuff:
   - **Performance investigation** — systematic baseline. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. ~~Sync source-scrape caption hotspot~~ ✅ already fixed: cache-first / background queue, no longer blocks `/entries/pane`.
   - **Shared-content tenancy mode** — one global feed/entry store + per-user overlays
