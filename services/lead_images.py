@@ -1512,11 +1512,26 @@ class LeadImageService:
                 return True
         return False
 
+    # Inline decorative-image class patterns — never lead images in any context.
+    # Applied unconditionally in _extract_first_image_url_from_html so feed-content
+    # paths (source_url=None) are covered as well as source-page paths.
+    _INLINE_DECO_CLASS_RE = re.compile(
+        r"\bvalign-"       # Sphinx/RST math formula glyphs (e.g. valign-m4, valign-0)
+        r"|\bemoji\b"      # emoji sprites from any CDN (class="emoji")
+        r"|\bwp-smiley\b"  # WordPress inline smilies
+        r"|\bipsEmoji\b",  # Invision Community emoji sprites
+        re.IGNORECASE,
+    )
+
     def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
 
+            # Inline decorative images (math glyphs, emoji sprites) — skip in all
+            # contexts, including feed-content paths where source_url is None.
+            if self._INLINE_DECO_CLASS_RE.search(attrs.get("class", "")):
+                continue
             # Images with percentage-based height (e.g. height="60%") are
             # decorative dividers or CSS-sized banners, not article images.
             if attrs.get("height", "").strip().endswith("%"):
