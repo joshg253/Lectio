@@ -53,6 +53,9 @@ from services import pinterest_oauth as pinterest_oauth_service
 from services import quire as quire_service
 from services import reddit as reddit_service
 from services import inoreader as inoreader_service
+from services import miniflux_import as miniflux_import_service
+from services import freshrss as freshrss_service
+from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
@@ -313,6 +316,20 @@ SETTING_INOREADER_TOKEN_EXPIRES_AT = "inoreader_token_expires_at"
 SETTING_INOREADER_OAUTH_STATE = "inoreader_oauth_state"
 SETTING_INOREADER_IMPORT_STATE = "inoreader_import_state"
 SETTING_INOREADER_EXPORT_DIR = "inoreader_export_dir"  # server-side path to JSON export files
+# Miniflux migration (FROM a Miniflux instance — distinct from the Miniflux API compat server).
+SETTING_MINIFLUX_IMPORT_URL = "miniflux_import_url"
+SETTING_MINIFLUX_IMPORT_TOKEN = "miniflux_import_token"
+SETTING_MINIFLUX_IMPORT_STATE = "miniflux_import_state"
+# FreshRSS migration.
+SETTING_FRESHRSS_URL = "freshrss_url"
+SETTING_FRESHRSS_USERNAME = "freshrss_username"
+SETTING_FRESHRSS_PASSWORD = "freshrss_password"
+SETTING_FRESHRSS_IMPORT_STATE = "freshrss_import_state"
+# tt-rss migration.
+SETTING_TTRSS_URL = "ttrss_url"
+SETTING_TTRSS_USERNAME = "ttrss_username"
+SETTING_TTRSS_PASSWORD = "ttrss_password"
+SETTING_TTRSS_IMPORT_STATE = "ttrss_import_state"
 # Reddit OAuth integration.
 SETTING_REDDIT_CLIENT_ID = "reddit_client_id"
 SETTING_REDDIT_CLIENT_SECRET = "reddit_client_secret"
@@ -15525,6 +15542,142 @@ def _api_resolve_entry(reader, rconn, feed_url: str, entry_url: str, item: dict)
     return entry
 
 
+def _apply_migration_items(items: list[dict], state: dict, save_fn) -> None:
+    """Apply a list of normalized migration items to the current user's Lectio data.
+
+    Normalized item shape:
+      url        — article canonical URL (empty string = subscription-only record)
+      title      — article title
+      published  — Unix timestamp (int) or None
+      feed_url   — feed subscription URL
+      feed_title — feed display name
+      content    — article HTML
+      starred    — True to star in Lectio
+      tags       — list of plain tag name strings (will be lower-cased)
+      folder     — folder name for the feed (empty = no folder assignment)
+
+    Updates ``state`` counters (subs_added, items_tagged, items_starred, errors)
+    and calls ``save_fn()`` after the subscription phase and after the tagging
+    phase.
+    """
+    reader_db = str(tenancy.reader_db_path())
+
+    # --- Phase 1: subscribe feeds and assign folders ---
+    feed_folders: dict[str, str] = {}
+    all_feed_urls: set[str] = set()
+    for item in items:
+        furl = item.get("feed_url") or ""
+        if furl:
+            all_feed_urls.add(furl)
+            folder = item.get("folder") or ""
+            if folder and furl not in feed_folders:
+                feed_folders[furl] = folder
+
+    with get_reader() as reader:
+        existing = {str(f.url) for f in reader.get_feeds()}
+        for furl in all_feed_urls:
+            if furl not in existing:
+                try:
+                    reader.add_feed(furl, exist_ok=True)
+                    state["subs_added"] = state.get("subs_added", 0) + 1
+                    existing.add(furl)
+                except Exception:
+                    pass
+
+    if feed_folders:
+        with get_meta_connection() as conn:
+            for furl, folder_name in feed_folders.items():
+                try:
+                    folder_id = _get_or_create_folder_by_name(conn, folder_name)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                        (folder_id, furl),
+                    )
+                except Exception:
+                    pass
+        invalidate_meta_structure_cache()
+
+    save_fn()
+
+    # --- Phase 2: apply tags and stars to articles ---
+    with get_reader() as reader:
+        with get_meta_connection() as conn:
+            with sqlite3.connect(reader_db, timeout=10.0) as rconn:
+                rconn.row_factory = sqlite3.Row
+                for item in items:
+                    entry_url = item.get("url") or ""
+                    feed_url = item.get("feed_url") or ""
+                    if not entry_url:
+                        continue
+
+                    tag_keys = [
+                        f"{MANUAL_TAG_KEY_PREFIX}{t.strip().lower()}"
+                        for t in (item.get("tags") or [])
+                        if t and t.strip()
+                    ]
+                    want_star = bool(item.get("starred"))
+                    if not tag_keys and not want_star:
+                        continue
+
+                    try:
+                        entry = None
+                        if feed_url:
+                            entry = reader.get_entry((feed_url, entry_url), None)
+                            if entry is None:
+                                row = rconn.execute(
+                                    "SELECT id FROM entries WHERE feed = ? AND link = ? LIMIT 1",
+                                    (feed_url, entry_url),
+                                ).fetchone()
+                                if row:
+                                    entry = reader.get_entry((feed_url, row["id"]), None)
+                            if entry is None:
+                                try:
+                                    reader.add_feed(feed_url, exist_ok=True)
+                                except Exception:
+                                    pass
+                                entry_dict: dict = {
+                                    "feed_url": feed_url,
+                                    "id": entry_url,
+                                    "title": item.get("title") or "",
+                                    "link": entry_url,
+                                }
+                                pub = item.get("published")
+                                if pub:
+                                    entry_dict["published"] = datetime.fromtimestamp(pub, timezone.utc)
+                                if item.get("content"):
+                                    entry_dict["content"] = [{"value": item["content"]}]
+                                try:
+                                    reader.add_entry(entry_dict)
+                                    entry = reader.get_entry((feed_url, entry_url), None)
+                                except Exception:
+                                    pass
+                        else:
+                            row = rconn.execute(
+                                "SELECT id, feed FROM entries WHERE link = ? LIMIT 1",
+                                (entry_url,),
+                            ).fetchone()
+                            if row:
+                                entry = reader.get_entry((row["feed"], row["id"]), None)
+
+                        if entry:
+                            for tag_key in tag_keys:
+                                try:
+                                    reader.set_tag(entry, tag_key)
+                                    state["items_tagged"] = state.get("items_tagged", 0) + 1
+                                except Exception:
+                                    pass
+                            if want_star:
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                                    (entry.feed_url, entry.id),
+                                )
+                                state["items_starred"] = state.get("items_starred", 0) + 1
+                    except Exception:
+                        state["errors"] = state.get("errors", 0) + 1
+
+    save_fn()
+
+
 def _inoreader_drip_step(calls_budget: int = 10) -> None:
     """One drip-import step: advance the API-driven import by up to calls_budget API calls."""
     with get_meta_connection() as conn:
@@ -15685,6 +15838,433 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
         state["error"] = str(exc)[:300]
         _save()
         LOGGER.exception("[inoreader] drip step error")
+
+
+# ---------------------------------------------------------------------------
+# Miniflux migration routes
+# ---------------------------------------------------------------------------
+
+@app.post("/integrations/miniflux/import/test")
+async def miniflux_import_test(request: Request):
+    """Test connection to a Miniflux instance. Body: {url, token}."""
+    body = await request.json()
+    base_url = (body.get("url") or "").strip()
+    token = (body.get("token") or "").strip()
+    if not base_url or not token:
+        return JSONResponse({"ok": False, "error": "url and token are required"}, status_code=400)
+    try:
+        info = miniflux_import_service.test_connection(base_url, token)
+        return JSONResponse({"ok": True, **info})
+    except miniflux_import_service.AuthError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+
+
+@app.get("/integrations/miniflux/import/status")
+def miniflux_import_status():
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_MINIFLUX_IMPORT_STATE) or ""
+    if not raw:
+        return JSONResponse({"state": None})
+    try:
+        return JSONResponse({"state": json.loads(raw)})
+    except Exception:
+        return JSONResponse({"state": None})
+
+
+@app.post("/integrations/miniflux/import/start")
+def miniflux_import_start():
+    with get_meta_connection() as conn:
+        base_url = get_setting(conn, SETTING_MINIFLUX_IMPORT_URL) or ""
+        token = get_setting(conn, SETTING_MINIFLUX_IMPORT_TOKEN) or ""
+    if not base_url or not token:
+        return JSONResponse({"ok": False, "error": "Miniflux URL and token not configured"}, status_code=400)
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_MINIFLUX_IMPORT_STATE, json.dumps(state))
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _miniflux_import_worker),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "state": state})
+
+
+@app.post("/integrations/miniflux/import/reset")
+def miniflux_import_reset():
+    with get_meta_connection() as conn:
+        delete_setting(conn, SETTING_MINIFLUX_IMPORT_STATE)
+    return JSONResponse({"ok": True})
+
+
+def _miniflux_import_worker() -> None:
+    with get_meta_connection() as conn:
+        base_url = get_setting(conn, SETTING_MINIFLUX_IMPORT_URL) or ""
+        token = get_setting(conn, SETTING_MINIFLUX_IMPORT_TOKEN) or ""
+
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_MINIFLUX_IMPORT_STATE) or "{}"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        state = {}
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as c:
+            set_setting(c, SETTING_MINIFLUX_IMPORT_STATE, json.dumps(state))
+
+    try:
+        feeds = miniflux_import_service.get_feeds(base_url, token)
+        # Subscription-only records (no article to tag/star).
+        sub_items = [
+            {"url": "", "title": "", "published": None,
+             "feed_url": f["feed_url"], "feed_title": f["title"],
+             "content": "", "starred": False, "tags": [], "folder": f["folder"]}
+            for f in feeds
+        ]
+        starred = miniflux_import_service.get_starred_entries(base_url, token)
+        _apply_migration_items(sub_items + starred, state, _save)
+        state["phase"] = "done"
+        state["done"] = True
+        _save()
+        LOGGER.info(
+            "[miniflux-import] done: %d subs, %d starred, %d tagged, %d errors",
+            state.get("subs_added", 0), state.get("items_starred", 0),
+            state.get("items_tagged", 0), state.get("errors", 0),
+        )
+    except miniflux_import_service.AuthError as exc:
+        state["error"] = str(exc)
+        state["done"] = False
+        _save()
+    except Exception as exc:
+        state["error"] = str(exc)[:300]
+        state["done"] = False
+        _save()
+        LOGGER.exception("[miniflux-import] worker error")
+
+
+# ---------------------------------------------------------------------------
+# FreshRSS migration routes
+# ---------------------------------------------------------------------------
+
+@app.post("/integrations/freshrss/import/test")
+async def freshrss_import_test(request: Request):
+    """Test connection to a FreshRSS instance. Body: {url, username, password}."""
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    username = (body.get("username") or "").strip()
+    password = (body.get("password") or "").strip()
+    if not url or not username or not password:
+        return JSONResponse({"ok": False, "error": "url, username and password are required"}, status_code=400)
+    try:
+        info = freshrss_service.test_connection(url, username, password)
+        return JSONResponse({"ok": True, **info})
+    except freshrss_service.AuthError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+
+
+@app.get("/integrations/freshrss/import/status")
+def freshrss_import_status():
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_FRESHRSS_IMPORT_STATE) or ""
+    if not raw:
+        return JSONResponse({"state": None})
+    try:
+        return JSONResponse({"state": json.loads(raw)})
+    except Exception:
+        return JSONResponse({"state": None})
+
+
+@app.post("/integrations/freshrss/import/start")
+def freshrss_import_start():
+    with get_meta_connection() as conn:
+        url = get_setting(conn, SETTING_FRESHRSS_URL) or ""
+        username = get_setting(conn, SETTING_FRESHRSS_USERNAME) or ""
+        password = get_setting(conn, SETTING_FRESHRSS_PASSWORD) or ""
+    if not url or not username or not password:
+        return JSONResponse({"ok": False, "error": "FreshRSS URL, username and password not configured"}, status_code=400)
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_FRESHRSS_IMPORT_STATE, json.dumps(state))
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _freshrss_import_worker),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "state": state})
+
+
+@app.post("/integrations/freshrss/import/reset")
+def freshrss_import_reset():
+    with get_meta_connection() as conn:
+        delete_setting(conn, SETTING_FRESHRSS_IMPORT_STATE)
+    return JSONResponse({"ok": True})
+
+
+def _freshrss_import_worker() -> None:
+    with get_meta_connection() as conn:
+        url = get_setting(conn, SETTING_FRESHRSS_URL) or ""
+        username = get_setting(conn, SETTING_FRESHRSS_USERNAME) or ""
+        password = get_setting(conn, SETTING_FRESHRSS_PASSWORD) or ""
+
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_FRESHRSS_IMPORT_STATE) or "{}"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        state = {}
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as c:
+            set_setting(c, SETTING_FRESHRSS_IMPORT_STATE, json.dumps(state))
+
+    try:
+        token = freshrss_service.login(url, username, password)
+
+        # Phase 1: subscriptions + folders.
+        subs = freshrss_service.get_subscriptions(url, token)
+        sub_items = []
+        for sub in subs:
+            feed_url = sub.get("feed_url", "")
+            cats = sub.get("categories") or []
+            folder = ""
+            for cat in cats:
+                label = cat.get("label") or ""
+                if label and not freshrss_service.label_is_tag(label):
+                    folder = label
+                    break
+            sub_items.append({
+                "url": "", "title": sub.get("title", ""), "published": None,
+                "feed_url": feed_url, "feed_title": sub.get("title", ""),
+                "content": "", "starred": False, "tags": [], "folder": folder,
+            })
+        _apply_migration_items(sub_items, state, _save)
+
+        # Phase 2: labels → tags (page through each label stream).
+        tags = freshrss_service.get_tags(url, token)
+        label_names = [
+            freshrss_service.label_name_from_tag_id(t["id"])
+            for t in tags
+            if freshrss_service.label_name_from_tag_id(t.get("id", ""))
+            and freshrss_service.label_is_tag(freshrss_service.label_name_from_tag_id(t["id"]))  # type: ignore
+        ]
+        for label_name in label_names:
+            stream_id = freshrss_service.label_stream_id(label_name)
+            continuation = None
+            while True:
+                items_raw, continuation = freshrss_service.get_stream_contents(
+                    url, token, stream_id, continuation=continuation, n=100
+                )
+                items = [freshrss_service.normalize_item(i) for i in items_raw]
+                for item in items:
+                    item["tags"] = [label_name]
+                _apply_migration_items(items, state, _save)
+                if not continuation:
+                    break
+
+        # Phase 3: starred entries.
+        continuation = None
+        while True:
+            items_raw, continuation = freshrss_service.get_stream_contents(
+                url, token, freshrss_service.STARRED_STREAM_ID, continuation=continuation, n=100
+            )
+            items = [freshrss_service.normalize_item(i) for i in items_raw]
+            for item in items:
+                item["starred"] = True
+            _apply_migration_items(items, state, _save)
+            if not continuation:
+                break
+
+        state["phase"] = "done"
+        state["done"] = True
+        _save()
+        LOGGER.info(
+            "[freshrss-import] done: %d subs, %d starred, %d tagged, %d errors",
+            state.get("subs_added", 0), state.get("items_starred", 0),
+            state.get("items_tagged", 0), state.get("errors", 0),
+        )
+    except freshrss_service.AuthError as exc:
+        state["error"] = str(exc)
+        state["done"] = False
+        _save()
+    except Exception as exc:
+        state["error"] = str(exc)[:300]
+        state["done"] = False
+        _save()
+        LOGGER.exception("[freshrss-import] worker error")
+
+
+# ---------------------------------------------------------------------------
+# tt-rss migration routes
+# ---------------------------------------------------------------------------
+
+@app.post("/integrations/ttrss/import/test")
+async def ttrss_import_test(request: Request):
+    """Test connection to a tt-rss instance. Body: {url, username, password}."""
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    username = (body.get("username") or "").strip()
+    password = (body.get("password") or "").strip()
+    if not url or not username or not password:
+        return JSONResponse({"ok": False, "error": "url, username and password are required"}, status_code=400)
+    try:
+        info = ttrss_service.test_connection(url, username, password)
+        return JSONResponse({"ok": True, **info})
+    except ttrss_service.AuthError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+
+
+@app.get("/integrations/ttrss/import/status")
+def ttrss_import_status():
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_TTRSS_IMPORT_STATE) or ""
+    if not raw:
+        return JSONResponse({"state": None})
+    try:
+        return JSONResponse({"state": json.loads(raw)})
+    except Exception:
+        return JSONResponse({"state": None})
+
+
+@app.post("/integrations/ttrss/import/start")
+def ttrss_import_start():
+    with get_meta_connection() as conn:
+        url = get_setting(conn, SETTING_TTRSS_URL) or ""
+        username = get_setting(conn, SETTING_TTRSS_USERNAME) or ""
+        password = get_setting(conn, SETTING_TTRSS_PASSWORD) or ""
+    if not url or not username or not password:
+        return JSONResponse({"ok": False, "error": "tt-rss URL, username and password not configured"}, status_code=400)
+    now = datetime.now(timezone.utc).isoformat()
+    state = {
+        "phase": "running",
+        "subs_added": 0, "items_starred": 0, "items_tagged": 0, "errors": 0,
+        "done": False, "error": None, "started_at": now, "updated_at": now,
+    }
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_TTRSS_IMPORT_STATE, json.dumps(state))
+    _uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(_uid, _ttrss_import_worker),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "state": state})
+
+
+@app.post("/integrations/ttrss/import/reset")
+def ttrss_import_reset():
+    with get_meta_connection() as conn:
+        delete_setting(conn, SETTING_TTRSS_IMPORT_STATE)
+    return JSONResponse({"ok": True})
+
+
+def _ttrss_import_worker() -> None:
+    with get_meta_connection() as conn:
+        url = get_setting(conn, SETTING_TTRSS_URL) or ""
+        username = get_setting(conn, SETTING_TTRSS_USERNAME) or ""
+        password = get_setting(conn, SETTING_TTRSS_PASSWORD) or ""
+
+    with get_meta_connection() as conn:
+        raw = get_setting(conn, SETTING_TTRSS_IMPORT_STATE) or "{}"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        state = {}
+
+    def _save():
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with get_meta_connection() as c:
+            set_setting(c, SETTING_TTRSS_IMPORT_STATE, json.dumps(state))
+
+    try:
+        sid = ttrss_service.login(url, username, password)
+
+        # Build category (folder) map.
+        cats = ttrss_service.get_categories(url, sid)
+        cat_name_map: dict[int, str] = {c["id"]: c["title"] for c in cats if c.get("title")}
+
+        # Subscribe all feeds and assign folders.
+        feeds = ttrss_service.get_all_feeds(url, sid)
+        feed_info_map: dict[int, dict] = {}
+        sub_items = []
+        for idx, f in enumerate(feeds):
+            feed_info_map[idx] = f  # placeholder; actual feed_id from headlines
+            folder = cat_name_map.get(f.get("cat_id", 0), "")
+            sub_items.append({
+                "url": "", "title": f.get("title", ""), "published": None,
+                "feed_url": f.get("feed_url", ""), "feed_title": f.get("title", ""),
+                "content": "", "starred": False, "tags": [], "folder": folder,
+            })
+        # Build a real feed_url → cat_id map for headline normalisation.
+        url_to_cat: dict[str, int] = {f["feed_url"]: f.get("cat_id", 0) for f in feeds}
+        # tt-rss headlines carry feed_id (int), not feed_url; build id→info map via a
+        # second pass once we fetch headlines (which include feed_url in their data).
+        _apply_migration_items(sub_items, state, _save)
+
+        # Page through all starred headlines.
+        limit = 200
+        skip = 0
+        while True:
+            headlines = ttrss_service.get_starred_headlines(url, sid, limit=limit, skip=skip)
+            if not headlines:
+                break
+            # Build feed_info_map from actual headline data (each headline has feed_url
+            # and feed_title fields that appear in some tt-rss versions).
+            feed_info_from_hl: dict[int, dict] = {}
+            for hl in headlines:
+                fid = hl.get("feed_id")
+                if isinstance(fid, int) and fid not in feed_info_from_hl:
+                    # Try to find the feed_url from the sub list or the headline itself.
+                    hl_feed_url = hl.get("feed_url", "")
+                    hl_feed_title = hl.get("feed_title", "")
+                    cat_id = url_to_cat.get(hl_feed_url, 0)
+                    feed_info_from_hl[fid] = {
+                        "feed_url": hl_feed_url,
+                        "title": hl_feed_title,
+                        "cat_id": cat_id,
+                    }
+            items = [
+                ttrss_service.normalize_headline(hl, feed_info_from_hl, cat_name_map)
+                for hl in headlines
+            ]
+            _apply_migration_items(items, state, _save)
+            if len(headlines) < limit:
+                break
+            skip += limit
+
+        state["phase"] = "done"
+        state["done"] = True
+        _save()
+        LOGGER.info(
+            "[ttrss-import] done: %d subs, %d starred, %d tagged, %d errors",
+            state.get("subs_added", 0), state.get("items_starred", 0),
+            state.get("items_tagged", 0), state.get("errors", 0),
+        )
+    except ttrss_service.AuthError as exc:
+        state["error"] = str(exc)
+        state["done"] = False
+        _save()
+    except Exception as exc:
+        state["error"] = str(exc)[:300]
+        state["done"] = False
+        _save()
+        LOGGER.exception("[ttrss-import] worker error")
 
 
 @app.get("/api/pinterest/boards")
@@ -15918,6 +16498,18 @@ def get_all_settings():
         "pinterest_oauth_configured": all(get_pinterest_oauth_credentials()),
         "pinterest_oauth_connected": bool(get_runtime_setting(SETTING_PINTEREST_OAUTH_REFRESH_TOKEN)),
         "shared_pinterest_oauth_client_id": get_runtime_setting(SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, ""),
+        # Miniflux / FreshRSS / tt-rss migrations
+        "miniflux_import_url": get_runtime_setting(SETTING_MINIFLUX_IMPORT_URL, ""),
+        "miniflux_import_token_set": bool(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN)),
+        "miniflux_import_token_masked": _masked(get_runtime_setting(SETTING_MINIFLUX_IMPORT_TOKEN, "")),
+        "freshrss_url": get_runtime_setting(SETTING_FRESHRSS_URL, ""),
+        "freshrss_username": get_runtime_setting(SETTING_FRESHRSS_USERNAME, ""),
+        "freshrss_password_set": bool(get_runtime_setting(SETTING_FRESHRSS_PASSWORD)),
+        "freshrss_password_masked": _masked(get_runtime_setting(SETTING_FRESHRSS_PASSWORD, "")),
+        "ttrss_url": get_runtime_setting(SETTING_TTRSS_URL, ""),
+        "ttrss_username": get_runtime_setting(SETTING_TTRSS_USERNAME, ""),
+        "ttrss_password_set": bool(get_runtime_setting(SETTING_TTRSS_PASSWORD)),
+        "ttrss_password_masked": _masked(get_runtime_setting(SETTING_TTRSS_PASSWORD, "")),
         # Inoreader migration
         "inoreader_client_id": get_runtime_setting(SETTING_INOREADER_CLIENT_ID, _ENV_INOREADER_CLIENT_ID),
         "inoreader_client_secret_set": bool(get_runtime_setting(SETTING_INOREADER_CLIENT_SECRET, _ENV_INOREADER_CLIENT_SECRET)),
@@ -15993,7 +16585,9 @@ async def save_all_settings(request: Request):
                   SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
                   SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
                   SETTING_INOREADER_CLIENT_SECRET,
-                  SETTING_REDDIT_CLIENT_SECRET, SETTING_SHARED_REDDIT_CLIENT_SECRET}
+                  SETTING_REDDIT_CLIENT_SECRET, SETTING_SHARED_REDDIT_CLIENT_SECRET,
+                  SETTING_MINIFLUX_IMPORT_TOKEN,
+                  SETTING_FRESHRSS_PASSWORD, SETTING_TTRSS_PASSWORD}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
         SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
@@ -16015,6 +16609,9 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_INOREADER_CLIENT_ID, SETTING_INOREADER_CLIENT_SECRET,
         SETTING_INOREADER_EXPORT_DIR,
+        SETTING_MINIFLUX_IMPORT_URL, SETTING_MINIFLUX_IMPORT_TOKEN,
+        SETTING_FRESHRSS_URL, SETTING_FRESHRSS_USERNAME, SETTING_FRESHRSS_PASSWORD,
+        SETTING_TTRSS_URL, SETTING_TTRSS_USERNAME, SETTING_TTRSS_PASSWORD,
         SETTING_REDDIT_CLIENT_ID, SETTING_REDDIT_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
