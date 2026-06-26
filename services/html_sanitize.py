@@ -210,8 +210,9 @@ def sanitize_html(content: str) -> str:
             if alt:
                 img.attrs["alt"] = alt
             obj_class = obj.attrs.get("class")
-            if obj_class:
-                img.attrs["class"] = obj_class
+            classes = list(obj_class) if isinstance(obj_class, list) else ([obj_class] if obj_class else [])
+            classes.append("lectio-math-svg")
+            img.attrs["class"] = classes
             obj.replace_with(img)
 
     for tag in soup.find_all(True):
