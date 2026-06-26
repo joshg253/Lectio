@@ -250,17 +250,32 @@ def sanitize_html(content: str) -> str:
             if la in _URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
                 del tag.attrs[attr_name]
 
-    # Strip pseudo-HTML tags that feeds sometimes embed as text inside elements
+    # Render pseudo-HTML tags that feeds sometimes embed as text inside elements
     # (e.g. &lt;em&gt;title&lt;/em&gt; in link text, stored as literal "<em>" in
-    # the NavigableString). Skip code/pre contexts where the literal text is intentional.
+    # the NavigableString). Re-parse as HTML so they become real elements and
+    # render correctly. Skip code/pre contexts where literal angle brackets are
+    # intentional. Newly inserted elements are sanitized inline.
     for text_node in soup.find_all(string=True):
         text = str(text_node)
         if "<" not in text or isinstance(text_node, Comment):
             continue
         if any((p.name or "").lower() in _NO_STRIP_ANCESTORS for p in text_node.parents):
             continue
-        cleaned = _PSEUDO_TAG_IN_TEXT_RE.sub("", text)
-        if cleaned != text:
-            text_node.replace_with(cleaned)
+        if not _PSEUDO_TAG_IN_TEXT_RE.search(text):
+            continue
+        frag = BeautifulSoup(text, "html.parser")
+        for el in list(frag.find_all(True)):
+            name = (el.name or "").lower()
+            if name not in _ALLOWED_TAGS:
+                el.unwrap()
+                continue
+            allowed_el = _ALLOWED_ATTRS.get(name, frozenset())
+            for attr in list(el.attrs):
+                la = attr.lower()
+                if la.startswith("on") or la == "style" or (la not in allowed_el and la not in _GLOBAL_ALLOWED_ATTRS):
+                    del el.attrs[attr]
+                elif la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr, ""))):
+                    del el.attrs[attr]
+        text_node.replace_with(frag)
 
     return str(soup)

@@ -3002,15 +3002,14 @@ button:hover, .button-link:hover {
    match the surrounding font on any screen density. */
 .entry-content img[class*="valign-"] {
   display: inline;
-  height: 1.5em;
+  height: 1.2em;
   width: auto;
   max-width: 100%;
-  vertical-align: -0.4em;
+  vertical-align: middle;
 }
 .entry-content img.lectio-math-svg.align-center {
   display: block;
-  margin: 1em auto;
-  width: 100%;
+  margin: 0.8em auto;
   max-width: 100%;
   height: auto;
 }
