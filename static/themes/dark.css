@@ -31,13 +31,12 @@
   --field-focus-border: var(--active-border);
   --field-focus-ring: color-mix(in srgb, var(--active-border) 38%, transparent);
 }
-/* Math formula images: invert dark ink to white, then screen-blend the
-   inverted-white background away so it matches the dark surface.
-   Works for both transparent-bg SVGs and white-bg PNGs. */
+/* Math formula images: invert so dark ink becomes white on the dark surface.
+   SVGs have transparent backgrounds so they invert cleanly.
+   PNGs with white backgrounds get a dark box with white math — visible. */
 .entry-content img[class*="valign-"],
 .entry-content img.lectio-math-svg {
   filter: invert(1);
-  mix-blend-mode: screen;
 }
 
 /* Highlight mark colors for dark theme */
