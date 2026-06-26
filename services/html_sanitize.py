@@ -73,6 +73,14 @@ _GLOBAL_ALLOWED_ATTRS = frozenset({"class"})
 # are multi-URL and not validated here, matching the existing srcset handling.)
 _URL_ATTRS = frozenset({"href", "src", "poster", "data-src", "data-lazy-src", "data-original", "data-image"})
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
+# Sphinx/dvisvgm math (eli.thegreenplace.net etc.) ships each formula's true
+# rendered height as an inline ``style="height: Npx"``. We strip inline styles, so
+# this height is lifted onto a real (allowlisted) ``height`` attribute instead; CSS
+# then honors it plus the valign-* baseline class rather than flattening every
+# glyph to one size. _MATH_SCALE is the single tuning lever — 1.0 reproduces the
+# author's px faithfully; raise it (e.g. 1.15) to enlarge all math (re-ingest to apply).
+_STYLE_HEIGHT_PX_RE = re.compile(r"height\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
+_MATH_SCALE = 1.0
 # Feeds sometimes embed HTML as entity-escaped text inside element text nodes
 # (e.g. &lt;em&gt;Title&lt;/em&gt; stored as literal "<em>Title</em>" in the
 # NavigableString). Strip these from non-code contexts to prevent raw tag names
@@ -185,6 +193,24 @@ def _sanitize_mathml(root) -> None:
                 del el.attrs[attr_name]
 
 
+def _promote_math_height(tag, style_value: str) -> None:
+    """Lift a Sphinx/dvisvgm math element's ``height: Npx`` inline style onto a real
+    ``height`` attribute so the true rendered size (and the px-based valign baseline)
+    survive the style-strip below. ``height`` is already in the img allowlist."""
+    if not style_value or tag.attrs.get("height"):
+        return
+    m = _STYLE_HEIGHT_PX_RE.search(style_value)
+    if m:
+        tag.attrs["height"] = str(max(1, round(float(m.group(1)) * _MATH_SCALE)))
+
+
+def _is_math_img(tag) -> bool:
+    """True for Sphinx-math <img> (inline ``valign-*`` or display ``align-center``)."""
+    cls = tag.attrs.get("class") or []
+    cls = cls if isinstance(cls, list) else [cls]
+    return any(str(c).startswith("valign-") or str(c) == "align-center" for c in cls)
+
+
 def sanitize_html(content: str) -> str:
     """Return ``content`` with only allowlisted tags/attributes (embeds kept)."""
     if not content:
@@ -223,7 +249,16 @@ def sanitize_html(content: str) -> str:
             classes = list(obj_class) if isinstance(obj_class, list) else ([obj_class] if obj_class else [])
             classes.append("lectio-math-svg")
             img.attrs["class"] = classes
+            # The object's style carries the true rendered px height; the new img has
+            # no style of its own, so copy it across before the strip pass below.
+            _promote_math_height(img, str(obj.attrs.get("style", "")))
             obj.replace_with(img)
+
+    # Pre-existing math <img> (PNG inline formulas, older display math) carry their
+    # true height inline too; lift it before the generic style-strip loop runs.
+    for img in soup.find_all("img"):
+        if _is_math_img(img):
+            _promote_math_height(img, str(img.attrs.get("style", "")))
 
     for tag in soup.find_all(True):
         if tag.parent is None:

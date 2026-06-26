@@ -2583,7 +2583,10 @@
       document.documentElement.setAttribute('data-theme', theme);
 
       if (themeStylesheet) {
-        themeStylesheet.href = `/static/themes/${theme}.css`;
+        // Must carry the asset-version query: /static is served immutable for a year,
+        // so an unversioned href serves a stale cached theme (e.g. a dark.css from
+        // before the math-invert rule), silently undoing theme CSS changes.
+        themeStylesheet.href = `/static/themes/${theme}.css?v=${window.STATIC_ASSET_VERSION}`;
       }
 
       const btnDark = document.getElementById('theme-btn-dark');
