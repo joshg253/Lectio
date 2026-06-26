@@ -2994,6 +2994,23 @@ button:hover, .button-link:hover {
   vertical-align: -0.2em;
 }
 
+/* Math formula images from Sphinx/RST blogs (eli.thegreenplace.net, etc.).
+   Inline variables/expressions use valign-* classes and must flow within
+   paragraph text. Block-level display equations use align-center and should
+   be centered with breathing room. */
+.entry-content img[class*="valign-"] {
+  display: inline;
+  width: auto;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.entry-content img.lectio-math-svg.align-center {
+  display: block;
+  margin: 0.8em auto;
+  max-width: 100%;
+  height: auto;
+}
+
 .entry-content iframe {
   /* Unify every embed (Bandcamp, SoundCloud, Spotify, etc.) to the same footprint
      as the inline YouTube player: full column width, capped at 560px, centered.
