@@ -4975,10 +4975,39 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
         )
 
 
+_SHORTS_HASHTAGS = ("#shorts", "#short", "#ytshorts", "#youtubeshorts")
+
 def _is_youtube_short(entry: object) -> bool:
-    """Return True if the entry is a YouTube Short (link contains /shorts/)."""
+    """Return True if the entry is a YouTube Short.
+
+    YouTube channel feeds use watch?v= links for all videos, so /shorts/ in the
+    link is rare. Detect via three signals:
+    1. /shorts/ in the link (direct shorts URLs, playlist feeds).
+    2. #shorts/#short hashtag in title or description (creator-applied tag;
+       YouTube surfaces Shorts on the Shorts shelf when creators add this).
+    3. Cached duration ≤ 60 s (in-memory lookup, no I/O).
+    """
     link = str(getattr(entry, "link", None) or "")
-    return "youtube.com/shorts/" in link
+    if "youtube.com/shorts/" in link:
+        return True
+
+    title = (getattr(entry, "title", None) or "").lower()
+    summary = (getattr(entry, "summary", None) or "").lower()
+    content_text = "".join(
+        (getattr(c, "value", None) or "").lower()
+        for c in (getattr(entry, "content", None) or [])
+    )
+    for text in (title, summary, content_text):
+        if any(tag in text for tag in _SHORTS_HASHTAGS):
+            return True
+
+    vid = youtube_duration_service.extract_video_id(link)
+    if vid:
+        dur, _ = youtube_duration_service.get_cached_duration(vid)
+        if dur is not None and dur <= 60:
+            return True
+
+    return False
 
 
 def _mark_existing_shorts_read(feed_urls: Iterable[str]) -> int:
@@ -14244,6 +14273,33 @@ def set_feed_display_pref_route(
         except Exception:
             LOGGER.exception("[display-prefs] error marking existing shorts read")
     return JSONResponse({"ok": True, "key": key, "value": value, "marked_read": marked})
+
+
+@app.post("/feeds/backfill-hide-shorts")
+def backfill_hide_shorts_route():
+    """Re-run the hide-shorts cleanup across all feeds that have hide_shorts=1.
+
+    Useful after the Shorts detection logic is improved (e.g. #shorts hashtag
+    or cached duration), so previously-missed Shorts get marked read without
+    the user having to re-toggle the pref on every feed."""
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
+        ).fetchall()
+    feed_urls = {str(r["feed_url"]) for r in rows}
+    if youtube_hide_shorts_global():
+        with get_meta_connection() as conn:
+            all_yt = conn.execute(
+                "SELECT DISTINCT feed_url FROM feed_display_prefs"
+                " WHERE feed_url LIKE 'https://www.youtube.com/%'"
+            ).fetchall()
+        feed_urls |= {str(r["feed_url"]) for r in all_yt}
+    try:
+        marked = _mark_existing_shorts_read(feed_urls)
+    except Exception:
+        LOGGER.exception("[backfill-hide-shorts] error")
+        return JSONResponse({"error": "backfill failed"}, status_code=500)
+    return JSONResponse({"ok": True, "marked": marked})
 
 
 @app.post("/feeds/thumbnail-url")
