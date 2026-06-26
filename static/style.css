@@ -2997,16 +2997,20 @@ button:hover, .button-link:hover {
 /* Math formula images from Sphinx/RST blogs (eli.thegreenplace.net, etc.).
    Inline variables/expressions use valign-* classes and must flow within
    paragraph text. Block-level display equations use align-center and should
-   be centered with breathing room. */
+   be centered with breathing room.
+   SVGs are sized in pt which renders small; scale to text height so they
+   match the surrounding font on any screen density. */
 .entry-content img[class*="valign-"] {
   display: inline;
+  height: 1.5em;
   width: auto;
   max-width: 100%;
-  vertical-align: middle;
+  vertical-align: -0.4em;
 }
 .entry-content img.lectio-math-svg.align-center {
   display: block;
-  margin: 0.8em auto;
+  margin: 1em auto;
+  width: 100%;
   max-width: 100%;
   height: auto;
 }
