@@ -311,6 +311,10 @@ def sanitize_html(content: str) -> str:
                     del el.attrs[attr]
                 elif la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr, ""))):
                     del el.attrs[attr]
-        text_node.replace_with(frag)
+        # Splice only the parsed children, not the BeautifulSoup document wrapper
+        # (replace_with(frag) can introduce <html>/<body> tags around the content).
+        for child in list(frag.contents):
+            text_node.insert_before(child)
+        text_node.extract()
 
     return str(soup)

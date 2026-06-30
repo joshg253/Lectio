@@ -1715,8 +1715,7 @@ class LeadImageService:
         # - valign-*: Sphinx/RST inline math formula glyphs (e.g. valign-m4)
         # - emoji / wp-smiley / ipsEmoji: emoji sprites from any CDN (not all
         #   emoji CDNs are in _EMOJI_URL_PATTERNS; class is the reliable signal)
-        img_class = attrs.get("class", "")
-        if re.search(r"\bvalign-|\bemoji\b|\bwp-smiley\b|\bipsEmoji\b", img_class):
+        if self._INLINE_DECO_CLASS_RE.search(attrs.get("class", "")):
             return False
 
         # Percentage-based height (e.g. height="60%") marks decorative dividers

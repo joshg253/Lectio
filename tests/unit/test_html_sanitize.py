@@ -146,6 +146,35 @@ def test_math_block_equation_height_promoted():
     assert "align-center" in out
 
 
+def test_pseudo_html_in_text_reparsed():
+    # Feeds sometimes store entity-escaped tags as literal text; they should
+    # become real elements so they render correctly.
+    out = H.sanitize_html("<p>&lt;em&gt;Title&lt;/em&gt; and &lt;strong&gt;body&lt;/strong&gt;</p>")
+    assert "<em>title</em>" in out.lower()
+    assert "<strong>body</strong>" in out.lower()
+
+
+def test_pseudo_html_in_code_kept_literal():
+    # Inside <code>/<pre>, escaped tags must stay as literal text.
+    out = H.sanitize_html("<pre><code>&lt;em&gt;not-a-tag&lt;/em&gt;</code></pre>")
+    assert "<em>" not in out.lower()
+    assert "&lt;em&gt;" in out or "not-a-tag" in out
+
+
+def test_pseudo_html_disallowed_attrs_stripped_after_reparse():
+    # Event handlers must be stripped even when the tag arrives entity-escaped.
+    out = H.sanitize_html('<p>&lt;em onclick="evil()"&gt;text&lt;/em&gt;</p>')
+    assert "onclick" not in out.lower()
+    assert "<em>" in out.lower() or "text" in out.lower()
+
+
+def test_pseudo_html_no_document_wrapper():
+    # The reparsing must not introduce <html> or <body> wrapper elements.
+    out = H.sanitize_html("<p>&lt;em&gt;hi&lt;/em&gt;</p>")
+    assert "<html" not in out.lower()
+    assert "<body" not in out.lower()
+
+
 def test_audio_video_kept():
     out = H.sanitize_html('<video src="https://x.test/v.mp4" controls></video>'
                           '<audio src="https://x.test/a.mp3" controls></audio>')
