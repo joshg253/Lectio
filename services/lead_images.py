@@ -2546,6 +2546,11 @@ class LeadImageService:
         (e.g. SMBC's <img id="cc-comic" title="...">), then falls back to the
         og:description meta tag.
         """
+        # Drop related/recent/Query-Loop post listings first: `_WEBCOMIC_IMG_CLASS_RE`
+        # matches WordPress's `wp-post-image`, so on a block-theme feed the <img> scan
+        # below would otherwise return a sibling post's featured-image alt text (e.g.
+        # karlkerschl.com's pinned "How I Built My Own Patreon Alternative").
+        html_text = self._strip_related_post_blocks(html_text)
         m = self._WEBCOMIC_ALT_TEXT_RE.search(html_text)
         if m:
             text = re.sub(r"<[^>]+>", " ", m.group(1))
