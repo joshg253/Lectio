@@ -90,7 +90,7 @@ class LeadImageService:
         """Convert [img]url[/img] BBCode tags to <img src="url"> for image extraction."""
         return cls._BBCODE_IMG_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -2144,11 +2144,6 @@ class LeadImageService:
                     return False
             except ValueError:
                 pass
-
-        # WordPress uploads are user-submitted content images (dated sub-paths).
-        # A compound filename like "pvclogo.webp" is an article subject, not a site logo.
-        if not skip_logo_patterns and "/wp-content/uploads/" in parsed.path:
-            skip_logo_patterns = True
 
         if not skip_logo_patterns and self._LOGO_URL_PATTERNS.search(image_url):
             # Allow logo-pattern URLs when the path encodes a large enough dimension —
