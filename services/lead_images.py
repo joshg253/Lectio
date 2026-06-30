@@ -578,6 +578,18 @@ class LeadImageService:
         except Exception:
             pass
 
+    def get_cached_lead_image_url(self, feed_url: str, entry_id: str) -> str | None:
+        """Return the resolved lead-image URL for an entry (in-memory, DB read-through).
+
+        Unlike get_cached_entry_thumbnail this needs no entry_link and applies no
+        YouTube/bypass/promotion logic — it's the raw stored URL, used by callers
+        that already know the entry is a webcomic panel (e.g. promoting the inline
+        ComicControl thumbnail to the full-resolution panel)."""
+        key = (feed_url, entry_id)
+        if key in self._cache:
+            return self._cache[key]
+        return self._load_cached_url_from_db(feed_url, entry_id)
+
     def _load_cached_url_from_db(self, feed_url: str, entry_id: str) -> str | None:
         """Read one stored lead-image URL from the DB and warm the in-memory cache.
 
