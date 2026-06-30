@@ -97,7 +97,9 @@ The short version:
 - **Add to Quire** — connect a [Quire](https://quire.io) account (per-user OAuth)
   and pick a destination project; an **Add to Quire** button then appears on each
   article and creates a task (titled from the entry, with the link in the
-  description). Also available via On Star and Automation rules. Quire's
+  description). A plain click adds straight to your default project; right-click the
+  button to open a picker and send it to a different project instead. Also available
+  via On Star and Automation rules. Quire's
   per-organization minute/hour rate limits are tracked with a usage meter in
   Settings, and automation runs are capped and back off on a 429. Register an app
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI

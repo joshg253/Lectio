@@ -365,7 +365,7 @@
               id="entry-quire-button"
               class="share-menu-item{% if not quire_configured %} share-menu-item--unavail{% endif %}"
               {% if quire_configured %}data-quire-feed-url="{{ selected_entry.feed_url }}" data-quire-entry-id="{{ selected_entry.id }}"{% else %}disabled{% endif %}
-              title="{% if quire_configured %}Add to Quire{% else %}Connect Quire in Settings{% endif %}"
+              title="{% if quire_configured %}Add to Quire (right-click to pick a project){% else %}Connect Quire in Settings{% endif %}"
               role="menuitem"
             ><span class="material-symbols-rounded" aria-hidden="true">add_task</span> Quire</button>
             <button

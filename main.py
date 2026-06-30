@@ -925,6 +925,11 @@ def quire_project_oid() -> str:
     return (get_runtime_setting(SETTING_QUIRE_PROJECT_OID) or "").strip()
 
 
+def quire_project_name() -> str:
+    """Display name of the chosen default destination project ("" if none)."""
+    return (get_runtime_setting(SETTING_QUIRE_PROJECT_NAME) or "").strip()
+
+
 def is_quire_configured() -> bool:
     """True when Quire is connected AND a default destination project is set —
     the precondition for the entry button, On-Star, and Automation rules."""
@@ -13173,6 +13178,7 @@ def _home_inner(
         "email_to_default": email_to_default,
         "instapaper_configured": is_instapaper_configured(),
         "quire_configured": is_quire_configured(),
+        "quire_project_name": quire_project_name(),
         "reddit_connected": reddit_connected(),
         "youtube_sync_last_at": youtube_sync_last_at,
         "youtube_sync_last_result": youtube_sync_last_result,

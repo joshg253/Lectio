@@ -16,6 +16,7 @@
     window.YT_EMBED_ACCOUNT_FEATURES = {{ yt_embed_account_features | tojson }};
     window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
     window.QUIRE_CONFIGURED = {{ quire_configured | tojson }};
+    window.QUIRE_PROJECT_NAME = {{ quire_project_name | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
     window.PROFILE_EMAIL = {{ profile_email | tojson }};
   </script>
@@ -3084,7 +3085,9 @@
       const quireBtn = event.target instanceof Element && event.target.closest('[data-quire-feed-url]');
       if (quireBtn) {
         event.preventDefault();
-        await openQuirePicker(quireBtn);
+        // Plain click adds straight to the default project; right-click opens the
+        // picker to choose a different one (see the contextmenu handler below).
+        await _quireQuickAdd(quireBtn);
         return;
       }
       const redditBtn = event.target instanceof Element && event.target.closest('[data-reddit-feed-url]');
@@ -3094,6 +3097,15 @@
         return;
       }
     });
+
+    // Right-click the Quire button to choose a destination project instead of
+    // adding to the default one. Capture phase so it beats the share-menu close.
+    document.addEventListener('contextmenu', async (event) => {
+      const quireBtn = event.target instanceof Element && event.target.closest('[data-quire-feed-url]');
+      if (!quireBtn) return;
+      event.preventDefault();
+      await openQuirePicker(quireBtn);
+    }, true);
 
     // --- Pinterest "Pin to board" picker -----------------------------------
     let _pinterestBoardsCache = null;   // null = not fetched; {connected, boards, error}
@@ -3136,9 +3148,14 @@
       menu.className = 'lectio-pin-menu';
       menu.innerHTML = '<div class="lectio-pin-loading">Loading boards…</div>';
       document.body.appendChild(menu);
-      const rect = btn.getBoundingClientRect();
-      menu.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
-      menu.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+      // The share-menu item is already hidden (capture-phase close), so its rect is
+      // empty — anchor to the still-visible share button and clamp into the viewport.
+      const anchor = document.getElementById('entry-share-btn') || btn;
+      const r = anchor.getBoundingClientRect();
+      const maxLeft = window.scrollX + window.innerWidth - 210;
+      const left = Math.max(window.scrollX + 8, Math.min(Math.round(r.left + window.scrollX), maxLeft));
+      menu.style.top = `${Math.round(r.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${left}px`;
       setTimeout(() => document.addEventListener('click', _pinOutsideClick, true), 0);
 
       const data = await _pinFetchBoards();
@@ -3196,8 +3213,20 @@
       showToastMessage(`Added to ${projectName}.`);
     }
 
+    // One-click: add to the configured default project (no picker). The button is
+    // only active when a default project is set, so an empty oid lets the server
+    // fall back to it.
+    async function _quireQuickAdd(btn) {
+      hideShareMenu();
+      _closeQuireMenu();
+      const feedUrl = btn.getAttribute('data-quire-feed-url') || '';
+      const entryId = btn.getAttribute('data-quire-entry-id') || '';
+      const projectName = window.QUIRE_PROJECT_NAME || 'Quire';
+      try { await _doQuireAdd(feedUrl, entryId, '', projectName); }
+      catch (e) { showToastMessage(e.message || 'Quire add failed'); }
+    }
+
     async function openQuirePicker(btn) {
-      const rect = btn.getBoundingClientRect();
       hideShareMenu();
       _closeQuireMenu();
       const feedUrl = btn.getAttribute('data-quire-feed-url') || '';
@@ -3206,8 +3235,15 @@
       menu.className = 'lectio-quire-menu';
       menu.innerHTML = '<div class="lectio-quire-loading">Loading projects…</div>';
       document.body.appendChild(menu);
-      menu.style.top = `${Math.round(rect.bottom + window.scrollY + 4)}px`;
-      menu.style.left = `${Math.round(rect.left + window.scrollX)}px`;
+      // The share-menu item that triggered this is already hidden (capture-phase
+      // close), so its rect is empty — anchor to the still-visible share button and
+      // clamp into the viewport so the menu never lands off-screen at 0,0.
+      const anchor = document.getElementById('entry-share-btn') || btn;
+      const r = anchor.getBoundingClientRect();
+      const maxLeft = window.scrollX + window.innerWidth - 210;
+      const left = Math.max(window.scrollX + 8, Math.min(Math.round(r.left + window.scrollX), maxLeft));
+      menu.style.top = `${Math.round(r.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${left}px`;
       setTimeout(() => document.addEventListener('click', _quireOutsideClick, true), 0);
 
       const data = await _fetchQuireProjects();
@@ -10109,6 +10145,7 @@
         {
           const connected = !!d.quire_connected;
           window.QUIRE_CONFIGURED = connected && !!d.quire_project_oid;
+          window.QUIRE_PROJECT_NAME = d.quire_project_name || '';
           const status = document.getElementById('sett-quire-status');
           if (status) status.textContent = connected
             ? `Connected as ${d.quire_username || 'Quire'}.`
