@@ -647,6 +647,37 @@ def test_megaphone_featured_image_beats_recent_episodes_widget(tmp_path: Path):
     assert alt == "SE Radio Guests Danny Yang and Sam Goldman"
 
 
+def test_webcomic_panel_skips_query_loop_sibling_posts(tmp_path: Path):
+    """WordPress block-theme single-post pages (e.g. karlkerschl.com) embed
+    `wp-block-query` Query Loops listing OTHER posts, each with a `wp-post-image`
+    featured thumbnail. The webcomic panel extractor must strip those loops first
+    so it returns None here (no own panel) rather than a pinned sibling post's
+    thumbnail. Regression: nearly every entry showed one featured post's image."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = "https://karlkerschl.com/gotham-academy-short-story-process/"
+    html = (
+        "<html><body><main>"
+        # The post's own content images (NOT featured/wp-post-image).
+        '<figure><img class="wp-image-22525" '
+        'src="https://karlkerschl.com/wp-content/uploads/2022/09/GA-BTS-01-rough-675x1024.jpg"></figure>'
+        # Query Loop of OTHER posts: a pinned "patreon" post + siblings.
+        '<div class="wp-block-query is-layout-flow"><ul class="wp-block-post-template">'
+        '<li class="wp-block-post post-7884"><figure class="wp-block-post-featured-image">'
+        '<a href="https://karlkerschl.com/how-i-built-my-own-patreon-alternative/">'
+        '<img width="870" height="532" class="attachment-post-thumbnail wp-post-image" '
+        'alt="How I Built My Own Patreon Alternative" '
+        'src="https://karlkerschl.com/wp-content/uploads/2021/08/patreon-alternative-feature.jpg"></a>'
+        "</figure></li></ul></div>"
+        "</main></body></html>"
+    )
+    # Webcomic panel extraction: no own panel survives stripping -> None.
+    assert service._extract_webcomic_panel_image(html, page, page) is None
+    # Full preferred-image scan then surfaces the post's own first content image.
+    assert service._extract_preferred_source_image_url(html, page, page, is_webcomic=True) == (
+        "https://karlkerschl.com/wp-content/uploads/2022/09/GA-BTS-01-rough-675x1024.jpg"
+    )
+
+
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
     """The hover-text punchline on the main comic <img title="..."> must win over
     og:description, which on SMBC is just the post title (regression: SMBC)."""

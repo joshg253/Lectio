@@ -231,7 +231,14 @@ class LeadImageService:
         # recent/related-episode widget is `megaphone-items megaphone-posts`,
         # whose thumbnails belong to OTHER episodes. The article's own featured
         # image lives in `megaphone-section`, which does NOT match these tokens.
-        r'megaphone[-_]posts|megaphone[-_]items)'
+        r'megaphone[-_]posts|megaphone[-_]items|'
+        # WordPress block-theme Query Loop (`wp-block-query`): a list of OTHER
+        # posts (featured/recent/related grids) embedded on a single-post page,
+        # each carrying a `wp-post-image` featured thumbnail. The article's own
+        # featured image is rendered by `wp-block-post-featured-image` directly
+        # under <article>, NOT inside a Query Loop, so stripping these is safe
+        # and stops a sibling post's thumbnail from winning (e.g. karlkerschl.com).
+        r'wp-block-query)'
         r'[^"\']*["\'][^>]*>',
         re.IGNORECASE,
     )
@@ -1836,6 +1843,11 @@ class LeadImageService:
         image and must outrank og:image, which on many webcomic CMSes is a single
         generic site banner repeated on every page.
         """
+        # Drop related/recent/Query-Loop post listings first: WordPress webcomic
+        # themes embed grids of OTHER posts whose thumbnails also carry the
+        # comic/featured classes, and the greedy first-match below would otherwise
+        # return a sibling post's image (e.g. karlkerschl.com's featured-posts row).
+        html_text = self._strip_related_post_blocks(html_text)
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
