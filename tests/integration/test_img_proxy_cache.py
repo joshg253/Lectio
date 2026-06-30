@@ -165,6 +165,51 @@ def test_zero_days_disables_eviction(monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM img_cache").fetchone()[0] == 1
 
 
+def test_same_origin_referer_helper():
+    # Origin root only — strips path/query, preserves scheme+host.
+    assert main._same_origin_referer("https://fabiensanglard.net/keyboards/m.webp") == "https://fabiensanglard.net/"
+    assert main._same_origin_referer("http://h.test:8080/a/b.png?x=1") == "http://h.test:8080/"
+    # Non-http(s) or origin-less URLs have no usable Referer.
+    assert main._same_origin_referer("data:image/png;base64,AAAA") is None
+    assert main._same_origin_referer("ftp://h.test/x.png") is None
+
+
+def _stub_hotlink_fetch(monkeypatch):
+    """Stub safe_get_async to mimic hotlink protection: 403 text/html without a
+    Referer, 200 image/webp once a Referer header is present. Records every call's
+    Referer so tests can assert honest-first (no preemptive Referer)."""
+    referers: list[str | None] = []
+
+    async def _fetch(client, url, *a, headers=None, **k):
+        ref = (headers or {}).get("Referer")
+        referers.append(ref)
+        if ref is None:
+            return httpx.Response(403, headers={"content-type": "text/html"}, content=b"<html>403</html>")
+        return httpx.Response(200, headers={"content-type": "image/webp"}, content=_png_bytes(20, 20))
+
+    monkeypatch.setattr(url_guard, "safe_get_async", _fetch)
+    return referers
+
+
+def test_hotlink_403_retried_with_same_origin_referer(monkeypatch):
+    referers = _stub_hotlink_fetch(monkeypatch)
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://hot.test/keyboards/m.webp"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/")
+    # First attempt honest (no Referer), retried with the image's own origin root.
+    assert referers == [None, "https://hot.test/"]
+
+
+def test_honest_image_not_retried_with_referer(monkeypatch):
+    # A host that serves the image honestly must never see a Referer escalation.
+    calls = _stub_fetch(monkeypatch, _png_bytes(20, 20), content_type="image/webp")
+    with _client() as client:
+        r = client.get("/api/img", params={"u": "https://nice.test/a.webp"})
+    assert r.status_code == 200
+    assert calls["n"] == 1  # single honest fetch, no retry
+
+
 def test_hit_bumps_last_accessed(monkeypatch):
     _stub_fetch(monkeypatch, _png_bytes(20, 20))
     with _client() as client:

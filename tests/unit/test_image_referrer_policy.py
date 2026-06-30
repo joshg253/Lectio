@@ -54,6 +54,17 @@ def test_hotlink_host_matching():
     assert not _is_hotlink_img_host("example.com")
 
 
+def test_fabiensanglard_routed_through_proxy():
+    # Inverse hotlink case: fabiensanglard.net 403s a no-Referer fetch, so its
+    # gallery .webp must go through /api/img (where the same-origin-Referer retry
+    # lives) rather than load directly with referrerpolicy=no-referrer.
+    assert _is_hotlink_img_host("fabiensanglard.net")
+    src = '<figure><img src="https://fabiensanglard.net/keyboards/model_m.webp" referrerpolicy="no-referrer"></figure>'
+    out = proxy_hotlink_images(src)
+    assert "/api/img?u=https%3A%2F%2Ffabiensanglard.net%2Fkeyboards%2Fmodel_m.webp" in out
+    assert 'src="https://fabiensanglard.net' not in out
+
+
 def test_proxy_rewrites_hotlink_host_img_to_api_img():
     src = '<p><img alt="git" src="https://nanolx.org/wp-content/uploads/git.png" width="128"/></p>'
     out = proxy_hotlink_images(src)

@@ -72,7 +72,10 @@ The short version:
   smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
   and full-resolution webcomic panels (ComicControl thumb→full promotion). List
   thumbnails fall back to a direct browser load when the server-side image proxy
-  is refused (some hosts IP-block the server but serve your own IP fine).
+  is refused (some hosts IP-block the server but serve your own IP fine). The
+  proxy also handles hotlink protection: if a host refuses an image fetched with
+  no referrer, it retries once with the image's own site as the `Referer`, and
+  reader/web view routes hotlink-protected images through the proxy too.
 - **Automation** — highlight, mark-as-read, deduplicate, email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per
