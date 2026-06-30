@@ -1318,6 +1318,10 @@ unread_counts_refresh_inflight = False
 # Incremented on every invalidation so in-flight background refreshes that
 # started before the invalidation don't write stale counts back to the cache.
 _unread_counts_generation: int = 0
+# Lead-image / YouTube-duration enhancement is network-heavy, so manual refresh
+# runs it off the request path. Track in-flight feeds to skip overlapping work.
+_enhancement_inflight_lock = threading.Lock()
+_enhancement_inflight_feeds: set[str] = set()
 # Feed-title map: hits the reader DB to enumerate every feed. Cache it — feed
 # titles barely change between page renders.
 FEED_TITLE_MAP_CACHE_TTL_SECONDS = int(os.getenv("LECTIO_FEED_TITLE_MAP_CACHE_TTL", "300"))
@@ -11636,6 +11640,7 @@ def _scheduled_refresh_tick() -> None:
         )
     feed_refresh_service.update_feeds(feeds_to_refresh)
     _run_automation_after_refresh(feeds_to_refresh)
+    invalidate_unread_counts_cache()
     if websub_service:
         websub_service.maybe_discover_hubs(list(feeds_to_refresh), tenancy.current_user_id())
 
@@ -13079,6 +13084,7 @@ def _home_inner(
         "global_note": global_note,
         "email_configured": is_email_configured(),
         "yt_oauth_connected": youtube_oauth_connected(),
+        "yt_embed_account_features": youtube_embed_account_features_enabled(),
         "pinterest_oauth_connected": pinterest_oauth_connected(),
         "pinterest_connected": pinterest_oauth_connected(),
         "inoreader_connected": inoreader_connected(),
@@ -16022,10 +16028,14 @@ async def miniflux_import_test(request: Request):
     try:
         info = miniflux_import_service.test_connection(base_url, token)
         return JSONResponse({"ok": True, **info})
-    except miniflux_import_service.AuthError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
-    except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+    except miniflux_import_service.AuthError:
+        return JSONResponse({"ok": False, "error": "Authentication failed — check your API token."}, status_code=401)
+    except url_guard.UnsafeURLError:
+        return JSONResponse({"ok": False, "error": "That server URL is not allowed (use a public http(s) address)."}, status_code=400)
+    except Exception:
+        # Don't echo the raw exception to the client (CodeQL: info exposure); log it.
+        LOGGER.warning("Miniflux connection test failed", exc_info=True)
+        return JSONResponse({"ok": False, "error": "Could not connect to the Miniflux server."}, status_code=502)
 
 
 @app.get("/integrations/miniflux/import/status")
@@ -16134,10 +16144,14 @@ async def freshrss_import_test(request: Request):
     try:
         info = freshrss_service.test_connection(url, username, password)
         return JSONResponse({"ok": True, **info})
-    except freshrss_service.AuthError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
-    except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+    except freshrss_service.AuthError:
+        return JSONResponse({"ok": False, "error": "Authentication failed — check your credentials."}, status_code=401)
+    except url_guard.UnsafeURLError:
+        return JSONResponse({"ok": False, "error": "That server URL is not allowed (use a public http(s) address)."}, status_code=400)
+    except Exception:
+        # Don't echo the raw exception to the client (CodeQL: info exposure); log it.
+        LOGGER.warning("FreshRSS connection test failed", exc_info=True)
+        return JSONResponse({"ok": False, "error": "Could not connect to the FreshRSS server."}, status_code=502)
 
 
 @app.get("/integrations/freshrss/import/status")
@@ -16294,10 +16308,14 @@ async def ttrss_import_test(request: Request):
     try:
         info = ttrss_service.test_connection(url, username, password)
         return JSONResponse({"ok": True, **info})
-    except ttrss_service.AuthError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
-    except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=502)
+    except ttrss_service.AuthError:
+        return JSONResponse({"ok": False, "error": "Authentication failed — check your credentials."}, status_code=401)
+    except url_guard.UnsafeURLError:
+        return JSONResponse({"ok": False, "error": "That server URL is not allowed (use a public http(s) address)."}, status_code=400)
+    except Exception:
+        # Don't echo the raw exception to the client (CodeQL: info exposure); log it.
+        LOGGER.warning("tt-rss connection test failed", exc_info=True)
+        return JSONResponse({"ok": False, "error": "Could not connect to the tt-rss server."}, status_code=502)
 
 
 @app.get("/integrations/ttrss/import/status")
@@ -17510,8 +17528,12 @@ def refresh(
         _da_cid, _da_secret = get_deviantart_credentials()
         if _da_cid and _da_secret:
             deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
-    feed_refresh_service.update_feeds(feed_urls)
+    feed_refresh_service.update_feeds(feed_urls, enhance=False)
     _run_automation_after_refresh(feed_urls)
+    invalidate_unread_counts_cache()
+    # Lead images / durations are network-heavy; fetch them off the request path
+    # so the redirect (and updated "new" badges) returns promptly.
+    _spawn_feed_enhancement(feed_urls)
     return RedirectResponse(
         url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"),
         status_code=303,
@@ -17564,8 +17586,10 @@ def refresh_feed(
     if feed_id:
         with get_meta_connection() as conn:
             scraper_service.refresh_scraped_feed_by_id(conn, feed_id)
-    feed_refresh_service.update_feeds([feed_url])
+    feed_refresh_service.update_feeds([feed_url], enhance=False)
     _run_automation_after_refresh({feed_url})
+    invalidate_unread_counts_cache()
+    _spawn_feed_enhancement([feed_url])
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Feed refresh complete.')}"
@@ -19131,6 +19155,35 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
     there or the work runs as the default user."""
     with tenancy.user_context(uid):
         fn(*args, **kwargs)
+
+
+def _enhance_feeds_background(feed_urls: list[str]) -> None:
+    """Run lead-image + YouTube-duration enhancement for ``feed_urls``, skipping
+    feeds another enhancement run is already handling so concurrent manual /
+    scheduled refreshes don't duplicate the network work."""
+    with _enhancement_inflight_lock:
+        todo = [u for u in feed_urls if u not in _enhancement_inflight_feeds]
+        _enhancement_inflight_feeds.update(todo)
+    if not todo:
+        return
+    try:
+        feed_refresh_service.enhance_feeds(todo)
+    finally:
+        with _enhancement_inflight_lock:
+            _enhancement_inflight_feeds.difference_update(todo)
+
+
+def _spawn_feed_enhancement(feed_urls: Iterable[str]) -> None:
+    """Spawn the lead-image / duration enhancement on a daemon thread bound to
+    the current tenancy user, so a refresh request can return immediately."""
+    urls = list(feed_urls)
+    if not urls:
+        return
+    threading.Thread(
+        target=_run_in_user_context,
+        args=(tenancy.current_user_id(), _enhance_feeds_background, urls),
+        daemon=True,
+    ).start()
 
 
 def _websub_verify_fanout(feed: str, hub_topic: str, challenge: str, lease: int | None) -> str | None:

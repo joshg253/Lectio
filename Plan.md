@@ -192,7 +192,7 @@ Detailed specs follow.
      dedup guard, rule-type gated on a connected account. (Remaining YT-area work is
      items 1, 2, and the quota meter below.)
 
-  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on; the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
+  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on (the client gate `_ytAccountFeaturesEnabled` is bootstrapped from `window.YT_EMBED_ACCOUNT_FEATURES` at page load so the button appears on a normal reading session without first opening Settings); the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
 
   5. **Quota meter — "tokens left" with low alerts.** — ✅ **SHIPPED.** Per-user
      `yt_quota_spend` table keyed by Pacific date; each billed call reports its unit

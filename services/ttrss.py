@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import httpx
 
+from services.url_guard import ensure_safe_outbound_url
+
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _TIMEOUT = 30
 
@@ -27,7 +29,10 @@ class AuthError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def _api_url(base_url: str) -> str:
-    return base_url.rstrip("/") + "/api/"
+    # SSRF guard: the single JSON-RPC endpoint all requests POST to. Validating
+    # the user-supplied host here covers every op. The client doesn't follow
+    # redirects (httpx default), so the host can't be bounced internally.
+    return ensure_safe_outbound_url(base_url.rstrip("/") + "/api/")
 
 
 def _rpc(client: httpx.Client, url: str, sid: str | None, op: str, **params) -> dict:
