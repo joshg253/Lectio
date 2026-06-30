@@ -13582,7 +13582,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
             resp = url_guard.safe_get(client, url, headers=_headers)
             # Hotlink protection: retry once with a same-origin Referer only after
             # an honest request is refused (see api_img_proxy / lead_images).
-            if resp.status_code in (403, 503):
+            if resp.status_code in _HOTLINK_REFUSAL_CODES:
                 _referer = _same_origin_referer(url)
                 if _referer:
                     resp = url_guard.safe_get(client, url, headers={**_headers, "Referer": _referer})
@@ -18875,6 +18875,12 @@ def _img_cache_key_url(u: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(kept)))
 
 
+# Statuses that signal a hotlink/WAF refusal of an honest image fetch — the cue to
+# retry once with a same-origin Referer. Shared by api_img_proxy and thumbnail_proxy
+# so the two proxies' escalation policy can't drift apart.
+_HOTLINK_REFUSAL_CODES = frozenset({403, 503})
+
+
 def _same_origin_referer(u: str) -> str | None:
     """Origin root (scheme://host/) of an image URL, for use as a same-origin
     Referer when a host hotlink-protects its images. None if the URL has no
@@ -18924,7 +18930,7 @@ async def api_img_proxy(u: str) -> Response:
             # after an honest request is actually refused do we retry with the
             # image's own origin as Referer — never preemptively. Mirrors the
             # honest-first WAF escalation in services/lead_images.py.
-            if resp.status_code in (403, 503):
+            if resp.status_code in _HOTLINK_REFUSAL_CODES:
                 referer = _same_origin_referer(u)
                 if referer:
                     resp = await url_guard.safe_get_async(
