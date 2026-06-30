@@ -108,7 +108,11 @@ The short version:
   fetch fallback for feeds whose servers refuse the default client.
 - **Multi-user** — isolated per-user databases with shared content caches;
   **GReader**, **Fever**, and **Miniflux v1** API compatibility; Instapaper & email integrations.
-- **Data portability** — Takeout-style ZIP export/import, online-safe backups, and platform migration. The Import/Export tab includes subtabs for Inoreader (file upload of ExportTool JSON backups or native export ZIPs, applying tags and starred state) and stubs for Miniflux, FreshRSS, and tt-rss. Three export formats are handled: ExportTool list format (full coverage — feed URL + synthesis), native Inoreader stream/dict format (starred state), and JSON Feed format (best-effort link lookup).
+- **Data portability** — Takeout-style ZIP export/import, online-safe backups, and platform migration. The Import/Export tab has dedicated migrator subtabs for four readers:
+  - **Inoreader** — file upload (ExportTool JSON / native export ZIP / JSON Feed, applying tags and starred state) or OAuth API drip (subscriptions, labels, starred, optional delete-from-source, 250 calls/day rate-limited).
+  - **Miniflux** — single-pass REST API import: subscriptions + category folders + starred articles + entry tags.
+  - **FreshRSS** — single-pass Google Reader API import: subscriptions + folder assignments + labels-as-tags + starred articles.
+  - **tt-rss** — single-pass JSON-RPC API import: subscriptions + category folders + starred articles + labels-as-tags.
 
 ---
 

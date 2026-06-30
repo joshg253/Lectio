@@ -13,6 +13,7 @@
     window.EMAIL_CONTACTS = {{ email_contacts | tojson }};
     window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
     window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
+    window.YT_EMBED_ACCOUNT_FEATURES = {{ yt_embed_account_features | tojson }};
     window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
     window.QUIRE_CONFIGURED = {{ quire_configured | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
@@ -1784,6 +1785,7 @@
           <div class="feeds-dedup-controls">
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
+            <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
           </div>
           <div id="dedup-inline-results" hidden>
             <p class="action-modal-label dedup-modal-intro"></p>
@@ -1880,19 +1882,63 @@
           </div>
         </div>
 
-        <!-- Miniflux migrator (stub) -->
+        <!-- Miniflux migrator -->
         <div class="feeds-tab-panel settings-section" data-migrator-panel="miniflux" hidden style="margin-top:0">
-          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Miniflux migration — coming soon. Miniflux exposes a clean REST API with no rate limits (self-hosted), so the full import (subscriptions, read state, starred) can run in a single pass.</p>
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Import subscriptions (with folder assignments), starred articles, and article tags from a Miniflux instance. Enter your Miniflux URL and an API token (Settings → API Keys in Miniflux).</p>
+          <div style="grid-column:1 / -1">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.4rem">
+              <input type="url" id="sett-miniflux-url" class="settings-input" placeholder="https://miniflux.example.com" maxlength="500" autocomplete="off" style="flex:2;min-width:12rem" />
+              <input type="password" id="sett-miniflux-token" class="settings-input settings-input--secret" placeholder="API Token" autocomplete="new-password" style="flex:1;min-width:8rem" />
+              <button type="button" id="mig-miniflux-save" class="settings-inline-btn" style="flex:none">Save</button>
+              <button type="button" id="mig-miniflux-test" class="settings-inline-btn" style="flex:none">Test</button>
+              <span id="mig-miniflux-creds-status" class="settings-inline-status"></span>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <button type="button" id="mig-miniflux-start" class="settings-inline-btn">Import</button>
+              <button type="button" id="mig-miniflux-reset" class="settings-inline-btn" hidden>Reset</button>
+              <span id="mig-miniflux-status" class="settings-inline-status"></span>
+            </div>
+          </div>
         </div>
 
-        <!-- FreshRSS migrator (stub) -->
+        <!-- FreshRSS migrator -->
         <div class="feeds-tab-panel settings-section" data-migrator-panel="freshrss" hidden style="margin-top:0">
-          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">FreshRSS migration — coming soon. FreshRSS implements the Google Reader–compatible API (same as Inoreader), so the Inoreader API client can be reused with minimal changes.</p>
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Import subscriptions (with folder assignments), labels (as article tags), and starred articles from a FreshRSS instance. Use your FreshRSS <strong>API password</strong> (not your regular password) — configure it in FreshRSS → Profile.</p>
+          <div style="grid-column:1 / -1">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.4rem">
+              <input type="url" id="sett-freshrss-url" class="settings-input" placeholder="https://freshrss.example.com" maxlength="500" autocomplete="off" style="flex:2;min-width:12rem" />
+              <input type="text" id="sett-freshrss-username" class="settings-input" placeholder="Username" maxlength="200" autocomplete="off" style="flex:1;min-width:8rem" />
+              <input type="password" id="sett-freshrss-password" class="settings-input settings-input--secret" placeholder="API Password" autocomplete="new-password" style="flex:1;min-width:8rem" />
+              <button type="button" id="mig-freshrss-save" class="settings-inline-btn" style="flex:none">Save</button>
+              <button type="button" id="mig-freshrss-test" class="settings-inline-btn" style="flex:none">Test</button>
+              <span id="mig-freshrss-creds-status" class="settings-inline-status"></span>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <button type="button" id="mig-freshrss-start" class="settings-inline-btn">Import</button>
+              <button type="button" id="mig-freshrss-reset" class="settings-inline-btn" hidden>Reset</button>
+              <span id="mig-freshrss-status" class="settings-inline-status"></span>
+            </div>
+          </div>
         </div>
 
-        <!-- tt-rss migrator (stub) -->
+        <!-- tt-rss migrator -->
         <div class="feeds-tab-panel settings-section" data-migrator-panel="ttrss" hidden style="margin-top:0">
-          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Tiny Tiny RSS migration — coming soon. tt-rss has a JSON API that covers feeds, categories, and articles.</p>
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Import subscriptions (with category folders), starred articles, and labels from a Tiny Tiny RSS instance. Uses the tt-rss JSON API.</p>
+          <div style="grid-column:1 / -1">
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.4rem">
+              <input type="url" id="sett-ttrss-url" class="settings-input" placeholder="https://ttrss.example.com" maxlength="500" autocomplete="off" style="flex:2;min-width:12rem" />
+              <input type="text" id="sett-ttrss-username" class="settings-input" placeholder="Username" maxlength="200" autocomplete="off" style="flex:1;min-width:8rem" />
+              <input type="password" id="sett-ttrss-password" class="settings-input settings-input--secret" placeholder="Password" autocomplete="new-password" style="flex:1;min-width:8rem" />
+              <button type="button" id="mig-ttrss-save" class="settings-inline-btn" style="flex:none">Save</button>
+              <button type="button" id="mig-ttrss-test" class="settings-inline-btn" style="flex:none">Test</button>
+              <span id="mig-ttrss-creds-status" class="settings-inline-status"></span>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+              <button type="button" id="mig-ttrss-start" class="settings-inline-btn">Import</button>
+              <button type="button" id="mig-ttrss-reset" class="settings-inline-btn" hidden>Reset</button>
+              <span id="mig-ttrss-status" class="settings-inline-status"></span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2538,7 +2584,10 @@
       document.documentElement.setAttribute('data-theme', theme);
 
       if (themeStylesheet) {
-        themeStylesheet.href = `/static/themes/${theme}.css`;
+        // Must carry the asset-version query: /static is served immutable for a year,
+        // so an unversioned href serves a stale cached theme (e.g. a dark.css from
+        // before the math-invert rule), silently undoing theme CSS changes.
+        themeStylesheet.href = `/static/themes/${theme}.css?v=${window.STATIC_ASSET_VERSION}`;
       }
 
       const btnDark = document.getElementById('theme-btn-dark');
@@ -4171,7 +4220,7 @@
     let _ytPlaylistsCache = null;        // null = not fetched; {connected, playlists, error}
     let _ytPlaylistsPromise = null;
     let _ytFolderName = '';              // populated from settings; used for empty-folder sync detection
-    let _ytAccountFeaturesEnabled = false; // yt_embed_account_features setting
+    let _ytAccountFeaturesEnabled = !!window.YT_EMBED_ACCOUNT_FEATURES; // yt_embed_account_features setting; bootstrapped so embeds enhance on first load
 
     async function _ytFetchPlaylists(force = false) {
       if (!force && _ytPlaylistsCache) return _ytPlaylistsCache;
@@ -4774,6 +4823,26 @@
       document.getElementById('entry-share-btn')?.setAttribute('aria-expanded', 'false');
     }
 
+    // Anchor the (fixed) share menu to its button so it escapes the entry pane's
+    // overflow:hidden; right-align to the button and flip up only if it'd run off
+    // the bottom of the viewport.
+    function positionShareMenu(menu, btn) {
+      const r = btn.getBoundingClientRect();
+      menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+      menu.style.left = 'auto';
+      const spaceBelow = window.innerHeight - r.bottom;
+      const wantUp = spaceBelow < 260 && r.top > spaceBelow;
+      if (wantUp) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${Math.round(window.innerHeight - r.top + 6)}px`;
+        menu.style.maxHeight = `${Math.round(r.top - 12)}px`;
+      } else {
+        menu.style.bottom = 'auto';
+        menu.style.top = `${Math.round(r.bottom + 6)}px`;
+        menu.style.maxHeight = `${Math.round(spaceBelow - 12)}px`;
+      }
+    }
+
     document.addEventListener('click', (event) => {
       if (!(event.target instanceof Element)) return;
       const shareBtn = event.target.closest('#entry-share-btn');
@@ -4787,6 +4856,7 @@
         } else {
           _closePinMenu();
           menu.removeAttribute('hidden');
+          positionShareMenu(menu, shareBtn);
           shareBtn.setAttribute('aria-expanded', 'true');
         }
         return;
@@ -9986,6 +10056,15 @@
           if (connect) connect.hidden = piConnected;
           if (disconnect) disconnect.hidden = !piConnected;
         }
+        // Third-party RSS reader migrations.
+        v('sett-miniflux-url', d.miniflux_import_url);
+        secretField('sett-miniflux-token', d.miniflux_import_token_set, d.miniflux_import_token_masked);
+        v('sett-freshrss-url', d.freshrss_url);
+        v('sett-freshrss-username', d.freshrss_username);
+        secretField('sett-freshrss-password', d.freshrss_password_set, d.freshrss_password_masked);
+        v('sett-ttrss-url', d.ttrss_url);
+        v('sett-ttrss-username', d.ttrss_username);
+        secretField('sett-ttrss-password', d.ttrss_password_set, d.ttrss_password_masked);
         // Inoreader migration.
         v('sett-inoreader-client-id', d.inoreader_client_id);
         secretField('sett-inoreader-client-secret', d.inoreader_client_secret_set, d.inoreader_client_secret_masked);
@@ -10500,6 +10579,121 @@
         _migInoRefreshStatus();
       });
 
+      // -----------------------------------------------------------------------
+      // Generic migrator helper — wires up save/test/import/reset for
+      // Miniflux, FreshRSS, and tt-rss panels.
+      // -----------------------------------------------------------------------
+      function _setupMigrator({ prefix, apiPrefix, credFields, sensitiveFields }) {
+        const $ = id => document.getElementById(id);
+
+        // Save credentials via /settings/all.
+        $(`mig-${prefix}-save`)?.addEventListener('click', async () => {
+          const st = $(`mig-${prefix}-creds-status`);
+          const payload = {};
+          for (const [settingKey, elId] of Object.entries(credFields)) {
+            const val = $(elId)?.value?.trim() || '';
+            if (val && !(sensitiveFields.includes(elId) && val.startsWith('•'))) {
+              payload[settingKey] = val;
+            } else if (!sensitiveFields.includes(elId)) {
+              payload[settingKey] = val;
+            }
+          }
+          try {
+            const resp = await fetch('/settings/all', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin', body: JSON.stringify(payload),
+            });
+            if (st) st.textContent = resp.ok ? 'Saved.' : 'Save failed.';
+            if (resp.ok) setTimeout(loadSettingsData, 300);
+          } catch (err) {
+            if (st) st.textContent = `Error: ${err.message || err}`;
+          }
+        });
+
+        // Test connection.
+        $(`mig-${prefix}-test`)?.addEventListener('click', async () => {
+          const st = $(`mig-${prefix}-creds-status`);
+          if (st) st.textContent = 'Testing…';
+          const body = {};
+          for (const [, elId] of Object.entries(credFields)) {
+            const key = elId.replace(`sett-${prefix}-`, '');
+            body[key] = $(elId)?.value?.trim() || '';
+          }
+          try {
+            const resp = await fetch(`/integrations/${apiPrefix}/import/test`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin', body: JSON.stringify(body),
+            });
+            const d = await resp.json().catch(() => ({}));
+            if (st) st.textContent = d.ok ? `Connected${d.username ? ` — ${d.username}` : (d.version ? ` (v${d.version})` : '')}` : `Error: ${d.error || resp.status}`;
+          } catch (err) {
+            if (st) st.textContent = `Error: ${err.message || err}`;
+          }
+        });
+
+        // Poll import status.
+        async function refreshStatus() {
+          try {
+            const r = await fetch(`/integrations/${apiPrefix}/import/status`, { credentials: 'same-origin' });
+            const d = await r.json().catch(() => ({}));
+            const s = d.state;
+            const statusEl = $(`mig-${prefix}-status`);
+            const startBtn = $(`mig-${prefix}-start`);
+            const resetBtn = $(`mig-${prefix}-reset`);
+            if (!s) {
+              if (statusEl) statusEl.textContent = '';
+              if (startBtn) startBtn.hidden = false;
+              if (resetBtn) resetBtn.hidden = true;
+              return;
+            }
+            const summary = `${s.subs_added || 0} feeds, ${s.items_starred || 0} starred, ${s.items_tagged || 0} tagged`;
+            if (s.done) {
+              if (statusEl) statusEl.textContent = `Done ✓ — ${summary}`;
+              if (startBtn) startBtn.hidden = true;
+              if (resetBtn) resetBtn.hidden = false;
+            } else if (s.error) {
+              if (statusEl) statusEl.textContent = `Error: ${s.error}`;
+              if (startBtn) startBtn.hidden = true;
+              if (resetBtn) resetBtn.hidden = false;
+            } else {
+              if (statusEl) statusEl.textContent = `Running… ${summary}`;
+              if (startBtn) startBtn.hidden = true;
+              if (resetBtn) resetBtn.hidden = false;
+              setTimeout(refreshStatus, 3000);
+            }
+          } catch { /* ignore */ }
+        }
+
+        $(`mig-${prefix}-start`)?.addEventListener('click', async () => {
+          try {
+            await fetch(`/integrations/${apiPrefix}/import/start`, { method: 'POST', credentials: 'same-origin' });
+            setTimeout(refreshStatus, 1500);
+          } catch { /* ignore */ }
+        });
+        $(`mig-${prefix}-reset`)?.addEventListener('click', async () => {
+          await fetch(`/integrations/${apiPrefix}/import/reset`, { method: 'POST', credentials: 'same-origin' });
+          refreshStatus();
+        });
+
+        refreshStatus();
+      }
+
+      _setupMigrator({
+        prefix: 'miniflux', apiPrefix: 'miniflux',
+        credFields: { miniflux_import_url: 'sett-miniflux-url', miniflux_import_token: 'sett-miniflux-token' },
+        sensitiveFields: ['sett-miniflux-token'],
+      });
+      _setupMigrator({
+        prefix: 'freshrss', apiPrefix: 'freshrss',
+        credFields: { freshrss_url: 'sett-freshrss-url', freshrss_username: 'sett-freshrss-username', freshrss_password: 'sett-freshrss-password' },
+        sensitiveFields: ['sett-freshrss-password'],
+      });
+      _setupMigrator({
+        prefix: 'ttrss', apiPrefix: 'ttrss',
+        credFields: { ttrss_url: 'sett-ttrss-url', ttrss_username: 'sett-ttrss-username', ttrss_password: 'sett-ttrss-password' },
+        sensitiveFields: ['sett-ttrss-password'],
+      });
+
       document.getElementById('sett-maint-run-now')?.addEventListener('click', async () => {
         try {
           await fetch('/settings/maintenance/run-now', { method: 'POST', credentials: 'same-origin' });
@@ -10798,6 +10992,25 @@
 
       const folderBtn = e.target.closest('[data-settings-folder-id]');
       if (folderBtn) { openFolderPropertiesModal(Number(folderBtn.dataset.settingsFolderId)); return; }
+
+      if (e.target.closest('#backfill-hide-shorts-btn')) {
+        const btn = document.getElementById('backfill-hide-shorts-btn');
+        btn.disabled = true;
+        btn.textContent = 'Cleaning…';
+        fetch('/feeds/backfill-hide-shorts', { method: 'POST', credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(d => {
+            btn.disabled = false;
+            btn.textContent = 'Clean up Shorts';
+            showToastMessage(d.marked > 0 ? `Marked ${d.marked} Short${d.marked !== 1 ? 's' : ''} as read.` : 'No unread Shorts found.');
+          })
+          .catch(() => {
+            btn.disabled = false;
+            btn.textContent = 'Clean up Shorts';
+            showToastMessage('Error running Shorts cleanup.');
+          });
+        return;
+      }
 
       if (e.target.closest('#fix-url-titles-btn')) {
         const btn = document.getElementById('fix-url-titles-btn');

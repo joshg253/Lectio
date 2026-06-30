@@ -31,6 +31,14 @@
   --field-focus-border: var(--active-border);
   --field-focus-ring: color-mix(in srgb, var(--active-border) 38%, transparent);
 }
+/* Math formula images: invert so dark ink becomes white on the dark surface.
+   SVGs have transparent backgrounds so they invert cleanly.
+   PNGs with white backgrounds get a dark box with white math — visible. */
+.entry-content img[class*="valign-"],
+.entry-content img.lectio-math-svg {
+  filter: invert(1);
+}
+
 /* Highlight mark colors for dark theme */
 .highlight-mark-yellow { background: #c8a800; color: #fff; }
 .highlight-mark-green  { background: #1e7a1e; color: #fff; }

@@ -189,6 +189,25 @@ def test_update_feeds_records_success_and_failure(tmp_path: Path):
     assert lead_calls == ["https://example.com/good.xml", "https://example.com/fail.xml"]
 
 
+def test_update_feeds_enhance_false_defers_enhancement(tmp_path: Path):
+    db_path = tmp_path / "meta.sqlite"
+    reader = _FakeReader()
+    yt_calls: list[str] = []
+    lead_calls: list[str] = []
+    service = _build_service(db_path, reader, yt_calls, lead_calls)
+
+    # enhance=False ingests entries but skips the network-heavy enhancement,
+    service.update_feeds(["https://example.com/good.xml"], enhance=False)
+    assert reader.updated == ["https://example.com/good.xml"]
+    assert yt_calls == []
+    assert lead_calls == []
+
+    # which a caller can then run off the request path via enhance_feeds().
+    service.enhance_feeds(["https://example.com/good.xml"])
+    assert yt_calls == ["https://example.com/good.xml"]
+    assert lead_calls == ["https://example.com/good.xml"]
+
+
 def test_update_feeds_skips_when_backoff_not_elapsed(tmp_path: Path):
     db_path = tmp_path / "meta.sqlite"
     reader = _FakeReader()

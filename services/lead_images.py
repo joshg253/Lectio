@@ -90,7 +90,7 @@ class LeadImageService:
         """Convert [img]url[/img] BBCode tags to <img src="url"> for image extraction."""
         return cls._BBCODE_IMG_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -136,7 +136,10 @@ class LeadImageService:
         # comic but are never the post's image: shields.io status badges
         # (e.g. img.shields.io/twitter/follow/…) and Ko-fi tip buttons
         # (storage.ko-fi.com/cdn/kofi3.png).
-        r"|shields\.io|ko-fi\.com)",
+        r"|shields\.io|ko-fi\.com"
+        # Microsoft Unified Header/Footer serves site-wide chrome assets (RE1Mu3b.png etc),
+        # not article content.
+        r"|uhf\.microsoft\.com)",
         re.IGNORECASE,
     )
     # Keep old name as alias so callers outside this class still work.
@@ -1512,11 +1515,26 @@ class LeadImageService:
                 return True
         return False
 
+    # Inline decorative-image class patterns — never lead images in any context.
+    # Applied unconditionally in _extract_first_image_url_from_html so feed-content
+    # paths (source_url=None) are covered as well as source-page paths.
+    _INLINE_DECO_CLASS_RE = re.compile(
+        r"\bvalign-"       # Sphinx/RST math formula glyphs (e.g. valign-m4, valign-0)
+        r"|\bemoji\b"      # emoji sprites from any CDN (class="emoji")
+        r"|\bwp-smiley\b"  # WordPress inline smilies
+        r"|\bipsEmoji\b",  # Invision Community emoji sprites
+        re.IGNORECASE,
+    )
+
     def _extract_first_image_url_from_html(self, html_text: str, base_url: str, source_url: str | None = None, allow_extensionless: bool = False) -> str | None:
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
 
+            # Inline decorative images (math glyphs, emoji sprites) — skip in all
+            # contexts, including feed-content paths where source_url is None.
+            if self._INLINE_DECO_CLASS_RE.search(attrs.get("class", "")):
+                continue
             # Images with percentage-based height (e.g. height="60%") are
             # decorative dividers or CSS-sized banners, not article images.
             if attrs.get("height", "").strip().endswith("%"):
@@ -1691,6 +1709,13 @@ class LeadImageService:
             ]
         )
         if self._AVATAR_HINT_PATTERNS.search(combined_hint_text):
+            return False
+
+        # Inline decorative images identified by CSS class:
+        # - valign-*: Sphinx/RST inline math formula glyphs (e.g. valign-m4)
+        # - emoji / wp-smiley / ipsEmoji: emoji sprites from any CDN (not all
+        #   emoji CDNs are in _EMOJI_URL_PATTERNS; class is the reliable signal)
+        if self._INLINE_DECO_CLASS_RE.search(attrs.get("class", "")):
             return False
 
         # Percentage-based height (e.g. height="60%") marks decorative dividers

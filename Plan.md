@@ -17,7 +17,9 @@ Build order (promoted from Later — top first):
 
 9. ~~**Miniflux v1 API compatibility**~~ — ✅ SHIPPED. `services/miniflux.py` + `/v1/*` routes in `main.py`. Covers: `/v1/version`, `/v1/me`, `/v1/categories`, `/v1/feeds`, `/v1/entries` (with status/feed/category/starred/limit/cursor params), `/v1/feeds/{id}/entries`, `/v1/categories/{id}/entries`, `/v1/entries/{id}`, `PUT /v1/entries` (bulk read/unread), `PUT /v1/entries/{id}/bookmark` (star toggle). Auth via `X-Auth-Token` header (user's raw `api_token`) or HTTP Basic password. Fever pre-sync race was already fixed (`presync=False`). README badge added.
 
-10. **Inoreader migration (in-app)**
+10. ~~**Inoreader migration (in-app)**~~ — ✅ SHIPPED (file upload + OAuth drip + optional delete-from-source). ~~**Miniflux / FreshRSS / tt-rss migrations**~~ — ✅ SHIPPED (single-pass REST/GReader/JSON-RPC; subscriptions + folders + starred + tags; Import/Export → platform subtab).
+
+10. **Inoreader migration (in-app)** [shipped above]
 
     Goal: fully migrate an Inoreader account into Lectio — feeds + folders (incl.
     disabled ones OPML can't export), tags, starred items — filling in only what
@@ -137,23 +139,16 @@ Build order (promoted from Later — top first):
     drip step hooked into `scheduled_refresh_loop`.
     **No new DB table** — checkpoint in existing `app_settings` KV store.
 
-    **Template for other platform migrators (Later):**
-    The three-path shape (OPML upload · export JSON upload · live API drip +
-    optional delete-from-source) generalises to any reader. Platforms to add
-    after Inoreader, roughly in priority order:
+    **Platform migrators — all shipped:**
 
-    | Platform | OPML | API auth | Notes |
-    |----------|------|----------|-------|
-    | **Miniflux** | ✅ | REST API token / Basic | Self-hosted; no rate limits so single-run import, no drip needed |
-    | **FreshRSS** | ✅ | Google Reader API compat | Self-hosted; `inoreader.py` largely reusable — just swap base URL |
-    | **tt-rss** | ✅ | JSON-RPC (tt-rss specific) | Self-hosted; own API shape |
+    | Platform | Status | Notes |
+    |----------|--------|-------|
+    | **Miniflux** | ✅ SHIPPED (untested e2e — no live instance) | `services/miniflux_import.py`; REST API token; single-pass |
+    | **FreshRSS** | ✅ SHIPPED | `services/freshrss.py`; ClientLogin → GoogleLogin; single-pass |
+    | **tt-rss** | ✅ SHIPPED | `services/ttrss.py`; JSON-RPC session; single-pass |
 
     Paid platforms (Feedly, FeedBin, NewsBlur, The Old Reader) deferred — not
     in use, no urgency.
-
-    FreshRSS speaks the same Google Reader API as Inoreader, so its service
-    would be a thin wrapper around the same client with a user-supplied base URL.
-    Miniflux has no rate limits (self-hosted), so the drip strategy isn't needed.
 
 ### Deferred follow-ups (Quire / destinations)
 - ~~**Share-dropdown consolidation**~~ — ✅ SHIPPED. Single `ios_share` button; all four destinations in the dropdown; unconfigured ones are disabled with a "connect in Settings" tooltip.
@@ -197,7 +192,7 @@ Detailed specs follow.
      dedup guard, rule-type gated on a connected account. (Remaining YT-area work is
      items 1, 2, and the quota meter below.)
 
-  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on; the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
+  4. ~~**Connection gating**~~ — ✅ **SHIPPED.** `youtube_playlist` rule-type and per-embed "Add to playlist" button are gated on `yt_embed_account_features` setting (user must explicitly enable embed account features) and the button is only injected when that setting is on (the client gate `_ytAccountFeaturesEnabled` is bootstrapped from `window.YT_EMBED_ACCOUNT_FEATURES` at page load so the button appears on a normal reading session without first opening Settings); the per-rule-type option remains gated on `yt_oauth_connected`. The Settings OAuth row is hidden until both Client ID + Secret are configured. A full server-side gate for a "YT special-area panel" can be added if a dedicated panel is built later.
 
   5. **Quota meter — "tokens left" with low alerts.** — ✅ **SHIPPED.** Per-user
      `yt_quota_spend` table keyed by Pacific date; each billed call reports its unit
@@ -307,6 +302,15 @@ Detailed specs follow.
     under-tested, needs broader characterization tests first.
   - **`ensure_meta_schema` (~585L)** — long but linear (CREATE + idempotent ALTERs),
     runs once at startup, low churn. A by-area split is cosmetic; low priority.
+  - **Backfill Sphinx-math height on already-stored entries** — the math
+    height/baseline fix (`_promote_math_height`) applies at ingest, so entries stored
+    before it keep their flattened math until re-ingested. A one-off that re-fetches
+    each Sphinx-math feed and re-sanitizes affected entries would retroactively fix
+    them; low value (math articles are few), do on demand. NB: `entries.content` is
+    stored as reader JSON (`json.dumps([Content._asdict()])`, i.e.
+    `[{"value":html,"type":...,"language":...}]`), **not** raw HTML — a backfill must
+    rewrite that structure (or go through reader's API), not overwrite the column with
+    a bare HTML string.
 - Multiuser stuff:
   - **Performance investigation** — systematic baseline. Per-request breakdown (DB time, enrich time, refresh contention) under realistic load. ~~Sync source-scrape caption hotspot~~ ✅ already fixed: cache-first / background queue, no longer blocks `/entries/pane`.
   - **Shared-content tenancy mode** — one global feed/entry store + per-user overlays

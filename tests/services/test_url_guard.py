@@ -75,3 +75,19 @@ def test_debug_mode_bypasses_all_checks(monkeypatch):
     # Even a clearly-private URL must pass when LECTIO_DEBUG=1.
     assert url_guard.is_safe_outbound_url("http://192.168.1.10/")
     assert url_guard.is_safe_outbound_url("http://127.0.0.1:8000/")
+
+
+def test_ensure_safe_outbound_url_returns_safe_url(monkeypatch):
+    _no_debug(monkeypatch)
+    _patch_resolve(monkeypatch, ["93.184.216.34"])
+    assert url_guard.ensure_safe_outbound_url("https://example.com/x") == "https://example.com/x"
+
+
+def test_ensure_safe_outbound_url_raises_on_unsafe(monkeypatch):
+    _no_debug(monkeypatch)
+    for bad in ("http://127.0.0.1/", "http://169.254.169.254/", "file:///etc/passwd", ""):
+        try:
+            url_guard.ensure_safe_outbound_url(bad)
+        except url_guard.UnsafeURLError:
+            continue
+        raise AssertionError(f"expected UnsafeURLError for {bad!r}")

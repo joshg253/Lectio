@@ -121,6 +121,20 @@ def is_safe_outbound_url(url: str) -> bool:
     return has_public
 
 
+def ensure_safe_outbound_url(url: str) -> str:
+    """Validate ``url`` for outbound use, returning it unchanged when safe.
+
+    Convenience wrapper for call sites that build a request URL from
+    user-supplied input (e.g. migration source servers) and want to fail closed
+    inline. Raises :class:`UnsafeURLError` when the URL is malformed, non-http(s),
+    or resolves to private / loopback / link-local space. Honors the
+    ``LECTIO_DEBUG`` bypass via :func:`is_safe_outbound_url`.
+    """
+    if not is_safe_outbound_url(url):
+        raise UnsafeURLError(url)
+    return url
+
+
 def _redirect_target(resp: httpx.Response) -> str | None:
     """Absolute URL of a redirect response's Location, or None."""
     loc = resp.headers.get("location")
