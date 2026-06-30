@@ -45,3 +45,25 @@ def test_dedupes_repeated_lead_image():
 def test_keeps_distinct_images():
     html = '<img src="https://x/a.jpg"/><img src="https://x/b.jpg"/>'
     assert main._dedupe_readability_images(html).count("<img") == 2
+
+
+def test_absolutizes_relative_media_urls():
+    """Reader view is served from Lectio's origin, so relative image/link URLs
+    (e.g. fabiensanglard.net's page-relative `model_m.webp`) must be resolved
+    against the source page or they 404."""
+    html = (
+        '<article><img src="model_m.webp">'
+        '<img src="../2168/keyboard/the_precious.webp">'
+        '<a href="more.html">link</a></article>'
+    )
+    out = main._absolutize_article_urls(html, "https://fabiensanglard.net/keyboards/index.html")
+    assert 'src="https://fabiensanglard.net/keyboards/model_m.webp"' in out
+    assert 'src="https://fabiensanglard.net/2168/keyboard/the_precious.webp"' in out
+    assert 'href="https://fabiensanglard.net/keyboards/more.html"' in out
+
+
+def test_absolutize_leaves_absolute_urls_untouched():
+    html = '<article><img src="https://cdn.example/a.png"><a href="https://x.test/p">l</a></article>'
+    out = main._absolutize_article_urls(html, "https://fabiensanglard.net/keyboards/index.html")
+    assert 'src="https://cdn.example/a.png"' in out
+    assert 'href="https://x.test/p"' in out

@@ -8056,6 +8056,27 @@ def _dedupe_readability_images(article_html: str) -> str:
     return _READABILITY_IMG_TAG_RE.sub(_strip, article_html)
 
 
+def _absolutize_article_urls(article_html: str, base_url: str) -> str:
+    """Resolve relative ``src``/``href`` URLs in reader-view HTML against ``base_url``.
+
+    The reader view is served from Lectio's own origin, so a relative image like
+    ``model_m.webp`` (e.g. fabiensanglard.net, which uses page-relative image
+    paths and ships no ``<base>`` tag) would otherwise resolve against Lectio and
+    404. Readability's summary path absolutizes only when ``Document(url=...)`` is
+    set; the BS4 content fallback returns its element verbatim, so apply one
+    uniform pass here. Idempotent for already-absolute URLs."""
+    if not article_html or not base_url:
+        return article_html
+    try:
+        from lxml import html as lxml_html
+
+        frag = lxml_html.fromstring(article_html)
+        frag.make_links_absolute(base_url, resolve_base_href=False)
+        return lxml_html.tostring(frag, encoding="unicode")
+    except Exception:
+        return article_html
+
+
 def _set_or_replace_tag_attr(tag_html: str, attr_name: str, value: str) -> str:
     attr_re = re.compile(rf'\b{re.escape(attr_name)}\s*=\s*["\'][^"\']*["\']', re.IGNORECASE)
     attr_literal = f'{attr_name}="{html.escape(value, quote=True)}"'
@@ -8679,7 +8700,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
             response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
         response.raise_for_status()
         raw_html = response.text
-        doc = Document(raw_html)
+        doc = Document(raw_html, url=source_url)
         title = doc.short_title() or source_url
         summary = doc.summary(html_partial=True)
         summary = _reinject_readability_embeds(summary, raw_html)
@@ -8707,6 +8728,9 @@ def build_readability_response(source_url: str) -> HTMLResponse:
                     article_html = sanitize_readability_html(fallback).strip()
         article_html = _dedupe_readability_images(article_html)
         article_html = _strip_bandcamp_track_signature(article_html)
+        # Resolve any remaining relative src/href (esp. the BS4 fallback path,
+        # which returns its element verbatim) against the source page URL.
+        article_html = _absolutize_article_urls(article_html, source_url)
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:

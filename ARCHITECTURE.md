@@ -432,6 +432,12 @@ feeds must be excluded from the global caches.
   *before* the sanitizer runs — so the re-injected iframes still get sandboxed by
   `_sanitize_iframe`. `_dedupe_readability_images` then drops repeated `<img>` tags
   sharing an `src`. Responsive CSS sizes the iframes (16/9, Spotify fixed-height).
+  Because Reader view is served from Lectio's own origin, relative `src`/`href`
+  URLs would resolve against Lectio and 404: `Document(url=source_url)` lets
+  readability absolutize the summary, and `_absolutize_article_urls` then runs a
+  final `make_links_absolute` pass over the article (covering the BS4 content
+  fallback, which returns its element verbatim) — fixes pages that use
+  page-relative image paths with no `<base>` tag (e.g. fabiensanglard.net).
 - **Feed-side YouTube recovery** — the embed `<iframe>` is stripped at ingest but
   the raw feed still carries it, so the media scan (`extract_youtube_embeds`,
   re-parsing the raw feed with sanitize off) caches the video ids and
