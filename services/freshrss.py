@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 import httpx
 
+from services.url_guard import ensure_safe_outbound_url
+
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _TIMEOUT = 30
 
@@ -28,7 +30,10 @@ class AuthError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def _api_base(instance_url: str) -> str:
-    return instance_url.rstrip("/") + "/api/greader.php"
+    # SSRF guard: every request below builds its URL from this base, so
+    # validating the user-supplied host here covers all of them. Clients don't
+    # follow redirects (httpx default), so the host can't be bounced internally.
+    return ensure_safe_outbound_url(instance_url.rstrip("/") + "/api/greader.php")
 
 
 def _auth_header(token: str) -> dict:

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from services.url_guard import ensure_safe_outbound_url
+
 _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _TIMEOUT = 30
 
@@ -22,7 +24,10 @@ class AuthError(RuntimeError):
 
 
 def _api_url(base_url: str, path: str) -> str:
-    return base_url.rstrip("/") + path
+    # SSRF guard: all requests build their URL through here, so validating the
+    # user-supplied host blocks private/loopback targets. Clients don't follow
+    # redirects (httpx default), closing the redirect-to-internal bypass.
+    return ensure_safe_outbound_url(base_url.rstrip("/") + path)
 
 
 def _headers(token: str) -> dict:

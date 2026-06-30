@@ -13,6 +13,7 @@
     window.EMAIL_CONTACTS = {{ email_contacts | tojson }};
     window.EMAIL_CONFIGURED = {{ email_configured | tojson }};
     window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
+    window.YT_EMBED_ACCOUNT_FEATURES = {{ yt_embed_account_features | tojson }};
     window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
     window.QUIRE_CONFIGURED = {{ quire_configured | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
@@ -4219,7 +4220,7 @@
     let _ytPlaylistsCache = null;        // null = not fetched; {connected, playlists, error}
     let _ytPlaylistsPromise = null;
     let _ytFolderName = '';              // populated from settings; used for empty-folder sync detection
-    let _ytAccountFeaturesEnabled = false; // yt_embed_account_features setting
+    let _ytAccountFeaturesEnabled = !!window.YT_EMBED_ACCOUNT_FEATURES; // yt_embed_account_features setting; bootstrapped so embeds enhance on first load
 
     async function _ytFetchPlaylists(force = false) {
       if (!force && _ytPlaylistsCache) return _ytPlaylistsCache;
@@ -4822,6 +4823,26 @@
       document.getElementById('entry-share-btn')?.setAttribute('aria-expanded', 'false');
     }
 
+    // Anchor the (fixed) share menu to its button so it escapes the entry pane's
+    // overflow:hidden; right-align to the button and flip up only if it'd run off
+    // the bottom of the viewport.
+    function positionShareMenu(menu, btn) {
+      const r = btn.getBoundingClientRect();
+      menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+      menu.style.left = 'auto';
+      const spaceBelow = window.innerHeight - r.bottom;
+      const wantUp = spaceBelow < 260 && r.top > spaceBelow;
+      if (wantUp) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${Math.round(window.innerHeight - r.top + 6)}px`;
+        menu.style.maxHeight = `${Math.round(r.top - 12)}px`;
+      } else {
+        menu.style.bottom = 'auto';
+        menu.style.top = `${Math.round(r.bottom + 6)}px`;
+        menu.style.maxHeight = `${Math.round(spaceBelow - 12)}px`;
+      }
+    }
+
     document.addEventListener('click', (event) => {
       if (!(event.target instanceof Element)) return;
       const shareBtn = event.target.closest('#entry-share-btn');
@@ -4835,6 +4856,7 @@
         } else {
           _closePinMenu();
           menu.removeAttribute('hidden');
+          positionShareMenu(menu, shareBtn);
           shareBtn.setAttribute('aria-expanded', 'true');
         }
         return;

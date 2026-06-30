@@ -180,7 +180,7 @@ class FeedRefreshService:
         except Exception:
             self._logger.debug("[refresh] fetch-history insert failed for %s", feed_url, exc_info=True)
 
-    def update_feeds(self, feed_urls: Iterable[str]) -> None:
+    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True) -> None:
         feed_url_list = list(feed_urls)
         if self._refresh_debug_enabled:
             self._logger.info("[refresh] start: feed_count=%d", len(feed_url_list))
@@ -483,9 +483,8 @@ class FeedRefreshService:
                             )
                         continue
 
-        for feed_url in feed_url_list:
-            self._fetch_and_store_youtube_durations(feed_url)
-            self._fetch_and_store_lead_images(feed_url)
+        if enhance:
+            self.enhance_feeds(feed_url_list)
 
         if self._refresh_debug_enabled:
             total_ms = int((time.perf_counter() - started_at) * 1000)
@@ -497,3 +496,13 @@ class FeedRefreshService:
                 skipped_count,
                 total_ms,
             )
+
+    def enhance_feeds(self, feed_urls: Iterable[str]) -> None:
+        """Fetch & store YouTube durations and lead images for the given feeds.
+
+        Network-heavy: sequential source-page fetches with per-entry throttling.
+        Callers that must return promptly (manual refresh request handlers) should
+        run this off the request path; ``update_feeds(enhance=False)`` skips it."""
+        for feed_url in feed_urls:
+            self._fetch_and_store_youtube_durations(feed_url)
+            self._fetch_and_store_lead_images(feed_url)
