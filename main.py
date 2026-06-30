@@ -400,8 +400,15 @@ _CORP_DOMAIN_CACHE: dict[str, bool] = {}
 # proxying caches the bytes server-side so the article image survives token expiry.
 # private-user-images.githubusercontent.com serves GitHub release/issue screenshots
 # behind short-lived (~5 min) JWT-signed URLs — same problem, same fix.
+# fabiensanglard.net is the *inverse* hotlink case: it 403s an image fetched with
+# no Referer (e.g. its .webp files) but serves it with a same-origin Referer. The
+# browser can't send fabiensanglard's own origin as Referer, so a direct <img>
+# load fails (its .webp break in reader/web view while its .jpg loads); routing
+# through /api/img lets the proxy's same-origin-Referer retry (api_img_proxy)
+# fetch the real bytes. See ARCHITECTURE "Same-origin Referer".
 _HOTLINK_IMG_HOSTS: frozenset[str] = frozenset(
-    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com"}
+    {"nanolx.org", "wixmp.com", "private-user-images.githubusercontent.com",
+     "fabiensanglard.net"}
 )
 
 
@@ -8731,6 +8738,13 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         # Resolve any remaining relative src/href (esp. the BS4 fallback path,
         # which returns its element verbatim) against the source page URL.
         article_html = _absolutize_article_urls(article_html, source_url)
+        # Apply the same hotlink handling as the entry pane (runs after
+        # absolutization so host-matching sees absolute src): route known
+        # hotlink hosts through /api/img (e.g. fabiensanglard.net, whose .webp
+        # 403 a no-Referer browser load), and strip the Referer on the rest so
+        # foreign-Referer placeholder hosts serve the real image.
+        article_html = proxy_hotlink_images(article_html)
+        article_html = add_no_referrer_to_images(article_html)
         if not article_html:
             raise ValueError("No readable article content was found.")
     except Exception as exc:
@@ -13564,7 +13578,14 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
         # follow_redirects=False so url_guard.safe_get validates every hop
         # (SSRF: a public thumbnail URL must not redirect to an internal target).
         with httpx.Client(follow_redirects=False, timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            resp = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
+            _headers = {"User-Agent": READABILITY_USER_AGENT}
+            resp = url_guard.safe_get(client, url, headers=_headers)
+            # Hotlink protection: retry once with a same-origin Referer only after
+            # an honest request is refused (see api_img_proxy / lead_images).
+            if resp.status_code in (403, 503):
+                _referer = _same_origin_referer(url)
+                if _referer:
+                    resp = url_guard.safe_get(client, url, headers={**_headers, "Referer": _referer})
             if resp.status_code in (404, 410):
                 # Image is permanently gone — null it out so it isn't re-attempted
                 lead_image_service.invalidate_image_url(url)
@@ -18854,6 +18875,19 @@ def _img_cache_key_url(u: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(kept)))
 
 
+def _same_origin_referer(u: str) -> str | None:
+    """Origin root (scheme://host/) of an image URL, for use as a same-origin
+    Referer when a host hotlink-protects its images. None if the URL has no
+    usable http(s) origin."""
+    try:
+        parsed = urlparse(u)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
+
+
 @app.get("/api/img")
 async def api_img_proxy(u: str) -> Response:
     """Server-side image proxy with a content-addressed cache.
@@ -18882,9 +18916,20 @@ async def api_img_proxy(u: str) -> Response:
         # follow_redirects=False so safe_get_async controls (and re-validates)
         # each hop instead of httpx silently bouncing to an internal address.
         async with httpx.AsyncClient(follow_redirects=False, timeout=12.0) as client:
-            resp = await url_guard.safe_get_async(
-                client, u, headers={"User-Agent": READABILITY_USER_AGENT}
-            )
+            headers = {"User-Agent": READABILITY_USER_AGENT}
+            resp = await url_guard.safe_get_async(client, u, headers=headers)
+            # Hotlink protection: some hosts serve a 403 (often text/html) for an
+            # image fetched without a Referer, but 200 image/* once a same-origin
+            # Referer is present (e.g. fabiensanglard.net's .webp files). Only
+            # after an honest request is actually refused do we retry with the
+            # image's own origin as Referer — never preemptively. Mirrors the
+            # honest-first WAF escalation in services/lead_images.py.
+            if resp.status_code in (403, 503):
+                referer = _same_origin_referer(u)
+                if referer:
+                    resp = await url_guard.safe_get_async(
+                        client, u, headers={**headers, "Referer": referer}
+                    )
     except url_guard.UnsafeURLError:
         return Response(status_code=403)
     except Exception:
