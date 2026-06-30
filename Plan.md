@@ -71,7 +71,7 @@ Build order (promoted from Later — top first):
 
     Auth: **OAuth 2.0** — same pattern as Pinterest/Quire, no password stored.
     - One Inoreader OAuth app (1-app limit on Pro); redirect URI registered as
-      `https://lectio.catfork.win/inoreader/oauth/callback`.
+      `https://lectio.${BASE_URL}/inoreader/oauth/callback`.
     - User enters App ID + App Key in Lectio → "Connect Inoreader" → OAuth
       redirect → `inoreader.com/oauth2/auth` → callback at
       `/inoreader/oauth/callback` → exchange code for access + refresh tokens,
