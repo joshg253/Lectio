@@ -118,7 +118,16 @@ The chunk-level visible-entry backfill (`backfill_entry_list`, spawned from the
 home route for entries missing a cached thumbnail) is a bare daemon thread for
 the same reason and must likewise be wrapped in `_run_in_user_context` at the
 call site — otherwise its thumbnails persist to the default tenant and appear to
-"not stick" for the real user across refreshes.
+"not stick" for the real user across refreshes. Manual refresh (`/refresh`,
+`/refresh/feed`) follows the same pattern: it ingests entries with
+`update_feeds(enhance=False)` and hands the network-heavy lead-image / YouTube-
+duration enhancement to `_spawn_feed_enhancement` (a daemon thread wrapped in
+`_run_in_user_context`, with a per-feed in-flight guard so concurrent manual /
+scheduled runs don't duplicate fetches), so the request returns promptly while
+images fill in shortly after. Each refresh path (manual, single-feed, scheduled)
+calls `invalidate_unread_counts_cache()` after ingest so newly-arrived entries
+update the folder "new" badges immediately instead of waiting out the
+stale-while-revalidate TTL.
 
 Account UI: `/account` lets a user change their password and view/regenerate
 their API token; admins additionally create/disable users and reset passwords.
@@ -221,7 +230,14 @@ feeds must be excluded from the global caches.
   Outbound **webhook** automation rules (`services/webhooks.py`) POST to a
   user-supplied URL, so they validate with `is_safe_outbound_url` and POST with
   `follow_redirects=False` (no GET helper for POST) — same outbound policy as the
-  image proxy and WebSub.
+  image proxy and WebSub. The migration source clients (`services/freshrss.py`,
+  `services/miniflux_import.py`, `services/ttrss.py`) fetch a user-supplied server
+  URL over both GET and POST, so each validates at its URL-builder choke point
+  (`_api_base` / `_api_url`) via `url_guard.ensure_safe_outbound_url` — one guard
+  covers every request (test + import worker) since they all share that host, and
+  the httpx clients don't follow redirects. Their `/import/test` endpoints return
+  generic error messages (and log detail server-side) rather than echoing the
+  exception, so an internal-probe attempt can't exfiltrate response detail.
   Still open: the `reader` library's own feed refresh (a subscribed `http://10.x`
   host is still fetched); and full DNS-rebind closure needs connection IP-pinning
   (the validate→connect window is small but nonzero).
@@ -265,6 +281,14 @@ feeds must be excluded from the global caches.
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **Sphinx/dvisvgm math sizing** — blogs like eli.thegreenplace.net emit formulas
+  as `<object type="image/svg+xml">` / `<img>` whose *true* rendered height rides on
+  an inline `style="height: Npx"` (the SVGs' intrinsic dimensions are in `pt`, which
+  renders tiny) plus a `valign-mN` baseline class. Since the allowlist strips inline
+  `style`, `_promote_math_height` lifts that px height onto a real `height` attribute
+  (already allowlisted) before the strip; CSS then honors the per-glyph height and
+  `valign-*` baseline instead of flattening every formula to one size. `_MATH_SCALE`
+  (default 1.0) is the single knob to enlarge all math (requires re-ingest to apply).
 - **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
   so Lectio estimates spend itself: each billed call reports its documented unit cost
   through a sink (`playlists.list`/`videos.list`/sub-sync = 1, `playlistItems.insert`/

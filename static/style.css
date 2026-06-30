@@ -2994,6 +2994,71 @@ button:hover, .button-link:hover {
   vertical-align: -0.2em;
 }
 
+/* Math formula images from Sphinx/dvisvgm blogs (eli.thegreenplace.net, etc.).
+   The feed ships each glyph's true rendered px height (preserved onto the img's
+   height attribute by html_sanitize) plus a valign-* baseline class. Honor both:
+   inline variables/expressions flow within text at author-intended size and sit on
+   the text baseline; block (display) equations center and shrink responsively.
+   The height attribute drives size, so we set width:auto (intrinsic aspect) and do
+   NOT declare a CSS height (which would override the attribute). */
+.entry-content img[class*="valign-"] {
+  display: inline;
+  width: auto;
+  max-width: 100%;
+  vertical-align: baseline; /* overridden per valign-* class below */
+}
+/* Math imgs lacking a stamped height (older content / no inline style) fall back to
+   roughly one line tall instead of rendering at tiny intrinsic pt. */
+.entry-content img[class*="valign-"]:not([height]) {
+  height: 1.15em;
+}
+/* valign-mN: the image baseline sits N px below the text baseline; valign-N above.
+   These px offsets are correct because we preserve the native px height. */
+.entry-content img.valign-0  { vertical-align: 0; }
+.entry-content img.valign-m1  { vertical-align: -1px; }
+.entry-content img.valign-m2  { vertical-align: -2px; }
+.entry-content img.valign-m3  { vertical-align: -3px; }
+.entry-content img.valign-m4  { vertical-align: -4px; }
+.entry-content img.valign-m5  { vertical-align: -5px; }
+.entry-content img.valign-m6  { vertical-align: -6px; }
+.entry-content img.valign-m7  { vertical-align: -7px; }
+.entry-content img.valign-m8  { vertical-align: -8px; }
+.entry-content img.valign-m9  { vertical-align: -9px; }
+.entry-content img.valign-m10 { vertical-align: -10px; }
+.entry-content img.valign-m11 { vertical-align: -11px; }
+.entry-content img.valign-m12 { vertical-align: -12px; }
+.entry-content img.valign-m13 { vertical-align: -13px; }
+.entry-content img.valign-m14 { vertical-align: -14px; }
+.entry-content img.valign-m15 { vertical-align: -15px; }
+.entry-content img.valign-m16 { vertical-align: -16px; }
+.entry-content img.valign-m17 { vertical-align: -17px; }
+.entry-content img.valign-m18 { vertical-align: -18px; }
+.entry-content img.valign-m19 { vertical-align: -19px; }
+.entry-content img.valign-m20 { vertical-align: -20px; }
+.entry-content img.valign-1  { vertical-align: 1px; }
+.entry-content img.valign-2  { vertical-align: 2px; }
+.entry-content img.valign-3  { vertical-align: 3px; }
+.entry-content img.valign-4  { vertical-align: 4px; }
+.entry-content img.valign-5  { vertical-align: 5px; }
+.entry-content img.valign-6  { vertical-align: 6px; }
+.entry-content img.valign-7  { vertical-align: 7px; }
+.entry-content img.valign-8  { vertical-align: 8px; }
+.entry-content img.valign-9  { vertical-align: 9px; }
+.entry-content img.valign-10 { vertical-align: 10px; }
+/* Block (display) equations. The stamped height drives size; max-width:100% +
+   object-fit:contain shrink wide equations uniformly (no distortion) on narrow
+   columns. Covers SVG (lectio-math-svg) and older PNG display math. */
+.entry-content img.align-center {
+  display: block;
+  margin: 0.8em auto;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+}
+.entry-content img.align-center:not([height]) {
+  height: auto;
+}
+
 .entry-content iframe {
   /* Unify every embed (Bandcamp, SoundCloud, Spotify, etc.) to the same footprint
      as the inline YouTube player: full column width, capped at 560px, centered.
@@ -6011,7 +6076,9 @@ textarea.hl-draft-pattern {
 .lectio-yt-pl-loading { padding: 0.4rem 0.55rem; color: var(--muted); font-size: 0.85rem; }
 .lectio-yt-pl-status { color: var(--muted); font-size: 0.8rem; }
 .entry-share-wrap { position: relative; display: inline-flex; }
-.entry-share-menu { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 1000; min-width: 160px; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
+/* position:fixed so the menu escapes the entry pane's overflow:hidden clipping;
+   JS (positionShareMenu) anchors it to the button and flips up if needed. */
+.entry-share-menu { position: fixed; z-index: 1000; min-width: 160px; overflow-y: auto; background: var(--elevated-bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 0.25rem; }
 .share-menu-item { display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left; background: none; border: 0; color: var(--fg); padding: 0.4rem 0.55rem; border-radius: 5px; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
 .share-menu-item:hover:not(:disabled) { background: var(--hover-bg); }
 .share-menu-item--unavail, .share-menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
