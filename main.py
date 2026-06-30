@@ -10403,6 +10403,48 @@ def _resolve_entry_content_html(entry):
     return content_html
 
 
+_COMICSTHUMBS_IMG_SRC_RE = re.compile(
+    r'(<img\b[^>]*?\bsrc=["\'])([^"\']*?/comicsthumbs/[^"\']+)(["\'])', re.IGNORECASE
+)
+# ComicControl filenames carry a cache-bust unix-timestamp prefix, e.g.
+# "1782426356-ARV1701_05.jpg". The stable part is everything after it.
+_COMICCONTROL_TS_PREFIX_RE = re.compile(r'^\d{6,}-')
+
+
+def _comiccontrol_stable_name(url: str) -> str:
+    """Return a ComicControl image's filename with its cache-bust timestamp
+    prefix removed (e.g. '…/1782426356-ARV1701_05.jpg' -> 'ARV1701_05.jpg')."""
+    fname = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    return _COMICCONTROL_TS_PREFIX_RE.sub("", fname)
+
+
+def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | None) -> str:
+    """Promote inline ComicControl /comicsthumbs/ images to the full panel.
+
+    ComicControl gives the thumbnail and the full panel DIFFERENT cache-bust
+    timestamp prefixes (e.g. comicsthumbs/1782426356-X.jpg vs comics/1782426355-X.jpg),
+    so a naive /comicsthumbs/ -> /comics/ swap keeps the thumb's timestamp — and
+    ComicControl answers that nonexistent timestamp with a 200 *HTML* page, not the
+    image, breaking the comic. When the resolved lead image (the real /comics/<ts>-<file>
+    read from the page) shares the same timestamp-stripped filename, substitute it
+    directly. Otherwise fall back to the directory swap (correct whenever the thumb
+    and panel happen to share a timestamp)."""
+    lead_name = (
+        _comiccontrol_stable_name(full_lead_url)
+        if full_lead_url and "/comics/" in full_lead_url
+        else None
+    )
+
+    def _sub(m: re.Match) -> str:
+        src = m.group(2)
+        if lead_name and _comiccontrol_stable_name(src).lower() == lead_name.lower():
+            return f"{m.group(1)}{full_lead_url}{m.group(3)}"
+        swapped = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", src, flags=re.IGNORECASE)
+        return f"{m.group(1)}{swapped}{m.group(3)}"
+
+    return _COMICSTHUMBS_IMG_SRC_RE.sub(_sub, content_html)
+
+
 def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     """Apply the per-site / generic feed-content cleanups to an entry's HTML.
 
@@ -10504,7 +10546,8 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     # same filename under /comics/. Promote inline so the reader shows the
     # readable comic, not the thumbnail.
     if isinstance(content_html, str) and "comicsthumbs" in content_html.lower():
-        content_html = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", content_html, flags=re.IGNORECASE)
+        _full_lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
+        content_html = _promote_comicsthumbs_in_content(content_html, _full_lead)
 
     # Standalone bare YouTube links (own paragraph / lone anchor) → inline player.
     # Covers feeds where the oEmbed iframe was stripped and only the link remains.
