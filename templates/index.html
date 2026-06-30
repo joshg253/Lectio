@@ -3107,6 +3107,21 @@
       await openQuirePicker(quireBtn);
     }, true);
 
+    // Position a share-target popup (already appended to <body>) just below the
+    // entry share button, clamped into the viewport. The share-menu item that
+    // triggered it is hidden by the capture-phase close by the time we run, so its
+    // own rect is empty — anchor to the still-visible share button instead, and
+    // measure the menu's own width rather than assume a fixed one.
+    function positionShareTargetMenu(menu, fallbackBtn) {
+      const anchor = document.getElementById('entry-share-btn') || fallbackBtn;
+      const r = anchor.getBoundingClientRect();
+      const width = menu.offsetWidth || 200;
+      const maxLeft = window.scrollX + window.innerWidth - width - 8;
+      const left = Math.max(window.scrollX + 8, Math.min(Math.round(r.left + window.scrollX), maxLeft));
+      menu.style.top = `${Math.round(r.bottom + window.scrollY + 4)}px`;
+      menu.style.left = `${left}px`;
+    }
+
     // --- Pinterest "Pin to board" picker -----------------------------------
     let _pinterestBoardsCache = null;   // null = not fetched; {connected, boards, error}
     async function _pinFetchBoards() {
@@ -3148,14 +3163,7 @@
       menu.className = 'lectio-pin-menu';
       menu.innerHTML = '<div class="lectio-pin-loading">Loading boards…</div>';
       document.body.appendChild(menu);
-      // The share-menu item is already hidden (capture-phase close), so its rect is
-      // empty — anchor to the still-visible share button and clamp into the viewport.
-      const anchor = document.getElementById('entry-share-btn') || btn;
-      const r = anchor.getBoundingClientRect();
-      const maxLeft = window.scrollX + window.innerWidth - 210;
-      const left = Math.max(window.scrollX + 8, Math.min(Math.round(r.left + window.scrollX), maxLeft));
-      menu.style.top = `${Math.round(r.bottom + window.scrollY + 4)}px`;
-      menu.style.left = `${left}px`;
+      positionShareTargetMenu(menu, btn);
       setTimeout(() => document.addEventListener('click', _pinOutsideClick, true), 0);
 
       const data = await _pinFetchBoards();
@@ -3235,15 +3243,7 @@
       menu.className = 'lectio-quire-menu';
       menu.innerHTML = '<div class="lectio-quire-loading">Loading projects…</div>';
       document.body.appendChild(menu);
-      // The share-menu item that triggered this is already hidden (capture-phase
-      // close), so its rect is empty — anchor to the still-visible share button and
-      // clamp into the viewport so the menu never lands off-screen at 0,0.
-      const anchor = document.getElementById('entry-share-btn') || btn;
-      const r = anchor.getBoundingClientRect();
-      const maxLeft = window.scrollX + window.innerWidth - 210;
-      const left = Math.max(window.scrollX + 8, Math.min(Math.round(r.left + window.scrollX), maxLeft));
-      menu.style.top = `${Math.round(r.bottom + window.scrollY + 4)}px`;
-      menu.style.left = `${left}px`;
+      positionShareTargetMenu(menu, btn);
       setTimeout(() => document.addEventListener('click', _quireOutsideClick, true), 0);
 
       const data = await _fetchQuireProjects();
