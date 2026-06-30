@@ -676,6 +676,9 @@ def test_webcomic_panel_skips_query_loop_sibling_posts(tmp_path: Path):
     assert service._extract_preferred_source_image_url(html, page, page, is_webcomic=True) == (
         "https://karlkerschl.com/wp-content/uploads/2022/09/GA-BTS-01-rough-675x1024.jpg"
     )
+    # The webcomic alt fallback must NOT return the sibling post's featured-image
+    # alt text — the post's own content image has no alt, so caption is None.
+    assert service._extract_webcomic_alt_text(html) is None
 
 
 def test_webcomic_alt_prefers_img_title_over_og_description(tmp_path: Path):
