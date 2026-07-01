@@ -126,3 +126,24 @@ def test_pending_row_is_invisible_to_the_default_tenant(configured):
 def test_default_background_user_ids_when_not_injected(configured):
     svc, _ = _service(None)
     assert svc._background_user_ids() == [tenancy.DEFAULT_USER_ID]
+
+
+def test_reclaim_resets_stale_in_progress_rows(configured):
+    # A row left 'in_progress' by a restart mid-capture would otherwise never
+    # be reselected (the poller only looks at 'pending') — reclaim fixes that.
+    _make_archive_db(tenancy.starred_archive_db_path("alice"))
+    conn = sqlite3.connect(str(tenancy.starred_archive_db_path("alice")))
+    conn.execute(
+        "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at)"
+        " VALUES ('https://alice.example/feed', 'e1', 'in_progress', 0)"
+    )
+    conn.commit()
+    conn.close()
+
+    svc, seen = _service(lambda: ["alice"])
+    svc._reclaim_stale_in_progress()
+
+    # The stranded row is now pending again and gets processed on the next scan.
+    with tenancy.user_context("alice"):
+        assert svc._process_one_pending() is True
+    assert seen == [("alice", "https://alice.example/feed")]
