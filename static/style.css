@@ -3706,6 +3706,11 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .sfc-action-btn:hover:not(:disabled) { background: var(--hover-bg); }
 .sfc-action-btn:disabled, .sfc-move-select:disabled { opacity: 0.5; cursor: default; }
+/* Native <select> needs an explicit themed background/text — transparent renders
+   as a white box with low-contrast text in dark mode. Match the app's other
+   themed selects (e.g. .feed-prop-strategy-select). */
+.sfc-move-select { background: var(--bg, #fff); color: var(--text, var(--fg, inherit)); }
+.sfc-move-select option { background: var(--bg, #fff); color: var(--text, var(--fg, inherit)); }
 .sfc-action-danger { color: #c0392b; border-color: #c0392b; }
 .sfc-action-danger:hover:not(:disabled) { background: rgba(192, 57, 43, 0.1); }
 .sfc-panel {
