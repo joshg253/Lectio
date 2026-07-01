@@ -1819,7 +1819,15 @@
           <div class="feeds-dedup-controls">
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
+            <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
+          </div>
+          <div id="multi-folder-results" hidden>
+            <p class="action-modal-label multi-folder-intro"></p>
+            <div class="multi-folder-list"></div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="multi-folder-ok" class="danger" hidden>Keep selected folders</button>
+            </div>
           </div>
           <div id="dedup-inline-results" hidden>
             <p class="action-modal-label dedup-modal-intro"></p>
@@ -2968,6 +2976,59 @@
       if (dedupeData.rescued_count > 0) parts.push(`rescued ${dedupeData.rescued_count} unread post(s)`);
       if (dedupeData.upgraded_count > 0) parts.push(`upgraded ${dedupeData.upgraded_count} feed(s) to Atom`);
       alert(parts.length ? parts.join(', ') + '.' : 'Nothing to do.');
+      window.location.reload();
+    });
+
+    const _mfEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    document.getElementById('multi-folder-btn')?.addEventListener('click', async () => {
+      const resp = await fetch('/feeds/multi-folder');
+      const data = await resp.json();
+      const feeds = data.feeds || [];
+      const results = document.getElementById('multi-folder-results');
+      const intro = results.querySelector('.multi-folder-intro');
+      const list = results.querySelector('.multi-folder-list');
+      const okBtn = document.getElementById('multi-folder-ok');
+
+      results.hidden = false;
+      if (feeds.length === 0) {
+        intro.textContent = 'No feeds are in more than one folder.';
+        list.innerHTML = '';
+        okBtn.hidden = true;
+        return;
+      }
+      okBtn.hidden = false;
+      intro.textContent = `Found ${feeds.length} feed(s) in more than one folder — choose the single folder to keep each in:`;
+      list.innerHTML = feeds.map((f, i) => {
+        const radios = f.folders.map((fld, j) =>
+          `<label class="dedup-folder-check"><input type="radio" name="mf_${i}" value="${fld.id}"${j === 0 ? ' checked' : ''}> ${_mfEscape(fld.name)}</label>`
+        ).join('');
+        return `<div class="dedup-cross-pair" data-index="${i}" data-feed-url="${_mfEscape(f.feed_url)}">` +
+          `<div class="dedup-pair"><div class="dedup-pair-row"><span class="dedup-url">${_mfEscape(f.title)}</span></div></div>` +
+          `<div class="dedup-folder-checks">${radios}</div>` +
+          `</div>`;
+      }).join('');
+    });
+
+    document.getElementById('multi-folder-ok')?.addEventListener('click', async () => {
+      const results = document.getElementById('multi-folder-results');
+      const choices = [];
+      for (const pair of results.querySelectorAll('.dedup-cross-pair')) {
+        const feedUrl = pair.dataset.feedUrl;
+        const checked = pair.querySelector('input[type="radio"]:checked');
+        if (feedUrl && checked) {
+          choices.push({ feed_url: feedUrl, folder_id: parseInt(checked.value) });
+        }
+      }
+      results.hidden = true;
+      const resp = await fetch('/feeds/multi-folder/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ choices }),
+      });
+      const respData = await resp.json();
+      alert(respData.resolved > 0 ? `Collapsed ${respData.resolved} feed(s) to a single folder.` : 'Nothing to do.');
       window.location.reload();
     });
 
@@ -6500,6 +6561,22 @@
 
         showContextMenu(event);
       });
+
+      // Double-click a folder row → open its Properties. Skip the root folder
+      // and the derived virtual "Uncategorized" folder, which have no editable
+      // properties.
+      folderLink.addEventListener('dblclick', (event) => {
+        if (folderLink.classList.contains('root-item') || folderLink.hasAttribute('data-virtual')) {
+          return;
+        }
+        const fid = folderLink.getAttribute('data-folder-id');
+        if (!fid) {
+          return;
+        }
+        event.preventDefault();
+        hideAllContextMenus();
+        openFolderPropertiesModal(Number(fid));
+      });
     }
 
     for (const feedLink of document.querySelectorAll('.feed-link')) {
@@ -6533,6 +6610,17 @@
         hideFolderSubmenu();
 
         showContextMenu(event);
+      });
+
+      // Double-click a feed row → open its Properties.
+      feedLink.addEventListener('dblclick', (event) => {
+        const feedUrl = feedLink.getAttribute('data-feed-url');
+        if (!feedUrl) {
+          return;
+        }
+        event.preventDefault();
+        hideAllContextMenus();
+        openFeedPropertiesModal(feedUrl);
       });
     }
 

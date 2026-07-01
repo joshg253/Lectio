@@ -229,6 +229,33 @@ def label_is_tag(label_name: str) -> bool:
 # JSON file import (Path B — no API calls needed)
 # ---------------------------------------------------------------------------
 
+def _coerce_published(item: dict) -> int | None:
+    """Best-available publish timestamp (Unix seconds) for a native item.
+
+    Falls back from the item's own ``published`` to Inoreader's ``crawlTimeMsec``
+    (milliseconds) and ``timestampUsec`` (microseconds) so date-less entries
+    still get a real age instead of defaulting to import time downstream."""
+    pub = item.get("published")
+    if pub:
+        try:
+            return int(pub)
+        except (TypeError, ValueError):
+            pass
+    crawl_ms = item.get("crawlTimeMsec")
+    if crawl_ms:
+        try:
+            return int(crawl_ms) // 1000
+        except (TypeError, ValueError):
+            pass
+    ts_usec = item.get("timestampUsec")
+    if ts_usec:
+        try:
+            return int(ts_usec) // 1_000_000
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
 def parse_export_json(data) -> list[dict]:
     """Parse items into normalised records.
 
@@ -291,7 +318,10 @@ def parse_export_json(data) -> list[dict]:
         out.append({
             "url": url,
             "title": item.get("title", ""),
-            "published": item.get("published"),
+            # Prefer the item's own published date; fall back to Inoreader's crawl
+            # time so entries that omit <pubDate> still carry a real timestamp and
+            # sort by true age instead of clustering at import time.
+            "published": _coerce_published(item),
             "feed_url": feed_url,
             "feed_title": origin.get("title", ""),
             "content": summary.get("content", ""),

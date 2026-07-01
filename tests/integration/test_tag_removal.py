@@ -88,6 +88,35 @@ def test_delete_everywhere_rejects_invalid_tag(reader_with_entries):
     assert main.delete_manual_tag_everywhere(None) == 0
 
 
+def test_normalize_tag_value_hyphenates_spaces():
+    # Multi-word input collapses to a single hyphenated tag instead of being
+    # rejected or split.
+    assert main.normalize_tag_value("games to play") == "games-to-play"
+    assert main.normalize_tag_value("  Games  To  Play  ") == "games-to-play"
+    assert main.normalize_tag_value("#Hello World") == "hello-world"
+
+
+def test_migrate_spaced_manual_tags_rewrites_and_removes_cleanly(reader_with_entries):
+    reader = reader_with_entries
+    prefix = main.MANUAL_TAG_KEY_PREFIX
+    # Simulate an imported multi-word tag stored with a literal space, which the
+    # normal tag UI can't create nor remove cleanly.
+    entry = reader.get_entry((FEED, "e0"))
+    reader.set_tag(entry.resource_id, f"{prefix}games to play")
+    main.invalidate_has_manual_tags_cache()
+    main.invalidate_tag_counts_cache()
+
+    rewrites = main.migrate_spaced_manual_tags()
+
+    assert rewrites == 1
+    assert main.get_manual_tags_for_entry(FEED, "e0") == ["games-to-play"]
+    # Idempotent: a second run finds nothing to do.
+    assert main.migrate_spaced_manual_tags() == 0
+    # The hyphenated tag removes cleanly via the per-post replace path.
+    main.set_manual_tags_for_entry(FEED, "e0", "")
+    assert main.get_manual_tags_for_entry(FEED, "e0") == []
+
+
 def test_tag_count_dedupes_same_article_across_feeds(reader_with_entries):
     """The same article syndicated across two feeds (identical entry id under
     two feed URLs) is one entry_tags row per feed, but the post list collapses

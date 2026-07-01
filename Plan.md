@@ -407,6 +407,16 @@ Detailed specs follow.
 
 ## Known limitations (not bugs)
 
+- **Pre-existing date-less entries sort by received time, not true age** — new
+  imports backfill a real `published` (Inoreader crawl-time fallback), and the
+  Pub-Old/Pub-New window now falls back to `first_updated` so old posts surface
+  correctly. But the handful of already-imported entries with a NULL `published`
+  (~343 in the live DB) still lack a true publication date; rather than overwrite
+  reader's `published` column with import time (worse than the runtime
+  url/title-inferred fallback), they sort by when the reader first saw them. A
+  one-time backfill that persists the inferred effective date could be added later
+  if the ordering of those specific entries ever matters.
+
 - **Reddit OAuth app registration blocked** — Reddit killed free OAuth2 app
   registration as part of the 2023 API crackdown. The Integrations → Reddit panel
   and all supporting code (`services/reddit.py`, routes, scheduler hook, submit
