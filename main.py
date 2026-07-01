@@ -188,7 +188,10 @@ def _load_local_env(env_path: str | Path | None = None) -> None:
 
 # Load local .env early so os.getenv() below can pick up values provided by the developer
 _load_local_env()
-DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(BASE_DIR))).resolve()
+# Default to BASE_DIR/data (matching the Docker ./data:/data mapping) so a local
+# run without LECTIO_DATA_DIR set writes DBs and service dirs (scraped-feeds/,
+# deviantart-feeds/) into ./data instead of polluting the repo root.
+DATA_DIR = Path(os.getenv("LECTIO_DATA_DIR", str(BASE_DIR / "data"))).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
 READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
