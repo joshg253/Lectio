@@ -15676,10 +15676,13 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
             state["errors"] = state.get("errors", 0) + 1
             continue
 
-        # Collect unique feed URLs to subscribe. Canonicalize so variants
+        # Canonicalize each item's feed URL once, in place, so variants
         # (old.reddit, ?alt=rss, trailing slash) merge into existing feeds
-        # rather than spawning uncategorized duplicates.
-        new_feed_urls = {canonical_feed_url(item["feed_url"]) for item in items if item["feed_url"]}
+        # rather than spawning uncategorized duplicates — and so the subscribe
+        # loop and the per-entry tag/star keying below stay in sync.
+        _canonicalize_item_feed_urls(items)
+
+        new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
         if new_feed_urls:
             with get_reader() as reader:
                 existing = {str(f.url) for f in reader.get_feeds()}
@@ -15705,10 +15708,10 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
                     rconn.row_factory = sqlite3.Row
                     for item in items:
                         entry_url = item["url"]
-                        # Same canonicalization as the subscribe loop so tags/
+                        # feed_url was canonicalized in place above, so tags/
                         # stars key off the canonical feed URL and land on the
                         # (possibly pre-existing) merged feed's entries.
-                        feed_url = canonical_feed_url(item["feed_url"]) if item["feed_url"] else item["feed_url"]
+                        feed_url = item["feed_url"]
                         if not entry_url or not feed_url:
                             continue
 
