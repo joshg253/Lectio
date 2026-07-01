@@ -9,9 +9,11 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Point DATA_DIR at ./tmp so tests never write into the project root or ./data.
-# Must happen before main.py is first imported (DATA_DIR resolves at module load time).
-_TEST_DATA_DIR = ROOT / "tmp"
+# Point DATA_DIR at ./tmp/test-data so tests never write into the project root or
+# ./data, and keep the throwaway DBs/service dirs in one subdir rather than loose
+# in ./tmp. Must happen before main.py is first imported (DATA_DIR resolves at
+# module load time).
+_TEST_DATA_DIR = ROOT / "tmp" / "test-data"
 _TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
 
