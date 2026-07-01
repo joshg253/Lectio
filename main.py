@@ -11292,6 +11292,20 @@ def canonical_feed_url(raw_url: str) -> str:
     return url
 
 
+def _canonicalize_item_feed_urls(items: list[dict]) -> None:
+    """Rewrite each item's ``feed_url`` to its canonical form, in place.
+
+    Importers that key both feed subscription and per-entry tag/star state off
+    ``item["feed_url"]`` call this once up front so every downstream use shares
+    the canonical value — variants (old.reddit, ``?alt=rss``, trailing slash)
+    then merge into an existing subscription instead of spawning a duplicate.
+    """
+    for item in items:
+        furl = item.get("feed_url") or ""
+        if furl:
+            item["feed_url"] = canonical_feed_url(furl)
+
+
 def _is_subscribable_feed_url(url: str) -> bool:
     """True only for http(s) feed URLs supplied by users.
 
@@ -15809,6 +15823,11 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
 
     items = inoreader_service.parse_export_json(data if isinstance(data, list) else data.get("items", []))
 
+    # Canonicalize each incoming feed URL once so the subscribe loop and the
+    # per-entry tag/star keying below share the same value — variants merge into
+    # an existing subscription instead of creating duplicates.
+    _canonicalize_item_feed_urls(items)
+
     feeds_added = 0
     items_starred = 0
     items_tagged = 0
@@ -15926,6 +15945,11 @@ def _apply_migration_items(items: list[dict], state: dict, save_fn) -> None:
     phase.
     """
     reader_db = str(tenancy.reader_db_path())
+
+    # Canonicalize every incoming feed URL once, up front, so both the subscribe
+    # phase and the per-entry tag/star keying below use the same canonical value
+    # (merging variants into an existing subscription instead of duplicating).
+    _canonicalize_item_feed_urls(items)
 
     # --- Phase 1: subscribe feeds and assign folders ---
     feed_folders: dict[str, str] = {}
@@ -16077,7 +16101,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                 existing = {str(f.url) for f in reader.get_feeds()}
                 added = 0
                 for sub in subs:
-                    furl = sub.get("feed_url", "")
+                    furl = canonical_feed_url(sub.get("feed_url", ""))
                     if furl and furl not in existing:
                         try:
                             reader.add_feed(furl, exist_ok=True)
@@ -16131,6 +16155,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                                 origin = item.get("origin") or {}
                                 raw_stream = origin.get("streamId", "")
                                 feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                                feed_url = canonical_feed_url(feed_url)
                                 if not entry_url or not feed_url:
                                     continue
                                 try:
@@ -16171,6 +16196,7 @@ def _inoreader_drip_step(calls_budget: int = 10) -> None:
                         origin = item.get("origin") or {}
                         raw_stream = origin.get("streamId", "")
                         feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream
+                        feed_url = canonical_feed_url(feed_url)
                         if not entry_url or not feed_url:
                             continue
                         try:

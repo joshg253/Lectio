@@ -36,3 +36,19 @@ def test_canonical_feed_url(raw, expected):
 def test_idempotent():
     once = main.canonical_feed_url("https://old.reddit.com/r/x/.rss")
     assert main.canonical_feed_url(once) == once
+
+
+def test_canonicalize_item_feed_urls_in_place():
+    """Importers key subscribe + tag/star off item['feed_url']; the helper must
+    rewrite it to canonical form in place so both phases stay in sync."""
+    items = [
+        {"feed_url": "https://old.reddit.com/r/x/.rss", "url": "a"},
+        {"feed_url": "https://example.com/feed/", "url": "b"},
+        {"feed_url": "", "url": "c"},           # empty left untouched
+        {"url": "d"},                            # missing key tolerated
+    ]
+    main._canonicalize_item_feed_urls(items)
+    assert items[0]["feed_url"] == "https://www.reddit.com/r/x/.rss"
+    assert items[1]["feed_url"] == "https://example.com/feed"
+    assert items[2]["feed_url"] == ""
+    assert "feed_url" not in items[3]
