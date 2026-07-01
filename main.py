@@ -11471,11 +11471,12 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             except Exception:  # noqa: BLE001
                 LOGGER.exception("[dedup] set_tag failed %s on %s", key, target_id)
         if sid in src_stars:
-            conn.execute(
+            cur = conn.execute(
                 "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
                 (keep_url, target_id, src_stars[sid]),
             )
-            counts["stars"] += 1
+            if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
+                counts["stars"] += 1
 
     # The source feed is about to be deleted; drop its now-migrated star rows.
     conn.execute("DELETE FROM saved_entries WHERE feed_url = ?", (remove_url,))
