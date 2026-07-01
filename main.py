@@ -17227,8 +17227,8 @@ def move_feed(
     ok = True
     try:
         move_feed_to_folder(feed_url, from_folder_id, to_folder_id)
-    except ValueError as exc:
-        message = str(exc)  # intentional, user-facing validation messages
+    except ValueError:
+        message = "Couldn't move the feed to that folder."
         ok = False
     except Exception:
         LOGGER.exception("[feeds/move] failed feed=%s -> folder=%s", feed_url, to_folder_id)
