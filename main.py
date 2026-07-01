@@ -17174,6 +17174,8 @@ def move_feed(
     feed_url: str = Form(...),
     from_folder_id: int = Form(...),
     to_folder_id: int = Form(...),
+    current_folder_id: int | None = Form(default=None),
+    current_list_feed_url: str | None = Form(default=None),
     sort_by: str | None = Form(default=None),
     sort_dir: str | None = Form(default=None),
     read_filter: str | None = Form(default=None),
@@ -17186,18 +17188,27 @@ def move_feed(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     read_filter_query = build_read_filter_query(read_filter)
 
-    if from_folder_id == to_folder_id:
-        return RedirectResponse(
-            url=(
-                f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-                f"{sort_query}"
-                f"{read_filter_query}"
-                f"{star_only_query}"
-                f"{resume_read_filter_query}"
-                f"&message={quote_plus('Feed is already in that folder.')}"
-            ),
-            status_code=303,
+    # Only "follow" the feed to its new folder if it's the feed the user is
+    # currently viewing. Right-clicking a feed you aren't looking at (to file it)
+    # should leave your current view put.
+    following = bool(current_list_feed_url) and current_list_feed_url == feed_url
+    if following:
+        dest_folder_id: int = to_folder_id
+        dest_feed = feed_url
+    else:
+        dest_folder_id = current_folder_id if current_folder_id is not None else to_folder_id
+        dest_feed = current_list_feed_url or ""
+
+    def _dest(message: str) -> str:
+        feed_q = f"&list_feed_url={quote_plus(dest_feed)}" if dest_feed else ""
+        return (
+            f"/?folder_id={dest_folder_id}{feed_q}"
+            f"{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}"
+            f"&message={quote_plus(message)}"
         )
+
+    if from_folder_id == to_folder_id:
+        return RedirectResponse(url=_dest("Feed is already in that folder."), status_code=303)
 
     message = "Feed moved."
     try:
@@ -17207,17 +17218,7 @@ def move_feed(
     except Exception as exc:
         message = f"Feed move failed: {exc}"
 
-    return RedirectResponse(
-        url=(
-            f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-            f"{sort_query}"
-            f"{read_filter_query}"
-            f"{star_only_query}"
-            f"{resume_read_filter_query}"
-            f"&message={quote_plus(message)}"
-        ),
-        status_code=303,
-    )
+    return RedirectResponse(url=_dest(message), status_code=303)
 
 
 @app.post("/feeds/disable")

@@ -1095,6 +1095,8 @@
     <input type="hidden" name="feed_url" id="context-move-feed-url" />
     <input type="hidden" name="from_folder_id" id="context-move-feed-from-folder-id" />
     <input type="hidden" name="to_folder_id" id="context-move-feed-to-folder-id" />
+    <input type="hidden" name="current_folder_id" value="{{ selected_folder_id }}" />
+    <input type="hidden" name="current_list_feed_url" value="{{ selected_feed_url or '' }}" />
     <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
     <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
     <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
