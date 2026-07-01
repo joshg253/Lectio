@@ -17790,6 +17790,74 @@ def mark_folder_as_read(
     )
 
 
+@app.post("/feeds/bulk")
+def bulk_feed_action(
+    request: Request,
+    action: str = Form(...),
+    feed_urls: str = Form(...),
+    to_folder_id: int | None = Form(default=None),
+):
+    """Apply one action to a set of selected feeds (Settings → Feeds toolbar).
+
+    feed_urls is newline-separated. Returns JSON {ok, action, count}. Reuses the
+    same per-feed helpers as the single-feed routes so behavior stays identical.
+    """
+    urls = [u.strip() for u in feed_urls.split("\n") if u.strip()]
+    if not urls:
+        return JSONResponse({"ok": False, "error": "No feeds selected."}, status_code=400)
+    count = 0
+    try:
+        if action == "disable":
+            for u in urls:
+                disable_feed(u)
+                count += 1
+        elif action == "enable":
+            for u in urls:
+                enable_feed(u)
+                count += 1
+        elif action == "mark-read":
+            count = mark_feeds_as_read(set(urls))
+            with unread_counts_cache_lock:
+                global _unread_counts_generation
+                _unread_counts_generation += 1
+                unread_counts_cache.clear()
+        elif action == "refresh":
+            feed_refresh_service.update_feeds(urls, enhance=False)
+            _run_automation_after_refresh(set(urls))
+            invalidate_unread_counts_cache()
+            _spawn_feed_enhancement(urls)
+            count = len(urls)
+        elif action == "move":
+            if not to_folder_id:
+                return JSONResponse({"ok": False, "error": "No target folder."}, status_code=400)
+            with get_meta_connection() as conn:
+                if not conn.execute("SELECT 1 FROM folders WHERE id = ?", (to_folder_id,)).fetchone():
+                    return JSONResponse({"ok": False, "error": "Target folder does not exist."}, status_code=400)
+                # Clean move: drop every existing membership, then add to target.
+                for u in urls:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (u,))
+                    conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (to_folder_id, u))
+                    count += 1
+            invalidate_meta_structure_cache()
+        elif action == "unsubscribe":
+            for u in urls:
+                with get_meta_connection() as conn:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (u,))
+                    still_used = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (u,)).fetchone()
+                if not still_used:
+                    with get_reader() as reader:
+                        with get_meta_connection() as conn:
+                            purge_orphaned_feed(reader, conn, u, archive_pending=True)
+                count += 1
+            invalidate_meta_structure_cache()
+        else:
+            return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)
+    except Exception as exc:
+        LOGGER.exception("[feeds/bulk] action=%s failed", action)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    return JSONResponse({"ok": True, "action": action, "count": count})
+
+
 @app.post("/feeds/mark-read")
 def mark_feed_as_read(
     request: Request,

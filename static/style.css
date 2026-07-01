@@ -3694,6 +3694,20 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .sfc-compare-btn:hover:not(:disabled) { background: var(--hover-bg); }
 .sfc-compare-btn:disabled { opacity: 0.5; cursor: default; }
 .sfc-count { font-size: 0.8rem; color: var(--muted); }
+.sfc-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-left: auto; }
+.sfc-action-btn, .sfc-move-select {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.82rem;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.sfc-action-btn:hover:not(:disabled) { background: var(--hover-bg); }
+.sfc-action-btn:disabled, .sfc-move-select:disabled { opacity: 0.5; cursor: default; }
+.sfc-action-danger { color: #c0392b; border-color: #c0392b; }
+.sfc-action-danger:hover:not(:disabled) { background: rgba(192, 57, 43, 0.1); }
 .sfc-panel {
   margin-top: 0.75rem;
   border: 1px solid var(--line);
@@ -4726,6 +4740,7 @@ mark.highlight-mark {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+  table-layout: fixed;
 }
 .settings-folders-table th {
   text-align: left;
@@ -4750,7 +4765,7 @@ mark.highlight-mark {
   width: 3rem;
 }
 .settings-folder-status { width: 5rem; text-align: right; }
-.settings-folder-actions { width: 3.75rem; text-align: right; white-space: nowrap; padding-right: 0.25rem; }
+.settings-folder-actions { width: 5.25rem; text-align: right; white-space: nowrap; padding-right: 0.25rem; }
 .settings-folder-toggle {
   background: none;
   border: none;
@@ -4785,6 +4800,20 @@ mark.highlight-mark {
   color: var(--ink);
   cursor: pointer;
   text-align: left;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.settings-folder-name-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 .settings-feed-name-btn:hover { text-decoration: underline; }
 .settings-feed-name-text[data-feed-error] { color: var(--danger, #c0392b); }
