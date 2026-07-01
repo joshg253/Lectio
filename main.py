@@ -11265,6 +11265,33 @@ def normalize_feed_url(feed_url: str) -> str:
     return feed_url
 
 
+def canonical_feed_url(raw_url: str) -> str:
+    """Canonical form of a feed URL for storage/dedupe at import time.
+
+    Composes the same normalization the interactive Add-Feed path uses
+    (YouTube channel canonicalization + ``normalize_feed_url``: host aliases
+    like old.reddit→www.reddit, format-selector params, trailing slashes,
+    scheme/host case). Importers must run every incoming feed URL through this
+    so a variant (old.reddit, a trailing ``?``, ``alt=rss``) attaches to an
+    existing subscription instead of creating a duplicate: ``reader.add_feed``
+    with ``exist_ok=True`` then merges into the existing feed, and any
+    per-entry tags/stars key off the same canonical URL. Returns the stripped
+    input unchanged if normalization fails.
+    """
+    url = (raw_url or "").strip()
+    if not url:
+        return url
+    try:
+        url = normalize_youtube_feed_url(url)
+    except Exception:
+        pass
+    try:
+        url = normalize_feed_url(url)
+    except Exception:
+        pass
+    return url
+
+
 def _is_subscribable_feed_url(url: str) -> bool:
     """True only for http(s) feed URLs supplied by users.
 
@@ -12095,13 +12122,17 @@ def import_opml(conn: sqlite3.Connection, opml_data: bytes) -> int:
             if feed_url:
                 feed_url = feed_url.strip()
                 if feed_url:
-                    if feed_url in feeds_with_folder:
-                        # Already assigned to a folder, skip
-                        return
                     if not _is_subscribable_feed_url(feed_url):
                         # Reject non-http(s) schemes (e.g. file://) — reader would
                         # otherwise read local files when refreshing the feed.
                         LOGGER.warning("OPML import: skipping non-http(s) entry %r", feed_url)
+                        return
+                    # Canonicalize so a variant (old.reddit, ?alt=rss, trailing
+                    # slash) attaches to an existing subscription instead of
+                    # creating an uncategorized duplicate.
+                    feed_url = canonical_feed_url(feed_url)
+                    if feed_url in feeds_with_folder:
+                        # Already assigned to a folder, skip
                         return
                     try:
                         reader.add_feed(feed_url, exist_ok=True)
@@ -15631,8 +15662,10 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
             state["errors"] = state.get("errors", 0) + 1
             continue
 
-        # Collect unique feed URLs to subscribe.
-        new_feed_urls = {item["feed_url"] for item in items if item["feed_url"]}
+        # Collect unique feed URLs to subscribe. Canonicalize so variants
+        # (old.reddit, ?alt=rss, trailing slash) merge into existing feeds
+        # rather than spawning uncategorized duplicates.
+        new_feed_urls = {canonical_feed_url(item["feed_url"]) for item in items if item["feed_url"]}
         if new_feed_urls:
             with get_reader() as reader:
                 existing = {str(f.url) for f in reader.get_feeds()}
@@ -15658,7 +15691,10 @@ def _run_import_loop(json_files: list, state: dict, _save) -> None:
                     rconn.row_factory = sqlite3.Row
                     for item in items:
                         entry_url = item["url"]
-                        feed_url = item["feed_url"]
+                        # Same canonicalization as the subscribe loop so tags/
+                        # stars key off the canonical feed URL and land on the
+                        # (possibly pre-existing) merged feed's entries.
+                        feed_url = canonical_feed_url(item["feed_url"]) if item["feed_url"] else item["feed_url"]
                         if not entry_url or not feed_url:
                             continue
 
