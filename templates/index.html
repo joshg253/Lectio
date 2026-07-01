@@ -1633,7 +1633,7 @@
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
-          {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | rejectattr('virtual', 'equalto', True) | list %}
+          {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
           {# Also list feeds attached directly to the root "All Feeds" folder
              (depth 0) — otherwise feeds added without a folder are invisible
              and unmanageable here. Shown last, labelled "Ungrouped". #}
@@ -1662,15 +1662,19 @@
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
               <td class="settings-folder-refresh">
+                {% if not row.virtual %}
                 <select class="settings-folder-cadence-select feed-prop-strategy-select" data-folder-id="{{ row.id }}" data-prev-value="{{ cad }}" title="Refresh frequency for this folder" aria-label="Refresh frequency for {{ row.name }}">
                   {% for value, label in cadence_options %}
                   <option value="{{ value }}"{% if value == cad %} selected{% endif %}>{{ label }}</option>
                   {% endfor %}
                 </select>
+                {% endif %}
               </td>
               <td class="settings-folder-actions">
+                {% if not row.virtual %}
                 <button type="button" class="settings-folder-props-btn" data-folder-automation-id="{{ row.id }}" title="Folder automation" aria-label="Folder automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
                 <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
+                {% endif %}
               </td>
               <td class="sfc-col-check"></td>
             </tr>
