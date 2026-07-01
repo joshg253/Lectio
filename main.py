@@ -17171,6 +17171,7 @@ def reparse_feed_route(feed_url: str = Form(...)):
 
 @app.post("/feeds/move")
 def move_feed(
+    request: Request,
     feed_url: str = Form(...),
     from_folder_id: int = Form(...),
     to_folder_id: int = Form(...),
@@ -17207,18 +17208,33 @@ def move_feed(
             f"&message={quote_plus(message)}"
         )
 
+    def _respond(message: str, ok: bool = True):
+        # AJAX caller (sidebar move submenu) wants JSON so it can relocate the
+        # feed node in place instead of a full-page reload.
+        requested_with = (request.headers.get("x-requested-with") or "").lower()
+        if "lectio" in requested_with or requested_with == "xmlhttprequest":
+            return JSONResponse(
+                {"ok": ok, "message": message, "following": following,
+                 "feed_url": feed_url, "from_folder_id": from_folder_id, "to_folder_id": to_folder_id},
+                status_code=200 if ok else 500,
+            )
+        return RedirectResponse(url=_dest(message), status_code=303)
+
     if from_folder_id == to_folder_id:
-        return RedirectResponse(url=_dest("Feed is already in that folder."), status_code=303)
+        return _respond("Feed is already in that folder.")
 
     message = "Feed moved."
+    ok = True
     try:
         move_feed_to_folder(feed_url, from_folder_id, to_folder_id)
     except ValueError as exc:
         message = str(exc)
+        ok = False
     except Exception as exc:
         message = f"Feed move failed: {exc}"
+        ok = False
 
-    return RedirectResponse(url=_dest(message), status_code=303)
+    return _respond(message, ok)
 
 
 @app.post("/feeds/disable")

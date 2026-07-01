@@ -5855,6 +5855,51 @@
     // (sidebar tree, Settings list, problem panels). Throws on a failed request
     // so callers can surface their own error UI. `function` decl is hoisted, so
     // callers defined earlier/later in this scope can all use it.
+    async function moveFeedRequest(feedUrl, fromFolderId, toFolderId, toFolderName) {
+      const form = document.getElementById('context-move-feed-form');
+      const body = new URLSearchParams();
+      body.set('feed_url', feedUrl);
+      body.set('from_folder_id', fromFolderId);
+      body.set('to_folder_id', toFolderId);
+      for (const n of ['current_folder_id', 'current_list_feed_url', 'sort_by', 'sort_dir', 'read_filter', 'star_only', 'resume_read_filter']) {
+        const inp = form?.querySelector(`[name="${n}"]`);
+        if (inp) body.set(n, inp.value);
+      }
+      const resp = await fetch('/feeds/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-move' },
+        credentials: 'same-origin', body: body.toString(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json().catch(() => ({ ok: true }));
+      if (data.ok === false) { window.alert(data.message || 'Move failed.'); return; }
+
+      // Relocate the feed node from the source folder to the target (if that
+      // folder's list is rendered), else just drop it from the source — no reload.
+      const fu = CSS.escape(feedUrl), sfid = CSS.escape(String(fromFolderId));
+      const srcLi = document.querySelector(`.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${sfid}"]`)?.closest('.tree-feed-item');
+      const unread = srcLi ? (parseInt(srcLi.querySelector('.count')?.textContent || '0', 10) || 0) : 0;
+      const targetUl = document.getElementById(`folder-feeds-${toFolderId}`);
+      const srcFolderEl = document.querySelector(`.tree-item[data-folder-id="${sfid}"]:not(.root-item)`);
+      const tgtFolderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(String(toFolderId))}"]:not(.root-item)`);
+      if (srcLi) {
+        const link = srcLi.querySelector('.feed-link');
+        if (targetUl && link) {
+          link.setAttribute('data-folder-id', String(toFolderId));
+          if (link.href) link.href = link.href.replace(/([?&]folder_id=)[^&]*/, `$1${toFolderId}`);
+          targetUl.appendChild(srcLi);
+          if (tgtFolderEl && unread) adjustCountBadge(tgtFolderEl, unread);
+        } else {
+          srcLi.remove();
+        }
+        if (srcFolderEl && unread) adjustCountBadge(srcFolderEl, -unread);
+      }
+      // Settings tree: drop the source row (reappears under the target on reload).
+      document.querySelectorAll(`.settings-feed-row[data-folder-feeds="${sfid}"][data-feed-url="${fu}"]`).forEach(r => r.remove());
+
+      if (typeof showToastMessage === 'function') showToastMessage(`Moved to "${toFolderName}".`);
+    }
+
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       const resp = await fetch('/feeds/unsubscribe', {
@@ -7917,11 +7962,12 @@
           return;
         }
 
-        moveFeedUrlInput.value = contextFeedUrl;
-        moveFeedFromFolderIdInput.value = contextFolderId;
-        moveFeedToFolderIdInput.value = targetFolderId;
+        const toFolderName = folderOption.textContent.trim();
+        const feedUrl = contextFeedUrl;
+        const fromFolderId = contextFolderId;
         hideContextMenu();
-        moveFeedForm.submit();
+        moveFeedRequest(feedUrl, fromFolderId, targetFolderId, toFolderName)
+          .catch((err) => window.alert(`Move failed: ${err}`));
       });
     }
 
