@@ -9337,14 +9337,22 @@ def merge_orphan_saved_entries(
     sort_by: str,
     sort_dir: str,
     limit: int,
+    only_feed_url: str | None = None,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
 
     Orphans are starred entries whose feed is no longer in any folder; their
     metadata comes entirely from the starred archive. Rendered alongside live
     saved entries so unsubscribing a feed doesn't make its saves disappear.
+
+    When *only_feed_url* is given, restrict orphans to that single feed (matched
+    canonically) — used when the user clicks the feed link of an orphaned save
+    to browse just that unsubscribed feed's archived items.
     """
     orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    if only_feed_url is not None:
+        target = normalize_feed_url(only_feed_url)
+        orphans = [o for o in orphans if normalize_feed_url(o["feed_url"]) == target]
     if not orphans:
         return posts
 
@@ -13176,10 +13184,29 @@ def _home_inner(
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
-    # unsubscribed) only when viewing the root "All Feeds" with the saved
-    # filter on — they don't belong to any folder, so per-folder views
-    # legitimately exclude them.
-    if (
+    # unsubscribed). Two entry points, both gated on the saved filter:
+    #   1. Root "All Feeds" with no feed/tag/query — orphans belong to no
+    #      folder, so per-folder views legitimately exclude them.
+    #   2. A specific feed selected that is no longer live (the user clicked
+    #      the feed link on an orphaned save) — show just that feed's archive.
+    orphan_only_feed = (
+        selected_feed_url
+        if (selected_star_only and selected_feed_url and selected_feed_url not in all_feed_urls)
+        else None
+    )
+    if orphan_only_feed:
+        try:
+            posts = merge_orphan_saved_entries(
+                posts,
+                live_feed_urls=all_feed_urls,
+                sort_by=selected_sort_by,
+                sort_dir=selected_sort_dir,
+                limit=limit,
+                only_feed_url=orphan_only_feed,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
+    elif (
         selected_star_only
         and selected_folder_id == root_id
         and not selected_feed_url
