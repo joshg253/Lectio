@@ -17171,9 +17171,12 @@ def reparse_feed_route(feed_url: str = Form(...)):
 
 @app.post("/feeds/move")
 def move_feed(
+    request: Request,
     feed_url: str = Form(...),
     from_folder_id: int = Form(...),
     to_folder_id: int = Form(...),
+    current_folder_id: int | None = Form(default=None),
+    current_list_feed_url: str | None = Form(default=None),
     sort_by: str | None = Form(default=None),
     sort_dir: str | None = Form(default=None),
     read_filter: str | None = Form(default=None),
@@ -17186,38 +17189,53 @@ def move_feed(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     read_filter_query = build_read_filter_query(read_filter)
 
-    if from_folder_id == to_folder_id:
-        return RedirectResponse(
-            url=(
-                f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-                f"{sort_query}"
-                f"{read_filter_query}"
-                f"{star_only_query}"
-                f"{resume_read_filter_query}"
-                f"&message={quote_plus('Feed is already in that folder.')}"
-            ),
-            status_code=303,
+    # Only "follow" the feed to its new folder if it's the feed the user is
+    # currently viewing. Right-clicking a feed you aren't looking at (to file it)
+    # should leave your current view put.
+    following = bool(current_list_feed_url) and current_list_feed_url == feed_url
+    if following:
+        dest_folder_id: int = to_folder_id
+        dest_feed = feed_url
+    else:
+        dest_folder_id = current_folder_id if current_folder_id is not None else to_folder_id
+        dest_feed = current_list_feed_url or ""
+
+    def _dest(message: str) -> str:
+        feed_q = f"&list_feed_url={quote_plus(dest_feed)}" if dest_feed else ""
+        return (
+            f"/?folder_id={dest_folder_id}{feed_q}"
+            f"{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}"
+            f"&message={quote_plus(message)}"
         )
 
+    def _respond(message: str, ok: bool = True):
+        # AJAX caller (sidebar move submenu) wants JSON so it can relocate the
+        # feed node in place instead of a full-page reload.
+        requested_with = (request.headers.get("x-requested-with") or "").lower()
+        if "lectio" in requested_with or requested_with == "xmlhttprequest":
+            return JSONResponse(
+                {"ok": ok, "message": message, "following": following,
+                 "feed_url": feed_url, "from_folder_id": from_folder_id, "to_folder_id": to_folder_id},
+                status_code=200 if ok else 500,
+            )
+        return RedirectResponse(url=_dest(message), status_code=303)
+
+    if from_folder_id == to_folder_id:
+        return _respond("Feed is already in that folder.")
+
     message = "Feed moved."
+    ok = True
     try:
         move_feed_to_folder(feed_url, from_folder_id, to_folder_id)
-    except ValueError as exc:
-        message = str(exc)
-    except Exception as exc:
-        message = f"Feed move failed: {exc}"
+    except ValueError:
+        message = "Couldn't move the feed to that folder."
+        ok = False
+    except Exception:
+        LOGGER.exception("[feeds/move] failed feed=%s -> folder=%s", feed_url, to_folder_id)
+        message = "Feed move failed."
+        ok = False
 
-    return RedirectResponse(
-        url=(
-            f"/?folder_id={to_folder_id}&list_feed_url={quote_plus(feed_url)}"
-            f"{sort_query}"
-            f"{read_filter_query}"
-            f"{star_only_query}"
-            f"{resume_read_filter_query}"
-            f"&message={quote_plus(message)}"
-        ),
-        status_code=303,
-    )
+    return _respond(message, ok)
 
 
 @app.post("/feeds/disable")
@@ -17788,6 +17806,71 @@ def mark_folder_as_read(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
     )
+
+
+@app.post("/feeds/bulk")
+def bulk_feed_action(
+    request: Request,
+    action: str = Form(...),
+    feed_urls: str = Form(...),
+    to_folder_id: int | None = Form(default=None),
+):
+    """Apply one action to a set of selected feeds (Settings → Feeds toolbar).
+
+    feed_urls is newline-separated. Returns JSON {ok, action, count}. Reuses the
+    same per-feed helpers as the single-feed routes so behavior stays identical.
+    """
+    urls = [u.strip() for u in feed_urls.split("\n") if u.strip()]
+    if not urls:
+        return JSONResponse({"ok": False, "error": "No feeds selected."}, status_code=400)
+    count = 0
+    try:
+        if action == "disable":
+            for u in urls:
+                disable_feed(u)
+                count += 1
+        elif action == "enable":
+            for u in urls:
+                enable_feed(u)
+                count += 1
+        elif action == "mark-read":
+            count = mark_feeds_as_read(set(urls))
+            invalidate_unread_counts_cache()
+        elif action == "refresh":
+            feed_refresh_service.update_feeds(urls, enhance=False)
+            _run_automation_after_refresh(set(urls))
+            invalidate_unread_counts_cache()
+            _spawn_feed_enhancement(urls)
+            count = len(urls)
+        elif action == "move":
+            if not to_folder_id:
+                return JSONResponse({"ok": False, "error": "No target folder."}, status_code=400)
+            with get_meta_connection() as conn:
+                if not conn.execute("SELECT 1 FROM folders WHERE id = ?", (to_folder_id,)).fetchone():
+                    return JSONResponse({"ok": False, "error": "Target folder does not exist."}, status_code=400)
+                # Clean move: drop every existing membership, then add to target.
+                for u in urls:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (u,))
+                    conn.execute("INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)", (to_folder_id, u))
+                    count += 1
+            invalidate_meta_structure_cache()
+        elif action == "unsubscribe":
+            # Reuse a single reader + meta connection across the whole batch.
+            with get_reader() as reader, get_meta_connection() as conn:
+                for u in urls:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (u,))
+                    still_used = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (u,)).fetchone()
+                    if not still_used:
+                        purge_orphaned_feed(reader, conn, u, archive_pending=True)
+                    count += 1
+            invalidate_meta_structure_cache()
+        else:
+            return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)
+    except Exception as exc:
+        LOGGER.exception("[feeds/bulk] action=%s failed", action)
+        # Don't leak internal exception detail to the client; it's in the logs.
+        return JSONResponse({"ok": False, "error": "Action failed."}, status_code=500)
+    return JSONResponse({"ok": True, "action": action, "count": count})
 
 
 @app.post("/feeds/mark-read")

@@ -111,7 +111,9 @@ The short version:
   a reader migration) are gathered into an **Uncategorized** folder pinned to the
   bottom of the sidebar, so they stay visible and easy to file — right-click a
   feed there and pick **Add to folder** to categorize it. "All Feeds" always
-  includes them.
+  includes them. In **Settings → Feeds** you can multi-select feeds (or tick a
+  folder's header checkbox to select all its feeds) and **bulk move, disable/
+  enable, mark-read, refresh, or unsubscribe** them in one action.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.

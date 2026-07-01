@@ -1095,6 +1095,8 @@
     <input type="hidden" name="feed_url" id="context-move-feed-url" />
     <input type="hidden" name="from_folder_id" id="context-move-feed-from-folder-id" />
     <input type="hidden" name="to_folder_id" id="context-move-feed-to-folder-id" />
+    <input type="hidden" name="current_folder_id" value="{{ selected_folder_id }}" />
+    <input type="hidden" name="current_list_feed_url" value="{{ selected_feed_url or '' }}" />
     <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
     <input type="hidden" name="sort_dir" value="{{ selected_sort_dir }}" />
     <input type="hidden" name="read_filter" value="{{ selected_read_filter }}" />
@@ -1648,6 +1650,13 @@
             <input type="search" id="feeds-folder-search-input" class="feeds-folder-search-input" placeholder="Filter folders and feeds…" autocomplete="off" aria-label="Filter folders and feeds" />
           </div>
           <table class="settings-folders-table">
+            <colgroup>
+              <col />
+              <col style="width: 2.5rem" />
+              <col style="width: 5rem" />
+              <col style="width: 4.75rem" />
+              <col style="width: 2rem" />
+            </colgroup>
             <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check" title="Select for comparison"></th></tr></thead>
             <tbody>
             {% for row in child_rows %}
@@ -1656,9 +1665,11 @@
             {% set cad = row.cadence_minutes or 0 %}
             <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
               <td class="settings-folder-name">
-                <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
-                <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
-                {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+                <div class="settings-folder-name-inner">
+                  <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+                  <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
+                  {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+                </div>
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
               <td class="settings-folder-refresh">
@@ -1676,7 +1687,11 @@
                 <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
                 {% endif %}
               </td>
-              <td class="sfc-col-check"></td>
+              <td class="sfc-col-check">
+                {% if folder_feeds %}
+                <input type="checkbox" class="sfc-check-all" data-folder-check="{{ row.id }}" title="Select all feeds in this folder" aria-label="Select all feeds in {{ 'Ungrouped' if row.depth == 0 else row.name }}" />
+                {% endif %}
+              </td>
             </tr>
             {% for feed in folder_feeds %}
             <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" data-feed-url="{{ feed.url }}" hidden>
@@ -1704,8 +1719,21 @@
             </tbody>
           </table>
           <div class="sfc-toolbar" id="sfc-toolbar" hidden>
-            <button type="button" class="sfc-compare-btn" id="sfc-compare-btn" disabled>Compare selected</button>
             <span class="sfc-count" id="sfc-count"></span>
+            <span class="sfc-actions">
+              <select id="sfc-move-folder" class="sfc-move-select" aria-label="Move selected feeds to folder">
+                <option value="">Move to…</option>
+                {% for opt in folder_options if opt.depth == 1 %}
+                <option value="{{ opt.id }}">{{ opt.name }}</option>
+                {% endfor %}
+              </select>
+              <button type="button" class="sfc-action-btn" id="sfc-mark-read-btn">Mark read</button>
+              <button type="button" class="sfc-action-btn" id="sfc-refresh-btn">Refresh</button>
+              <button type="button" class="sfc-action-btn" id="sfc-disable-btn">Disable</button>
+              <button type="button" class="sfc-action-btn" id="sfc-enable-btn">Enable</button>
+              <button type="button" class="sfc-action-btn sfc-action-danger" id="sfc-unsub-btn">Unsubscribe</button>
+              <button type="button" class="sfc-compare-btn" id="sfc-compare-btn" disabled>Compare</button>
+            </span>
           </div>
           <div class="sfc-panel" id="sfc-panel" hidden></div>
           {% else %}
@@ -5836,6 +5864,51 @@
     // (sidebar tree, Settings list, problem panels). Throws on a failed request
     // so callers can surface their own error UI. `function` decl is hoisted, so
     // callers defined earlier/later in this scope can all use it.
+    async function moveFeedRequest(feedUrl, fromFolderId, toFolderId, toFolderName) {
+      const form = document.getElementById('context-move-feed-form');
+      const body = new URLSearchParams();
+      body.set('feed_url', feedUrl);
+      body.set('from_folder_id', fromFolderId);
+      body.set('to_folder_id', toFolderId);
+      for (const n of ['current_folder_id', 'current_list_feed_url', 'sort_by', 'sort_dir', 'read_filter', 'star_only', 'resume_read_filter']) {
+        const inp = form?.querySelector(`[name="${n}"]`);
+        if (inp) body.set(n, inp.value);
+      }
+      const resp = await fetch('/feeds/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-move' },
+        credentials: 'same-origin', body: body.toString(),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json().catch(() => ({ ok: true }));
+      if (data.ok === false) { window.alert(data.message || 'Move failed.'); return; }
+
+      // Relocate the feed node from the source folder to the target (if that
+      // folder's list is rendered), else just drop it from the source — no reload.
+      const fu = CSS.escape(feedUrl), sfid = CSS.escape(String(fromFolderId));
+      const srcLi = document.querySelector(`.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${sfid}"]`)?.closest('.tree-feed-item');
+      const unread = srcLi ? (parseInt(srcLi.querySelector('.count')?.textContent || '0', 10) || 0) : 0;
+      const targetUl = document.getElementById(`folder-feeds-${toFolderId}`);
+      const srcFolderEl = document.querySelector(`.tree-item[data-folder-id="${sfid}"]:not(.root-item)`);
+      const tgtFolderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(String(toFolderId))}"]:not(.root-item)`);
+      if (srcLi) {
+        const link = srcLi.querySelector('.feed-link');
+        if (targetUl && link) {
+          link.setAttribute('data-folder-id', String(toFolderId));
+          if (link.href) link.href = link.href.replace(/([?&]folder_id=)[^&]*/, `$1${toFolderId}`);
+          targetUl.appendChild(srcLi);
+          if (tgtFolderEl && unread) adjustCountBadge(tgtFolderEl, unread);
+        } else {
+          srcLi.remove();
+        }
+        if (srcFolderEl && unread) adjustCountBadge(srcFolderEl, -unread);
+      }
+      // Settings tree: drop the source row (reappears under the target on reload).
+      document.querySelectorAll(`.settings-feed-row[data-folder-feeds="${sfid}"][data-feed-url="${fu}"]`).forEach(r => r.remove());
+
+      if (typeof showToastMessage === 'function') showToastMessage(`Moved to "${toFolderName}".`);
+    }
+
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       const resp = await fetch('/feeds/unsubscribe', {
@@ -7898,11 +7971,12 @@
           return;
         }
 
-        moveFeedUrlInput.value = contextFeedUrl;
-        moveFeedFromFolderIdInput.value = contextFolderId;
-        moveFeedToFolderIdInput.value = targetFolderId;
+        const toFolderName = folderOption.textContent.trim();
+        const feedUrl = contextFeedUrl;
+        const fromFolderId = contextFolderId;
         hideContextMenu();
-        moveFeedForm.submit();
+        moveFeedRequest(feedUrl, fromFolderId, targetFolderId, toFolderName)
+          .catch((err) => window.alert(`Move failed: ${err}`));
       });
     }
 
@@ -11529,12 +11603,106 @@
 
       // Listen for checkbox changes anywhere in the feeds tab (covers dynamically
       // shown rows after folder expand).
+      function syncFolderCheck(folderId) {
+        const boxes = [...feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${folderId}"] .sfc-check`)];
+        const folderCb = feedsTab.querySelector(`.sfc-check-all[data-folder-check="${folderId}"]`);
+        if (!folderCb) return;
+        const checked = boxes.filter(b => b.checked).length;
+        folderCb.checked = boxes.length > 0 && checked === boxes.length;
+        folderCb.indeterminate = checked > 0 && checked < boxes.length;
+      }
+
       feedsTab.addEventListener('change', (e) => {
-        if (e.target.classList.contains('sfc-check')) {
+        if (e.target.classList.contains('sfc-check-all')) {
+          // Folder-level select-all: (un)check every feed in that folder, even
+          // when the folder is collapsed (the checkboxes exist in the DOM).
+          const fid = e.target.dataset.folderCheck;
+          feedsTab.querySelectorAll(`.settings-feed-row[data-folder-feeds="${fid}"] .sfc-check`)
+            .forEach(cb => { cb.checked = e.target.checked; });
+          e.target.indeterminate = false;
           updateToolbar();
+          panel.hidden = true;
+        } else if (e.target.classList.contains('sfc-check')) {
+          updateToolbar();
+          const row = e.target.closest('.settings-feed-row');
+          if (row) syncFolderCheck(row.dataset.folderFeeds);
           // Collapse the panel when selection changes so it does not show stale results.
           panel.hidden = true;
         }
+      });
+
+      // ---- Bulk actions on the selected feeds ----
+      const moveSelect = document.getElementById('sfc-move-folder');
+      const _ACTION_LABEL = { move: 'moved', disable: 'disabled', enable: 'enabled',
+                              unsubscribe: 'unsubscribed', refresh: 'refreshed', 'mark-read': 'marked read' };
+      function selectedUrls() { return getSelectedFeeds().map(f => f.url); }
+      function removeRowsFor(urls) {
+        const set = new Set(urls);
+        const affectedFolders = new Set();
+        feedsTab.querySelectorAll('.settings-feed-row').forEach(r => {
+          if (set.has(r.dataset.feedUrl)) {
+            if (r.dataset.folderFeeds) affectedFolders.add(r.dataset.folderFeeds);
+            r.remove();
+          }
+        });
+        // Keep each affected folder's select-all checkbox (checked/indeterminate)
+        // consistent with the rows that remain.
+        affectedFolders.forEach(fid => syncFolderCheck(fid));
+        updateToolbar();
+      }
+      function setRowsDisabled(urls, disabled) {
+        const set = new Set(urls);
+        feedsTab.querySelectorAll('.settings-feed-row').forEach(r => {
+          if (set.has(r.dataset.feedUrl)) r.classList.toggle('settings-feed-row--disabled', disabled);
+        });
+      }
+      async function bulkAction(action, extra) {
+        const urls = selectedUrls();
+        if (!urls.length) return null;
+        const body = new URLSearchParams();
+        body.set('action', action);
+        body.set('feed_urls', urls.join('\n'));
+        for (const [k, v] of Object.entries(extra || {})) body.set(k, v);
+        const controls = toolbar.querySelectorAll('button, select');
+        controls.forEach(c => c.disabled = true);
+        try {
+          const resp = await fetch('/feeds/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-bulk' },
+            credentials: 'same-origin', body: body.toString(),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!data.ok) { alert(data.error || 'Action failed.'); return null; }
+          countEl.textContent = `${data.count} ${_ACTION_LABEL[action] || action}`;
+          return data;
+        } catch (e) { alert('Action failed: ' + e); return null; }
+        finally {
+          controls.forEach(c => c.disabled = false);
+          compareBtn.disabled = getSelectedFeeds().length < 2;
+        }
+      }
+      moveSelect?.addEventListener('change', async () => {
+        if (!moveSelect.value) return;
+        const urls = selectedUrls();
+        const data = await bulkAction('move', { to_folder_id: moveSelect.value });
+        moveSelect.value = '';
+        if (data) removeRowsFor(urls);
+      });
+      document.getElementById('sfc-disable-btn')?.addEventListener('click', async () => {
+        const urls = selectedUrls();
+        if (await bulkAction('disable')) setRowsDisabled(urls, true);
+      });
+      document.getElementById('sfc-enable-btn')?.addEventListener('click', async () => {
+        const urls = selectedUrls();
+        if (await bulkAction('enable')) setRowsDisabled(urls, false);
+      });
+      document.getElementById('sfc-mark-read-btn')?.addEventListener('click', () => bulkAction('mark-read'));
+      document.getElementById('sfc-refresh-btn')?.addEventListener('click', () => bulkAction('refresh'));
+      document.getElementById('sfc-unsub-btn')?.addEventListener('click', async () => {
+        const urls = selectedUrls();
+        if (!urls.length) return;
+        if (!confirm(`Unsubscribe ${urls.length} feed${urls.length === 1 ? '' : 's'}? This permanently deletes them.`)) return;
+        if (await bulkAction('unsubscribe')) removeRowsFor(urls);
       });
 
       compareBtn.addEventListener('click', async () => {
