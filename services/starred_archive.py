@@ -533,7 +533,32 @@ class StarredArchiveService:
             self._worker_thread.join(timeout=timeout)
             self._worker_thread = None
 
+    def _reclaim_stale_in_progress(self) -> None:
+        """Reset rows stranded in 'in_progress' back to 'pending'.
+
+        A row is claimed by flipping 'pending' -> 'in_progress' before capture.
+        If the process is restarted (redeploy) mid-capture, those rows are never
+        reselected — the poller only looks at 'pending' — so they leak forever.
+        Reclaiming on worker start makes a restart self-healing.
+        """
+        for uid in self._background_user_ids():
+            try:
+                with tenancy.user_context(uid):
+                    with self._get_archive_connection() as conn:
+                        reclaimed = conn.execute(
+                            "UPDATE archived_entry SET status = 'pending' "
+                            "WHERE status = 'in_progress'"
+                        ).rowcount
+                if reclaimed:
+                    LOGGER.info(
+                        "starred archive: reclaimed %d stale in_progress rows for %s",
+                        reclaimed, uid,
+                    )
+            except sqlite3.Error as exc:
+                LOGGER.warning("starred archive: reclaim failed for %s: %s", uid, exc)
+
     def _worker_loop(self) -> None:
+        self._reclaim_stale_in_progress()
         while not self._stop_event.is_set():
             processed = False
             for uid in self._background_user_ids():

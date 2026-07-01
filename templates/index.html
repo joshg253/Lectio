@@ -11926,15 +11926,15 @@
             url.searchParams.set('chunk_delta', '1');
             // Ensure the current list filter is included when requesting more.
             if (!url.searchParams.has('read_filter')) {
-              const currentReadFilter = document.querySelector('.topbar-search-form input[name="read_filter"]')?.value;
+              const currentReadFilter = document.querySelector('.posts-search-form input[name="read_filter"]')?.value;
               if (currentReadFilter) url.searchParams.set('read_filter', currentReadFilter);
             }
             if (!url.searchParams.has('resume_read_filter')) {
-              const currentResumeReadFilter = document.querySelector('.topbar-search-form input[name="resume_read_filter"]')?.value;
+              const currentResumeReadFilter = document.querySelector('.posts-search-form input[name="resume_read_filter"]')?.value;
               if (currentResumeReadFilter) url.searchParams.set('resume_read_filter', currentResumeReadFilter);
             }
             if (!url.searchParams.has('star_only')) {
-              const currentStarOnly = document.querySelector('.topbar-search-form input[name="star_only"]')?.value;
+              const currentStarOnly = document.querySelector('.posts-search-form input[name="star_only"]')?.value;
               if (currentStarOnly) url.searchParams.set('star_only', currentStarOnly);
             }
             if (!url.searchParams.has('q')) {
@@ -12244,7 +12244,7 @@
       }).catch(() => {});
     });
 
-    const topbarSearchForm = document.querySelector('.topbar-search-form');
+    const topbarSearchForm = document.querySelector('.posts-search-form');
     topbarSearchForm?.addEventListener('submit', (event) => {
       event.preventDefault();
 
