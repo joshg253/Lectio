@@ -125,6 +125,8 @@ The short version:
   - **FreshRSS** — single-pass Google Reader API import: subscriptions + folder assignments + labels-as-tags + starred articles.
   - **tt-rss** — single-pass JSON-RPC API import: subscriptions + category folders + starred articles + labels-as-tags.
 
+  Every migrator canonicalizes incoming feed URLs (old.reddit → www.reddit, `?alt=rss`, trailing slashes, YouTube channel forms) before subscribing, so variant URLs merge into an existing subscription instead of creating duplicate feeds.
+
 ---
 
 ## Technical overview
