@@ -5,6 +5,43 @@ this file only tracks what's still open.
 
 ## Now
 
+### Global audio player — persistent play-across-navigation (NEXT UP)
+
+**Problem:** audio stops the moment you click another post. The entry view loads
+via pane-swaps (`/entries/pane`), so the `<audio>` element lives inside the
+swapped-out content and gets ripped out of the DOM on navigation — killing
+playback.
+
+**Scope (confirmed with user):** audio only; a **persistent player bar with real
+controls** — now-playing title, play/pause, seek scrubber, playback speed — that
+survives navigation. Shows up at the top (or bottom) of the app.
+
+**Approach:**
+- Host a **single persistent `<audio>` element + control bar** in
+  `templates/index.html`, *outside* the entry-pane swap target, hidden until
+  something plays. Because the element never leaves the DOM, playback continues
+  across pane swaps.
+- Entry-pane audio "play" controls become **triggers that load the track**
+  (title + URL) into the global player instead of rendering an inline `<audio>`
+  that gets swapped away. A new static JS module owns the player.
+- State stays **client-side** (current track, position, playback speed) in the JS
+  module. **No server/DB changes** for v1.
+
+**Reuse (don't reinvent):**
+- Audio detection/handling already exists: standard `<enclosure>` plus Media RSS
+  `media:content` recovery via `services/podcast_audio.py`; current inline audio
+  rendering is in `templates/_entry_pane.html` (~L408, the audio-feed-suggestion
+  / player region). Reroute that play action into the global player.
+- Match the plain-HTML/JS, no-build-step frontend conventions; keyboard-first.
+
+**Files:** `templates/index.html` (persistent bar), `templates/_entry_pane.html`
+(reroute play → global player), a new static JS/CSS module. No backend/schema
+changes.
+
+**Defer (v2 ideas):** queue/playlist of audio across a folder, remember position
+per episode, Media Session API (lock-screen / hardware-key controls), speed
+presets.
+
 Build order (promoted from Later — top first):
 1. ~~**Global skip-Shorts toggle** (YouTube area)~~ — ✅ SHIPPED (`yt_hide_shorts_global`).
 2. ~~**Auto add to Instapaper** rule~~ — ✅ SHIPPED (`instapaper` rule type; `_run_instapaper_rules_after_refresh`; gated on configured creds).
