@@ -1419,6 +1419,7 @@ async def lifespan(app: FastAPI):
         ensure_meta_schema()
         ensure_starred_archive_schema()
         ensure_reader_indexes()
+        migrate_spaced_manual_tags()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
     if LECTIO_PUBLIC_URL:
@@ -6374,6 +6375,10 @@ def normalize_tag_value(value: str | None) -> str | None:
         return None
 
     normalized = value.strip().lower().lstrip("#")
+    # Collapse internal whitespace to hyphens so multi-word tags (e.g. imported
+    # "games to play") survive as a single tag instead of being split or
+    # rejected by TAG_VALUE_PATTERN, which does not allow spaces.
+    normalized = re.sub(r"\s+", "-", normalized).strip("-")
     if not normalized:
         return None
     if not TAG_VALUE_PATTERN.fullmatch(normalized):
@@ -6524,6 +6529,61 @@ def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tu
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
     return updated, merged
+
+
+def migrate_spaced_manual_tags() -> int:
+    """One-time cleanup: manual tags imported with spaces (e.g. "games to play")
+    were stored as a single key that the tag UI can't remove cleanly, since the
+    remove/parse paths split on whitespace. Rewrite each spaced key to its
+    hyphenated normalized form. Idempotent: once migrated no key contains a
+    space, so the probing query returns nothing and this is a cheap no-op.
+
+    Returns the number of (entry, tag) rewrites performed.
+    """
+    prefix = MANUAL_TAG_KEY_PREFIX
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            spaced_keys = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT key FROM entry_tags WHERE key LIKE ? AND key LIKE '% %'",
+                    (f"{prefix}%",),
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.warning("migrate_spaced_manual_tags: probe failed", exc_info=True)
+        return 0
+
+    if not spaced_keys:
+        return 0
+
+    rewrites = 0
+    with get_reader() as reader:
+        for old_key in spaced_keys:
+            old_tag = old_key[len(prefix):]
+            new_norm = normalize_tag_value(old_tag)
+            if not new_norm:
+                continue
+            new_key = f"{prefix}{new_norm}"
+            if new_key == old_key:
+                continue
+            for entry in list(reader.get_entries(tags=[old_key])):
+                try:
+                    reader.set_tag(entry.resource_id, new_key)
+                    reader.delete_tag(entry.resource_id, old_key)
+                    rewrites += 1
+                except Exception:
+                    LOGGER.warning(
+                        "migrate_spaced_manual_tags: failed on %s", entry.resource_id, exc_info=True
+                    )
+    if rewrites:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+        LOGGER.info("migrate_spaced_manual_tags: rewrote %d tag(s)", rewrites)
+    return rewrites
 
 
 def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
@@ -9021,7 +9081,7 @@ def list_entries_for_feeds(
                         _placeholders = ",".join("?" for _ in _feed_list)
                         rows = _rconn.execute(
                             f"SELECT feed, id FROM entries WHERE feed IN ({_placeholders}){read_clause}"
-                            f" ORDER BY published ASC LIMIT ?",
+                            f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
                             _feed_list + [fetch_limit],
                         ).fetchall()
                     else:
@@ -9035,13 +9095,13 @@ def list_entries_for_feeds(
                             _chunk = _feed_list[_i:_i + 999]
                             _ph = ",".join("?" for _ in _chunk)
                             chunk_rows = _rconn.execute(
-                                f"SELECT feed, id, published FROM entries"
+                                f"SELECT feed, id, coalesce(published, first_updated) AS sort_val FROM entries"
                                 f" WHERE feed IN ({_ph}){read_clause}"
-                                f" ORDER BY published ASC LIMIT ?",
+                                f" ORDER BY coalesce(published, first_updated) ASC LIMIT ?",
                                 _chunk + [fetch_limit],
                             ).fetchall()
                             batch_rows.extend(chunk_rows)
-                        batch_rows.sort(key=lambda r: r["published"] or "")
+                        batch_rows.sort(key=lambda r: r["sort_val"] or "")
                         rows = batch_rows
                 finally:
                     _rconn.close()
@@ -11367,6 +11427,13 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         reader.add_feed(feed_url, exist_ok=True)
 
     with get_meta_connection() as conn:
+        # Single-folder invariant: a feed lives in exactly one folder. Drop any
+        # existing memberships before recording the new one so re-adding a feed
+        # moves it rather than leaving it in multiple folders.
+        conn.execute(
+            "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
+            (feed_url, folder_id),
+        )
         conn.execute(
             "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
             (folder_id, feed_url),
@@ -17823,10 +17890,13 @@ async def deduplicate_feeds(request: Request):
                         rescue_to=keep if rescue_unread else None,
                         migrate_curation_to=keep,
                     )
-        # Ensure the canonical URL is in each selected folder.
+        # Ensure the canonical URL is in exactly the selected folders. Clear any
+        # existing memberships first so the survivor doesn't linger in folders
+        # the user didn't choose (which caused feeds to drift across folders).
         with get_reader() as reader:
             reader.add_feed(keep, exist_ok=True)
         with get_meta_connection() as conn:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (keep,))
             for fid in target_folder_ids:
                 conn.execute(
                     "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
@@ -17844,10 +17914,13 @@ async def deduplicate_feeds(request: Request):
             folder_ids = [r[0] for r in conn.execute(
                 "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (current,)
             ).fetchall()]
-        # Add canonical Atom URL to the same folders.
+        # Replace the RSS variant with its Atom canonical in exactly the same
+        # folders. Clear any pre-existing memberships for the canonical first so
+        # it doesn't end up in folders beyond the ones it's replacing.
         with get_reader() as reader:
             reader.add_feed(upgrade_to, exist_ok=True)
         with get_meta_connection() as conn:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (upgrade_to,))
             for fid in folder_ids:
                 conn.execute(
                     "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
@@ -17873,6 +17946,72 @@ async def deduplicate_feeds(request: Request):
 
     invalidate_meta_structure_cache()
     return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded), "rescued_count": rescued_count})
+
+
+@app.get("/feeds/multi-folder")
+def get_multi_folder_feeds():
+    """Report feeds that belong to more than one folder.
+
+    A feed is meant to live in a single folder; migration/import drift left some
+    in several. Returns each such feed with its folders so the user can pick the
+    one to keep."""
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT ff.feed_url, ff.folder_id, f.name AS folder_name"
+            " FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+            " WHERE ff.feed_url IN ("
+            "   SELECT feed_url FROM folder_feeds GROUP BY feed_url HAVING COUNT(*) > 1"
+            " ) ORDER BY ff.feed_url, f.name"
+        ).fetchall()
+
+    titles = get_feed_title_map()
+    by_feed: dict[str, list[dict]] = {}
+    for feed_url, folder_id, folder_name in rows:
+        by_feed.setdefault(feed_url, []).append({"id": folder_id, "name": folder_name})
+
+    feeds = [
+        {
+            "feed_url": feed_url,
+            "title": titles.get(feed_url, feed_url),
+            "folders": folders,
+        }
+        for feed_url, folders in sorted(by_feed.items(), key=lambda kv: titles.get(kv[0], kv[0]).lower())
+    ]
+    return JSONResponse({"feeds": feeds, "count": len(feeds)})
+
+
+@app.post("/feeds/multi-folder/resolve")
+async def resolve_multi_folder_feeds(request: Request):
+    """Collapse each chosen feed to a single folder.
+
+    Body (JSON): choices — list of {feed_url, folder_id}. For each, drop all
+    existing folder memberships and keep only the chosen folder."""
+    body = await request.json()
+    choices: list[dict] = body.get("choices", [])
+
+    resolved = 0
+    with get_meta_connection() as conn:
+        for choice in choices:
+            feed_url = (choice.get("feed_url") or "").strip()
+            folder_id = choice.get("folder_id")
+            if not feed_url or folder_id is None:
+                continue
+            # Only act on the chosen folder if the feed is actually a member,
+            # so a stale choice can't move a feed into an unrelated folder.
+            member = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ? AND folder_id = ? LIMIT 1",
+                (feed_url, int(folder_id)),
+            ).fetchone()
+            if not member:
+                continue
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
+                (feed_url, int(folder_id)),
+            )
+            resolved += 1
+    if resolved:
+        invalidate_meta_structure_cache()
+    return JSONResponse({"resolved": resolved})
 
 
 @app.post("/refresh")

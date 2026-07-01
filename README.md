@@ -43,7 +43,9 @@ and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and
 The short version:
 
 - **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
-  mark-as-read, manual tags, read history, search, and a Readability/web-view proxy.
+  mark-as-read, manual tags (space-separated; multi-word tags are hyphenated, e.g.
+  `games to play` → `games-to-play`), read history, search, and a
+  Readability/web-view proxy.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
   inline podcast players (incl. audio borrowed from a separate host feed), file
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
@@ -108,11 +110,15 @@ The short version:
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
-  stars onto the surviving feed, so no curation is lost). Feeds that aren't in any folder (e.g. after
+  stars onto the surviving feed, so no curation is lost). Each feed lives in a
+  single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
+  feeds that drifted into several folders (from older imports/migrations) and lets
+  you pick the one to keep. Feeds that aren't in any folder (e.g. after
   a reader migration) are gathered into an **Uncategorized** folder pinned to the
   bottom of the sidebar, so they stay visible and easy to file — right-click a
   feed there and pick **Add to folder** to categorize it. "All Feeds" always
-  includes them. In **Settings → Feeds** you can multi-select feeds (or tick a
+  includes them. **Double-click** a folder or feed name in the sidebar to open its
+  Properties. In **Settings → Feeds** you can multi-select feeds (or tick a
   folder's header checkbox to select all its feeds) and **bulk move, disable/
   enable, mark-read, refresh, or unsubscribe** them in one action.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn

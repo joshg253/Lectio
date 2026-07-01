@@ -56,6 +56,16 @@ feeds themselves. These two can diverge: a feed can exist in the reader with no
 `folder_feeds` row (common after an OPML/reader migration). Such feeds are
 **orphans**.
 
+**Single-folder invariant:** a feed belongs to exactly one folder. `folder_feeds`
+has no DB-level uniqueness (it once allowed multi-folder membership), so the
+invariant is enforced in the write paths: `add_feed_to_folder` clears a feed's
+other memberships before inserting, and the dedup/format-upgrade paths delete the
+survivor's stale rows before re-inserting the chosen folders (earlier they added
+without removing, which let feeds drift across folders). Pre-existing drift is
+repaired by **Settings → Feeds → Utilities → Fix multi-folder feeds**
+(`GET /feeds/multi-folder` reports feeds with >1 row; `POST
+/feeds/multi-folder/resolve` keeps only the user-chosen folder per feed).
+
 The sidebar surfaces orphans through a **virtual "Uncategorized" folder**,
 derived at render time — it has no `folders` row. Its id is a negative sentinel
 (`UNCATEGORIZED_FOLDER_ID`) so it never collides with real (positive) folder
@@ -539,6 +549,20 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 - Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe` (canonical URL after stripping tracking params); keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
+
+## Entry sort window (Pub Old / Pub New)
+
+`reader` only sorts newest-first, so for large folders (`> PER_FEED_QUERY_THRESHOLD`
+feeds) `list_entries` fetches the sort window with a direct SQL query and then
+enriches only the surviving rows. Both directions order by
+`coalesce(published, first_updated)` so an entry that carries no `published`
+falls back to when the reader first saw it instead of sorting as NULL. Previously
+the ascending path ordered by raw `published`, and since SQLite sorts NULLs first
+under `ASC`, date-less imported entries filled the `LIMIT` window and were then
+re-dated to their (recent) import time — pushing genuinely old posts out of view.
+Imports set a real `published` at ingest where possible: the Inoreader parser
+(`_coerce_published`) falls back from the item's `published` to `crawlTimeMsec` /
+`timestampUsec`, so newly imported entries carry their true age.
 
 ## Feed auto-taggers
 
