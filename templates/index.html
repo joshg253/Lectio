@@ -1650,6 +1650,13 @@
             <input type="search" id="feeds-folder-search-input" class="feeds-folder-search-input" placeholder="Filter folders and feeds…" autocomplete="off" aria-label="Filter folders and feeds" />
           </div>
           <table class="settings-folders-table">
+            <colgroup>
+              <col />
+              <col style="width: 2.5rem" />
+              <col style="width: 5rem" />
+              <col style="width: 4.75rem" />
+              <col style="width: 2rem" />
+            </colgroup>
             <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check" title="Select for comparison"></th></tr></thead>
             <tbody>
             {% for row in child_rows %}

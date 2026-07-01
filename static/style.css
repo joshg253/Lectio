@@ -3681,6 +3681,16 @@ body[data-keyboard-open="1"] .action-modal-panel {
   align-items: center;
   gap: 0.6rem;
   margin-top: 0.5rem;
+  /* Pin to the bottom of the scrolling Settings panel so the bulk actions are
+     reachable without scrolling to the end of a long feed list. Still only
+     rendered once something is selected (toggled via the [hidden] attribute). */
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 0.5rem;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  backdrop-filter: blur(2px);
 }
 .sfc-compare-btn {
   padding: 0.25rem 0.75rem;
