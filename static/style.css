@@ -4763,14 +4763,14 @@ mark.highlight-mark {
   vertical-align: middle;
 }
 .settings-folder-row:last-child td { border-bottom: none; }
-.settings-folder-name { font-weight: 500; }
+.settings-folder-name { font-weight: 500; white-space: nowrap; overflow: hidden; }
 .settings-folder-feeds {
   color: var(--muted);
   text-align: right;
-  width: 3rem;
+  width: 2.5rem;
 }
 .settings-folder-status { width: 5rem; text-align: right; }
-.settings-folder-actions { width: 5.25rem; text-align: right; white-space: nowrap; padding-right: 0.25rem; }
+.settings-folder-actions { width: 4.75rem; text-align: right; white-space: nowrap; padding-right: 0.25rem; }
 .settings-folder-toggle {
   background: none;
   border: none;
@@ -4788,7 +4788,7 @@ mark.highlight-mark {
 .settings-folder-toggle:disabled { opacity: 0.25; cursor: default; }
 .settings-folder-toggle .material-symbols-rounded { font-size: 18px; transition: transform 0.12s ease; }
 .settings-folder-toggle[aria-expanded="true"] .material-symbols-rounded { transform: rotate(90deg); }
-.settings-folder-refresh { width: 6.5rem; }
+.settings-folder-refresh { width: 5rem; }
 .settings-folder-cadence-select { font-size: 0.78rem; padding: 0.12rem 0.25rem; width: 100%; }
 .settings-feed-row td {
   padding: 0.3rem 0.5rem;
@@ -4812,14 +4812,18 @@ mark.highlight-mark {
   white-space: nowrap;
   vertical-align: middle;
 }
+/* Flex row so the name truncates and the toggle + failing badge stay pinned on
+   one line (instead of the badge wrapping to a new row), using the full column
+   width with no wasted reserve. */
+.settings-folder-name-inner { display: flex; align-items: center; gap: 0.2rem; min-width: 0; }
 .settings-folder-name-text {
-  display: inline-block;
-  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: middle;
 }
+.settings-folder-name-inner .settings-folder-toggle,
+.settings-folder-error-badge { flex: none; white-space: nowrap; }
 .settings-feed-name-btn:hover { text-decoration: underline; }
 .settings-feed-name-text[data-feed-error] { color: var(--danger, #c0392b); }
 .settings-feed-row--disabled .settings-feed-name-text { color: var(--muted); font-style: italic; }

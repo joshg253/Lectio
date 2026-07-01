@@ -1658,9 +1658,11 @@
             {% set cad = row.cadence_minutes or 0 %}
             <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
               <td class="settings-folder-name">
-                <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
-                <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
-                {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+                <div class="settings-folder-name-inner">
+                  <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+                  <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
+                  {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+                </div>
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
               <td class="settings-folder-refresh">
