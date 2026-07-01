@@ -49,6 +49,25 @@ The priority is fast triage, not always showing three panes.
 
 Lectio is designed for VPS deployment behind a reverse proxy. Auth is always active; access requires a user account. See `.env.example` for deployment configuration.
 
+## Folder tree & the Uncategorized folder
+
+Folders live in the meta DB (`folders` + `folder_feeds`); the reader owns the
+feeds themselves. These two can diverge: a feed can exist in the reader with no
+`folder_feeds` row (common after an OPML/reader migration). Such feeds are
+**orphans**.
+
+The sidebar surfaces orphans through a **virtual "Uncategorized" folder**,
+derived at render time — it has no `folders` row. Its id is a negative sentinel
+(`UNCATEGORIZED_FOLDER_ID`) so it never collides with real (positive) folder
+ids, and its membership is computed as `all reader feeds − foldered feeds`. It's
+pinned last in the tree, hidden when empty, and self-updates as feeds get filed.
+Because it isn't a real folder, its context menu exposes only whole-folder
+actions (mark-read / refresh) and it's excluded from move-target lists; the
+`get_folder_feed_urls` resolver special-cases the sentinel so those actions still
+work. The root "All Feeds" folder resolves to *every* reader feed (not just
+foldered ones), so orphans and their unread counts are always reachable from the
+top of the tree.
+
 ## Multi-user tenancy
 
 Lectio uses a **storage-layer resolver** so the UI/API and service layers are

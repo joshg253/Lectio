@@ -107,7 +107,11 @@ The short version:
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
-  tabs, and duplicate-feed scanning.
+  tabs, and duplicate-feed scanning. Feeds that aren't in any folder (e.g. after
+  a reader migration) are gathered into an **Uncategorized** folder pinned to the
+  bottom of the sidebar, so they stay visible and easy to file — right-click a
+  feed there and pick **Add to folder** to categorize it. "All Feeds" always
+  includes them.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.

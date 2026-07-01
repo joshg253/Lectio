@@ -205,10 +205,11 @@
                 {% endif %}
                 <a
                   href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
-                  class="tree-item child-item {% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
+                  class="tree-item child-item {% if row.virtual %}virtual-folder {% endif %}{% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
                   data-folder-name="{{ row.name }}"
                   data-folder-depth="{{ row.depth }}"
+                  {% if row.virtual %}data-virtual="1"{% endif %}
                 >
                   <span class="name">{{ row.name }}</span>
                   {% if row.unread_count %}<span class="count">{{ row.unread_count }}</span>{% endif %}
@@ -1632,7 +1633,7 @@
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
-          {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
+          {% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | rejectattr('virtual', 'equalto', True) | list %}
           {# Also list feeds attached directly to the root "All Feeds" folder
              (depth 0) — otherwise feeds added without a folder are invisible
              and unmanageable here. Shown last, labelled "Ungrouped". #}
@@ -6372,6 +6373,27 @@
           return;
         }
 
+        // The virtual "Uncategorized" folder is derived, not a real folder row:
+        // expose only whole-folder actions, hide anything that would rename,
+        // delete, or otherwise mutate a folder that doesn't exist in the DB.
+        if (folderLink.hasAttribute('data-virtual')) {
+          setMenuItemVisible(refreshButton, true);
+          setMenuItemVisible(markReadButton, true);
+          setMenuItemVisible(addToFolderWrap, false);
+          setMenuItemVisible(addFeedButton, false);
+          setMenuItemVisible(feedPropertiesButton, false);
+          setMenuItemVisible(folderPropertiesButton, false);
+          setMenuItemVisible(highlightsButton, false);
+          setMenuItemVisible(unsubscribeFeedButton, false);
+          setMenuItemVisible(renameFolderButton, false);
+          setMenuItemVisible(deleteFolderButton, false);
+          setMenuItemVisible(youtubeSyncButton, false);
+          setMenuItemVisible(disableFeedButton, false);
+          hideFolderSubmenu();
+          showContextMenu(event);
+          return;
+        }
+
         setMenuItemVisible(refreshButton, true);
         setMenuItemVisible(markReadButton, true);
         setMenuItemVisible(addToFolderWrap, false);
@@ -7940,7 +7962,7 @@
       function hlScopeData() {
         const folderNames = {};
         const feedTitles = {};
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           folderNames[el.getAttribute('data-folder-id')] = el.getAttribute('data-folder-name');
         }
         for (const el of document.querySelectorAll('.feed-link[data-feed-url][data-folder-id]')) {
@@ -9074,7 +9096,7 @@
         allFolderOpt.value = '';
         allFolderOpt.textContent = 'All Feeds';
         folderSel.appendChild(allFolderOpt);
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           const opt = document.createElement('option');
           opt.value = el.getAttribute('data-folder-id');
           opt.textContent = el.getAttribute('data-folder-name');
@@ -9246,7 +9268,7 @@
         excludeRow.appendChild(excludeRowLabel);
 
         const allFoldersList = [];
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           allFoldersList.push({ id: el.getAttribute('data-folder-id'), name: el.getAttribute('data-folder-name') });
         }
         const selectedExcludeIds = new Set((prefill.exclude_scope_ids || '').split(',').map(s => s.trim()).filter(Boolean));
