@@ -416,3 +416,83 @@ class TestPushActiveFeedUrls:
         monkeypatch.setattr(main, "get_websub_connection", lambda: (_ for _ in ()).throw(Exception("db gone")))
         result = main.get_push_active_feed_urls()
         assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# _migrate_curation — tags + stars move onto the survivor (dedup consolidation)
+# ---------------------------------------------------------------------------
+
+def _add_entry(feed_url: str, entry_id: str, link: str) -> None:
+    with main.get_reader() as reader:
+        reader.add_entry({"feed_url": feed_url, "id": entry_id, "title": entry_id, "link": link})
+
+
+def _tag_entry(feed_url: str, entry_id: str, tag: str) -> None:
+    with main.get_reader() as reader:
+        reader.set_tag((feed_url, entry_id), f"{main.MANUAL_TAG_KEY_PREFIX}{tag}")
+
+
+def _star_entry(feed_url: str, entry_id: str) -> None:
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (feed_url, entry_id, "2020-01-01T00:00:00Z"),
+        )
+        conn.commit()
+
+
+class TestMigrateCuration:
+    def test_synth_when_survivor_lacks_entry(self, env):
+        """A tagged+starred source entry absent from the survivor is synthesized
+        into it, carrying the tag and star; source star row is removed."""
+        _add_feed_to_folder(FEED, _root_folder_id())    # survivor, no matching entry
+        _add_feed_to_folder(FEED2, _root_folder_id())   # source
+        _add_entry(FEED2, "e1", "https://example.test/a")
+        _tag_entry(FEED2, "e1", "python")
+        _star_entry(FEED2, "e1")
+
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                counts = main._migrate_curation(reader, conn, FEED2, FEED)
+
+        assert counts == {"tags": 1, "stars": 1, "synth": 1}
+        with main.get_reader() as reader:
+            keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
+        assert f"{main.MANUAL_TAG_KEY_PREFIX}python" in keys
+        with main.get_meta_connection() as conn:
+            surv = conn.execute(
+                "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id=?", (FEED, "e1")
+            ).fetchone()
+            src = conn.execute(
+                "SELECT 1 FROM saved_entries WHERE feed_url=?", (FEED2,)
+            ).fetchone()
+        assert surv is not None
+        assert src is None  # moved off the source feed
+
+    def test_guid_match_attaches_to_existing_entry(self, env):
+        """When the survivor already holds the same GUID, the tag attaches to that
+        entry instead of synthesizing a duplicate."""
+        _add_feed_to_folder(FEED, _root_folder_id())
+        _add_feed_to_folder(FEED2, _root_folder_id())
+        _add_entry(FEED, "e1", "https://example.test/a")   # survivor already has e1
+        _add_entry(FEED2, "e1", "https://example.test/a")  # source
+        _tag_entry(FEED2, "e1", "git")
+
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                counts = main._migrate_curation(reader, conn, FEED2, FEED)
+
+        assert counts["tags"] == 1
+        assert counts["synth"] == 0
+        with main.get_reader() as reader:
+            keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
+        assert f"{main.MANUAL_TAG_KEY_PREFIX}git" in keys
+
+    def test_no_curation_is_noop(self, env):
+        _add_feed_to_folder(FEED, _root_folder_id())
+        _add_feed_to_folder(FEED2, _root_folder_id())
+        _add_entry(FEED2, "e1", "https://example.test/a")  # untagged, unstarred
+        with main.get_reader() as reader:
+            with main.get_meta_connection() as conn:
+                counts = main._migrate_curation(reader, conn, FEED2, FEED)
+        assert counts == {"tags": 0, "stars": 0, "synth": 0}
