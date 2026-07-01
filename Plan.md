@@ -56,6 +56,20 @@ Build order (promoted from Later — top first):
 
 10. ~~**Inoreader migration (in-app)**~~ — ✅ SHIPPED (file upload + OAuth drip + optional delete-from-source). ~~**Miniflux / FreshRSS / tt-rss migrations**~~ — ✅ SHIPPED (single-pass REST/GReader/JSON-RPC; subscriptions + folders + starred + tags; Import/Export → platform subtab).
 
+11. **Uncategorized folder + orphan-feed cleanup** — folder ✅ SHIPPED: a virtual
+    "Uncategorized" folder (negative sentinel id, derived per-render as
+    `all reader feeds − foldered feeds`) pins migration orphans to the bottom of
+    the sidebar; "All Feeds" now resolves to every reader feed. Cleanup 🔄 in
+    progress: one-time `scripts/categorize_uncategorized.py` (hybrid keyword
+    heuristics + a Claude review pass, dry-run CSV → `--apply`) bulk-files the
+    orphans into existing folders; genuinely-ambiguous and dead feeds are left in
+    Uncategorized for manual sorting.
+
+12. **Global audio player** — PLANNED. Persistent audio bar (now-playing title /
+    play-pause / seek / speed) that survives entry-pane swaps by hosting a single
+    `<audio>` element outside the swapped region and rerouting entry-pane audio
+    into it. Audio only; client-side state; no backend/schema changes.
+
 10. **Inoreader migration (in-app)** [shipped above]
 
     Goal: fully migrate an Inoreader account into Lectio — feeds + folders (incl.

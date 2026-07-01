@@ -205,10 +205,11 @@
                 {% endif %}
                 <a
                   href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
-                  class="tree-item child-item {% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
+                  class="tree-item child-item {% if row.virtual %}virtual-folder {% endif %}{% if row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
                   data-folder-name="{{ row.name }}"
                   data-folder-depth="{{ row.depth }}"
+                  {% if row.virtual %}data-virtual="1"{% endif %}
                 >
                   <span class="name">{{ row.name }}</span>
                   {% if row.unread_count %}<span class="count">{{ row.unread_count }}</span>{% endif %}
@@ -1661,15 +1662,19 @@
               </td>
               <td class="settings-folder-feeds">{{ row.feed_count }}</td>
               <td class="settings-folder-refresh">
+                {% if not row.virtual %}
                 <select class="settings-folder-cadence-select feed-prop-strategy-select" data-folder-id="{{ row.id }}" data-prev-value="{{ cad }}" title="Refresh frequency for this folder" aria-label="Refresh frequency for {{ row.name }}">
                   {% for value, label in cadence_options %}
                   <option value="{{ value }}"{% if value == cad %} selected{% endif %}>{{ label }}</option>
                   {% endfor %}
                 </select>
+                {% endif %}
               </td>
               <td class="settings-folder-actions">
+                {% if not row.virtual %}
                 <button type="button" class="settings-folder-props-btn" data-folder-automation-id="{{ row.id }}" title="Folder automation" aria-label="Folder automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
                 <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
+                {% endif %}
               </td>
               <td class="sfc-col-check"></td>
             </tr>
@@ -6372,6 +6377,27 @@
           return;
         }
 
+        // The virtual "Uncategorized" folder is derived, not a real folder row:
+        // expose only whole-folder actions, hide anything that would rename,
+        // delete, or otherwise mutate a folder that doesn't exist in the DB.
+        if (folderLink.hasAttribute('data-virtual')) {
+          setMenuItemVisible(refreshButton, true);
+          setMenuItemVisible(markReadButton, true);
+          setMenuItemVisible(addToFolderWrap, false);
+          setMenuItemVisible(addFeedButton, false);
+          setMenuItemVisible(feedPropertiesButton, false);
+          setMenuItemVisible(folderPropertiesButton, false);
+          setMenuItemVisible(highlightsButton, false);
+          setMenuItemVisible(unsubscribeFeedButton, false);
+          setMenuItemVisible(renameFolderButton, false);
+          setMenuItemVisible(deleteFolderButton, false);
+          setMenuItemVisible(youtubeSyncButton, false);
+          setMenuItemVisible(disableFeedButton, false);
+          hideFolderSubmenu();
+          showContextMenu(event);
+          return;
+        }
+
         setMenuItemVisible(refreshButton, true);
         setMenuItemVisible(markReadButton, true);
         setMenuItemVisible(addToFolderWrap, false);
@@ -7940,7 +7966,7 @@
       function hlScopeData() {
         const folderNames = {};
         const feedTitles = {};
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           folderNames[el.getAttribute('data-folder-id')] = el.getAttribute('data-folder-name');
         }
         for (const el of document.querySelectorAll('.feed-link[data-feed-url][data-folder-id]')) {
@@ -9074,7 +9100,7 @@
         allFolderOpt.value = '';
         allFolderOpt.textContent = 'All Feeds';
         folderSel.appendChild(allFolderOpt);
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           const opt = document.createElement('option');
           opt.value = el.getAttribute('data-folder-id');
           opt.textContent = el.getAttribute('data-folder-name');
@@ -9246,7 +9272,7 @@
         excludeRow.appendChild(excludeRowLabel);
 
         const allFoldersList = [];
-        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item)')) {
+        for (const el of document.querySelectorAll('.tree-item[data-folder-id][data-folder-name]:not(.root-item):not([data-virtual])')) {
           allFoldersList.push({ id: el.getAttribute('data-folder-id'), name: el.getAttribute('data-folder-name') });
         }
         const selectedExcludeIds = new Set((prefill.exclude_scope_ids || '').split(',').map(s => s.trim()).filter(Boolean));

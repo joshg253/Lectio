@@ -221,6 +221,14 @@ tenancy.configure(
 ROOT_FOLDER_NAME = "All Feeds"
 _LECTIO_FOLDER_NAME = "_Lectio"
 
+# Virtual, derived folder pinned to the bottom of the sidebar that holds every
+# subscribed feed with no folder_feeds row (e.g. feeds imported via OPML/reader
+# migration that never got a folder). It has no DB row; its id is a negative
+# sentinel so it never collides with real (positive) folder ids, and its
+# membership is computed per-render as (all reader feeds − foldered feeds).
+UNCATEGORIZED_FOLDER_ID = -1
+UNCATEGORIZED_FOLDER_NAME = "Uncategorized"
+
 scraper_service.init(DATA_DIR)
 deviantart_service.init(DATA_DIR)
 
@@ -3875,6 +3883,11 @@ def get_direct_feed_urls_by_folder(conn: sqlite3.Connection) -> dict[int, list[s
 
 
 def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
+    # The virtual "Uncategorized" folder has no folder_feeds rows; its members are
+    # every reader feed not in any folder. Resolving it here lets all folder
+    # actions (mark-read, refresh, …) operate on it uniformly.
+    if folder_id == UNCATEGORIZED_FOLDER_ID:
+        return get_all_reader_feed_urls() - get_all_feed_urls(conn)
     descendant_ids = get_descendant_folder_ids(conn, folder_id)
     placeholders = ",".join("?" for _ in descendant_ids)
     rows = conn.execute(
@@ -3887,6 +3900,21 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
 def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT DISTINCT feed_url FROM folder_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+def get_all_reader_feed_urls() -> set[str]:
+    """Return every feed URL the reader is subscribed to.
+
+    Unlike get_all_feed_urls (which reads folder_feeds), this covers feeds that
+    were never assigned to a folder — the source set for the virtual
+    "Uncategorized" folder. Read straight from the reader DB to stay O(feeds)
+    without materializing full feed objects.
+    """
+    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+    try:
+        return {str(r[0]) for r in conn.execute("SELECT url FROM feeds")}
+    finally:
+        conn.close()
 
 
 # A "feeds" rule scope targets an explicit set of feeds (not a whole folder). Its
@@ -12883,6 +12911,20 @@ def _home_inner(
         root_id = cast(int, snapshot["root_id"])
         folder_feed_urls_by_id = cast(dict[int, set[str]], snapshot["folder_feed_urls_by_id"])
         selected_folder_id = folder_id or root_id
+
+        # Derive the virtual "Uncategorized" folder: feeds the reader knows about
+        # that live in no folder_feeds row. Copy the snapshot's per-folder maps
+        # (shared with the cached snapshot) before adding derived keys so we never
+        # mutate cross-request cache state. Also widen "All Feeds" (root) to cover
+        # every reader feed, not just foldered ones, so orphan feeds and their
+        # unreads are reachable from the top of the tree.
+        all_reader_feed_urls = get_all_reader_feed_urls()
+        uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+        folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
+        direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
+        folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+        folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
+        direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(uncategorized_feed_urls)
         _tick("structure_snapshot")
 
         unread_counts_by_feed = get_unread_counts_by_feed()
@@ -12898,12 +12940,33 @@ def _home_inner(
             active_unread_counts_by_feed,
             direct_feed_urls_by_folder,
         )
+        # The virtual Uncategorized folder isn't in raw_folder_rows, so count it
+        # here and fold it into the root ("All Feeds") total.
+        uncategorized_unread = sum(
+            active_unread_counts_by_feed.get(url, 0) for url in uncategorized_feed_urls
+        )
+        unread_counts_by_folder[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
+        unread_counts_by_folder[root_id] = unread_counts_by_folder.get(root_id, 0) + uncategorized_unread
         _tick("counts_by_folder")
         folder_rows = []
         for row in raw_folder_rows:
             folder_dict = dict(row)
             folder_dict["unread_count"] = unread_counts_by_folder.get(int(row["id"]), 0)
             folder_rows.append(folder_dict)
+        # Append the virtual Uncategorized folder last so it pins to the bottom of
+        # the tree. Only when it actually holds feeds. `virtual` flags the template
+        # and context menu to suppress edit affordances (rename/delete/props).
+        if uncategorized_feed_urls:
+            folder_rows.append({
+                "id": UNCATEGORIZED_FOLDER_ID,
+                "name": UNCATEGORIZED_FOLDER_NAME,
+                "cadence_minutes": None,
+                "depth": 1,
+                "path": UNCATEGORIZED_FOLDER_NAME,
+                "feed_count": len(uncategorized_feed_urls),
+                "unread_count": uncategorized_unread,
+                "virtual": True,
+            })
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
         highlight_rules = get_highlight_keywords(conn)
