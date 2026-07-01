@@ -11381,6 +11381,113 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         ).start()
 
 
+def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
+    """Migrate manual tags and stars from a feed being removed onto the surviving
+    feed, so consolidating duplicates never drops curation.
+
+    Mirrors the reconcile_duplicate_feeds.py --merge logic for the in-app dedup
+    path: each source entry that carries a manual tag or a star is matched to a
+    survivor entry by GUID, else by normalized link; when neither matches, the
+    source entry is synthesized into the survivor feed so its tag/star has a home.
+    Moved stars are removed from the source feed's saved_entries rows.
+
+    Returns {"tags": n, "stars": n, "synth": n}.
+    """
+    counts = {"tags": 0, "stars": 0, "synth": 0}
+
+    # Ensure the survivor feed exists so synthesized entries have a home.
+    try:
+        reader.add_feed(keep_url, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("[dedup] could not ensure survivor feed %s exists", keep_url)
+        return counts
+
+    # Index survivor entries: GUID set + normalized-link -> id.
+    s_guids: set[str] = set()
+    s_link2id: dict[str, str] = {}
+    for e in reader.get_entries(feed=keep_url):
+        s_guids.add(e.id)
+        n = normalize_entry_link_for_dedupe(e.link)
+        if n:
+            s_link2id.setdefault(n, e.id)
+
+    # Source entries + their manual tags.
+    src_entries = {e.id: e for e in reader.get_entries(feed=remove_url)}
+    src_tags: dict[str, list[str]] = {}
+    for eid, e in src_entries.items():
+        keys = [
+            _extract_tag_key(t) for t in reader.get_tags(e.resource_id)
+        ]
+        keys = [k for k in keys if k and k.startswith(MANUAL_TAG_KEY_PREFIX)]
+        if keys:
+            src_tags[eid] = keys
+    # Source stars (meta saved_entries).
+    src_stars: dict[str, str] = {
+        r[0]: r[1] for r in conn.execute(
+            "SELECT entry_id, saved_at FROM saved_entries WHERE feed_url = ?", (remove_url,)
+        )
+    }
+
+    ids = set(src_tags) | set(src_stars)
+    if not ids:
+        return counts
+
+    def _resolve(sid: str) -> tuple[str, bool]:
+        if sid in s_guids:
+            return sid, False
+        e = src_entries.get(sid)
+        n = normalize_entry_link_for_dedupe(e.link) if e else None
+        if n and n in s_link2id:
+            return s_link2id[n], False
+        return sid, True  # synth
+
+    for sid in ids:
+        target_id, synth = _resolve(sid)
+        if synth:
+            e = src_entries.get(sid)
+            ed: dict = {
+                "feed_url": keep_url,
+                "id": sid,
+                "title": (e.title if e else "") or "",
+                "link": (e.link if e and e.link else sid),
+            }
+            if e and e.published:
+                ed["published"] = e.published
+            if e and getattr(e, "content", None):
+                ed["content"] = [{"value": e.content[0].value}]
+            elif e and e.summary:
+                ed["summary"] = e.summary
+            try:
+                reader.add_entry(ed)
+                counts["synth"] += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] synth add_entry failed %s -> %s", sid, keep_url)
+                continue
+            target_id = sid
+        for key in src_tags.get(sid, []):
+            try:
+                reader.set_tag((keep_url, target_id), key)
+                counts["tags"] += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] set_tag failed %s on %s", key, target_id)
+        if sid in src_stars:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+                (keep_url, target_id, src_stars[sid]),
+            )
+            if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
+                counts["stars"] += 1
+
+    # The source feed is about to be deleted; drop its now-migrated star rows.
+    conn.execute("DELETE FROM saved_entries WHERE feed_url = ?", (remove_url,))
+    conn.commit()
+
+    if counts["tags"] or counts["stars"]:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return counts
+
+
 def purge_orphaned_feed(
     reader,
     conn: sqlite3.Connection,
@@ -11388,6 +11495,7 @@ def purge_orphaned_feed(
     *,
     archive_pending: bool = True,
     rescue_to: str | None = None,
+    migrate_curation_to: str | None = None,
 ) -> int:
     """Delete a feed that has already been confirmed orphaned (no folder_feeds rows).
 
@@ -11422,6 +11530,11 @@ def purge_orphaned_feed(
     rescue_to:
         When set, mark read entries in *rescue_to* as unread when the removed
         feed had them unread (slug-matched).  Used by dedup/upgrade paths.
+    migrate_curation_to:
+        When set, migrate the removed feed's manual tags and stars onto this
+        surviving feed (synthesizing missing entries) before deletion, so
+        consolidating duplicates never drops curation.  Used by dedup/upgrade
+        paths.
 
     Returns
     -------
@@ -11440,6 +11553,17 @@ def purge_orphaned_feed(
 
     # Step 2 — rescue unread entries into the surviving feed.
     rescued = _rescue_unread_entries(reader, feed_url, rescue_to) if rescue_to else 0
+
+    # Step 2b — migrate manual tags + stars onto the surviving feed so a
+    # dedup/upgrade consolidation never drops curation.
+    if migrate_curation_to:
+        migrated = _migrate_curation(reader, conn, feed_url, migrate_curation_to)
+        if migrated["tags"] or migrated["stars"] or migrated["synth"]:
+            LOGGER.info(
+                "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized",
+                feed_url, migrate_curation_to,
+                migrated["tags"], migrated["stars"], migrated["synth"],
+            )
 
     # Step 3 — dispatch the delete via the appropriate path.
     da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
@@ -17674,6 +17798,7 @@ async def deduplicate_feeds(request: Request):
                         reader, conn, feed_url,
                         archive_pending=False,
                         rescue_to=keep_url if rescue_unread else None,
+                        migrate_curation_to=keep_url,
                     )
         removed.append({"removed": feed_url, "kept": keep_url})
         LOGGER.info("[deduplicate] same-folder: removed %s from folder %d", feed_url, folder_id)
@@ -17696,6 +17821,7 @@ async def deduplicate_feeds(request: Request):
                         reader, conn, remove,
                         archive_pending=False,
                         rescue_to=keep if rescue_unread else None,
+                        migrate_curation_to=keep,
                     )
         # Ensure the canonical URL is in each selected folder.
         with get_reader() as reader:
@@ -17740,6 +17866,7 @@ async def deduplicate_feeds(request: Request):
                         reader, conn, current,
                         archive_pending=False,
                         rescue_to=upgrade_to,
+                        migrate_curation_to=upgrade_to,
                     )
         upgraded.append({"from": current, "to": upgrade_to})
         LOGGER.info("[deduplicate] upgraded %s → %s", current, upgrade_to)
