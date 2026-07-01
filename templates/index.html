@@ -11638,7 +11638,16 @@
       function selectedUrls() { return getSelectedFeeds().map(f => f.url); }
       function removeRowsFor(urls) {
         const set = new Set(urls);
-        feedsTab.querySelectorAll('.settings-feed-row').forEach(r => { if (set.has(r.dataset.feedUrl)) r.remove(); });
+        const affectedFolders = new Set();
+        feedsTab.querySelectorAll('.settings-feed-row').forEach(r => {
+          if (set.has(r.dataset.feedUrl)) {
+            if (r.dataset.folderFeeds) affectedFolders.add(r.dataset.folderFeeds);
+            r.remove();
+          }
+        });
+        // Keep each affected folder's select-all checkbox (checked/indeterminate)
+        // consistent with the rows that remain.
+        affectedFolders.forEach(fid => syncFolderCheck(fid));
         updateToolbar();
       }
       function setRowsDisabled(urls, disabled) {

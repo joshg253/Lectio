@@ -17228,10 +17228,11 @@ def move_feed(
     try:
         move_feed_to_folder(feed_url, from_folder_id, to_folder_id)
     except ValueError as exc:
-        message = str(exc)
+        message = str(exc)  # intentional, user-facing validation messages
         ok = False
-    except Exception as exc:
-        message = f"Feed move failed: {exc}"
+    except Exception:
+        LOGGER.exception("[feeds/move] failed feed=%s -> folder=%s", feed_url, to_folder_id)
+        message = "Feed move failed."
         ok = False
 
     return _respond(message, ok)
@@ -17834,10 +17835,7 @@ def bulk_feed_action(
                 count += 1
         elif action == "mark-read":
             count = mark_feeds_as_read(set(urls))
-            with unread_counts_cache_lock:
-                global _unread_counts_generation
-                _unread_counts_generation += 1
-                unread_counts_cache.clear()
+            invalidate_unread_counts_cache()
         elif action == "refresh":
             feed_refresh_service.update_feeds(urls, enhance=False)
             _run_automation_after_refresh(set(urls))
@@ -17857,21 +17855,21 @@ def bulk_feed_action(
                     count += 1
             invalidate_meta_structure_cache()
         elif action == "unsubscribe":
-            for u in urls:
-                with get_meta_connection() as conn:
+            # Reuse a single reader + meta connection across the whole batch.
+            with get_reader() as reader, get_meta_connection() as conn:
+                for u in urls:
                     conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (u,))
                     still_used = conn.execute("SELECT 1 FROM folder_feeds WHERE feed_url = ? LIMIT 1", (u,)).fetchone()
-                if not still_used:
-                    with get_reader() as reader:
-                        with get_meta_connection() as conn:
-                            purge_orphaned_feed(reader, conn, u, archive_pending=True)
-                count += 1
+                    if not still_used:
+                        purge_orphaned_feed(reader, conn, u, archive_pending=True)
+                    count += 1
             invalidate_meta_structure_cache()
         else:
             return JSONResponse({"ok": False, "error": f"Unknown action: {action}"}, status_code=400)
     except Exception as exc:
         LOGGER.exception("[feeds/bulk] action=%s failed", action)
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        # Don't leak internal exception detail to the client; it's in the logs.
+        return JSONResponse({"ok": False, "error": "Action failed."}, status_code=500)
     return JSONResponse({"ok": True, "action": action, "count": count})
 
 
