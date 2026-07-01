@@ -2983,13 +2983,29 @@
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
     document.getElementById('multi-folder-btn')?.addEventListener('click', async () => {
-      const resp = await fetch('/feeds/multi-folder');
-      const data = await resp.json();
-      const feeds = data.feeds || [];
       const results = document.getElementById('multi-folder-results');
-      const intro = results.querySelector('.multi-folder-intro');
-      const list = results.querySelector('.multi-folder-list');
+      const intro = results?.querySelector('.multi-folder-intro');
+      const list = results?.querySelector('.multi-folder-list');
       const okBtn = document.getElementById('multi-folder-ok');
+      if (!results || !intro || !list || !okBtn) {
+        console.error('Multi-folder UI elements are missing');
+        return;
+      }
+
+      let feeds;
+      try {
+        const resp = await fetch('/feeds/multi-folder');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        feeds = data?.feeds || [];
+      } catch (err) {
+        console.error('Failed to scan for multi-folder feeds', err);
+        results.hidden = false;
+        intro.textContent = 'Could not scan for multi-folder feeds — please try again.';
+        list.innerHTML = '';
+        okBtn.hidden = true;
+        return;
+      }
 
       results.hidden = false;
       if (feeds.length === 0) {
@@ -3013,6 +3029,8 @@
 
     document.getElementById('multi-folder-ok')?.addEventListener('click', async () => {
       const results = document.getElementById('multi-folder-results');
+      const intro = results?.querySelector('.multi-folder-intro');
+      if (!results) return;
       const choices = [];
       for (const pair of results.querySelectorAll('.dedup-cross-pair')) {
         const feedUrl = pair.dataset.feedUrl;
@@ -3021,13 +3039,22 @@
           choices.push({ feed_url: feedUrl, folder_id: parseInt(checked.value) });
         }
       }
+      let respData;
+      try {
+        const resp = await fetch('/feeds/multi-folder/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ choices }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        respData = await resp.json();
+      } catch (err) {
+        // Keep the UI visible so the user can retry rather than losing their picks.
+        console.error('Failed to resolve multi-folder feeds', err);
+        if (intro) intro.textContent = 'Could not apply changes — please try again.';
+        return;
+      }
       results.hidden = true;
-      const resp = await fetch('/feeds/multi-folder/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ choices }),
-      });
-      const respData = await resp.json();
       alert(respData.resolved > 0 ? `Collapsed ${respData.resolved} feed(s) to a single folder.` : 'Nothing to do.');
       window.location.reload();
     });

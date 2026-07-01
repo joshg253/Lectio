@@ -413,7 +413,7 @@ Detailed specs follow.
   correctly. But the handful of already-imported entries with a NULL `published`
   (~343 in the live DB) still lack a true publication date; rather than overwrite
   reader's `published` column with import time (worse than the runtime
-  url/title-inferred fallback), they sort by when the reader first saw them. A
+  URL/title-inferred fallback), they sort by when the reader first saw them. A
   one-time backfill that persists the inferred effective date could be added later
   if the ordering of those specific entries ever matters.
 
