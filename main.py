@@ -3895,6 +3895,12 @@ def get_folder_feed_urls(conn: sqlite3.Connection, folder_id: int) -> set[str]:
     # actions (mark-read, refresh, …) operate on it uniformly.
     if folder_id == UNCATEGORIZED_FOLDER_ID:
         return get_all_reader_feed_urls() - get_all_feed_urls(conn)
+    # "All Feeds" (root) covers every reader feed, including orphans that live in
+    # no folder. The home view widens root the same way for display and counts, so
+    # folder actions (mark-read/older, refresh) must match — otherwise entries in
+    # uncategorized feeds show under All Feeds but can't be marked from there.
+    if folder_id == get_root_folder_id(conn):
+        return get_all_reader_feed_urls()
     descendant_ids = get_descendant_folder_ids(conn, folder_id)
     placeholders = ",".join("?" for _ in descendant_ids)
     rows = conn.execute(

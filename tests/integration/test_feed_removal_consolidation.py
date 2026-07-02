@@ -277,6 +277,29 @@ class TestUnsubscribeRoute:
 
 
 # ---------------------------------------------------------------------------
+# get_folder_feed_urls — root ("All Feeds") must include uncategorized feeds
+# ---------------------------------------------------------------------------
+
+class TestRootFeedResolution:
+    def test_root_includes_uncategorized_feeds(self, env):
+        """A feed in no folder must be reachable from All Feeds, so mark-read /
+        mark-older / refresh on the root operate on it (regression: root actions
+        used to skip orphan feeds that the list view still displayed)."""
+        foldered = _make_child_folder("Foldered")
+        _add_feed_to_folder(FEED, foldered)
+        # FEED2 lives in the reader but in no folder → Uncategorized.
+        with main.get_reader() as reader:
+            reader.add_feed(FEED2, allow_invalid_url=True, exist_ok=True)
+
+        with main.get_meta_connection() as conn:
+            root_id = main.get_root_folder_id(conn)
+            root_feeds = main.get_folder_feed_urls(conn, root_id)
+
+        assert FEED in root_feeds
+        assert FEED2 in root_feeds  # the orphan is now covered by root actions
+
+
+# ---------------------------------------------------------------------------
 # Site C — delete_folder
 # ---------------------------------------------------------------------------
 
