@@ -311,6 +311,47 @@ class TestDeleteFolder:
         main.delete_folder(fid)
         ws_mock.unsubscribe.assert_not_called()
 
+    def test_delete_folder_move_reassigns_feeds_to_target(self, env, monkeypatch):
+        fid = _make_child_folder("MoveFrom")
+        target = _make_child_folder("MoveTo")
+        _add_feed_to_folder(FEED, fid)
+        ws_mock = MagicMock()
+        monkeypatch.setattr(main, "websub_service", ws_mock)
+        deleted, unsubbed, moved = main.delete_folder(
+            fid, feed_action="move", move_to_folder_id=target
+        )
+        assert (unsubbed, moved) == (0, 1)
+        ws_mock.unsubscribe.assert_not_called()
+        with main.get_meta_connection() as conn:
+            rows = conn.execute(
+                "SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchall()
+        assert [int(r["folder_id"]) for r in rows] == [target]
+
+    def test_delete_folder_move_to_uncategorized_leaves_feed_folderless(self, env, monkeypatch):
+        fid = _make_child_folder("MoveFrom2")
+        _add_feed_to_folder(FEED, fid)
+        ws_mock = MagicMock()
+        monkeypatch.setattr(main, "websub_service", ws_mock)
+        main.delete_folder(
+            fid, feed_action="move", move_to_folder_id=main.UNCATEGORIZED_FOLDER_ID
+        )
+        ws_mock.unsubscribe.assert_not_called()
+        with main.get_meta_connection() as conn:
+            rows = conn.execute(
+                "SELECT 1 FROM folder_feeds WHERE feed_url = ?", (FEED,)
+            ).fetchall()
+        assert rows == []  # folderless => Uncategorized
+        with main.get_reader() as reader:
+            assert any(str(f.url) == FEED for f in reader.get_feeds())  # still subscribed
+
+    def test_delete_folder_move_into_self_rejected(self, env, monkeypatch):
+        fid = _make_child_folder("MoveSelf")
+        _add_feed_to_folder(FEED, fid)
+        monkeypatch.setattr(main, "websub_service", MagicMock())
+        with pytest.raises(ValueError):
+            main.delete_folder(fid, feed_action="move", move_to_folder_id=fid)
+
 
 # ---------------------------------------------------------------------------
 # Site D — deduplicate_feeds (same-folder + cross-folder) and E (upgrade)

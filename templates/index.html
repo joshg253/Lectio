@@ -1010,6 +1010,8 @@
 
   <form id="context-delete-folder-form" method="post" action="/folders/delete" hidden>
     <input type="hidden" name="folder_id" id="context-delete-folder-id" />
+    <input type="hidden" name="feed_action" id="context-delete-folder-feed-action" value="unsub" />
+    <input type="hidden" name="move_to_folder_id" id="context-delete-folder-move-to" />
   </form>
 
   <form id="context-youtube-sync-form" method="post" action="/youtube/sync" hidden>
@@ -1173,6 +1175,36 @@
   <div id="tag-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-tag-rename" class="context-menu-item">Rename tag…</button>
     <button type="button" id="ctx-tag-delete" class="context-menu-item danger">Delete tag everywhere</button>
+  </div>
+
+  <div id="delete-folder-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="delete-folder-title">
+      <div class="modal-header-row">
+        <h3 id="delete-folder-title" class="action-modal-title">Delete folder</h3>
+        <button type="button" class="modal-close" data-close-modal="delete-folder-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-body">
+        <p id="delete-folder-message">This folder contains feeds. What should happen to them?</p>
+        <div class="delete-folder-options" style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="delete-folder-action" value="unsub" checked> Unsubscribe all feeds
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="delete-folder-action" value="move"> Move all feeds to:
+          </label>
+          <select id="delete-folder-target" class="text-input" disabled style="width:100%">
+            <option value="-1">Uncategorized (no folder)</option>
+            {% for folder in folder_options if folder.depth > 0 %}
+            <option value="{{ folder.id }}">{{ folder.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="action-modal-footer">
+        <button type="button" class="btn-secondary" data-close-modal="delete-folder-modal">Cancel</button>
+        <button type="button" id="delete-folder-confirm" class="btn-primary danger">Delete</button>
+      </div>
+    </div>
   </div>
 
   <div id="tag-rename-modal" class="action-modal" hidden>
@@ -11940,6 +11972,40 @@
       });
     });
 
+    const deleteFolderModal = document.getElementById('delete-folder-modal');
+    const deleteFolderMessage = document.getElementById('delete-folder-message');
+    const deleteFolderTargetSelect = document.getElementById('delete-folder-target');
+    const deleteFolderConfirm = document.getElementById('delete-folder-confirm');
+    const deleteFolderFeedActionInput = document.getElementById('context-delete-folder-feed-action');
+    const deleteFolderMoveToInput = document.getElementById('context-delete-folder-move-to');
+
+    // Enable the target <select> only when the "move" radio is chosen.
+    if (deleteFolderModal) {
+      for (const radio of deleteFolderModal.querySelectorAll('input[name="delete-folder-action"]')) {
+        radio.addEventListener('change', () => {
+          if (deleteFolderTargetSelect) {
+            deleteFolderTargetSelect.disabled =
+              deleteFolderModal.querySelector('input[name="delete-folder-action"]:checked')?.value !== 'move';
+          }
+        });
+      }
+    }
+
+    function submitFolderDeletion(feedAction, moveToFolderId) {
+      if (!deleteFolderIdInput || !deleteFolderForm) {
+        return;
+      }
+      deleteFolderIdInput.value = contextFolderId;
+      if (deleteFolderFeedActionInput) {
+        deleteFolderFeedActionInput.value = feedAction;
+      }
+      if (deleteFolderMoveToInput) {
+        deleteFolderMoveToInput.value = feedAction === 'move' ? moveToFolderId : '';
+      }
+      hideAllContextMenus();
+      deleteFolderForm.submit();
+    }
+
     deleteFolderButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -11947,15 +12013,45 @@
         return;
       }
 
-      const confirmed = window.confirm(`Delete folder "${contextFolderName}"?`);
-      if (!confirmed) {
-        hideContextMenu();
+      // Count feeds that live in this folder's subtree.
+      const feedCount = document.querySelectorAll(
+        `#folder-feeds-${contextFolderId} .tree-feed-item`
+      ).length;
+
+      // Empty folder: keep the simple confirm.
+      if (feedCount === 0 || !deleteFolderModal) {
+        const confirmed = window.confirm(`Delete folder "${contextFolderName}"?`);
+        if (!confirmed) {
+          hideContextMenu();
+          return;
+        }
+        submitFolderDeletion('unsub', '');
         return;
       }
 
-      deleteFolderIdInput.value = contextFolderId;
+      // Non-empty: ask what to do with the feeds.
+      if (deleteFolderMessage) {
+        deleteFolderMessage.textContent =
+          `"${contextFolderName}" contains ${feedCount} feed(s). What should happen to them?`;
+      }
+      // Reset to defaults and hide the folder being deleted from the move target.
+      const unsubRadio = deleteFolderModal.querySelector('input[name="delete-folder-action"][value="unsub"]');
+      if (unsubRadio) unsubRadio.checked = true;
+      if (deleteFolderTargetSelect) {
+        deleteFolderTargetSelect.disabled = true;
+        for (const opt of deleteFolderTargetSelect.options) {
+          opt.hidden = opt.value === String(contextFolderId);
+        }
+      }
       hideAllContextMenus();
-      deleteFolderForm.submit();
+      deleteFolderModal.removeAttribute('hidden');
+    });
+
+    deleteFolderConfirm?.addEventListener('click', () => {
+      const action = deleteFolderModal?.querySelector('input[name="delete-folder-action"]:checked')?.value || 'unsub';
+      const moveTo = deleteFolderTargetSelect?.value || '-1';
+      deleteFolderModal?.setAttribute('hidden', '');
+      submitFolderDeletion(action, moveTo);
     });
 
     youtubeSyncButton?.addEventListener('click', (event) => {

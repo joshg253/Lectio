@@ -5,8 +5,11 @@ Hybrid workflow:
   1. `--propose`  applies high-precision keyword heuristics to feed titles +
      recent entry titles and writes a dry-run proposal CSV. Feeds no rule is
      confident about are written with an empty folder for manual/LLM fill-in.
-  2. A human (or Claude) reviews the CSV and fills the blanks.
-  3. `--apply <csv>` inserts the approved feed->folder assignments into
+  2. `--review <csv>` (optional) sends the still-blank rows to Claude, which
+     picks one of the existing folders for each — or leaves it blank when the
+     feed is genuinely ambiguous or dead. Writes an updated CSV.
+  3. A human reviews the CSV and fixes any remaining blanks.
+  4. `--apply <csv>` inserts the approved feed->folder assignments into
      folder_feeds. Rows with an empty folder are skipped.
 
 The app caches folder structure in-process, so after --apply restart the
@@ -15,8 +18,13 @@ container (`docker compose restart`) for the sidebar to reflect the changes.
 Usage:
     uv run scripts/categorize_uncategorized.py --propose \
         --data-dir data --user u_xxx --out proposal.csv
-    uv run scripts/categorize_uncategorized.py --apply proposal.csv \
+    uv run --with anthropic scripts/categorize_uncategorized.py \
+        --review proposal.csv --data-dir data --user u_xxx --out reviewed.csv
+    uv run scripts/categorize_uncategorized.py --apply reviewed.csv \
         --data-dir data --user u_xxx
+
+The review pass needs Anthropic credentials — an `ANTHROPIC_API_KEY` env var or
+an `ant auth login` profile.
 """
 
 from __future__ import annotations
@@ -148,6 +156,136 @@ def cmd_propose(args) -> None:
     print(f"\nProposal written to {args.out} — review, fill blanks, then --apply it.")
 
 
+def _valid_folder_names(meta: Path) -> list[str]:
+    """Real, assignable folder names — excludes the virtual root and _Lectio."""
+    mc = sqlite3.connect(meta)
+    excluded = {"All Feeds", "_Lectio"}
+    names = sorted(
+        r[0]
+        for r in mc.execute("SELECT name FROM folders WHERE name IS NOT NULL")
+        if r[0] not in excluded
+    )
+    mc.close()
+    return names
+
+
+# Batch size for the Claude review pass — small enough to keep each response well
+# under the token cap, large enough to amortize the shared folder-list prompt.
+_REVIEW_CHUNK = 40
+_REVIEW_MODEL = "claude-opus-4-8"
+
+
+def _review_chunk(client, folders: list[str], feeds: list[dict]) -> dict[str, str]:
+    """Ask Claude to file each feed into one of `folders` (or "" if unsure)."""
+    listing = "\n".join(
+        f"{i}. url={f['url']}\n   title={f['title']}\n   recent: {' | '.join(f['samples'])}"
+        for i, f in enumerate(feeds)
+    )
+    prompt = (
+        "You are sorting RSS/Atom feeds into an existing set of folders for a "
+        "feed reader. For each feed, choose the single best-fitting folder from "
+        "the allowed list below, based on its title and recent entry titles. If "
+        "none clearly fits, or the feed looks dead/spammy/uncategorizable, leave "
+        "the folder empty (\"\") — do not force a bad match.\n\n"
+        f"Allowed folders:\n- " + "\n- ".join(folders) + "\n\n"
+        f"Feeds:\n{listing}"
+    )
+    response = client.messages.create(
+        model=_REVIEW_MODEL,
+        max_tokens=8000,
+        output_config={
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "assignments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {"type": "string"},
+                                    "folder": {"type": "string", "enum": folders + [""]},
+                                },
+                                "required": ["url", "folder"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    },
+                    "required": ["assignments"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        messages=[{"role": "user", "content": prompt}],
+    )
+    import json
+
+    text = next(b.text for b in response.content if b.type == "text")
+    data = json.loads(text)
+    return {a["url"]: a["folder"] for a in data["assignments"] if a.get("folder")}
+
+
+def cmd_review(args) -> None:
+    try:
+        import anthropic
+    except ImportError:
+        raise SystemExit(
+            "The review pass needs the anthropic SDK. Re-run with:\n"
+            "  uv run --with anthropic scripts/categorize_uncategorized.py --review ..."
+        )
+
+    _, meta = _db_paths(Path(args.data_dir), args.user)
+    folders = _valid_folder_names(meta)
+    if not folders:
+        raise SystemExit("No assignable folders found in the meta DB.")
+
+    with open(args.review_csv, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+        fieldnames = rows[0].keys() if rows else []
+
+    blanks = [r for r in rows if not (r.get("suggested_folder") or "").strip()]
+    print(f"rows: {len(rows)}  blank (to review): {len(blanks)}")
+    if not blanks:
+        print("Nothing to review.")
+        return
+
+    client = anthropic.Anthropic()
+    resolved: dict[str, str] = {}
+    for start in range(0, len(blanks), _REVIEW_CHUNK):
+        chunk = blanks[start : start + _REVIEW_CHUNK]
+        feeds = [
+            {
+                "url": r.get("feed_url", ""),
+                "title": r.get("title", ""),
+                "samples": (r.get("samples", "") or "").split(" | "),
+            }
+            for r in chunk
+        ]
+        try:
+            picks = _review_chunk(client, folders, feeds)
+        except Exception as exc:  # keep going; unreviewed rows stay blank
+            print(f"  ! chunk {start // _REVIEW_CHUNK} failed: {exc}")
+            continue
+        resolved.update(picks)
+        print(f"  reviewed {start + len(chunk)}/{len(blanks)}  (+{len(picks)} filled)")
+
+    filled = 0
+    for r in rows:
+        url = r.get("feed_url", "")
+        if url in resolved and not (r.get("suggested_folder") or "").strip():
+            r["suggested_folder"] = resolved[url]
+            r["method"] = "claude"
+            filled += 1
+
+    with open(args.out, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(fieldnames))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"filled {filled} of {len(blanks)} blanks -> {args.out}")
+    print("Review it, fix any remaining blanks, then --apply it.")
+
+
 def cmd_apply(args) -> None:
     reader, meta = _db_paths(Path(args.data_dir), args.user)
     mc = sqlite3.connect(meta)
@@ -182,12 +320,16 @@ def main() -> None:
     p.add_argument("--user", default=None, help="user id (multi-user); omit for single-user")
     sub = p.add_subparsers(dest="cmd", required=False)
     p.add_argument("--propose", action="store_true")
+    p.add_argument("--review", dest="review_csv", default=None,
+                   help="fill blank rows in this proposal CSV via Claude")
     p.add_argument("--apply", dest="apply_csv", default=None)
     p.add_argument("--out", default="proposal.csv")
     args = p.parse_args()
     if args.apply_csv:
         args.csv = args.apply_csv
         cmd_apply(args)
+    elif args.review_csv:
+        cmd_review(args)
     else:
         cmd_propose(args)
 

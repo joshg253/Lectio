@@ -117,7 +117,10 @@ The short version:
   a reader migration) are gathered into an **Uncategorized** folder pinned to the
   bottom of the sidebar, so they stay visible and easy to file — right-click a
   feed there and pick **Add to folder** to categorize it. "All Feeds" always
-  includes them. **Double-click** a folder or feed name in the sidebar to open its
+  includes them. Right-click a non-empty folder and pick **Delete Folder** to
+  choose what happens to the feeds inside: **unsubscribe all**, or **move all to
+  another folder** (including Uncategorized/no folder). Empty folders delete with
+  a simple confirm. **Double-click** a folder or feed name in the sidebar to open its
   Properties. In **Settings → Feeds** you can multi-select feeds (or tick a
   folder's header checkbox to select all its feeds) and **bulk move, disable/
   enable, mark-read, refresh, or unsubscribe** them in one action.

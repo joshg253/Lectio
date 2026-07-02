@@ -11780,7 +11780,24 @@ def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -
     invalidate_meta_structure_cache()
 
 
-def delete_folder(folder_id: int) -> tuple[int, int]:
+def delete_folder(
+    folder_id: int,
+    feed_action: str = "unsub",
+    move_to_folder_id: int | None = None,
+) -> tuple[int, int, int]:
+    """Delete a folder (and its descendants).
+
+    feed_action controls what happens to feeds that live in the deleted folders:
+      - "unsub" (default): unsubscribe feeds that end up in no other folder.
+      - "move": reassign every affected feed to move_to_folder_id. A target of
+        UNCATEGORIZED_FOLDER_ID (or the root folder) leaves feeds folderless
+        (i.e. Uncategorized) without unsubscribing them.
+
+    Returns (deleted_folder_count, unsubscribed_feed_count, moved_feed_count).
+    """
+    if feed_action not in ("unsub", "move"):
+        raise ValueError("Invalid feed action.")
+
     with get_meta_connection() as conn:
         root_id = get_root_folder_id(conn)
         row = conn.execute(
@@ -11788,12 +11805,30 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
             (folder_id,),
         ).fetchone()
         if not row:
-            return (0, 0)
+            return (0, 0, 0)
         if int(row["id"]) == root_id:
             raise ValueError("Cannot delete root folder.")
 
         descendant_ids = get_descendant_folder_ids(conn, folder_id)
         placeholders = ",".join("?" for _ in descendant_ids)
+
+        target_id: int | None = None
+        if feed_action == "move":
+            if move_to_folder_id is None:
+                raise ValueError("A target folder is required to move feeds.")
+            target_id = int(move_to_folder_id)
+            # Treat the root folder the same as Uncategorized: feeds become folderless.
+            if target_id == root_id:
+                target_id = UNCATEGORIZED_FOLDER_ID
+            if target_id in descendant_ids:
+                raise ValueError("Cannot move feeds into the folder being deleted.")
+            if target_id != UNCATEGORIZED_FOLDER_ID:
+                target_row = conn.execute(
+                    "SELECT id FROM folders WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
+                if not target_row:
+                    raise ValueError("Target folder does not exist.")
 
         feed_rows = conn.execute(
             f"SELECT DISTINCT feed_url FROM folder_feeds WHERE folder_id IN ({placeholders})",
@@ -11809,6 +11844,18 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
             f"DELETE FROM folders WHERE id IN ({placeholders})",
             descendant_ids,
         )
+
+        moved_feed_count = 0
+        if feed_action == "move":
+            if target_id != UNCATEGORIZED_FOLDER_ID:
+                for feed_url in affected_feed_urls:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                        (target_id, feed_url),
+                    )
+            moved_feed_count = len(affected_feed_urls)
+            invalidate_meta_structure_cache()
+            return (len(descendant_ids), 0, moved_feed_count)
 
         orphaned_feed_urls: list[str] = []
         for feed_url in affected_feed_urls:
@@ -11831,7 +11878,7 @@ def delete_folder(folder_id: int) -> tuple[int, int]:
                     removed_feed_count += 1
 
     invalidate_meta_structure_cache()
-    return (len(descendant_ids), removed_feed_count)
+    return (len(descendant_ids), removed_feed_count, 0)
 
 
 def _start_background_update(feed_url: str) -> None:
@@ -14259,13 +14306,22 @@ def youtube_sync_route(folder_id: int = Form(...)):
 
 
 @app.post("/folders/delete")
-def delete_folder_route(folder_id: int = Form(...)):
+def delete_folder_route(
+    folder_id: int = Form(...),
+    feed_action: str = Form("unsub"),
+    move_to_folder_id: int | None = Form(None),
+):
     root_id = None
     try:
         with get_meta_connection() as conn:
             root_id = get_root_folder_id(conn)
-        deleted_folders, deleted_feeds = delete_folder(folder_id)
-        message = f"Deleted {deleted_folders} folder(s). Removed {deleted_feeds} feed subscription(s)."
+        deleted_folders, deleted_feeds, moved_feeds = delete_folder(
+            folder_id, feed_action=feed_action, move_to_folder_id=move_to_folder_id
+        )
+        if feed_action == "move":
+            message = f"Deleted {deleted_folders} folder(s). Moved {moved_feeds} feed(s)."
+        else:
+            message = f"Deleted {deleted_folders} folder(s). Removed {deleted_feeds} feed subscription(s)."
     except ValueError as exc:
         message = str(exc)
         if root_id is None:
