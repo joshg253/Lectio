@@ -156,7 +156,19 @@ scheduled runs don't duplicate fetches), so the request returns promptly while
 images fill in shortly after. Each refresh path (manual, single-feed, scheduled)
 calls `invalidate_unread_counts_cache()` after ingest so newly-arrived entries
 update the folder "new" badges immediately instead of waiting out the
-stale-while-revalidate TTL.
+stale-while-revalidate TTL. Both the async refresh and the *cold* synchronous
+compute in `get_unread_counts_by_feed` are guarded by the cache generation
+counter: a scan takes ~2s, and if a mark-read/refresh bumps the generation
+mid-scan, the result predates that change and is discarded rather than written
+back — otherwise a slow render's stale counts would repopulate the just-cleared
+cache and make a mark-read appear to revert seconds later.
+
+The bulk age actions (`/entries/mark-older-than-read`, `/entries/mark-newer-than-unread`)
+must key off the same entry date the list renders and the client optimistically
+greys on — `published or updated or added`. The list falls back to `added`
+(received) when a feed omits publish dates, so an endpoint that only considered
+`published or updated` would skip entries the UI already marked, making them
+flash read and then revert.
 
 Account UI: `/account` lets a user change their password and view/regenerate
 their API token; admins additionally create/disable users and reset passwords.

@@ -4181,9 +4181,15 @@ def get_unread_counts_by_feed() -> dict[str, int]:
             cached = unread_counts_cache.get("unread_counts")
             if cached:
                 return cached[1].copy()
+            gen_at_start = _unread_counts_generation
         counts = _compute_unread_counts_by_feed()
         with unread_counts_cache_lock:
-            unread_counts_cache["unread_counts"] = (time.time(), counts)
+            # Only cache if no mark-read/refresh bumped the generation while we
+            # were computing (the scan takes ~2s). Otherwise `counts` predates
+            # that change and would poison the cache with stale unread counts —
+            # e.g. mark-older-than-read appearing to revert seconds later.
+            if _unread_counts_generation == gen_at_start:
+                unread_counts_cache["unread_counts"] = (time.time(), counts)
         return counts.copy()
 
 
@@ -18850,7 +18856,11 @@ def mark_entries_older_than_read(
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=False):
-                date = entry.published or entry.updated
+                # Match the date the list displays and the client greys on
+                # (post_timestamp = published or updated or added). Without the
+                # `added` fallback the server skips entries the UI optimistically
+                # marked, so they flash read then revert.
+                date = entry.published or entry.updated or entry.added
                 if date is None:
                     continue
                 if date.tzinfo is None:
@@ -18919,7 +18929,9 @@ def mark_entries_newer_than_unread(
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=True):
-                date = entry.published or entry.updated
+                # Same date basis as the list / optimistic client (published or
+                # updated or added) so mark-newer mirrors what the UI un-marks.
+                date = entry.published or entry.updated or entry.added
                 if date is None:
                     continue
                 if date.tzinfo is None:

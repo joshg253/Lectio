@@ -188,6 +188,77 @@ def test_older_than_mark_read_async_returns_json(monkeypatch):
     assert "marked" in body
 
 
+class _FakeEntry:
+    def __init__(self, eid, published=None, updated=None, added=None):
+        self.id = eid
+        self.feed_url = "http://feed/"
+        self.published = published
+        self.updated = updated
+        self.added = added
+
+
+class _FakeReader:
+    def __init__(self, entries):
+        self._entries = entries
+        self.marked: list[tuple[str, str]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_entries(self, feed=None, read=None):
+        return list(self._entries)
+
+    def mark_entry_as_read(self, key):
+        self.marked.append(key)
+
+
+def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
+    """Regression: the list displays / greys on `published or updated or added`,
+    so mark-older must use the same basis. An old entry whose only date is
+    `added` (received) must be marked — otherwise it flashes read then reverts."""
+    import datetime as _dt
+
+    old = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)
+    recent = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=1)
+    entries = [
+        _FakeEntry("e_added_old", published=None, updated=None, added=old),   # marked
+        _FakeEntry("e_pub_old", published=old, added=recent),                 # marked
+        _FakeEntry("e_recent", published=recent, added=old),                  # skipped (published recent)
+        _FakeEntry("e_no_date", published=None, updated=None, added=None),    # skipped
+    ]
+    fake = _FakeReader(entries)
+
+    def _meta_conn_with_read_state():
+        conn = _dummy_meta_conn()
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS entry_read_state ("
+            "feed_url TEXT, entry_id TEXT, read_at TEXT,"
+            "PRIMARY KEY (feed_url, entry_id))"
+        )
+        return conn
+
+    app = FastAPI()
+    app.post("/entries/mark-older-than-read")(main.mark_entries_older_than_read)
+    monkeypatch.setattr(main, "get_meta_connection", _meta_conn_with_read_state)
+    monkeypatch.setattr(main, "get_folder_feed_urls", lambda _c, _f: {"http://feed/"})
+    monkeypatch.setattr(main, "filter_feed_urls", lambda urls, _l: urls)
+    monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(main, "get_reader", lambda: fake)
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/entries/mark-older-than-read",
+            data={"folder_id": "1", "max_age_days": "7"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.status_code == 200
+    assert r.json()["marked"] == 2
+    assert set(k[1] for k in fake.marked) == {"e_added_old", "e_pub_old"}
+
+
 # ---------------------------------------------------------------------------
 # /entries/read — async toggle must run its background write under the
 # request's user, not the default (legacy) user.
@@ -254,3 +325,42 @@ def test_run_in_user_context_binds_user_inside_worker():
     assert seen == ["u_worker"]
     # And it restores the prior binding afterward.
     assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+
+
+# ---------------------------------------------------------------------------
+# Unread-count cache generation guard (mark-read "revert" race)
+# ---------------------------------------------------------------------------
+
+def test_cold_compute_discards_stale_counts_after_generation_bump(monkeypatch):
+    """A slow cold-cache scan that finishes *after* a mark-read bumped the
+    generation must not overwrite the freshly-cleared cache with its pre-mark
+    counts — otherwise the marked entries appear to revert seconds later."""
+    monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(main, "unread_counts_refresh_inflight", False)
+
+    def _compute_with_concurrent_mark():
+        # Simulate a mark-read landing while the ~2s scan is running.
+        main._unread_counts_generation += 1
+        return {"http://feed/": 5}
+
+    monkeypatch.setattr(main, "_compute_unread_counts_by_feed", _compute_with_concurrent_mark)
+
+    result = main.get_unread_counts_by_feed()
+
+    # Caller still gets the computed value...
+    assert result == {"http://feed/": 5}
+    # ...but the stale snapshot is NOT cached (would otherwise be served fresh
+    # for the full TTL, reverting the mark on screen).
+    assert "unread_counts" not in main.unread_counts_cache
+
+
+def test_cold_compute_caches_counts_when_generation_stable(monkeypatch):
+    """The happy path: no concurrent change, so the computed counts are cached."""
+    monkeypatch.setattr(main, "unread_counts_cache", {})
+    monkeypatch.setattr(main, "unread_counts_refresh_inflight", False)
+    monkeypatch.setattr(main, "_compute_unread_counts_by_feed", lambda: {"http://feed/": 2})
+
+    result = main.get_unread_counts_by_feed()
+
+    assert result == {"http://feed/": 2}
+    assert main.unread_counts_cache["unread_counts"][1] == {"http://feed/": 2}
