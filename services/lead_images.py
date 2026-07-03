@@ -89,6 +89,27 @@ class LeadImageService:
     def _bbcode_img_to_html(cls, text: str) -> str:
         """Convert [img]url[/img] BBCode tags to <img src="url"> for image extraction."""
         return cls._BBCODE_IMG_RE.sub(r'<img src="\1">', text)
+
+    # Bare image URL (image-extension, not already inside an attribute/tag) followed
+    # by whitespace, a tag/escaped-tag start, an ampersand, or end-of-string.
+    _BARE_IMG_URL_RE = re.compile(
+        r'(?<![\w"\'=/])(https?://[^\s<>"\']+?\.(?:png|jpe?g|gif|webp|bmp|svg))(?=[\s<&]|$)',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _promote_bare_image_urls(cls, text: str) -> str:
+        """Wrap bare image URLs in ``<img>`` so inline extraction can find them.
+
+        Escaped-plaintext feeds (e.g. orpheus.network news) ship the post image as a
+        bare URL with no ``<img>`` tag. The article renderer promotes it, but the raw
+        feed content the lead-image extractor sees does not — so without this the
+        inline strategy finds nothing and the feed falls back to og_scrape (which on a
+        login-gated source page picks up the site logo). Only runs when the content
+        has no real ``<img>`` already, to avoid touching normal HTML feeds."""
+        if "<img" in text.lower():
+            return text
+        return cls._BARE_IMG_URL_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
         r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
         re.IGNORECASE,
@@ -972,6 +993,10 @@ class LeadImageService:
         for html_candidate in html_candidates:
             if feed_url:
                 html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
+            # Normalize BBCode [img] and bare image URLs (escaped-plaintext feeds ship
+            # the post image as a bare URL with no <img> tag) so the extractors below
+            # can see them, matching extract_inline_thumb_url.
+            html_candidate = self._promote_bare_image_urls(self._bbcode_img_to_html(html_candidate))
             # Check <video poster="..."> before <img> — video posts (e.g. Tumblr)
             # embed the frame thumbnail as the poster, which is the best lead image.
             for vm in _VIDEO_POSTER_RE.finditer(html_candidate):
@@ -1075,7 +1100,7 @@ class LeadImageService:
         for html_candidate in html_candidates:
             if feed_url:
                 html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
-            prepared.append(self._bbcode_img_to_html(html_candidate))
+            prepared.append(self._promote_bare_image_urls(self._bbcode_img_to_html(html_candidate)))
         return prepared
 
     def extract_inline_svg_thumb_url(self, entry: object) -> str | None:
@@ -1208,6 +1233,10 @@ class LeadImageService:
         for candidate_html in (content_html, summary):
             if not isinstance(candidate_html, str) or not candidate_html.strip():
                 continue
+            # Normalize BBCode [img] and bare image URLs (escaped-plaintext feeds
+            # ship the post image as a bare URL with no <img> tag) so the extractor
+            # can see them, matching extract_inline_thumb_url.
+            candidate_html = self._promote_bare_image_urls(self._bbcode_img_to_html(candidate_html))
             image_url = self._extract_first_image_url_from_html(candidate_html, base_url)
             if image_url and not self._should_bypass_cached_url(entry_link=entry_link, cached_url=image_url):
                 return image_url
@@ -3019,7 +3048,7 @@ class LeadImageService:
             for html_candidate in html_candidates:
                 if feed_url:
                     html_candidate = self._strip_feed_injected_blocks(html_candidate, feed_url)
-                html_candidate = self._bbcode_img_to_html(html_candidate)
+                html_candidate = self._promote_bare_image_urls(self._bbcode_img_to_html(html_candidate))
                 img = self._extract_first_image_url_from_html(html_candidate, base_url, allow_extensionless=True)
                 if img:
                     inline_url = img

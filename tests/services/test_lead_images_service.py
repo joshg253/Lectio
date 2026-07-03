@@ -155,6 +155,43 @@ def test_inline_thumb_url_promotes_comiccontrol(tmp_path: Path):
     assert service.extract_inline_thumb_url(entry) == "https://www.atomic-robo.com/comics/1-ARV.jpg"
 
 
+def test_inline_thumb_url_promotes_bare_plaintext_image_url(tmp_path: Path):
+    # Escaped-plaintext feeds (e.g. orpheus.network news) ship the post image as a
+    # bare URL with no <img> tag. Without promotion the inline extractor finds
+    # nothing and the feed falls back to og_scrape (which on a login-gated source
+    # page grabs the site logo). The bare URL must be surfaced as the thumbnail.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://orpheus.network/feeds.php?feed=feed_news",
+        entry_id="https://orpheus.network/index.php#news212",
+        link="https://orpheus.network/index.php#news212",
+        content_html=(
+            "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg&lt;br&gt;\n"
+            "&lt;br&gt;\nAoTM June Round 1 has closed and we have a winner!&lt;br&gt;"
+        ),
+    )
+    assert (
+        service.extract_inline_thumb_url(entry)
+        == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
+    )
+    assert (
+        service.extract_entry_thumbnail_url(entry)
+        == "https://i.ibb.co/Zp25NHbV/2-Sd-RZ3-GBUz.jpg"
+    )
+
+
+def test_bare_url_promotion_skips_non_image_urls(tmp_path: Path):
+    # A bare non-image URL (forum link) must not be promoted to an <img>.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://orpheus.network/feeds.php?feed=feed_news",
+        entry_id="news-x",
+        link="https://orpheus.network/index.php#news-x",
+        content_html="Voting is open&lt;br&gt;\nhttps://orpheus.network/forums.php?threadid=1",
+    )
+    assert service.extract_inline_thumb_url(entry) is None
+
+
 def test_podcast_title_branding_image_rejected(tmp_path: Path):
     # og:scrape can fall back to a show-title branding graphic on a post with no
     # real featured image; reject it even on the cached (skip_logo_patterns) path.
