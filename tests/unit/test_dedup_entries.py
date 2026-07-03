@@ -53,7 +53,10 @@ def _fake_reader_ctx(entries):
 
 def test_slug_dedup_returns_entries_list(monkeypatch):
     conn = _make_conn()
-    conn.execute("INSERT INTO folders VALUES (1, 'Test', NULL)")
+    # 'All Feeds' root must exist: get_folder_feed_urls() resolves the root via
+    # get_root_folder_id(), which raises if it's absent. 'Test' is a child of it.
+    conn.execute("INSERT INTO folders VALUES (99, 'All Feeds', NULL)")
+    conn.execute("INSERT INTO folders VALUES (1, 'Test', 99)")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed1.example.com/rss')")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed2.example.com/rss')")
     conn.commit()
@@ -86,7 +89,10 @@ def test_slug_dedup_returns_entries_list(monkeypatch):
 
 def test_safe_dedup_returns_entries_list(monkeypatch):
     conn = _make_conn()
-    conn.execute("INSERT INTO folders VALUES (1, 'Test', NULL)")
+    # 'All Feeds' root must exist: get_folder_feed_urls() resolves the root via
+    # get_root_folder_id(), which raises if it's absent. 'Test' is a child of it.
+    conn.execute("INSERT INTO folders VALUES (99, 'All Feeds', NULL)")
+    conn.execute("INSERT INTO folders VALUES (1, 'Test', 99)")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed1.example.com/rss')")
     conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed2.example.com/rss')")
     conn.commit()

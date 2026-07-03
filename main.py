@@ -4181,11 +4181,28 @@ def get_unread_counts_by_feed() -> dict[str, int]:
             cached = unread_counts_cache.get("unread_counts")
             if cached:
                 return cached[1].copy()
+            gen_at_start = _unread_counts_generation
         counts = _compute_unread_counts_by_feed()
         with unread_counts_cache_lock:
-            unread_counts_cache["unread_counts"] = (time.time(), counts)
+            # Only cache if no mark-read/refresh bumped the generation while we
+            # were computing (the scan takes ~2s). Otherwise `counts` predates
+            # that change and would poison the cache with stale unread counts —
+            # e.g. mark-older-than-read appearing to revert seconds later.
+            if _unread_counts_generation == gen_at_start:
+                unread_counts_cache["unread_counts"] = (time.time(), counts)
         return counts.copy()
 
+
+def entry_effective_date(entry) -> datetime | None:
+    """The date the UI treats as an entry's timestamp: publish date, falling
+    back to update then received (`added`) date for feeds that omit dates.
+
+    Single source of truth so the list render, unread counts, and the bulk
+    age actions (mark-older/newer-than) all agree — a mismatch here made
+    mark-older skip entries the UI had optimistically marked, so they flashed
+    read then reverted.
+    """
+    return entry.published or entry.updated or entry.added
 
 
 def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
@@ -4310,7 +4327,7 @@ def _safe_dedup_collect(reader, feed_urls: set[str], max_per_feed: int, read_fil
             if read_filter is not None:
                 kwargs["read"] = read_filter
             for entry in reader.get_entries(**kwargs):
-                published = entry.published or entry.updated or entry.added
+                published = entry_effective_date(entry)
                 ntitle = _safe_dedup_norm_title(entry.title)
                 records.append({
                     "feed_url":   str(entry.feed_url or ""),
@@ -4535,7 +4552,7 @@ def _dry_run_dedup(
                     if total_scanned >= max_entries:
                         break
                     total_scanned += 1
-                    published = entry.published or entry.updated or entry.added
+                    published = entry_effective_date(entry)
                     info: dict = {
                         "title": str(entry.title or ""),
                         "link": str(entry.link or ""),
@@ -4729,7 +4746,7 @@ def _dry_run_pattern(
             if matched:
                 total_matches += 1
                 if len(matches) < result_limit:
-                    published = entry.published or entry.updated or entry.added
+                    published = entry_effective_date(entry)
                     matches.append({
                         "title": title_text,
                         "link": str(entry.link or ""),
@@ -4812,7 +4829,7 @@ def _run_now_dedup(
         for feed_url in feed_urls:
             try:
                 for entry in reader.get_entries(feed=feed_url, read=False, limit=max_per_feed):
-                    published = entry.published or entry.updated or entry.added
+                    published = entry_effective_date(entry)
                     info = {
                         "feed_url": str(entry.feed_url or ""),
                         "entry_id": str(entry.id),
@@ -7241,7 +7258,7 @@ def get_folder_properties(folder_id: int) -> dict:
                     "newest": None,
                 })
                 fs["count"] += 1
-                published = entry.published or entry.updated or entry.added
+                published = entry_effective_date(entry)
                 if published:
                     if fs["oldest"] is None or published < fs["oldest"]:
                         fs["oldest"] = published
@@ -9222,7 +9239,7 @@ def list_entries_for_feeds(
                     continue
                 if normalized_read_filter == "history" and not is_read:
                     continue
-            published_dt = entry.published or entry.updated or entry.added
+            published_dt = entry_effective_date(entry)
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
@@ -10705,7 +10722,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         if _reader_get_ms > 200:
             LOGGER.info("[perf] entry_detail: reader.get_entry=%dms %s", _reader_get_ms, entry_id)
 
-        published_dt = entry.published or entry.updated or entry.added
+        published_dt = entry_effective_date(entry)
         author_name = (getattr(entry, "authors_str", None) or "").strip() or None
 
         content_html = _resolve_entry_content_html(entry)
@@ -18850,7 +18867,11 @@ def mark_entries_older_than_read(
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=False):
-                date = entry.published or entry.updated
+                # Match the date the list displays and the client greys on
+                # (post_timestamp = published or updated or added). Without the
+                # `added` fallback the server skips entries the UI optimistically
+                # marked, so they flash read then revert.
+                date = entry_effective_date(entry)
                 if date is None:
                     continue
                 if date.tzinfo is None:
@@ -18919,7 +18940,9 @@ def mark_entries_newer_than_unread(
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=True):
-                date = entry.published or entry.updated
+                # Same date basis as the list / optimistic client (published or
+                # updated or added) so mark-newer mirrors what the UI un-marks.
+                date = entry_effective_date(entry)
                 if date is None:
                     continue
                 if date.tzinfo is None:
