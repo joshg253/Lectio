@@ -107,10 +107,20 @@ The short version:
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
-- **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
-  DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
+- **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds (turn a
+  feedless page into a feed: pick from suggested CSS selectors or type your own,
+  preview the exact items before saving, and optionally backfill items already on
+  the page), YouTube &
+  DeviantArt sync, Bluesky image recovery (bsky.app RSS is text-only — Lectio pulls
+  each post's images from the AT Protocol API so they show in the reader, including
+  content-labeled posts), per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
-  stars onto the surviving feed, so no curation is lost). Each feed lives in a
+  stars onto the surviving feed, so no curation is lost). **Curation is never
+  dropped on unsubscribe:** removing a feed that has starred/tagged items offers
+  to move that curation onto another feed first, and **Settings → Feeds** lets you
+  multi-select several feeds and **Combine** them into one survivor (migrating
+  their stars, tags, and optionally unread state, then unsubscribing the rest).
+  Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
   you pick the one to keep. Feeds that aren't in any folder (e.g. after

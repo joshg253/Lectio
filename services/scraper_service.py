@@ -148,6 +148,160 @@ def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> No
 
 
 # ---------------------------------------------------------------------------
+# Link extraction + selector suggestions (shared by scraping and preview)
+# ---------------------------------------------------------------------------
+
+def _resolve_link_anchors(soup: BeautifulSoup, selector: str) -> list:
+    """Resolve a selector to the anchor elements it targets.
+
+    A selector copied from "inspect element" often targets a container (e.g. a
+    <li> or <div>) rather than the <a> inside it. Use a selected element directly
+    if it's an <a> with an href, otherwise pull the descendant anchors — preserving
+    document order and dropping duplicates. No selector => every anchor on the page.
+    """
+    selected = soup.select(selector) if selector else soup.find_all("a")
+    anchors: list = []
+    seen: set[int] = set()
+    for el in selected:
+        candidates = [el] if (el.name == "a" and el.get("href")) else el.find_all("a")
+        for anchor in candidates:
+            if not anchor.get("href") or id(anchor) in seen:
+                continue
+            seen.add(id(anchor))
+            anchors.append(anchor)
+    return anchors
+
+
+def _anchor_to_item(anchor, source_url: str) -> dict | None:
+    """Turn an <a> into a preview/entry dict {title, url}, or None if unusable."""
+    href = str(anchor.get("href") or "").strip()
+    if not href or href.startswith("#") or href.startswith("javascript:"):
+        return None
+    abs_url = urljoin(source_url, href)
+    # Collapse internal whitespace runs (newlines/tabs from multi-line markup)
+    # so titles read cleanly, e.g. "Diana Ross - Give up\n\t\tBass" -> one line.
+    title = " ".join(anchor.get_text(" ", strip=True).split())[:500] or abs_url
+    return {"title": title, "url": abs_url}
+
+
+def extract_link_items(html: str, source_url: str, selector: str) -> list[dict]:
+    """Items a link-list selector would produce: [{title, url}], de-duped by url."""
+    soup = BeautifulSoup(html, "html.parser")
+    items: list[dict] = []
+    seen_urls: set[str] = set()
+    for anchor in _resolve_link_anchors(soup, str(selector or "").strip()):
+        item = _anchor_to_item(anchor, source_url)
+        if not item or item["url"] in seen_urls:
+            continue
+        seen_urls.add(item["url"])
+        items.append(item)
+    return items
+
+
+def _css_ident(value: str) -> str:
+    """A CSS class/id token safe to drop into a selector, or '' if unusable
+    (dynamic/hashed tokens with odd characters are skipped)."""
+    import re as _re
+    value = value.strip()
+    if value and _re.fullmatch(r"[A-Za-z_-][A-Za-z0-9_-]*", value):
+        return value
+    return ""
+
+
+def _first_class(node) -> str:
+    """First class token on a node that is a usable CSS identifier, or ''."""
+    for c in (node.get("class") or []):
+        ident = _css_ident(c)
+        if ident:
+            return ident
+    return ""
+
+
+def _candidate_selector_for_anchor(anchor) -> str | None:
+    """Build a stable selector scoping an anchor to its nearest identifiable group.
+
+    Prefers the anchor's own class, then scopes to the nearest ancestor that
+    carries an id or class (e.g. ``ul.update-list a``) so anchors in a distinctly
+    marked list (content) don't collapse into the same key as an unrelated bare
+    ``ul > li`` list (nav). Falls back to a generic parent>tag chain, or None."""
+    a_class = _first_class(anchor)
+    if a_class:
+        return f"a.{a_class}"
+
+    # Climb to the nearest ancestor (a few hops) that has an id or a usable class
+    # and scope the selector to it. id is more specific than class.
+    node = anchor.parent
+    hops = 0
+    while node is not None and getattr(node, "name", None) and hops < 4:
+        if node.name in ("[document]", "html", "body"):
+            break
+        node_id = _css_ident(str(node.get("id") or ""))
+        if node_id:
+            return f"#{node_id} a"
+        node_class = _first_class(node)
+        if node_class:
+            return f"{node.name}.{node_class} a"
+        node = node.parent
+        hops += 1
+
+    # No marked ancestor nearby — fall back to a generic parent>tag chain.
+    parent = anchor.parent
+    if parent is not None and getattr(parent, "name", None):
+        grandparent = parent.parent
+        gp_name = getattr(grandparent, "name", None)
+        if gp_name and gp_name not in ("[document]", "html", "body"):
+            return f"{gp_name} > {parent.name} a"
+    return None
+
+
+def suggest_selectors(html: str, source_url: str, limit: int = 6) -> list[dict]:
+    """Suggest link-list selectors by grouping anchors that share a structure.
+
+    Returns ranked ``[{selector, count, samples}]`` — most links first — so the UI
+    can offer one-click chips instead of hand-written CSS."""
+    soup = BeautifulSoup(html, "html.parser")
+    groups: dict[str, list[dict]] = {}
+    for anchor in soup.find_all("a"):
+        item = _anchor_to_item(anchor, source_url)
+        if not item:
+            continue
+        selector = _candidate_selector_for_anchor(anchor)
+        if not selector:
+            continue
+        groups.setdefault(selector, []).append(item)
+
+    suggestions: list[dict] = []
+    for selector, items in groups.items():
+        # Verify the derived selector actually resolves (skip if BS4 rejects it),
+        # and use the resolved de-duped count so the chip matches the live preview.
+        try:
+            resolved = extract_link_items(html, source_url, selector)
+        except Exception:
+            continue
+        if len(resolved) < 2:
+            continue  # a single link isn't a "list" worth suggesting
+        suggestions.append({
+            "selector": selector,
+            "count": len(resolved),
+            "samples": [it["title"] for it in resolved[:3]],
+        })
+
+    def _rank(s: dict) -> tuple:
+        # A generic tag-only descendant selector like "div > div a" usually catches
+        # site nav/login chrome. Demote only those: a class-based selector OR a
+        # list-item ("li a") selector points at real content. Everything else is
+        # then ranked by how many links it gathers.
+        sel = s["selector"]
+        has_class = "." in sel
+        is_list = "li a" in sel
+        is_generic_chrome = not has_class and not is_list
+        return (not is_generic_chrome, s["count"])
+
+    suggestions.sort(key=_rank, reverse=True)
+    return suggestions[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Scraping modes
 # ---------------------------------------------------------------------------
 
@@ -200,7 +354,7 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     selector = str(feed.get("selector") or "").strip()
     soup = BeautifulSoup(html, "html.parser")
-    link_elements = soup.select(selector) if selector else soup.find_all("a")
+    link_elements = _resolve_link_anchors(soup, selector)
 
     existing_urls: set[str] = {
         str(r["entry_url"])
@@ -213,14 +367,14 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
     new_visible = 0
 
     for a in link_elements:
-        href = str(a.get("href") or "").strip()
-        if not href or href.startswith("#") or href.startswith("javascript:"):
+        item = _anchor_to_item(a, str(feed["source_url"]))
+        if not item:
             continue
-        abs_url = urljoin(str(feed["source_url"]), href)
+        abs_url = item["url"]
         if abs_url in existing_urls:
             continue
         existing_urls.add(abs_url)
-        title = a.get_text(strip=True)[:500] or abs_url
+        title = item["title"]
         entry_id = str(uuid.uuid4())
         hidden = 1 if initial else 0
         conn.execute(
@@ -240,6 +394,33 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 # Public API
 # ---------------------------------------------------------------------------
 
+def preview_page_feed(source_url: str, mode: str, selector: str | None) -> dict:
+    """Preview what a page feed would produce, without creating anything.
+
+    Returns ``{title, mode, items, suggestions, content_preview}``:
+    - ``items``: link-list entries [{title, url}] the selector would yield;
+    - ``suggestions``: ranked candidate selectors for link_list mode;
+    - ``content_preview``: text excerpt of the watched region for change_detect.
+    Raises on fetch failure so the route can surface the error."""
+    html = _fetch_html(source_url)
+    title = _page_title(html, source_url)
+    sel = (selector or "").strip()
+    out: dict = {"title": title, "mode": mode, "items": [], "suggestions": [], "content_preview": ""}
+    if mode == "link_list":
+        out["suggestions"] = suggest_selectors(html, source_url)
+        if sel:
+            out["items"] = extract_link_items(html, source_url, sel)[:50]
+    else:
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            content = "".join(str(el) for el in soup.select(sel)) if sel else html
+        except Exception:
+            content = html
+        text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
+        out["content_preview"] = text[:600]
+    return out
+
+
 def create_scraped_feed(
     conn: sqlite3.Connection,
     reader,
@@ -247,8 +428,12 @@ def create_scraped_feed(
     mode: str,
     selector: str | None,
     feed_title: str | None,
+    backfill: bool = False,
 ) -> tuple[str, str]:
     """Create a scraped feed, do initial scrape, register with reader. Returns (feed_id, file_url).
+
+    When ``backfill`` is set (link_list only), pre-existing links are surfaced as
+    visible entries rather than seeded hidden.
 
     The caller is responsible for adding the feed to a folder in folder_feeds.
     """
@@ -277,8 +462,9 @@ def create_scraped_feed(
     feed = dict(feed_row)
 
     if mode == "link_list":
-        # Seed existing links as hidden so they aren't surfaced as new entries.
-        _scrape_link_list(conn, feed, initial=True)
+        # Seed existing links as hidden so they aren't surfaced as new entries,
+        # unless backfill was requested — then surface them as visible entries.
+        _scrape_link_list(conn, feed, initial=not backfill)
     else:
         # Capture initial hash and create a first entry so the feed isn't empty on
         # first view — subsequent page changes will generate additional entries.

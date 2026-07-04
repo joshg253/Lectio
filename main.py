@@ -48,6 +48,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import bluesky
 from services import deviantart as deviantart_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
@@ -10727,6 +10728,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         content_html = _resolve_entry_content_html(entry)
 
+        # Bluesky RSS is text-only; append the post's images (recovered from the
+        # AT Protocol API, incl. content-labeled posts) so the article shows them.
+        # The list thumbnail is handled separately in extract_entry_thumbnail_url.
+        if bluesky.is_bsky_feed(str(entry.feed_url)):
+            _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
+            if _bsky_imgs:
+                _existing = content_html or ""
+                _add = "".join(
+                    f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
+                    f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
+                    for u in _bsky_imgs if u not in _existing
+                )
+                content_html = _existing + _add
+
         # Per-site / generic feed-content cleanups (NASA nav, mynorthwest related
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
         # iframes, recovered YouTube embeds). Operates on content_html only.
@@ -11469,6 +11484,24 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
             args=(feed_url, _uid),
             daemon=True,
         ).start()
+
+
+def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dict:
+    """Count the manual tags and stars a feed carries (curation that would be lost
+    on unsubscribe). Returns ``{"tagged": n, "stars": n}`` — ``tagged`` is the number
+    of entries with at least one manual tag, ``stars`` the number of saved entries."""
+    stars = conn.execute(
+        "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)
+    ).fetchone()[0]
+    tagged = 0
+    try:
+        for e in reader.get_entries(feed=feed_url):
+            keys = [_extract_tag_key(t) for t in reader.get_tags(e.resource_id)]
+            if any(k and k.startswith(MANUAL_TAG_KEY_PREFIX) for k in keys):
+                tagged += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return {"tagged": tagged, "stars": int(stars)}
 
 
 def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
@@ -14460,6 +14493,26 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
     )
 
 
+@app.post("/scraped-feeds/preview")
+def preview_scraped_feed_route(
+    source_url: str = Form(...),
+    mode: str = Form(default="link_list"),
+    selector: str = Form(default=""),
+):
+    """Preview a page feed's extracted items / suggested selectors before creating it."""
+    source_url = source_url.strip()
+    if not source_url:
+        return JSONResponse({"error": "URL required"}, status_code=400)
+    if mode not in ("change_detect", "link_list"):
+        mode = "link_list"
+    try:
+        result = scraper_service.preview_page_feed(source_url, mode, selector.strip() or None)
+    except Exception as exc:
+        LOGGER.warning("[scraper] preview failed for %s: %s", source_url, exc)
+        return JSONResponse({"error": "Could not fetch or parse that page."}, status_code=502)
+    return JSONResponse(result)
+
+
 @app.post("/scraped-feeds")
 def create_scraped_feed_route(
     source_url: str = Form(...),
@@ -14467,6 +14520,7 @@ def create_scraped_feed_route(
     selector: str = Form(default=""),
     feed_title: str = Form(default=""),
     folder_id: int | None = Form(default=None),
+    backfill: str = Form(default=""),
 ):
     source_url = source_url.strip()
     if not source_url:
@@ -14484,6 +14538,7 @@ def create_scraped_feed_route(
                     conn, reader, source_url, mode,
                     selector.strip() or None,
                     feed_title.strip() or None,
+                    backfill=backfill in ("1", "true", "on", "yes"),
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
@@ -17735,6 +17790,7 @@ def unsubscribe_feed(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    migrate_curation_to: str | None = Form(default=None),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
@@ -17756,9 +17812,19 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
+            # When a target feed is given, migrate this feed's tags/stars onto it
+            # (synthesizing entries) instead of archiving the stars — so curation
+            # isn't lost on unsubscribe.
+            _migrate_to = (migrate_curation_to or "").strip() or None
+            if _migrate_to == feed_url:
+                _migrate_to = None  # can't migrate onto itself
             with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
+                    purge_orphaned_feed(
+                        reader, conn, feed_url,
+                        archive_pending=_migrate_to is None,
+                        migrate_curation_to=_migrate_to,
+                    )
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
@@ -17781,6 +17847,75 @@ def unsubscribe_feed(
         ),
         status_code=303,
     )
+
+
+@app.get("/feeds/curation-count")
+def feed_curation_count_route(feed_url: str = Query(...)):
+    """Return how much curation (manual tags + stars) a feed carries, so the UI
+    can offer to migrate it before an unsubscribe drops it."""
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                counts = feed_curation_counts(reader, conn, feed_url)
+                # Candidate migration targets: every other subscribed feed, so the
+                # dialog's picker doesn't depend on what's rendered in the DOM.
+                candidates = [
+                    {"url": f.url, "title": f.title or f.url}
+                    for f in reader.get_feeds(sort="title")
+                    if f.url != feed_url
+                ]
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[curation] count failed for %s: %s", feed_url, exc)
+        return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
+    counts["candidates"] = candidates
+    return JSONResponse(counts)
+
+
+@app.post("/feeds/combine")
+def combine_feeds_route(
+    request: Request,
+    survivor_url: str = Form(...),
+    source_url: list[str] = Form(default=[]),
+    move_unread: str = Form(default=""),
+):
+    """Combine several feeds into one: migrate each source feed's tags/stars (and
+    optionally unread state) onto the survivor, then unsubscribe the sources.
+
+    Reuses the dedup consolidation core (``purge_orphaned_feed`` with
+    ``migrate_curation_to``) but for arbitrary user-picked feeds, not just
+    detected duplicates."""
+    survivor_url = survivor_url.strip()
+    sources = [u.strip() for u in source_url if u.strip() and u.strip() != survivor_url]
+    if not survivor_url or not sources:
+        return JSONResponse({"ok": False, "message": "Pick a survivor and at least one other feed."}, status_code=400)
+    do_unread = move_unread in ("1", "true", "on", "yes")
+
+    migrated = {"tags": 0, "stars": 0, "synth": 0}
+    rescued = 0
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                for src in sources:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (src,))
+                    conn.commit()
+                    rescued += purge_orphaned_feed(
+                        reader, conn, src,
+                        archive_pending=False,
+                        rescue_to=survivor_url if do_unread else None,
+                        migrate_curation_to=survivor_url,
+                    )
+        invalidate_meta_structure_cache()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("[combine] failed combining into %s", survivor_url)
+        return JSONResponse({"ok": False, "message": "Combine failed — see server logs."}, status_code=500)
+
+    return JSONResponse({
+        "ok": True,
+        "combined": len(sources),
+        "survivor_url": survivor_url,
+        "rescued": rescued,
+        "message": f"Combined {len(sources)} feed{'s' if len(sources) != 1 else ''} into one.",
+    })
 
 
 @app.get("/feeds/duplicates")

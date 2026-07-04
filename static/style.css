@@ -3591,6 +3591,86 @@ body[data-keyboard-open="1"] .action-modal-panel {
   cursor: pointer;
 }
 
+/* ── Page Feed builder: selector preview + suggestions ───────────────────── */
+.afd-pf-selector-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.afd-pf-selector-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.afd-pf-preview-btn {
+  flex-shrink: 0;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: inherit;
+}
+.afd-pf-preview-btn:hover { border-color: var(--accent); }
+.afd-pf-preview-btn:disabled { opacity: 0.6; cursor: default; }
+
+.afd-pf-suggestions {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.afd-pf-suggest-label {
+  font-size: 0.8rem;
+  color: var(--muted, #888);
+}
+.afd-pf-chip {
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.afd-pf-chip:hover { border-color: var(--accent); background: var(--accent-soft, rgba(120,120,255,0.08)); }
+
+.afd-pf-preview {
+  margin-top: 0.45rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.afd-pf-preview-head {
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.afd-pf-preview-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.afd-pf-preview-list li {
+  margin: 0.1rem 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.afd-pf-backfill {
+  margin-top: 0.55rem;
+  display: block;
+}
+
 /* ── Unified Add Feed dialog ─────────────────────────────────────────────── */
 .afd-url-row {
   display: flex;
@@ -3752,6 +3832,11 @@ body[data-keyboard-open="1"] .action-modal-panel {
   white-space: nowrap;
 }
 .sfc-panel-error { font-size: 0.85rem; color: var(--danger, #d97070); margin: 0; }
+
+.sfc-combine-list { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.4rem 0; }
+.sfc-combine-item { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; cursor: pointer; }
+.sfc-combine-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfc-combine-actions { margin-top: 0.5rem; }
 
 .afd-pf {
   display: grid;

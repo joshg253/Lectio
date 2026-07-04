@@ -58,6 +58,39 @@ container so the sidebar reflects the new folders.
 
 ## Later
 
+### CodeQL — model our guards as sanitizers (advanced setup)
+
+CodeQL default setup keeps re-flagging guarded sinks as false positives:
+`py/full-ssrf` on `url_guard.safe_get` (guarded by `is_safe_outbound_url`) and
+`py/path-injection` on scraped/DeviantArt feed-file paths (guarded by
+`assert_safe_feed_id` + UUID ids). These are currently **dismissed** as false
+positives in the code-scanning UI.
+
+Durable fix: switch repo from **default** to **advanced** CodeQL setup (a
+Settings → Code security change), add `.github/workflows/codeql.yml`, and ship a
+custom **query pack** that extends the SSRF and path-injection queries with our
+guards as barriers (Python model-as-data can't express sanitizer barriers, so it
+needs actual `.ql`, not just `.yml` data extensions). Green can only be validated
+once it runs on GitHub Actions.
+
+### Page Feed builder — point-and-click element picker (PR B)
+
+PR A shipped the non-interactive half: a `/scraped-feeds/preview` endpoint,
+ranked selector suggestions (`scraper_service.suggest_selectors`), a live preview
+list in the Add-Feed modal, and a backfill toggle (`create_scraped_feed(...,
+backfill=)`). Remaining: let the user **click an element on a rendered preview of
+the page** to derive the selector, instead of picking a suggested chip or typing
+CSS.
+
+**Approach:** serve the fetched page (sanitized / same-origin proxied, images via
+`/api/img`) in an iframe inside the modal; inject a small script that outlines
+elements on hover and, on click, computes a robust selector (reuse the
+class/list-aware logic in `_candidate_selector_for_anchor`) and posts it to the
+parent, which fills the selector box and re-runs the existing live preview.
+**Watch out:** CSP, JS-heavy pages that don't render statically, and relative
+asset URLs — expect some sites to degrade to the suggestion chips (which is why
+those ship first).
+
 ### Send-to-destination — remaining candidates
 
 The rule engine + on-star fan-out + shared destination senders are shipped
