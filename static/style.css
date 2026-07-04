@@ -3833,6 +3833,11 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .sfc-panel-error { font-size: 0.85rem; color: var(--danger, #d97070); margin: 0; }
 
+.sfc-combine-list { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.4rem 0; }
+.sfc-combine-item { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9rem; cursor: pointer; }
+.sfc-combine-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfc-combine-actions { margin-top: 0.5rem; }
+
 .afd-pf {
   display: grid;
   gap: 0.4rem;

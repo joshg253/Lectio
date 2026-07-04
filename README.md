@@ -113,7 +113,12 @@ The short version:
   the page), YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
-  stars onto the surviving feed, so no curation is lost). Each feed lives in a
+  stars onto the surviving feed, so no curation is lost). **Curation is never
+  dropped on unsubscribe:** removing a feed that has starred/tagged items offers
+  to move that curation onto another feed first, and **Settings → Feeds** lets you
+  multi-select several feeds and **Combine** them into one survivor (migrating
+  their stars, tags, and optionally unread state, then unsubscribing the rest).
+  Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
   you pick the one to keep. Feeds that aren't in any folder (e.g. after

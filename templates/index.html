@@ -1795,6 +1795,7 @@
               <button type="button" class="sfc-action-btn" id="sfc-disable-btn">Disable</button>
               <button type="button" class="sfc-action-btn" id="sfc-enable-btn">Enable</button>
               <button type="button" class="sfc-action-btn sfc-action-danger" id="sfc-unsub-btn">Unsubscribe</button>
+              <button type="button" class="sfc-action-btn" id="sfc-combine-btn" disabled>Combine…</button>
               <button type="button" class="sfc-compare-btn" id="sfc-compare-btn" disabled>Compare</button>
             </span>
           </div>
@@ -11840,6 +11841,7 @@
       if (!feedsTab) return;
       const toolbar = document.getElementById('sfc-toolbar');
       const compareBtn = document.getElementById('sfc-compare-btn');
+      const combineBtn = document.getElementById('sfc-combine-btn');
       const countEl = document.getElementById('sfc-count');
       const panel = document.getElementById('sfc-panel');
       if (!toolbar || !compareBtn || !countEl || !panel) return;
@@ -11865,6 +11867,7 @@
         const n = getSelectedFeeds().length;
         toolbar.hidden = n === 0;
         compareBtn.disabled = n < 2;
+        if (combineBtn) combineBtn.disabled = n < 2;
         if (n === 0) {
           countEl.textContent = '';
         } else if (n > MAX_COMPARE) {
@@ -11977,6 +11980,71 @@
         if (!urls.length) return;
         if (!confirm(`Unsubscribe ${urls.length} feed${urls.length === 1 ? '' : 's'}? This permanently deletes them.`)) return;
         if (await bulkAction('unsubscribe')) removeRowsFor(urls);
+      });
+
+      // Combine: pick one selected feed as survivor; migrate the others' tags/
+      // stars (and optionally unread) onto it, then unsubscribe them.
+      combineBtn?.addEventListener('click', () => {
+        const selected = getSelectedFeeds();
+        if (selected.length < 2) return;
+        panel.innerHTML = '';
+        const heading = document.createElement('p');
+        heading.className = 'sfc-panel-heading';
+        heading.textContent = 'Combine feeds — keep which one?';
+        panel.append(heading);
+
+        const list = document.createElement('div');
+        list.className = 'sfc-combine-list';
+        selected.forEach((f, i) => {
+          const lbl = document.createElement('label');
+          lbl.className = 'sfc-combine-item';
+          const rb = document.createElement('input');
+          rb.type = 'radio'; rb.name = 'sfc-combine-survivor'; rb.value = f.url;
+          if (i === 0) rb.checked = true;
+          const sp = document.createElement('span');
+          sp.textContent = f.name; sp.title = f.url;
+          lbl.append(rb, sp); list.append(lbl);
+        });
+        panel.append(list);
+
+        const opts = document.createElement('label');
+        opts.className = 'sfc-combine-item';
+        const unreadCb = document.createElement('input');
+        unreadCb.type = 'checkbox'; unreadCb.id = 'sfc-combine-unread';
+        opts.append(unreadCb, document.createTextNode(' Also carry over unread state'));
+        panel.append(opts);
+
+        const actions = document.createElement('div');
+        actions.className = 'sfc-combine-actions';
+        const go = document.createElement('button');
+        go.type = 'button'; go.className = 'sfc-action-btn'; go.textContent = `Combine ${selected.length} feeds`;
+        actions.append(go); panel.append(actions);
+        panel.hidden = false;
+
+        go.addEventListener('click', async () => {
+          const survivor = panel.querySelector('input[name="sfc-combine-survivor"]:checked')?.value;
+          if (!survivor) return;
+          const sources = selected.map(f => f.url).filter(u => u !== survivor);
+          const survivorName = selected.find(f => f.url === survivor)?.name || survivor;
+          if (!confirm(`Combine ${sources.length} feed${sources.length === 1 ? '' : 's'} into "${survivorName}"? Their stars, tags${unreadCb.checked ? ', and unread items' : ''} move over, then they're unsubscribed.`)) return;
+          go.disabled = true; go.textContent = 'Combining…';
+          const body = new URLSearchParams();
+          body.set('survivor_url', survivor);
+          sources.forEach(u => body.append('source_url', u));
+          if (unreadCb.checked) body.set('move_unread', '1');
+          try {
+            const r = await fetch('/feeds/combine', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-combine' },
+              credentials: 'same-origin', body: body.toString(),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!data.ok) { alert(data.message || 'Combine failed.'); go.disabled = false; go.textContent = `Combine ${selected.length} feeds`; return; }
+            removeRowsFor(sources);
+            panel.hidden = true; panel.innerHTML = '';
+            if (typeof showToastMessage === 'function') showToastMessage(data.message);
+          } catch (e) { alert('Combine failed: ' + e); go.disabled = false; }
+        });
       });
 
       compareBtn.addEventListener('click', async () => {
