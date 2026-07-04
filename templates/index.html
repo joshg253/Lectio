@@ -13378,6 +13378,10 @@
       pfPickerClose?.addEventListener('click', pfClosePicker);
 
       window.addEventListener('message', async (e) => {
+        // The picker iframe is same-origin (served by /scraped-feeds/picker-frame),
+        // so only trust messages from it — ignore spoofed cross-origin messages.
+        if (e.origin !== window.location.origin) return;
+        if (!pfPickerFrame || e.source !== pfPickerFrame.contentWindow) return;
         const d = e.data;
         if (!d || d.type !== 'lectio-pick' || !d.href || !selectedFeedUrl) return;
         if (pfPickerHeadText) pfPickerHeadText.textContent = 'Deriving selector…';

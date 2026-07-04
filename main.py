@@ -8564,7 +8564,7 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
             "document.addEventListener('click',function(e){"
             "e.preventDefault();e.stopPropagation();"
             "var a=nearestA(e.target);"
-            "if(a){try{parent.postMessage({type:'lectio-pick',href:a.href},'*');}catch(_){}}"
+            "if(a){try{parent.postMessage({type:'lectio-pick',href:a.href},location.origin);}catch(_){}}"
             "},true);"
             "document.addEventListener('submit',function(e){e.preventDefault();},true);"
             "})();</script>"
