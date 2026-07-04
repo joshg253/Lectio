@@ -11471,6 +11471,24 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         ).start()
 
 
+def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dict:
+    """Count the manual tags and stars a feed carries (curation that would be lost
+    on unsubscribe). Returns ``{"tagged": n, "stars": n}`` — ``tagged`` is the number
+    of entries with at least one manual tag, ``stars`` the number of saved entries."""
+    stars = conn.execute(
+        "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)
+    ).fetchone()[0]
+    tagged = 0
+    try:
+        for e in reader.get_entries(feed=feed_url):
+            keys = [_extract_tag_key(t) for t in reader.get_tags(e.resource_id)]
+            if any(k and k.startswith(MANUAL_TAG_KEY_PREFIX) for k in keys):
+                tagged += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return {"tagged": tagged, "stars": int(stars)}
+
+
 def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
     """Migrate manual tags and stars from a feed being removed onto the surviving
     feed, so consolidating duplicates never drops curation.
@@ -17757,6 +17775,7 @@ def unsubscribe_feed(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    migrate_curation_to: str | None = Form(default=None),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
@@ -17778,9 +17797,19 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
+            # When a target feed is given, migrate this feed's tags/stars onto it
+            # (synthesizing entries) instead of archiving the stars — so curation
+            # isn't lost on unsubscribe.
+            _migrate_to = (migrate_curation_to or "").strip() or None
+            if _migrate_to == feed_url:
+                _migrate_to = None  # can't migrate onto itself
             with get_reader() as reader:
                 with get_meta_connection() as conn:
-                    purge_orphaned_feed(reader, conn, feed_url, archive_pending=True)
+                    purge_orphaned_feed(
+                        reader, conn, feed_url,
+                        archive_pending=_migrate_to is None,
+                        migrate_curation_to=_migrate_to,
+                    )
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
@@ -17803,6 +17832,74 @@ def unsubscribe_feed(
         ),
         status_code=303,
     )
+
+
+@app.get("/feeds/curation-count")
+def feed_curation_count_route(feed_url: str = Query(...)):
+    """Return how much curation (manual tags + stars) a feed carries, so the UI
+    can offer to migrate it before an unsubscribe drops it."""
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                counts = feed_curation_counts(reader, conn, feed_url)
+                # Candidate migration targets: every other subscribed feed, so the
+                # dialog's picker doesn't depend on what's rendered in the DOM.
+                candidates = [
+                    {"url": f.url, "title": f.title or f.url}
+                    for f in reader.get_feeds(sort="title")
+                    if f.url != feed_url
+                ]
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    counts["candidates"] = candidates
+    return JSONResponse(counts)
+
+
+@app.post("/feeds/combine")
+def combine_feeds_route(
+    request: Request,
+    survivor_url: str = Form(...),
+    source_url: list[str] = Form(default=[]),
+    move_unread: str = Form(default=""),
+):
+    """Combine several feeds into one: migrate each source feed's tags/stars (and
+    optionally unread state) onto the survivor, then unsubscribe the sources.
+
+    Reuses the dedup consolidation core (``purge_orphaned_feed`` with
+    ``migrate_curation_to``) but for arbitrary user-picked feeds, not just
+    detected duplicates."""
+    survivor_url = survivor_url.strip()
+    sources = [u.strip() for u in source_url if u.strip() and u.strip() != survivor_url]
+    if not survivor_url or not sources:
+        return JSONResponse({"ok": False, "message": "Pick a survivor and at least one other feed."}, status_code=400)
+    do_unread = move_unread in ("1", "true", "on", "yes")
+
+    migrated = {"tags": 0, "stars": 0, "synth": 0}
+    rescued = 0
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                for src in sources:
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (src,))
+                    conn.commit()
+                    rescued += purge_orphaned_feed(
+                        reader, conn, src,
+                        archive_pending=False,
+                        rescue_to=survivor_url if do_unread else None,
+                        migrate_curation_to=survivor_url,
+                    )
+        invalidate_meta_structure_cache()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("[combine] failed combining into %s", survivor_url)
+        return JSONResponse({"ok": False, "message": f"Combine failed: {exc}"}, status_code=500)
+
+    return JSONResponse({
+        "ok": True,
+        "combined": len(sources),
+        "survivor_url": survivor_url,
+        "rescued": rescued,
+        "message": f"Combined {len(sources)} feed{'s' if len(sources) != 1 else ''} into one.",
+    })
 
 
 @app.get("/feeds/duplicates")

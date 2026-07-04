@@ -1126,6 +1126,27 @@
     <input type="hidden" name="resume_read_filter" value="{{ selected_resume_read_filter }}" />
   </form>
 
+  <div id="unsub-migrate-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="unsub-migrate-title">
+      <div class="modal-header-row">
+        <h3 id="unsub-migrate-title" class="action-modal-title">Unsubscribe feed</h3>
+        <button type="button" class="modal-close" data-close-modal="unsub-migrate-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <p id="unsub-migrate-body" class="action-modal-hint"></p>
+      <div id="unsub-migrate-curation" hidden>
+        <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" checked /> Move it to another feed:</label>
+        <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
+        <datalist id="unsub-migrate-candidates"></datalist>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" value="skip" /> Don't move — just unsubscribe (stars are archived; tags are lost)</label>
+      </div>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>
+        <button type="button" id="unsub-migrate-confirm" class="feed-prop-unsubscribe-btn">Unsubscribe</button>
+      </div>
+    </div>
+  </div>
+
   <div id="folder-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-refresh" class="context-menu-item">Refresh</button>
     <button type="button" id="ctx-mark-read" class="context-menu-item">Mark as read</button>
@@ -6041,6 +6062,7 @@
 
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
+      if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
       const resp = await fetch('/feeds/unsubscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
@@ -6101,20 +6123,110 @@
       }
     }
 
+    // Confirm + (if the feed carries curation) offer to migrate its tags/stars to
+    // another feed before unsubscribing, so curation isn't silently lost. Resolves
+    // true if the feed was unsubscribed, false if cancelled/failed.
+    async function unsubscribeFeedInteractive(feedUrl, folderId, opts = {}) {
+      const title = opts.title || feedUrl;
+      const modal = document.getElementById('unsub-migrate-modal');
+      const bodyEl = document.getElementById('unsub-migrate-body');
+      const curationEl = document.getElementById('unsub-migrate-curation');
+      const noteEl = document.getElementById('unsub-migrate-curation-note');
+      const targetSel = document.getElementById('unsub-migrate-target');
+      const targetList = document.getElementById('unsub-migrate-candidates');
+      const confirmBtn = document.getElementById('unsub-migrate-confirm');
+      const moveRadio = document.getElementById('unsub-migrate-move');
+      if (!modal) { // fallback: plain confirm
+        if (!window.confirm(`Unsubscribe from "${title}"?`)) return false;
+        try { await unsubscribeFeedRequest(feedUrl, folderId, opts); return true; }
+        catch (err) { window.alert(`Unsubscribe failed: ${err}`); return false; }
+      }
+
+      let counts = { tagged: 0, stars: 0, candidates: [] };
+      try {
+        const r = await fetch('/feeds/curation-count?feed_url=' + encodeURIComponent(feedUrl), { credentials: 'same-origin' });
+        if (r.ok) counts = await r.json();
+      } catch (_) { /* proceed with zero counts */ }
+
+      bodyEl.textContent = `Unsubscribe from "${title}"? This removes the feed and its articles from Lectio.`;
+      const hasCuration = (counts.tagged || 0) + (counts.stars || 0) > 0;
+      const candidates = counts.candidates || [];
+      if (hasCuration) {
+        const parts = [];
+        if (counts.stars) parts.push(`${counts.stars} starred`);
+        if (counts.tagged) parts.push(`${counts.tagged} tagged`);
+        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}. Move them onto another feed so they aren't lost?`;
+        // Filterable typeahead: datalist option label -> feed url. Titles can
+        // repeat, so disambiguate duplicate labels with a short host hint.
+        targetList.innerHTML = '';
+        targetSel.value = '';
+        const labelToUrl = new Map();
+        const labelSeen = new Map();
+        candidates.forEach(c => {
+          let label = c.title || c.url;
+          if (labelSeen.has(label)) {
+            let host = c.url; try { host = new URL(c.url).host; } catch (_) {}
+            label = `${label} (${host})`;
+          }
+          // Still collide? append a counter so every option is selectable.
+          let uniq = label, n = 2;
+          while (labelToUrl.has(uniq)) { uniq = `${label} #${n++}`; }
+          labelSeen.set(c.title || c.url, true);
+          labelToUrl.set(uniq, c.url);
+          const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
+        });
+        targetSel._labelToUrl = labelToUrl;
+        moveRadio.checked = candidates.length > 0;
+        moveRadio.disabled = candidates.length === 0;
+        targetSel.disabled = !moveRadio.checked;
+        curationEl.hidden = false;
+      } else {
+        curationEl.hidden = true;
+      }
+
+      modal.removeAttribute('hidden');
+
+      return new Promise((resolve) => {
+        function onChoiceChange() {
+          const choice = modal.querySelector('input[name="unsub-migrate-choice"]:checked')?.value;
+          targetSel.disabled = choice !== 'move';
+        }
+        function cleanup() {
+          confirmBtn.removeEventListener('click', onConfirm);
+          modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.removeEventListener('change', onChoiceChange));
+          modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.removeEventListener('click', onCancel));
+          modal.setAttribute('hidden', '');
+        }
+        async function onConfirm() {
+          let migrateTo = null;
+          if (hasCuration) {
+            const choice = modal.querySelector('input[name="unsub-migrate-choice"]:checked')?.value;
+            if (choice === 'move') {
+              migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
+              if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose the "Don’t move" option.'); return; }
+            }
+          }
+          cleanup();
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo }); resolve(true); }
+          catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
+        }
+        function onCancel() { cleanup(); resolve(false); }
+        confirmBtn.addEventListener('click', onConfirm);
+        modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.addEventListener('change', onChoiceChange));
+        modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.addEventListener('click', onCancel));
+      });
+    }
+    window.unsubscribeFeedInteractive = unsubscribeFeedInteractive;
+
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropUnsubscribeBtn.dataset.feedUrl;
       const folderId = parseInt((feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0], 10);
       if (!feedUrl || !folderId) return;
       const title = feedPropRealTitle?.textContent || feedUrl;
-      if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.`)) return;
       feedPropUnsubscribeBtn.disabled = true;
-      try {
-        await unsubscribeFeedRequest(feedUrl, folderId, { title });
-        closeFeedPropertiesModal();
-      } catch {
-        window.alert('Unsubscribe failed. Please try again.');
-        feedPropUnsubscribeBtn.disabled = false;
-      }
+      const done = await unsubscribeFeedInteractive(feedUrl, folderId, { title });
+      if (done) closeFeedPropertiesModal();
+      else feedPropUnsubscribeBtn.disabled = false;
     });
 
     // Pause / Resume updates toggle
@@ -8168,10 +8280,6 @@
       }
 
       const title = contextFolderName.trim() || contextFeedUrl;
-      if (!window.confirm(`Unsubscribe feed "${title}"?`)) {
-        hideContextMenu();
-        return;
-      }
       hideAllContextMenus();
 
       const feedUrl = contextFeedUrl;
@@ -8179,13 +8287,10 @@
       const feedLi = document.querySelector(
         `.tree-feed-item > .feed-link[data-feed-url="${CSS.escape(feedUrl)}"][data-folder-id="${CSS.escape(String(folderId))}"]`
       )?.closest('.tree-feed-item');
-      if (feedLi) feedLi.style.opacity = '0.4';
 
-      unsubscribeFeedRequest(feedUrl, folderId, { title })
-        .catch((err) => {
-          if (feedLi) feedLi.style.opacity = '';
-          window.alert(`Unsubscribe failed: ${err}`);
-        });
+      unsubscribeFeedInteractive(feedUrl, folderId, { title }).then((done) => {
+        if (done && feedLi) feedLi.style.opacity = '0.4';
+      });
     });
 
     feedPropertiesButton?.addEventListener('click', (event) => {
@@ -11637,7 +11742,6 @@
         const url = unsubTrigger.getAttribute('data-feed-url');
         const folderId = unsubTrigger.getAttribute('data-folder-id');
         if (!url || !folderId) return;
-        if (!window.confirm(`Unsubscribe from this feed?\n\n${url}`)) return;
 
         const li = unsubTrigger.closest('.problem-feed-item');
         // Capture the panel before the helper removes the row, so we can update
@@ -11645,23 +11749,18 @@
         const isAcked = li?.closest('[data-problem-panel="acked"]');
         const panelKey = isAcked ? 'acked' : 'failing';
         const emptyText = isAcked ? 'No feeds marked as checked OK.' : 'No failing feeds right now.';
-        if (li) li.style.opacity = '0.4';
         unsubTrigger.disabled = true;
 
-        unsubscribeFeedRequest(url, folderId)
-          .then(() => {
-            const modal = document.getElementById('problematic-feeds-modal');
-            if (modal) {
-              updateProblemTabCount(panelKey, -1);
-              const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
-              if (panel) ensureEmptyMessage(panel, emptyText);
-            }
-          })
-          .catch((err) => {
-            if (li) li.style.opacity = '';
-            unsubTrigger.disabled = false;
-            window.alert(`Unsubscribe failed: ${err}`);
-          });
+        unsubscribeFeedInteractive(url, folderId, { title: url }).then((done) => {
+          if (!done) { unsubTrigger.disabled = false; return; }
+          if (li) li.style.opacity = '0.4';
+          const modal = document.getElementById('problematic-feeds-modal');
+          if (modal) {
+            updateProblemTabCount(panelKey, -1);
+            const panel = modal.querySelector(`[data-problem-panel="${panelKey}"]`);
+            if (panel) ensureEmptyMessage(panel, emptyText);
+          }
+        });
       }
 
       // Settings → Feeds → Folders: trashcan on each feed row.
@@ -11672,18 +11771,13 @@
         const folderId = settingsUnsub.getAttribute('data-folder-id');
         const title = settingsUnsub.getAttribute('data-feed-title') || url;
         if (!url || !folderId) return;
-        if (!window.confirm(`Unsubscribe from "${title}"?\n\nThis removes the feed and all its articles from Lectio. This cannot be undone.\n\n${url}`)) return;
 
         const tr = settingsUnsub.closest('.settings-feed-row');
-        if (tr) tr.style.opacity = '0.4';
         settingsUnsub.disabled = true;
-
-        unsubscribeFeedRequest(url, folderId, { title })
-          .catch((err) => {
-            if (tr) tr.style.opacity = '';
-            settingsUnsub.disabled = false;
-            window.alert(`Unsubscribe failed: ${err}`);
-          });
+        unsubscribeFeedInteractive(url, folderId, { title }).then((done) => {
+          if (done) { if (tr) tr.style.opacity = '0.4'; }
+          else settingsUnsub.disabled = false;
+        });
       }
     });
 
