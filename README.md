@@ -107,7 +107,10 @@ The short version:
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
-- **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds, YouTube &
+- **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds (turn a
+  feedless page into a feed: pick from suggested CSS selectors or type your own,
+  preview the exact items before saving, and optionally backfill items already on
+  the page), YouTube &
   DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
   stars onto the surviving feed, so no curation is lost). Each feed lives in a

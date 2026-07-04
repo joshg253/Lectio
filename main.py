@@ -14460,6 +14460,26 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
     )
 
 
+@app.post("/scraped-feeds/preview")
+def preview_scraped_feed_route(
+    source_url: str = Form(...),
+    mode: str = Form(default="link_list"),
+    selector: str = Form(default=""),
+):
+    """Preview a page feed's extracted items / suggested selectors before creating it."""
+    source_url = source_url.strip()
+    if not source_url:
+        return JSONResponse({"error": "URL required"}, status_code=400)
+    if mode not in ("change_detect", "link_list"):
+        mode = "link_list"
+    try:
+        result = scraper_service.preview_page_feed(source_url, mode, selector.strip() or None)
+    except Exception as exc:
+        LOGGER.warning("[scraper] preview failed for %s: %s", source_url, exc)
+        return JSONResponse({"error": f"Could not fetch page: {exc}"}, status_code=502)
+    return JSONResponse(result)
+
+
 @app.post("/scraped-feeds")
 def create_scraped_feed_route(
     source_url: str = Form(...),
@@ -14467,6 +14487,7 @@ def create_scraped_feed_route(
     selector: str = Form(default=""),
     feed_title: str = Form(default=""),
     folder_id: int | None = Form(default=None),
+    backfill: str = Form(default=""),
 ):
     source_url = source_url.strip()
     if not source_url:
@@ -14484,6 +14505,7 @@ def create_scraped_feed_route(
                     conn, reader, source_url, mode,
                     selector.strip() or None,
                     feed_title.strip() or None,
+                    backfill=backfill in ("1", "true", "on", "yes"),
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",

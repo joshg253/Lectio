@@ -76,3 +76,51 @@ def test_link_list_direct_anchor_selector_still_works(monkeypatch):
     scraper_service._scrape_link_list(conn, feed, initial=False)
     count = conn.execute("SELECT COUNT(*) FROM scraped_entries").fetchone()[0]
     assert count == 2
+
+
+def test_extract_link_items_dedups_and_resolves_absolute():
+    items = scraper_service.extract_link_items(
+        _PAGE, "https://basslessons.be/", "ul > li"
+    )
+    assert [i["url"] for i in items] == [
+        "https://basslessons.be/transcriptions.php?i=1192",
+        "https://basslessons.be/transcriptions.php?i=1193",
+    ]
+    assert items[0]["title"] == "Diana Ross - Give up"
+
+
+_RANK_PAGE = """
+<html><body>
+  <nav><div><div><a href='/login'>Login</a></div><div><a href='/a'>A</a></div>
+    <div><a href='/b'>B</a></div><div><a href='/c'>C</a></div><div><a href='/d'>D</a></div></div></nav>
+  <ul><li><a class='post' href='/p1'>Post 1</a></li>
+      <li><a class='post' href='/p2'>Post 2</a></li>
+      <li><a class='post' href='/p3'>Post 3</a></li></ul>
+</body></html>
+"""
+
+
+def test_suggest_selectors_ranks_content_over_nav_chrome():
+    suggestions = scraper_service.suggest_selectors(_RANK_PAGE, "https://x/")
+    assert suggestions, "expected at least one suggestion"
+    for s in suggestions:
+        assert s["count"] >= 2
+        assert scraper_service.extract_link_items(_RANK_PAGE, "https://x/", s["selector"])
+    # The class-based content list must outrank the more-numerous generic
+    # "div > div a" nav chrome, even though the latter matches more links.
+    assert "." in suggestions[0]["selector"]
+
+
+def test_preview_page_feed_link_list(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE)
+    out = scraper_service.preview_page_feed("https://basslessons.be/", "link_list", "ul > li")
+    assert out["mode"] == "link_list"
+    assert len(out["items"]) == 2
+    assert out["suggestions"]
+
+
+def test_preview_page_feed_change_detect(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE)
+    out = scraper_service.preview_page_feed("https://basslessons.be/", "change_detect", "ul")
+    assert out["mode"] == "change_detect"
+    assert "Diana Ross" in out["content_preview"]

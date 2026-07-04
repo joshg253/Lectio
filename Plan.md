@@ -58,6 +58,24 @@ container so the sidebar reflects the new folders.
 
 ## Later
 
+### Page Feed builder — point-and-click element picker (PR B)
+
+PR A shipped the non-interactive half: a `/scraped-feeds/preview` endpoint,
+ranked selector suggestions (`scraper_service.suggest_selectors`), a live preview
+list in the Add-Feed modal, and a backfill toggle (`create_scraped_feed(...,
+backfill=)`). Remaining: let the user **click an element on a rendered preview of
+the page** to derive the selector, instead of picking a suggested chip or typing
+CSS.
+
+**Approach:** serve the fetched page (sanitized / same-origin proxied, images via
+`/api/img`) in an iframe inside the modal; inject a small script that outlines
+elements on hover and, on click, computes a robust selector (reuse the
+class/list-aware logic in `_candidate_selector_for_anchor`) and posts it to the
+parent, which fills the selector box and re-runs the existing live preview.
+**Watch out:** CSP, JS-heavy pages that don't render statically, and relative
+asset URLs — expect some sites to degrade to the suggestion chips (which is why
+those ship first).
+
 ### Send-to-destination — remaining candidates
 
 The rule engine + on-star fan-out + shared destination senders are shipped
