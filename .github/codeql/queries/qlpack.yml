@@ -1,0 +1,6 @@
+name: lectio/codeql-guards
+version: 0.0.1
+library: false
+dependencies:
+  codeql/python-all: "*"
+  codeql/python-queries: "*"

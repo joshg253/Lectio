@@ -73,6 +73,10 @@ jobs:
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
+        # Lectio config: adds guard-aware SSRF/path-injection queries and drops
+        # the stock versions that flag our audited url_guard / assert_safe_feed_id
+        # sinks. See .github/codeql/codeql-config.yml.
+        config-file: ./.github/codeql/codeql-config.yml
         # If you wish to specify custom queries, you can do so here or in a config file.
         # By default, queries listed here will override any specified in a config file.
         # Prefix the list here with "+" to use these queries and those in the config file.

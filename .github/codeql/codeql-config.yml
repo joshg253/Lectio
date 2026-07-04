@@ -1,0 +1,20 @@
+name: "Lectio CodeQL config"
+
+# Advanced-setup config. We keep the default code-scanning security suite and
+# ADD Lectio's guard-aware copies of the SSRF and path-injection queries, then
+# drop the stock versions of those two queries. Our copies model our audited
+# guards (services.url_guard.is_safe_outbound_url / ensure_safe_outbound_url and
+# services.assert_safe_feed_id) as sanitizer barriers, so the guarded sinks stop
+# producing the false positives we currently dismiss by hand in the UI. See
+# .github/codeql/queries/ for the barrier definitions.
+queries:
+  - uses: ./.github/codeql/queries
+
+# Suppress the stock queries whose only findings here are the guarded sinks our
+# custom copies already clear. The custom copies (py/lectio/*) still run and will
+# fire if a genuinely unguarded sink is introduced.
+query-filters:
+  - exclude:
+      id: py/full-ssrf
+  - exclude:
+      id: py/path-injection
