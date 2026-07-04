@@ -23,6 +23,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import ssl
 from urllib.parse import urlparse
 
 import httpx
@@ -30,6 +31,43 @@ import httpx
 # Max redirect hops to follow when fetching an externally-influenced URL. Each
 # hop is re-validated, so this just bounds work / loops.
 DEFAULT_MAX_REDIRECTS = 5
+
+
+def _build_web_ssl_context() -> ssl.SSLContext:
+    """TLS context for fetching arbitrary third-party web content.
+
+    httpx/httpcore's default context advertises a narrower cipher list than
+    curl/requests/browsers, which some WAF/CDN edges (e.g. Tumblr) reject at the
+    TLS layer — the connection is dropped before any HTTP response ("Server
+    disconnected without sending a response"). Resetting to OpenSSL's standard
+    ``DEFAULT`` cipher suite matches what ordinary clients present, so those hosts
+    stop refusing us. This is a stock TLS config, not JA3/browser spoofing.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        ctx.set_ciphers("DEFAULT")
+    except ssl.SSLError:
+        pass
+    return ctx
+
+
+# Built once; shared by all outbound web-content clients.
+WEB_SSL_CONTEXT = _build_web_ssl_context()
+
+
+def build_client(**kwargs) -> httpx.Client:
+    """httpx.Client for arbitrary web content, using WEB_SSL_CONTEXT and
+    (by default) manual redirect handling so safe_get can revalidate each hop."""
+    kwargs.setdefault("verify", WEB_SSL_CONTEXT)
+    kwargs.setdefault("follow_redirects", False)
+    return httpx.Client(**kwargs)
+
+
+def build_async_client(**kwargs) -> httpx.AsyncClient:
+    """Async counterpart of :func:`build_client` for :func:`safe_get_async`."""
+    kwargs.setdefault("verify", WEB_SSL_CONTEXT)
+    kwargs.setdefault("follow_redirects", False)
+    return httpx.AsyncClient(**kwargs)
 
 
 class UnsafeURLError(Exception):
@@ -191,7 +229,7 @@ def safe_head(
     """
     if not is_safe_outbound_url(url):
         raise UnsafeURLError(url)
-    with httpx.Client(follow_redirects=False, timeout=timeout, headers=headers) as client:
+    with build_client(timeout=timeout, headers=headers) as client:
         return client.head(url)
 
 

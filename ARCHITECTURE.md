@@ -295,6 +295,15 @@ feeds must be excluded from the global caches.
   `browser_ua_feeds` set. Per-user, manually resettable in Feed Properties. This is
   escalation on refusal, not IP-block evasion — consistent with the good-citizen
   policy (honest by default; don't spoof hosts happy to serve us).
+- **Outbound TLS cipher compatibility** — httpx/httpcore's default `SSLContext`
+  advertises a narrower cipher list than curl/requests/browsers, and some WAF/CDN
+  edges (e.g. Tumblr) drop the connection at the TLS layer before any HTTP response
+  ("Server disconnected without sending a response"). All arbitrary-web-content
+  clients are built via `url_guard.build_client` / `build_async_client`, which use
+  a shared `WEB_SSL_CONTEXT` reset to OpenSSL's stock `DEFAULT` ciphers so those
+  hosts accept us. This is a standard TLS config, not JA3/browser fingerprint
+  spoofing — same good-citizen posture as the UA policy. Fixed-API integration
+  clients (freshrss/ttrss/inoreader/quire/etc.) keep httpx defaults.
 - **Subscription scheme allowlist** — user-supplied feed URLs (Add Feed, OPML
   import, discovered `<link>` candidates) are restricted to http/https via
   `_is_subscribable_feed_url`. `reader` natively fetches `file://`, so without
