@@ -3923,6 +3923,9 @@
     const feedPropStratGrid = document.getElementById('feed-prop-strat-grid');
     const feedPropStratEmpty = document.getElementById('feed-prop-strat-empty');
     const feedPropUnsubscribeBtn = document.getElementById('feed-prop-unsubscribe-btn');
+    // Sentinel folder id for a feed that belongs to no folder (an Uncategorized
+    // orphan). Real folder ids are >= 1; the Uncategorized virtual folder is -1.
+    const ORPHAN_FOLDER_ID = 0;
     const feedPropReparseBtn = document.getElementById('feed-prop-reparse-btn');
     const feedPropReparseStatus = document.getElementById('feed-prop-reparse-status');
     const feedPropBrowserUaRow = document.getElementById('feed-prop-browser-ua-row');
@@ -6082,7 +6085,7 @@
       // sentinel id (e.g. -1), not the folder_id 0 we unsubscribe with, so match
       // by feed-url alone in that case — otherwise the sidebar item lingers until
       // a full refresh.
-      const feedFolderSel = folderId ? `[data-folder-id="${fid}"]` : '';
+      const feedFolderSel = folderId > 0 ? `[data-folder-id="${fid}"]` : '';
       document.querySelectorAll(
         `.tree-feed-item > .feed-link[data-feed-url="${fu}"]${feedFolderSel}`
       ).forEach(link => link.closest('.tree-feed-item')?.remove());
@@ -6123,7 +6126,7 @@
           cur.searchParams.delete('entry_id');
           // folderId 0 == an orphan feed with no folder; drop the scope to the
           // default view rather than navigating to a non-existent folder_id=0.
-          if (folderId) cur.searchParams.set('folder_id', String(folderId));
+          if (folderId > 0) cur.searchParams.set('folder_id', String(folderId));
           else cur.searchParams.delete('folder_id');
         }
         const target = cur.pathname + cur.search;
@@ -6233,9 +6236,12 @@
 
     feedPropUnsubscribeBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropUnsubscribeBtn.dataset.feedUrl;
-      // Orphan (Uncategorized) feeds have no folder id; fall back to 0 so the
-      // backend still purges the feed instead of the button silently no-op'ing.
-      const folderId = parseInt((feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0], 10) || 0;
+      // ORPHAN_FOLDER_ID (0) means "feed is in no folder" (an Uncategorized
+      // orphan). Real folder ids are always >= 1 and the Uncategorized virtual
+      // folder is -1, so 0 is a safe not-a-folder sentinel: the backend still
+      // purges the feed instead of the button silently no-op'ing.
+      const parsedFolderId = parseInt((feedPropUnsubscribeBtn.dataset.folderIds || '').split(',')[0], 10);
+      const folderId = Number.isNaN(parsedFolderId) ? ORPHAN_FOLDER_ID : parsedFolderId;
       if (!feedUrl) return;
       const title = feedPropRealTitle?.textContent || feedUrl;
       feedPropUnsubscribeBtn.disabled = true;
