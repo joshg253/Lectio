@@ -17920,8 +17920,10 @@ def feed_curation_count_route(feed_url: str = Query(...)):
                 counts = feed_curation_counts(reader, conn, feed_url)
                 # Candidate migration targets: every other subscribed feed, so the
                 # dialog's picker doesn't depend on what's rendered in the DOM.
+                # Prefer the user's custom title (what they see in the sidebar)
+                # over reader's real feed title.
                 candidates = [
-                    {"url": f.url, "title": f.title or f.url}
+                    {"url": f.url, "title": getattr(f, "user_title", None) or f.title or f.url}
                     for f in reader.get_feeds(sort="title")
                     if f.url != feed_url
                 ]
