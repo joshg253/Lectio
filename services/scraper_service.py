@@ -178,7 +178,9 @@ def _anchor_to_item(anchor, source_url: str) -> dict | None:
     if not href or href.startswith("#") or href.startswith("javascript:"):
         return None
     abs_url = urljoin(source_url, href)
-    title = anchor.get_text(" ", strip=True)[:500] or abs_url
+    # Collapse internal whitespace runs (newlines/tabs from multi-line markup)
+    # so titles read cleanly, e.g. "Diana Ross - Give up\n\t\tBass" -> one line.
+    title = " ".join(anchor.get_text(" ", strip=True).split())[:500] or abs_url
     return {"title": title, "url": abs_url}
 
 
@@ -206,20 +208,45 @@ def _css_ident(value: str) -> str:
     return ""
 
 
-def _candidate_selector_for_anchor(anchor) -> str | None:
-    """Build a simple, stable selector describing an anchor within its list group.
+def _first_class(node) -> str:
+    """First class token on a node that is a usable CSS identifier, or ''."""
+    for c in (node.get("class") or []):
+        ident = _css_ident(c)
+        if ident:
+            return ident
+    return ""
 
-    Prefers the anchor's own class, then its parent container's tag+class (e.g.
-    ``li.item a``), so anchors sharing a repeating structure collapse to one key.
-    Returns None when nothing stable can be derived."""
-    a_class = next((c for c in (anchor.get("class") or []) if _css_ident(c)), "")
+
+def _candidate_selector_for_anchor(anchor) -> str | None:
+    """Build a stable selector scoping an anchor to its nearest identifiable group.
+
+    Prefers the anchor's own class, then scopes to the nearest ancestor that
+    carries an id or class (e.g. ``ul.update-list a``) so anchors in a distinctly
+    marked list (content) don't collapse into the same key as an unrelated bare
+    ``ul > li`` list (nav). Falls back to a generic parent>tag chain, or None."""
+    a_class = _first_class(anchor)
     if a_class:
-        return f"a.{_css_ident(a_class)}"
+        return f"a.{a_class}"
+
+    # Climb to the nearest ancestor (a few hops) that has an id or a usable class
+    # and scope the selector to it. id is more specific than class.
+    node = anchor.parent
+    hops = 0
+    while node is not None and getattr(node, "name", None) and hops < 4:
+        if node.name in ("[document]", "html", "body"):
+            break
+        node_id = _css_ident(str(node.get("id") or ""))
+        if node_id:
+            return f"#{node_id} a"
+        node_class = _first_class(node)
+        if node_class:
+            return f"{node.name}.{node_class} a"
+        node = node.parent
+        hops += 1
+
+    # No marked ancestor nearby — fall back to a generic parent>tag chain.
     parent = anchor.parent
     if parent is not None and getattr(parent, "name", None):
-        p_class = next((c for c in (parent.get("class") or []) if _css_ident(c)), "")
-        if p_class:
-            return f"{parent.name}.{_css_ident(p_class)} a"
         grandparent = parent.parent
         gp_name = getattr(grandparent, "name", None)
         if gp_name and gp_name not in ("[document]", "html", "body"):
