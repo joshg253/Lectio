@@ -15,7 +15,7 @@ def _guarded_get(url: str, *, timeout: float, headers: dict | None = None) -> ht
     Raises url_guard.UnsafeURLError for private/loopback/link-local targets.
     """
     hdrs = headers or _HEADERS
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=hdrs) as client:
+    with url_guard.build_client(timeout=timeout, headers=hdrs) as client:
         return url_guard.safe_get(client, url, headers=hdrs)
 
 
@@ -29,7 +29,7 @@ def _guarded_head(url: str, *, timeout: float, headers: dict | None = None) -> h
     if not url_guard.is_safe_outbound_url(url):
         return None
     hdrs = headers or _HEADERS
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=hdrs) as client:
+    with url_guard.build_client(timeout=timeout, headers=hdrs) as client:
         return client.head(url)
 
 

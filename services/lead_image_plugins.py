@@ -23,7 +23,7 @@ def _guarded_get(url: str, *, timeout: float = 8.0, headers: dict | None = None)
     every hop is re-validated and the redirect-to-internal bypass stays closed in
     one place. Raises ``url_guard.UnsafeURLError`` for an unsafe hop.
     """
-    with httpx.Client(follow_redirects=False, timeout=timeout) as client:
+    with url_guard.build_client(timeout=timeout) as client:
         return url_guard.safe_get(client, url, headers=headers)
 
 

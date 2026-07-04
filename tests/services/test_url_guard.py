@@ -91,3 +91,36 @@ def test_ensure_safe_outbound_url_raises_on_unsafe(monkeypatch):
         except url_guard.UnsafeURLError:
             continue
         raise AssertionError(f"expected UnsafeURLError for {bad!r}")
+
+
+def test_web_ssl_context_uses_broad_ciphers():
+    # A stock DEFAULT cipher list (what curl/requests/browsers present) rather
+    # than httpx's narrower default, so WAF/CDN edges (e.g. Tumblr) that reject
+    # httpx's TLS fingerprint accept us. Just assert we get a usable context with
+    # more than a trivial number of ciphers enabled.
+    import ssl
+
+    ctx = url_guard.WEB_SSL_CONTEXT
+    assert isinstance(ctx, ssl.SSLContext)
+    assert len(ctx.get_ciphers()) > 5
+
+
+def test_build_client_wires_context_and_no_auto_redirects():
+    c = url_guard.build_client(timeout=5)
+    try:
+        assert c.follow_redirects is False
+    finally:
+        c.close()
+
+
+def test_build_async_client_wires_context_and_no_auto_redirects():
+    import asyncio
+
+    import httpx
+
+    c = url_guard.build_async_client(timeout=5)
+    try:
+        assert isinstance(c, httpx.AsyncClient)
+        assert c.follow_redirects is False
+    finally:
+        asyncio.run(c.aclose())

@@ -6699,7 +6699,7 @@ def get_feed_tag_suggestions(
         if not already_fetching:
             def _fetch_tags(url: str = feed_url) -> None:
                 try:
-                    with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+                    with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
                         response = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
                     response.raise_for_status()
                     parsed = feedparser.parse(response.content)
@@ -7879,7 +7879,7 @@ def _scan_feed_media_audio(feed_url: str) -> None:
     found_map: dict[str, str] = {}
     raw_feed: bytes | None = None
     try:
-        with httpx.Client(follow_redirects=False, timeout=8.0,
+        with url_guard.build_client(timeout=8.0,
                           headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             resp = url_guard.safe_get(client, feed_url)
         if resp.status_code == 200 and resp.content:
@@ -7952,7 +7952,7 @@ def _polite_safe_get(url: str, *, timeout: float):
     Returns the final response (caller checks status)."""
     resp = None
     for ua in (LECTIO_HONEST_USER_AGENT, PODCAST_FETCH_USER_AGENT):
-        with httpx.Client(follow_redirects=False, timeout=timeout,
+        with url_guard.build_client(timeout=timeout,
                           headers={"User-Agent": ua}) as client:
             resp = url_guard.safe_get(client, url)
         if resp.status_code != 403:
@@ -8383,7 +8383,7 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
 
     try:
-        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
         response.raise_for_status()
     except Exception as exc:
@@ -8602,7 +8602,7 @@ def probe_frameability(source_url: str) -> dict[str, object]:
     try:
         if not url_guard.is_safe_outbound_url(source_url):
             raise url_guard.UnsafeURLError(source_url)
-        with httpx.Client(follow_redirects=False, timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             with client.stream("GET", source_url) as response:
                 blocked, reason = is_probably_frame_blocked(response.headers)
                 final_url = str(response.url)
@@ -8860,7 +8860,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
 
     try:
-        with httpx.Client(follow_redirects=False, timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
         response.raise_for_status()
         raw_html = response.text
@@ -12627,7 +12627,7 @@ def media_audio_download(feed_url: str, entry_id: str):
         filename = safe_title.replace(" ", "_") + ".mp3"
 
     def _stream():
-        with httpx.Client(
+        with url_guard.build_client(
             follow_redirects=True,
             timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
             headers={"User-Agent": READABILITY_USER_AGENT},
@@ -14052,7 +14052,7 @@ def thumbnail_proxy(url: str = Query(...), crop: str = Query(default="cover"), m
     try:
         # follow_redirects=False so url_guard.safe_get validates every hop
         # (SSRF: a public thumbnail URL must not redirect to an internal target).
-        with httpx.Client(follow_redirects=False, timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        with url_guard.build_client(timeout=_THUMB_FETCH_TIMEOUT, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             _headers = {"User-Agent": READABILITY_USER_AGENT}
             resp = url_guard.safe_get(client, url, headers=_headers)
             # Hotlink protection: retry once with a same-origin Referer only after
@@ -19718,7 +19718,7 @@ async def api_img_proxy(u: str) -> Response:
     try:
         # follow_redirects=False so safe_get_async controls (and re-validates)
         # each hop instead of httpx silently bouncing to an internal address.
-        async with httpx.AsyncClient(follow_redirects=False, timeout=12.0) as client:
+        async with url_guard.build_async_client(timeout=12.0) as client:
             headers = {"User-Agent": READABILITY_USER_AGENT}
             resp = await url_guard.safe_get_async(client, u, headers=headers)
             # Hotlink protection: some hosts serve a 403 (often text/html) for an
@@ -19799,7 +19799,7 @@ async def api_favicon(domain: str) -> Response:
     google_url = f"https://www.google.com/s2/favicons?domain={quote_plus(host)}&sz=32"
     favicon_ico_url = f"https://{host}/favicon.ico"
 
-    async with httpx.AsyncClient(follow_redirects=False, timeout=8.0) as client:
+    async with url_guard.build_async_client(timeout=8.0) as client:
         # Hop 1: Google faviconV2 (via redirect from s2/favicons).
         try:
             resp = await url_guard.safe_get_async(
