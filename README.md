@@ -111,7 +111,9 @@ The short version:
   feedless page into a feed: pick from suggested CSS selectors or type your own,
   preview the exact items before saving, and optionally backfill items already on
   the page), YouTube &
-  DeviantArt sync, per-folder cadence, feed compare, fetch-history & automations
+  DeviantArt sync, Bluesky image recovery (bsky.app RSS is text-only — Lectio pulls
+  each post's images from the AT Protocol API so they show in the reader, including
+  content-labeled posts), per-folder cadence, feed compare, fetch-history & automations
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
   stars onto the surviving feed, so no curation is lost). **Curation is never
   dropped on unsubscribe:** removing a feed that has starred/tagged items offers

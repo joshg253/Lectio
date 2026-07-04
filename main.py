@@ -48,6 +48,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import bluesky
 from services import deviantart as deviantart_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
@@ -10726,6 +10727,20 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         author_name = (getattr(entry, "authors_str", None) or "").strip() or None
 
         content_html = _resolve_entry_content_html(entry)
+
+        # Bluesky RSS is text-only; append the post's images (recovered from the
+        # AT Protocol API, incl. content-labeled posts) so the article shows them.
+        # The list thumbnail is handled separately in extract_entry_thumbnail_url.
+        if bluesky.is_bsky_feed(str(entry.feed_url)):
+            _bsky_imgs = bluesky.fetch_post_images(str(entry.id))
+            if _bsky_imgs:
+                _existing = content_html or ""
+                _add = "".join(
+                    f'<p><img src="{html.escape(u, quote=True)}" loading="lazy"'
+                    f' referrerpolicy="no-referrer" style="max-width:100%;height:auto;"></p>'
+                    for u in _bsky_imgs if u not in _existing
+                )
+                content_html = _existing + _add
 
         # Per-site / generic feed-content cleanups (NASA nav, mynorthwest related
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container

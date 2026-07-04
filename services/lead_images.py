@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import feedparser
 import httpx
 
+from services import bluesky
 from services import tenancy
 from services import url_guard
 from services import svg_sanitize
@@ -871,6 +872,13 @@ class LeadImageService:
             video_id = self._extract_video_id(entry_link)
             if video_id:
                 return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+        # Bluesky RSS is text-only; recover the post's first image (incl. adult-
+        # labeled posts) from the public AT Protocol API via the entry's at:// id.
+        if bluesky.is_bsky_feed(feed_url):
+            bsky_imgs = bluesky.fetch_post_images(str(getattr(entry, "id", "") or ""))
+            if bsky_imgs:
+                return bsky_imgs[0]
 
         # Respect manual 'none' strategy — skip lead images entirely for this feed.
         if feed_url and self._is_feed_none_strategy(feed_url):
