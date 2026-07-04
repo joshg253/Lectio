@@ -21,12 +21,15 @@ servers (192.168.x.x, 127.0.0.1) work normally.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import socket
 import ssl
 from urllib.parse import urlparse
 
 import httpx
+
+LOGGER = logging.getLogger("lectio.url_guard")
 
 # Max redirect hops to follow when fetching an externally-influenced URL. Each
 # hop is re-validated, so this just bounds work / loops.
@@ -46,8 +49,11 @@ def _build_web_ssl_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     try:
         ctx.set_ciphers("DEFAULT")
-    except ssl.SSLError:
-        pass
+    except ssl.SSLError as exc:
+        # Unusual OpenSSL build / FIPS mode may reject the "DEFAULT" string; keep
+        # the stock context rather than failing outbound fetches, but log it so
+        # the (now environment-dependent) fingerprint is diagnosable.
+        LOGGER.warning("could not apply DEFAULT ciphers to web SSL context: %s", exc)
     return ctx
 
 

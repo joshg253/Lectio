@@ -111,3 +111,16 @@ def test_build_client_wires_context_and_no_auto_redirects():
         assert c.follow_redirects is False
     finally:
         c.close()
+
+
+def test_build_async_client_wires_context_and_no_auto_redirects():
+    import asyncio
+
+    import httpx
+
+    c = url_guard.build_async_client(timeout=5)
+    try:
+        assert isinstance(c, httpx.AsyncClient)
+        assert c.follow_redirects is False
+    finally:
+        asyncio.run(c.aclose())
