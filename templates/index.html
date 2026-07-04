@@ -6078,12 +6078,17 @@
 
       const fu = CSS.escape(feedUrl);
       const fid = CSS.escape(String(folderId));
-      document.querySelector(
-        `.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${fid}"]`
-      )?.closest('.tree-feed-item')?.remove();
+      // An orphan (Uncategorized) feed renders under the virtual folder's
+      // sentinel id (e.g. -1), not the folder_id 0 we unsubscribe with, so match
+      // by feed-url alone in that case — otherwise the sidebar item lingers until
+      // a full refresh.
+      const feedFolderSel = folderId ? `[data-folder-id="${fid}"]` : '';
+      document.querySelectorAll(
+        `.tree-feed-item > .feed-link[data-feed-url="${fu}"]${feedFolderSel}`
+      ).forEach(link => link.closest('.tree-feed-item')?.remove());
       let removedSettingsRows = 0;
       document.querySelectorAll(
-        `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"][data-folder-id="${fid}"]`
+        `.settings-feed-row [data-settings-feed-unsubscribe][data-feed-url="${fu}"]${feedFolderSel}`
       ).forEach(btn => { if (btn.closest('.settings-feed-row')) { btn.closest('.settings-feed-row').remove(); removedSettingsRows++; } });
       // Keep the Settings folder row consistent: decrement its feed count and,
       // if it's now empty, disable/collapse its expand toggle.
