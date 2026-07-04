@@ -34,6 +34,19 @@ _HTTP_TIMEOUT = 15.0
 _cache: dict[str, tuple[float, list[str]]] = {}
 _cache_lock = threading.Lock()
 _TTL_SECONDS = 3600.0
+_CACHE_MAX = 2000  # bound the cache so a long-running process can't grow unbounded
+
+
+def _evict_locked(now: float) -> None:
+    """Drop expired entries; if still over the cap, drop the oldest. Caller holds
+    ``_cache_lock``."""
+    expired = [k for k, (ts, _) in _cache.items() if now - ts >= _TTL_SECONDS]
+    for k in expired:
+        del _cache[k]
+    if len(_cache) > _CACHE_MAX:
+        # Oldest-first eviction down to the cap.
+        for k in sorted(_cache, key=lambda k: _cache[k][0])[: len(_cache) - _CACHE_MAX]:
+            del _cache[k]
 
 
 def is_bsky_feed(feed_url: str | None) -> bool:
@@ -90,4 +103,5 @@ def fetch_post_images(at_uri: str | None) -> list[str]:
         urls = []
     with _cache_lock:
         _cache[at_uri] = (now, urls)
+        _evict_locked(now)
     return urls

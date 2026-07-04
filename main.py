@@ -14509,7 +14509,7 @@ def preview_scraped_feed_route(
         result = scraper_service.preview_page_feed(source_url, mode, selector.strip() or None)
     except Exception as exc:
         LOGGER.warning("[scraper] preview failed for %s: %s", source_url, exc)
-        return JSONResponse({"error": f"Could not fetch page: {exc}"}, status_code=502)
+        return JSONResponse({"error": "Could not fetch or parse that page."}, status_code=502)
     return JSONResponse(result)
 
 
@@ -17865,7 +17865,8 @@ def feed_curation_count_route(feed_url: str = Query(...)):
                     if f.url != feed_url
                 ]
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        LOGGER.warning("[curation] count failed for %s: %s", feed_url, exc)
+        return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
     counts["candidates"] = candidates
     return JSONResponse(counts)
 
@@ -17906,7 +17907,7 @@ def combine_feeds_route(
         invalidate_meta_structure_cache()
     except Exception as exc:  # noqa: BLE001
         LOGGER.exception("[combine] failed combining into %s", survivor_url)
-        return JSONResponse({"ok": False, "message": f"Combine failed: {exc}"}, status_code=500)
+        return JSONResponse({"ok": False, "message": "Combine failed — see server logs."}, status_code=500)
 
     return JSONResponse({
         "ok": True,
