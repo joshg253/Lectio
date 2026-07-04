@@ -111,6 +111,30 @@ def test_suggest_selectors_ranks_content_over_nav_chrome():
     assert "." in suggestions[0]["selector"]
 
 
+def test_selector_for_clicked_link_reuses_candidate_logic():
+    # Clicking a '.post' link derives the same class-based selector the chips do.
+    res = scraper_service.selector_for_clicked_link(_RANK_PAGE, "https://x/", "https://x/p2")
+    assert res is not None
+    assert res["selector"] == "a.post"
+    assert res["count"] == 3
+
+
+def test_selector_for_clicked_link_no_match_returns_none():
+    assert scraper_service.selector_for_clicked_link(_RANK_PAGE, "https://x/", "https://x/nope") is None
+
+
+@pytest.mark.parametrize("href", ["", "   ", "\t\n"])
+def test_selector_for_clicked_link_blank_href_returns_none(href):
+    # A blank href normalizes to the source URL (no anchor), so no selector.
+    assert scraper_service.selector_for_clicked_link(_RANK_PAGE, "https://x/", href) is None
+
+
+def test_pick_page_feed_selector_fetches(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _RANK_PAGE)
+    res = scraper_service.pick_page_feed_selector("https://x/", "https://x/p1")
+    assert res == {"selector": "a.post", "count": 3}
+
+
 def test_preview_page_feed_link_list(monkeypatch):
     monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE)
     out = scraper_service.preview_page_feed("https://basslessons.be/", "link_list", "ul > li")

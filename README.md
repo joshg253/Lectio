@@ -108,9 +108,10 @@ The short version:
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds (turn a
-  feedless page into a feed: pick from suggested CSS selectors or type your own,
-  preview the exact items before saving, and optionally backfill items already on
-  the page), YouTube &
+  feedless page into a feed: click a link on a rendered preview of the page to
+  derive a selector, pick from suggested CSS selectors, or type your own; preview
+  the exact items before saving; and optionally backfill items already on the
+  page), YouTube &
   DeviantArt sync, Bluesky image recovery (bsky.app RSS is text-only — Lectio pulls
   each post's images from the AT Protocol API so they show in the reader, including
   content-labeled posts), per-folder cadence, feed compare, fetch-history & automations

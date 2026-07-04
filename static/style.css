@@ -3670,6 +3670,39 @@ body[data-keyboard-open="1"] .action-modal-panel {
   margin-top: 0.55rem;
   display: block;
 }
+.afd-pf-picker {
+  margin-top: 0.55rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.afd-pf-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted, #666);
+  background: var(--accent-soft, rgba(120, 120, 255, 0.08));
+}
+.afd-pf-picker-head span { flex: 1; }
+.afd-pf-picker-close {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.6;
+}
+.afd-pf-picker-close:hover { opacity: 1; }
+.afd-pf-picker-frame {
+  display: block;
+  width: 100%;
+  height: 340px;
+  border: 0;
+  background: #fff;
+}
 
 /* ── Unified Add Feed dialog ─────────────────────────────────────────────── */
 .afd-url-row {
