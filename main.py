@@ -17921,12 +17921,17 @@ def feed_curation_count_route(feed_url: str = Query(...)):
                 # Candidate migration targets: every other subscribed feed, so the
                 # dialog's picker doesn't depend on what's rendered in the DOM.
                 # Prefer the user's custom title (what they see in the sidebar)
-                # over reader's real feed title.
-                candidates = [
-                    {"url": f.url, "title": getattr(f, "user_title", None) or f.title or f.url}
-                    for f in reader.get_feeds(sort="title")
-                    if f.url != feed_url
-                ]
+                # over reader's real feed title, and sort by that rendered title so
+                # the picker order matches the labels (reader's sort="title" orders
+                # by the real title, which can differ once user_title is applied).
+                candidates = sorted(
+                    (
+                        {"url": f.url, "title": getattr(f, "user_title", None) or f.title or f.url}
+                        for f in reader.get_feeds()
+                        if f.url != feed_url
+                    ),
+                    key=lambda c: c["title"].lower(),
+                )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("[curation] count failed for %s: %s", feed_url, exc)
         return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
