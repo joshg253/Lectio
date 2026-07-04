@@ -200,7 +200,21 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     selector = str(feed.get("selector") or "").strip()
     soup = BeautifulSoup(html, "html.parser")
-    link_elements = soup.select(selector) if selector else soup.find_all("a")
+    selected = soup.select(selector) if selector else soup.find_all("a")
+
+    # A selector copied from "inspect element" often targets a container (e.g. a
+    # <li> or <div>) rather than the <a> inside it. Resolve each selected element
+    # to the anchor(s) it holds: use it directly if it's an <a> with an href,
+    # otherwise pull the descendant anchors (preserving document order, no dupes).
+    link_elements: list = []
+    seen_anchor_ids: set[int] = set()
+    for el in selected:
+        anchors = [el] if (el.name == "a" and el.get("href")) else el.find_all("a")
+        for anchor in anchors:
+            if not anchor.get("href") or id(anchor) in seen_anchor_ids:
+                continue
+            seen_anchor_ids.add(id(anchor))
+            link_elements.append(anchor)
 
     existing_urls: set[str] = {
         str(r["entry_url"])
