@@ -8377,7 +8377,7 @@ miniflux_service = MinifluxService(
 )
 
 
-def build_source_proxy_response(source_url: str) -> HTMLResponse:
+def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLResponse:
     parsed = urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
@@ -8539,6 +8539,40 @@ def build_source_proxy_response(source_url: str) -> HTMLResponse:
         sanitized = re.sub(r"(</body\s*>)", proxy_bar + r"\1", sanitized, count=1, flags=re.IGNORECASE)
     else:
         sanitized += proxy_bar
+
+    # Picker mode: outline links on hover and post the clicked link's href to the
+    # parent (the Add-Feed modal), which derives a selector server-side. Page
+    # scripts are already stripped by the sanitizer, so this is the only JS in
+    # the frame. No navigation happens — every click is captured and cancelled.
+    if picker:
+        picker_assets = (
+            "<style>"
+            "html.lectio-picker,html.lectio-picker *{cursor:crosshair!important;}"
+            ".lectio-pick-hover{outline:2px solid #1a73e8!important;"
+            "outline-offset:1px!important;background:rgba(26,115,232,.08)!important;}"
+            "#lectio-bar{display:none!important;}"
+            "</style>"
+            "<script>(function(){"
+            "document.documentElement.classList.add('lectio-picker');"
+            "var last=null;"
+            "function nearestA(el){while(el&&el!==document.body){"
+            "if(el.tagName==='A'&&el.getAttribute('href'))return el;el=el.parentElement;}return null;}"
+            "document.addEventListener('mouseover',function(e){"
+            "var a=nearestA(e.target);"
+            "if(last&&last!==a)last.classList.remove('lectio-pick-hover');"
+            "if(a)a.classList.add('lectio-pick-hover');last=a;},true);"
+            "document.addEventListener('click',function(e){"
+            "e.preventDefault();e.stopPropagation();"
+            "var a=nearestA(e.target);"
+            "if(a){try{parent.postMessage({type:'lectio-pick',href:a.href},'*');}catch(_){}}"
+            "},true);"
+            "document.addEventListener('submit',function(e){e.preventDefault();},true);"
+            "})();</script>"
+        )
+        if re.search(r"</body\s*>", sanitized, re.IGNORECASE):
+            sanitized = re.sub(r"(</body\s*>)", picker_assets + r"\1", sanitized, count=1, flags=re.IGNORECASE)
+        else:
+            sanitized += picker_assets
 
     return HTMLResponse(sanitized, status_code=200)
 
@@ -14491,6 +14525,33 @@ def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
         url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
         status_code=303,
     )
+
+
+@app.get("/scraped-feeds/picker-frame")
+def scraped_feed_picker_frame(url: str):
+    """Sanitized, same-origin proxy of the source page with the link picker
+    injected, for embedding in the Add-Feed modal iframe."""
+    return build_source_proxy_response(url, picker=True)
+
+
+@app.post("/scraped-feeds/pick")
+def pick_scraped_feed_selector_route(
+    source_url: str = Form(...),
+    href: str = Form(...),
+):
+    """Derive a link-list selector from a link the user clicked in the picker."""
+    source_url = source_url.strip()
+    href = href.strip()
+    if not source_url or not href:
+        return JSONResponse({"error": "URL and href required"}, status_code=400)
+    try:
+        result = scraper_service.pick_page_feed_selector(source_url, href)
+    except Exception as exc:
+        LOGGER.warning("[scraper] pick failed for %s: %s", source_url, exc)
+        return JSONResponse({"error": "Could not fetch or parse that page."}, status_code=502)
+    if not result:
+        return JSONResponse({"error": "No selector could be derived for that link."}, status_code=404)
+    return JSONResponse(result)
 
 
 @app.post("/scraped-feeds/preview")

@@ -25,23 +25,18 @@ SSA variable validated by `assert_safe_feed_id` (path). **Remaining:** confirm t
 fire; the barrier `.ql` may need a tweak to the exact `codeql/python-queries`
 library API version.
 
-### Page Feed builder — point-and-click element picker (PR B)
+### Page Feed builder — point-and-click element picker (PR B) — SHIPPED
 
-PR A shipped the non-interactive half: a `/scraped-feeds/preview` endpoint,
-ranked selector suggestions (`scraper_service.suggest_selectors`), a live preview
-list in the Add-Feed modal, and a backfill toggle (`create_scraped_feed(...,
-backfill=)`). Remaining: let the user **click an element on a rendered preview of
-the page** to derive the selector, instead of picking a suggested chip or typing
-CSS.
-
-**Approach:** serve the fetched page (sanitized / same-origin proxied, images via
-`/api/img`) in an iframe inside the modal; inject a small script that outlines
-elements on hover and, on click, computes a robust selector (reuse the
-class/list-aware logic in `_candidate_selector_for_anchor`) and posts it to the
-parent, which fills the selector box and re-runs the existing live preview.
-**Watch out:** CSP, JS-heavy pages that don't render statically, and relative
-asset URLs — expect some sites to degrade to the suggestion chips (which is why
-those ship first).
+The interactive picker is built. The Add-Feed Page Feed section has a "Pick from
+page" button (link_list mode) that loads the source page in a sandboxed iframe via
+`GET /scraped-feeds/picker-frame` — the existing sanitized same-origin source
+proxy (`build_source_proxy_response(..., picker=True)`) with a small injected
+script that outlines links on hover and posts the clicked link's href to the
+parent. `POST /scraped-feeds/pick` resolves that href to a selector server-side
+via `scraper_service.pick_page_feed_selector` (reusing `_candidate_selector_for_anchor`,
+so it produces the same selectors as the suggestion chips), which fills the box
+and re-runs the existing live preview. Scoped to link_list mode; JS-heavy /
+frame-blocked pages degrade to the suggestion chips.
 
 
 ## Later

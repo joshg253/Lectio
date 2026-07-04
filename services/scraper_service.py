@@ -254,6 +254,40 @@ def _candidate_selector_for_anchor(anchor) -> str | None:
     return None
 
 
+def selector_for_clicked_link(html: str, source_url: str, href: str) -> dict | None:
+    """Derive a link-list selector from a clicked link on the rendered page.
+
+    ``href`` is the absolute URL the browser resolved for the clicked anchor (via
+    the proxied page's ``<base>``). Find the matching anchor, reuse
+    ``_candidate_selector_for_anchor`` so the picker produces the same selectors
+    the suggestion chips do, and report how many links it resolves. Returns
+    ``{selector, count}`` or ``None`` when no anchor matches or no selector fits."""
+    target = urljoin(source_url, str(href or "").strip())
+    if not target:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for anchor in soup.find_all("a"):
+        item = _anchor_to_item(anchor, source_url)
+        if not item or item["url"] != target:
+            continue
+        selector = _candidate_selector_for_anchor(anchor)
+        if not selector:
+            continue
+        try:
+            count = len(extract_link_items(html, source_url, selector))
+        except Exception:
+            count = 0
+        return {"selector": selector, "count": count}
+    return None
+
+
+def pick_page_feed_selector(source_url: str, href: str) -> dict | None:
+    """Fetch the page and derive a selector from a clicked link. Raises on fetch
+    failure so the route can surface the error; returns None when no match."""
+    html = _fetch_html(source_url)
+    return selector_for_clicked_link(html, source_url, href)
+
+
 def suggest_selectors(html: str, source_url: str, limit: int = 6) -> list[dict]:
     """Suggest link-list selectors by grouping anchors that share a structure.
 

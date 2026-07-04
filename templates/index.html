@@ -1288,12 +1288,17 @@
         <label class="action-modal-label">CSS selector <span class="action-modal-label-hint">(optional)</span></label>
         <div class="afd-pf-selector-row">
           <input id="afd-pf-selector" placeholder="e.g. .changelog a, article a" />
+          <button type="button" id="afd-pf-pick-btn" class="afd-pf-preview-btn" hidden>Pick from page</button>
           <button type="button" id="afd-pf-preview-btn" class="afd-pf-preview-btn">Preview</button>
         </div>
         <p class="action-modal-hint">For link list, selects link elements (a container like <code>ul &gt; li</code> also works). For change detect, selects the content region to watch.</p>
         <div id="afd-pf-suggestions" class="afd-pf-suggestions" hidden>
           <span class="afd-pf-suggest-label">Suggested:</span>
           <span id="afd-pf-suggestions-chips"></span>
+        </div>
+        <div id="afd-pf-picker" class="afd-pf-picker" hidden>
+          <div class="afd-pf-picker-head"><span>Click a headline link in the page to build a selector.</span><button type="button" id="afd-pf-picker-close" class="afd-pf-picker-close" title="Close picker">×</button></div>
+          <iframe id="afd-pf-picker-frame" class="afd-pf-picker-frame" title="Page picker" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
         </div>
         <div id="afd-pf-preview" class="afd-pf-preview" hidden></div>
         <label class="fakefeedz-mode-label afd-pf-backfill"><input type="checkbox" id="afd-pf-backfill" /> Include items already on the page (backfill), not just new ones</label>
@@ -13174,6 +13179,7 @@
         } else if (d.status === 'none' || d.status === 'blocked') {
           setMsg(d.message, 'warn');
           pfSection.hidden = false; isPageFeedMode = true; selectedFeedUrl = rawUrl;
+          pfSyncPickBtn();
           submitBtn.textContent = 'Create Page Feed'; submitBtn.disabled = false;
         } else {
           setMsg(d.message || 'Could not check URL.', 'error');
@@ -13342,6 +13348,54 @@
 
       pfPreviewBtn?.addEventListener('click', pfRunPreview);
       pfSelectorInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pfRunPreview(); } });
+
+      // Point-and-click selector picker: load the source page (sanitized, same-
+      // origin proxy) in an iframe; clicking a link posts its href back, which we
+      // resolve to a selector server-side and feed into the existing preview.
+      const pfPickBtn = document.getElementById('afd-pf-pick-btn');
+      const pfPicker = document.getElementById('afd-pf-picker');
+      const pfPickerFrame = document.getElementById('afd-pf-picker-frame');
+      const pfPickerClose = document.getElementById('afd-pf-picker-close');
+      const pfPickerHeadText = pfPicker?.querySelector('.afd-pf-picker-head span');
+
+      function pfClosePicker() { if (pfPicker) pfPicker.hidden = true; if (pfPickerFrame) pfPickerFrame.src = 'about:blank'; }
+
+      // The picker only makes sense for link_list mode (it derives a link selector).
+      function pfSyncPickBtn() {
+        const mode = modal.querySelector('input[name="afd-mode"]:checked')?.value || 'link_list';
+        if (pfPickBtn) pfPickBtn.hidden = (mode !== 'link_list');
+        if (mode !== 'link_list') pfClosePicker();
+      }
+      modal.querySelectorAll('input[name="afd-mode"]').forEach(r => r.addEventListener('change', pfSyncPickBtn));
+
+      pfPickBtn?.addEventListener('click', () => {
+        if (!selectedFeedUrl) return;
+        if (!pfPicker.hidden) { pfClosePicker(); return; }
+        if (pfPickerHeadText) pfPickerHeadText.textContent = 'Click a headline link in the page to build a selector.';
+        pfPicker.hidden = false;
+        pfPickerFrame.src = '/scraped-feeds/picker-frame?url=' + encodeURIComponent(selectedFeedUrl);
+      });
+      pfPickerClose?.addEventListener('click', pfClosePicker);
+
+      window.addEventListener('message', async (e) => {
+        const d = e.data;
+        if (!d || d.type !== 'lectio-pick' || !d.href || !selectedFeedUrl) return;
+        if (pfPickerHeadText) pfPickerHeadText.textContent = 'Deriving selector…';
+        try {
+          const body = new URLSearchParams({ source_url: selectedFeedUrl, href: d.href });
+          const r = await fetch('/scraped-feeds/pick', { method: 'POST', body, credentials: 'same-origin' });
+          const res = await r.json();
+          if (!r.ok || !res.selector) {
+            if (pfPickerHeadText) pfPickerHeadText.textContent = res.error || 'No selector for that link — try another.';
+            return;
+          }
+          pfSelectorInput.value = res.selector;
+          pfClosePicker();
+          pfRunPreview();
+        } catch (_) {
+          if (pfPickerHeadText) pfPickerHeadText.textContent = 'Network error — could not derive a selector.';
+        }
+      });
       // Auto-load suggestions the first time the Page Feed section is opened.
       pfSection?.addEventListener('toggle', () => {
         if (pfSection.open && isPageFeedMode && pfSuggestions.hidden && !pfSuggestChips.children.length) {
