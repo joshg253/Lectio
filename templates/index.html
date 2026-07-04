@@ -7001,9 +7001,32 @@
             if (!entryReadabilityContainer || !sourceViewActive || sourceViewMode !== 'readability') return;
             entryReadabilityContainer.innerHTML = '';
 
-            // Prepend lead image if present in the entry pane title metadata.
+            // Normalize an image URL for duplicate comparison: drop the query
+            // string and collapse CDN size-variant path segments (Blogger/
+            // Googleusercontent /sNNN/ and /wNNN-hNNN.../ before the filename) so
+            // the same image at different sizes compares equal.
+            const normImageKey = (u) => {
+              try {
+                const url = new URL(u, window.location.href);
+                const path = url.pathname.replace(
+                  /\/(?:s\d+|w\d+-h\d+)(?:-[a-z0-9-]+)?(\/[^/]+)$/i, '$1');
+                return url.host + path;
+              } catch (e) {
+                return (u || '').split('?')[0];
+              }
+            };
+
+            // Prepend lead image if present in the entry pane title metadata —
+            // but not when the article body already contains that same image
+            // (any CDN size variant), which would render it twice.
             const leadImageUrl = entryPaneTitle?.getAttribute('data-post-lead-image-url') || '';
-            if (leadImageUrl) {
+            let leadInArticle = false;
+            if (leadImageUrl && article) {
+              const leadKey = normImageKey(leadImageUrl);
+              leadInArticle = Array.from(article.querySelectorAll('img')).some(
+                (im) => normImageKey(im.getAttribute('src') || '') === leadKey);
+            }
+            if (leadImageUrl && !leadInArticle) {
               const img = document.createElement('img');
               img.src = leadImageUrl;
               img.className = 'entry-readability-lead-image';
