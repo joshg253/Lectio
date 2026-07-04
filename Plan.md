@@ -5,6 +5,47 @@ this file only tracks what's still open.
 
 ## Now
 
+### CodeQL — model our guards as sanitizers (advanced setup) — BUILT, pending first Actions run
+
+CodeQL default setup kept re-flagging guarded sinks as false positives:
+`py/full-ssrf` on `url_guard.safe_get` (guarded by `is_safe_outbound_url`) and
+`py/path-injection` on scraped/DeviantArt feed-file paths (guarded by
+`assert_safe_feed_id` + UUID ids), previously **dismissed** by hand in the
+code-scanning UI.
+
+Done: repo switched to **advanced** setup; `.github/workflows/codeql.yml` wired
+to `.github/codeql/codeql-config.yml`, which adds a custom **query pack**
+(`.github/codeql/queries/`) with guard-aware copies of the two queries
+(`py/lectio/full-ssrf`, `py/lectio/path-injection`) that model our guards as
+`Sanitizer` barriers, and `query-filters` that drop the stock `py/full-ssrf` /
+`py/path-injection`. Barriers: nodes inside the audited `safe_get`/`safe_head`/
+`safe_get_async` wrappers + `ensure_safe_outbound_url` return (SSRF); uses of an
+SSA variable validated by `assert_safe_feed_id` (path). **Remaining:** confirm the
+`.ql` compiles green on the GitHub Actions run and that the two alerts no longer
+fire; the barrier `.ql` may need a tweak to the exact `codeql/python-queries`
+library API version.
+
+### Page Feed builder — point-and-click element picker (PR B)
+
+PR A shipped the non-interactive half: a `/scraped-feeds/preview` endpoint,
+ranked selector suggestions (`scraper_service.suggest_selectors`), a live preview
+list in the Add-Feed modal, and a backfill toggle (`create_scraped_feed(...,
+backfill=)`). Remaining: let the user **click an element on a rendered preview of
+the page** to derive the selector, instead of picking a suggested chip or typing
+CSS.
+
+**Approach:** serve the fetched page (sanitized / same-origin proxied, images via
+`/api/img`) in an iframe inside the modal; inject a small script that outlines
+elements on hover and, on click, computes a robust selector (reuse the
+class/list-aware logic in `_candidate_selector_for_anchor`) and posts it to the
+parent, which fills the selector box and re-runs the existing live preview.
+**Watch out:** CSP, JS-heavy pages that don't render statically, and relative
+asset URLs — expect some sites to degrade to the suggestion chips (which is why
+those ship first).
+
+
+## Later
+
 ### Global audio player — persistent play-across-navigation (NEXT UP)
 
 **Problem:** audio stops the moment you click another post. The entry view loads
@@ -56,40 +97,6 @@ the live data (needs `ANTHROPIC_API_KEY`/`ant` creds and `uv run --with anthropi
 for the review pass), eyeball the reviewed CSV, `--apply`, and restart the
 container so the sidebar reflects the new folders.
 
-## Later
-
-### CodeQL — model our guards as sanitizers (advanced setup)
-
-CodeQL default setup keeps re-flagging guarded sinks as false positives:
-`py/full-ssrf` on `url_guard.safe_get` (guarded by `is_safe_outbound_url`) and
-`py/path-injection` on scraped/DeviantArt feed-file paths (guarded by
-`assert_safe_feed_id` + UUID ids). These are currently **dismissed** as false
-positives in the code-scanning UI.
-
-Durable fix: switch repo from **default** to **advanced** CodeQL setup (a
-Settings → Code security change), add `.github/workflows/codeql.yml`, and ship a
-custom **query pack** that extends the SSRF and path-injection queries with our
-guards as barriers (Python model-as-data can't express sanitizer barriers, so it
-needs actual `.ql`, not just `.yml` data extensions). Green can only be validated
-once it runs on GitHub Actions.
-
-### Page Feed builder — point-and-click element picker (PR B)
-
-PR A shipped the non-interactive half: a `/scraped-feeds/preview` endpoint,
-ranked selector suggestions (`scraper_service.suggest_selectors`), a live preview
-list in the Add-Feed modal, and a backfill toggle (`create_scraped_feed(...,
-backfill=)`). Remaining: let the user **click an element on a rendered preview of
-the page** to derive the selector, instead of picking a suggested chip or typing
-CSS.
-
-**Approach:** serve the fetched page (sanitized / same-origin proxied, images via
-`/api/img`) in an iframe inside the modal; inject a small script that outlines
-elements on hover and, on click, computes a robust selector (reuse the
-class/list-aware logic in `_candidate_selector_for_anchor`) and posts it to the
-parent, which fills the selector box and re-runs the existing live preview.
-**Watch out:** CSP, JS-heavy pages that don't render statically, and relative
-asset URLs — expect some sites to degrade to the suggestion chips (which is why
-those ship first).
 
 ### Send-to-destination — remaining candidates
 
