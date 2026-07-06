@@ -3498,6 +3498,15 @@ body.resizing {
   display: none;
 }
 
+/* The unsubscribe confirmation is launched from inside the Feed Properties
+   modal (and elsewhere) while that modal stays open. All .action-modal share
+   z-index: 80, so DOM order would otherwise paint Feed Properties (later in the
+   DOM) over this warning. Bump it so the nested confirmation always sits on top
+   of whatever launched it. */
+#unsub-migrate-modal {
+  z-index: 90;
+}
+
 .action-modal-panel {
   width: min(440px, 100%);
   min-width: min(320px, 100%);
