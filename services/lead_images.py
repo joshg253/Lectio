@@ -143,7 +143,14 @@ class LeadImageService:
         # to on a post with no real featured image (e.g. a WP preview entry). Keep
         # the "-small" suffix so per-episode artwork like "E_293_Podcast_Title.jpg"
         # (Real Python) is NOT rejected.
-        r"|podcast[-_]title[-_]small",
+        r"|podcast[-_]title[-_]small"
+        # "/TwitterCard/…" — publisher's generic Twitter/OG share-card graphic
+        # (e.g. c-sharpcorner's UploadFile/TwitterCard/twitter_card_logo.png), a
+        # site-brand logo served as og:image/twitter:image on image-less posts.
+        r"|twitter[-_]?card"
+        # "csharp-corner-new" — c-sharpcorner's brand wordmark at /images/, shipped
+        # as og:image on posts that have no featured image of their own.
+        r"|csharp[-_]corner[-_]new",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
@@ -255,6 +262,11 @@ class LeadImageService:
         r'<(div|section|aside|nav|ul)\b[^>]*\bclass=["\'][^"\']*'
         r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
         r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|'
+        # c-sharpcorner renders a "Recommended Videos" widget (class
+        # "videos-section" wrapping a "videoList" <ul>) whose thumbnails are
+        # OTHER articles' video stills. With no real og:image on the page these
+        # would otherwise win the body scan and show a sibling post's image.
+        r'videos?[-_]section|recommended[-_]?videos|'
         # WordPress "Megaphone" podcast theme (e.g. se-radio.net): the
         # recent/related-episode widget is `megaphone-items megaphone-posts`,
         # whose thumbnails belong to OTHER episodes. The article's own featured
