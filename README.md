@@ -45,7 +45,9 @@ The short version:
 - **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
   mark-as-read, manual tags (space-separated; multi-word tags are hyphenated, e.g.
   `games to play` → `games-to-play`), read history, search, and a
-  Readability/web-view proxy.
+  Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
+  that filters the current selection (folder/feed + read state) by tag, and a
+  tag chip in an article's header opens that tag scoped to the article's own feed.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
   inline podcast players (incl. audio borrowed from a separate host feed), file
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older

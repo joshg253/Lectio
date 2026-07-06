@@ -3318,6 +3318,24 @@ button:hover, .button-link:hover {
   background: var(--hover-bg);
 }
 
+/* Tags submenu inside the posts filter dropdown */
+.filter-tags-submenu { display: block; }
+.filter-tags-summary { display: flex; align-items: center; gap: 0.35rem; list-style: none; }
+.filter-tags-summary::-webkit-details-marker { display: none; }
+.filter-tags-caret { margin-left: auto; font-size: 1rem; transition: transform 0.15s; }
+.filter-tags-submenu[open] .filter-tags-caret { transform: rotate(180deg); }
+.filter-tags-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 15rem;
+  overflow-y: auto;
+  margin-left: 0.4rem;
+  padding-left: 0.35rem;
+  border-left: 2px solid var(--border, #3a3a3a);
+}
+.filter-tags-list .menu-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.filter-tags-list .count { margin-left: auto; opacity: 0.7; font-variant-numeric: tabular-nums; }
+
 .history-menu-item {
   display: flex;
   align-items: center;

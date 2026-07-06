@@ -347,6 +347,22 @@
                 <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'all' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
+                {% if tag_rows %}
+                {# Tags submenu: filter the CURRENT selection (folder/feed + read
+                   filter) by a tag. Base keeps everything except the tag. #}
+                {% set tag_filter_base = '/?folder_id=' ~ selected_folder_id %}
+                {% if selected_feed_url %}{% set tag_filter_base = tag_filter_base ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+                <hr class="menu-divider" />
+                <details class="filter-tags-submenu">
+                  <summary class="menu-item filter-tags-summary {% if selected_tag %}active{% endif %}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">sell</span> Tags <span class="filter-tags-caret material-symbols-rounded" aria-hidden="true">expand_more</span></summary>
+                  <div class="filter-tags-list">
+                    {% if selected_tag %}<a class="menu-item" href="{{ tag_filter_base ~ tb_rf ~ tb_sort }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">close</span> Clear tag</a>{% endif %}
+                    {% for tag_row in tag_rows %}
+                    <a class="menu-item {% if selected_tag == tag_row.name %}active{% endif %}" href="{{ tag_filter_base ~ '&tag=' ~ (tag_row.name | urlencode) ~ tb_rf ~ tb_sort }}"><span class="tag-label">#{{ tag_row.name }}</span> <span class="count">{{ tag_row.count }}</span></a>
+                    {% endfor %}
+                  </div>
+                </details>
+                {% endif %}
               </div>
             </details>
             <details class="toolbar-dropdown sort-menu">
