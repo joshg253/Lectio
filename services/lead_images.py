@@ -1860,6 +1860,14 @@ class LeadImageService:
         ):
             return False
 
+        # Banner-shaped hero (e.g. PlayStation Blog's 1900x470 "header-image"):
+        # the <img> declares no width/height, and its extracted bare src carries
+        # no query dims, but its srcset/src resize=W,H reveals a >4:1 ratio.
+        # These are site header banners, not article content.
+        _bw, _bh = self._banner_dims_from_tag(attrs)
+        if _bw and _bh and (_bw / _bh > 4.0 or _bh / _bw > 4.0):
+            return False
+
         # Lazy-loaded site chrome (logos, nav images) uses a data: placeholder src
         # with no srcset and no explicit dimensions. The real URL lives in data-src,
         # but without any sizing signal we can't tell it apart from a logo.
@@ -1870,6 +1878,21 @@ class LeadImageService:
                 return False
 
         return True
+
+    _TAG_RESIZE_DIMS_RE = re.compile(r"(?:resize|fit)=([0-9]+)(?:%2[Cc]|,)([0-9]+)", re.IGNORECASE)
+
+    def _banner_dims_from_tag(self, attrs: dict[str, str]) -> tuple[int | None, int | None]:
+        """Pull the served W,H from a WordPress/Jetpack resize=/fit= hint in the
+        tag's src or srcset, so banner-shaped heroes can be rejected even when the
+        <img> carries no width/height attributes and the bare src has no query."""
+        for val in (attrs.get("src", ""), attrs.get("srcset", ""), attrs.get("data-srcset", "")):
+            m = self._TAG_RESIZE_DIMS_RE.search(val or "")
+            if m:
+                try:
+                    return int(m.group(1)), int(m.group(2))
+                except ValueError:
+                    pass
+        return None, None
 
     def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str, is_webcomic: bool = False) -> int:
         score = 0

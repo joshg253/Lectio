@@ -213,6 +213,26 @@ def test_gog_chrome_subdomains_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
 
 
+def test_source_header_banner_rejected_via_srcset_dims(tmp_path: Path):
+    # PlayStation Blog's article header banner has no width/height attrs and a bare
+    # src with no query, but its srcset carries resize=1900,470 (4:1). It must be
+    # rejected so og:image (the real featured image) wins instead.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    banner_attrs = {
+        "class": "header-image wp-image-420286",
+        "fetchpriority": "high",
+        "src": "https://blog.playstation.com/tachyon/2026/06/c53068d0.png",
+        "srcset": "https://blog.playstation.com/tachyon/2026/06/c53068d0.png?resize=1900%2C470&zoom=1 1900w",
+    }
+    hero_attrs = {
+        "class": "wp-post-image",
+        "src": "https://blog.playstation.com/tachyon/2026/06/fac3adf5.png",
+        "srcset": "https://blog.playstation.com/tachyon/2026/06/fac3adf5.png?resize=1600%2C900 1600w",
+    }
+    assert service._is_source_image_tag_acceptable(banner_attrs, banner_attrs["src"]) is False
+    assert service._is_source_image_tag_acceptable(hero_attrs, hero_attrs["src"]) is True
+
+
 def test_sponsor_icon_and_ad_blast_rejected(tmp_path: Path):
     # The Daily WTF post: feed content's only image is the Inedo buildmaster-icon
     # sponsor logo and the source page's first image is an /fblast/ ad blast; the
