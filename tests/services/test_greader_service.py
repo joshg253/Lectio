@@ -49,10 +49,11 @@ def _make_meta(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _mock_feed(url=_FEED_URL, title="Example Feed", link="https://example.com"):
+def _mock_feed(url=_FEED_URL, title="Example Feed", link="https://example.com", user_title=None):
     f = MagicMock()
     f.url = url
     f.title = title
+    f.user_title = user_title
     f.link = link
     f.updated = datetime(2024, 1, 1, tzinfo=timezone.utc)
     return f
@@ -243,6 +244,20 @@ def test_get_subscription_list(tmp_path):
     assert sub["id"] == f"feed/{_FEED_URL}"
     assert sub["title"] == "Example Feed"
     assert any(c["label"] == "Tech" for c in sub["categories"])
+
+
+def test_subscription_list_prefers_user_title(tmp_path):
+    # Overridden feed name (user_title) should win over the raw reader title so
+    # synced clients (Capy, etc.) match the Lectio web UI.
+    db = tmp_path / "meta.sqlite"
+    _make_meta(db).close()
+    mock_reader = MagicMock()
+    mock_reader.get_feeds.return_value = [_mock_feed(user_title="My Renamed Feed")]
+    mock_reader.get_entries.return_value = []
+    svc = _build_service(db, mock_reader)
+
+    result = svc.get_subscription_list()
+    assert result["subscriptions"][0]["title"] == "My Renamed Feed"
 
 
 # ------------------------------------------------------------------ unread counts
