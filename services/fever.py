@@ -141,7 +141,9 @@ class FeverService:
             feeds.append({
                 "id": fid,
                 "favicon_id": 0,
-                "title": feed.title or str(feed.url),
+                # Prefer the user's overridden feed name so synced clients (Capy,
+                # etc.) show the same names as the Lectio web UI.
+                "title": getattr(feed, "user_title", None) or feed.title or str(feed.url),
                 "url": str(feed.url),
                 "site_url": str(feed.link or ""),
                 "is_spark": 0,
