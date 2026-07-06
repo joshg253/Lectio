@@ -13500,6 +13500,13 @@
       document.getElementById('no-feeds-add-btn')?.addEventListener('click', () => {
         window.openAddFeedDialog();
       });
+
+      // Quick-subscription deep link: /?subscribe=<feed> (RSSHub-Radar pointed at
+      // Lectio via the Feedbin/Nextcloud News address override) auto-opens the
+      // Add Feed dialog pre-filled with the feed URL.
+      {% if subscribe_url %}
+      window.openAddFeedDialog({ url: {{ subscribe_url | tojson }} });
+      {% endif %}
     }());
 
     // "Create page feed" button inside the no-RSS toast.

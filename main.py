@@ -1756,7 +1756,13 @@ class _AuthMiddleware(BaseHTTPMiddleware):
                     break
             if _session_logged_in(request):
                 return await call_next(request)
-        next_url = str(request.url)
+        # Store a same-origin relative path (path + query) so _safe_next accepts
+        # it and the user lands back on the deep link after logging in — e.g. a
+        # /?subscribe=<feed> quick-subscription link. An absolute URL would be
+        # rejected by _safe_next as an open-redirect and drop the user on "/".
+        next_url = request.url.path
+        if request.url.query:
+            next_url += "?" + request.url.query
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
 
 
@@ -13281,6 +13287,8 @@ def home(
     no_rss_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    subscribe: str | None = None,
+    subscribe_to: str | None = None,
 ):
     # Limit concurrent expensive home renders (DB queries + context building).
     # Release before returning StreamingResponse so slow network delivery on the
@@ -13308,6 +13316,7 @@ def home(
             no_rss_url=no_rss_url,
             chunk=chunk,
             chunk_delta=chunk_delta,
+            subscribe=subscribe or subscribe_to,
         )
     finally:
         _home_request_semaphore.release()
@@ -13330,6 +13339,7 @@ def _home_inner(
     no_rss_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    subscribe: str | None = None,
 ):
     # Allow client to suggest a preferred read_filter via header for SPA/AJAX calls.
     # Use it only when no explicit `read_filter` was supplied in the URL/form.
@@ -13762,6 +13772,10 @@ def _home_inner(
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,
+        # Quick-subscription deep link (e.g. RSSHub-Radar pointed at Lectio via
+        # the Feedbin/Nextcloud News override). Only pass through http(s) URLs so
+        # the auto-opened Add Feed dialog can't be primed with a junk scheme.
+        "subscribe_url": subscribe if (subscribe or "").strip().lower().startswith(("http://", "https://")) else None,
         "auto_refresh_enabled": _arm > 0,
         "auto_refresh_minutes": _arm,
         "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,

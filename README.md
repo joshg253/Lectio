@@ -153,6 +153,16 @@ The short version:
 
   Every migrator canonicalizes incoming feed URLs (old.reddit → www.reddit, `?alt=rss`, trailing slashes, YouTube channel forms) before subscribing, so variant URLs merge into an existing subscription instead of creating duplicate feeds.
 
+- **Browser-extension quick subscribe** — Lectio answers the `?subscribe=<feed>`
+  (Feedbin) and `?subscribe_to=<feed>` (Nextcloud News) quick-subscription URL
+  patterns on its home page: it opens the **Add Feed** dialog pre-filled with the
+  feed URL (prompting for login first if needed, then returning you to it). To use
+  it with [RSSHub-Radar](https://github.com/DIYgod/RSSHub-Radar), enable **Feedbin**
+  (or **Nextcloud News**) in the extension's quick-subscription settings and set its
+  address override to your Lectio origin (e.g. `https://your-lectio.example`, no
+  trailing slash). Clicking that service in the extension then drops the discovered
+  feed straight into Lectio's Add Feed dialog.
+
 ---
 
 ## Technical overview
