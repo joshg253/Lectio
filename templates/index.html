@@ -2133,6 +2133,16 @@
             <span id="feed-prop-website">-</span>
             <a id="feed-prop-website-open" href="#" target="_blank" rel="noopener noreferrer" class="feed-prop-inline-btn feed-prop-open-btn" hidden title="Open in new tab">&#x2197;</a>
           </dd>
+          <dt>Folder</dt>
+          <dd id="feed-prop-folder-row">
+            <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">
+              <option value="-1">Uncategorized (no folder)</option>
+              {% for opt in folder_options if opt.depth > 0 %}
+              <option value="{{ opt.id }}">{{ opt.path }}</option>
+              {% endfor %}
+            </select>
+            <span id="feed-prop-folder-status" class="feed-prop-inline-status"></span>
+          </dd>
           <dt>XML address</dt>
           <dd id="feed-prop-xml-row">
             <span id="feed-prop-xml">-</span>
@@ -3902,6 +3912,8 @@
     const feedPropUpdated = document.getElementById('feed-prop-updated');
     const feedPropReceived = document.getElementById('feed-prop-received');
     const feedPropLastPost = document.getElementById('feed-prop-last-post');
+    const feedPropFolderSelect = document.getElementById('feed-prop-folder-select');
+    const feedPropFolderStatus = document.getElementById('feed-prop-folder-status');
     const feedPropStrategy = document.getElementById('feed-prop-strategy');
     const feedPropStrategyHint = document.getElementById('feed-prop-strategy-hint');
     const feedPropShowThumb = document.getElementById('feed-prop-show-thumb');
@@ -5137,6 +5149,8 @@
       setFeedPropText(feedPropUpdated, '-');
       setFeedPropText(feedPropReceived, '-');
       setFeedPropText(feedPropLastPost, '-');
+      if (feedPropFolderSelect) { feedPropFolderSelect.value = '-1'; feedPropFolderSelect.dataset.currentFolderId = '-1'; feedPropFolderSelect.dataset.feedUrl = feedUrl; }
+      if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
       if (feedPropStrategy) feedPropStrategy.value = 'auto';
       if (feedPropStrategyHint) feedPropStrategyHint.textContent = '';
       setActivePreset('');
@@ -5254,6 +5268,17 @@
         }
         setFeedPropText(feedPropReceived, data.last_received);
         setFeedPropText(feedPropLastPost, data.last_post);
+        if (feedPropFolderSelect) {
+          // Root membership is stored folderless, so treat "no folder id" (and
+          // any stray root id) as Uncategorized (-1). Feeds live in one folder.
+          const fids = Array.isArray(data.folder_ids) ? data.folder_ids : [];
+          const hasOption = (id) => !!feedPropFolderSelect.querySelector(`option[value="${CSS.escape(String(id))}"]`);
+          const currentFolderId = fids.find((id) => hasOption(id)) ?? -1;
+          feedPropFolderSelect.value = String(currentFolderId);
+          feedPropFolderSelect.dataset.feedUrl = feedUrl;
+          feedPropFolderSelect.dataset.currentFolderId = String(currentFolderId);
+        }
+        if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
 
         // Toggle YouTube vs standard tuning sections
         const isYoutubeFeed = !!data.is_youtube_feed;
@@ -6003,6 +6028,26 @@
 
     feedPropertiesClose?.addEventListener('click', () => {
       closeFeedPropertiesModal();
+    });
+
+    // Change a feed's folder straight from the Info tab. Reuses moveFeedRequest
+    // (hoisted below) so the sidebar/Settings surfaces update in place. A target
+    // of -1 (Uncategorized) is handled server-side as folderless.
+    feedPropFolderSelect?.addEventListener('change', async () => {
+      const feedUrl = feedPropFolderSelect.dataset.feedUrl;
+      const fromId = parseInt(feedPropFolderSelect.dataset.currentFolderId ?? '-1', 10);
+      const toId = parseInt(feedPropFolderSelect.value, 10);
+      if (!feedUrl || fromId === toId) return;
+      const toName = feedPropFolderSelect.options[feedPropFolderSelect.selectedIndex]?.textContent?.trim() || 'folder';
+      if (feedPropFolderStatus) feedPropFolderStatus.textContent = 'Moving…';
+      try {
+        await moveFeedRequest(feedUrl, fromId, toId, toName);
+        feedPropFolderSelect.dataset.currentFolderId = String(toId);
+        if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
+      } catch (e) {
+        if (feedPropFolderStatus) feedPropFolderStatus.textContent = 'Move failed.';
+        feedPropFolderSelect.value = String(fromId);
+      }
     });
 
     let _feedPropCloseOnClick = false;

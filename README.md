@@ -134,7 +134,8 @@ The short version:
   choose what happens to the feeds inside: **unsubscribe all**, or **move all to
   another folder** (including Uncategorized/no folder). Empty folders delete with
   a simple confirm. **Double-click** a folder or feed name in the sidebar to open its
-  Properties. In **Settings → Feeds** you can multi-select feeds (or tick a
+  Properties. A feed's **Properties → Info** tab shows its current folder and lets
+  you reassign it (including to Uncategorized) from a dropdown. In **Settings → Feeds** you can multi-select feeds (or tick a
   folder's header checkbox to select all its feeds) and **bulk move, disable/
   enable, mark-read, refresh, or unsubscribe** them in one action.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
