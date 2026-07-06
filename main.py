@@ -11613,6 +11613,40 @@ def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dic
     return {"tagged": tagged, "stars": int(stars)}
 
 
+def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list[dict]:
+    """List the specific curated entries a feed carries (manual tags and/or a
+    star) so the unsubscribe dialog can show exactly what would be lost. Each
+    item is ``{title, link, starred, tags: [display names]}``. Starred-but-
+    untagged and tagged-but-unstarred entries are both included."""
+    starred_ids = {
+        str(r[0]) for r in conn.execute(
+            "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (feed_url,)
+        )
+    }
+    items: list[dict] = []
+    try:
+        for e in reader.get_entries(feed=feed_url):
+            tags = [
+                key[len(MANUAL_TAG_KEY_PREFIX):].strip()
+                for key in (_extract_tag_key(t) for t in reader.get_tags(e.resource_id))
+                if key and key.startswith(MANUAL_TAG_KEY_PREFIX)
+            ]
+            starred = e.id in starred_ids
+            if not tags and not starred:
+                continue
+            items.append({
+                "title": e.title or e.link or e.id,
+                "link": e.link or "",
+                "starred": starred,
+                "tags": sorted(tags),
+            })
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("feed_curation_items failed for %s", feed_url)
+    # Starred first, then by title, so the most deliberate curation leads.
+    items.sort(key=lambda it: (not it["starred"], str(it["title"]).casefold()))
+    return items
+
+
 def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
     """Migrate manual tags and stars from a feed being removed onto the surviving
     feed, so consolidating duplicates never drops curation.
@@ -18056,6 +18090,20 @@ def feed_curation_count_route(feed_url: str = Query(...)):
         return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
     counts["candidates"] = candidates
     return JSONResponse(counts)
+
+
+@app.get("/feeds/curation-items")
+def feed_curation_items_route(feed_url: str = Query(...)):
+    """List the exact curated entries (tagged and/or starred) a feed carries, so
+    the unsubscribe dialog can show what would be lost before you confirm."""
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                items = feed_curation_items(reader, conn, feed_url)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[curation] items failed for %s: %s", feed_url, exc)
+        return JSONResponse({"error": "Could not read this feed's curated items."}, status_code=500)
+    return JSONResponse({"items": items})
 
 
 @app.post("/feeds/combine")

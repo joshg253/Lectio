@@ -118,7 +118,8 @@ The short version:
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
   stars onto the surviving feed, so no curation is lost). **Curation is never
   dropped on unsubscribe:** removing a feed that has starred/tagged items offers
-  to move that curation onto another feed first, and **Settings → Feeds** lets you
+  to move that curation onto another feed first (with a **View items** toggle that
+  lists exactly which starred/tagged entries are at stake), and **Settings → Feeds** lets you
   multi-select several feeds and **Combine** them into one survivor (migrating
   their stars, tags, and optionally unread state, then unsubscribing the rest).
   Each feed lives in a
