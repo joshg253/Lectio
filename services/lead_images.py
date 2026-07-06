@@ -2296,14 +2296,19 @@ class LeadImageService:
                 return False
             if query_h is not None and query_h < self._LEAD_IMAGE_MIN_HEIGHT:
                 return False
-            # Jetpack/WP CDN: resize=W,H (or resize=W%2CH) specifies the exact
-            # served dimensions — they override filename-embedded dimensions.
-            for _rm in re.finditer(r"(?:^|&)resize=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", query, re.IGNORECASE):
+            # Jetpack/WP CDN: resize=W,H / fit=W,H (comma or %2C) specify the exact
+            # served dimensions — they override filename-embedded dimensions. Reject
+            # when a dimension is below minimum, OR when the ratio is banner-shaped
+            # (wider than 4:1 / taller than 1:4) — those are site-wide promo banners,
+            # not article content, e.g. PlayStation Blog's 1900x470 featured banners.
+            for _rm in re.finditer(r"(?:^|&)(?:resize|fit)=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", query, re.IGNORECASE):
                 try:
                     _rw, _rh = int(_rm.group(1)), int(_rm.group(2))
                     if _rw < self._LEAD_IMAGE_MIN_WIDTH or _rh < self._LEAD_IMAGE_MIN_HEIGHT:
                         return False
-                except ValueError:
+                    if _rh and (_rw / _rh > 4.0 or _rh / _rw > 4.0):
+                        return False
+                except (ValueError, ZeroDivisionError):
                     pass
                 break
 

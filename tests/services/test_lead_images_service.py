@@ -213,6 +213,20 @@ def test_gog_chrome_subdomains_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
 
 
+def test_banner_aspect_ratio_rejected_from_query_dims(tmp_path: Path):
+    # WordPress/Jetpack resize= and fit= query params declare the served size.
+    # A banner-shaped ratio (wider than 4:1) is a site-wide promo, not article
+    # content — e.g. PlayStation Blog's 1900x470 featured banners.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    banner = "https://blog.playstation.com/tachyon/2026/06/c53068d0.png?resize=1900%2C470&zoom=1"
+    fit_banner = "https://example.com/x.jpg?fit=1900,470"
+    hero = "https://blog.playstation.com/tachyon/2026/06/abc.png?resize=1600%2C900"
+    assert service._is_image_url_acceptable(banner, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(fit_banner, None, None, allow_extensionless=True) is False
+    # A normal 16:9 hero at the same CDN must still pass.
+    assert service._is_image_url_acceptable(hero, None, None, allow_extensionless=True) is True
+
+
 def test_extract_thumbnail_reads_lazy_loaded_img(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
