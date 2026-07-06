@@ -159,6 +159,12 @@ class LeadImageService:
         # (e.g. img.shields.io/twitter/follow/…) and Ko-fi tip buttons
         # (storage.ko-fi.com/cdn/kofi3.png).
         r"|shields\.io|ko-fi\.com"
+        # GOG serves site chrome from dedicated subdomains: menu-static hosts the
+        # nav "PATRON" badge (patron_badge.png) and landing-pages hosts generic
+        # template hero images. Both appear in the page body before the article's
+        # og:image and would otherwise win the first-large-image body scan. Real
+        # article images live on images-N.gog-statics.com, which stays allowed.
+        r"|menu-static\.gog-statics\.com|landing-pages\.gog-statics\.com"
         # Microsoft Unified Header/Footer serves site-wide chrome assets (RE1Mu3b.png etc),
         # not article content.
         r"|uhf\.microsoft\.com)",

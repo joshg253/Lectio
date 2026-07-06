@@ -200,6 +200,19 @@ def test_podcast_title_branding_image_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(url, None, None, skip_logo_patterns=True) is False
 
 
+def test_gog_chrome_subdomains_rejected(tmp_path: Path):
+    # GOG article pages embed the nav "PATRON" badge and template hero images from
+    # dedicated chrome subdomains before the article's og:image; they must never be
+    # picked as the lead image, while real content on images-N.gog-statics.com stays.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    badge = "https://menu-static.gog-statics.com/assets/img/patron_badge.png"
+    hero = "https://landing-pages.gog-statics.com/assets/images/hero-image.png"
+    content = "https://images-4.gog-statics.com/3dc0df829359442b4369ac4d806f9161ba7d498ea36f168ebdf95558ccf89841.jpg"
+    assert service._is_image_url_acceptable(badge, None, None, skip_logo_patterns=True) is False
+    assert service._is_image_url_acceptable(hero, None, None, skip_logo_patterns=True) is False
+    assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
+
+
 def test_extract_thumbnail_reads_lazy_loaded_img(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
