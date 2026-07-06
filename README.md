@@ -137,7 +137,9 @@ The short version:
   Properties. A feed's **Properties → Info** tab shows its current folder and lets
   you reassign it (including to Uncategorized) from a dropdown. In **Settings → Feeds** you can multi-select feeds (or tick a
   folder's header checkbox to select all its feeds) and **bulk move, disable/
-  enable, mark-read, refresh, or unsubscribe** them in one action.
+  enable, mark-read, refresh, or unsubscribe** them in one action. A **Stale**
+  sub-tab ranks active feeds by how long since their newest post (oldest first,
+  never-posted feeds at the top) to help find candidates to prune.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.

@@ -4140,6 +4140,67 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
         return counts
 
 
+# Newest-post-per-feed is derived from a full GROUP BY over the reader entries
+# table, so cache it briefly (keyed per-user by reader DB path) to keep the
+# Settings → Feeds "Stale" view from re-scanning on every home render.
+_feed_last_post_cache: dict[str, tuple[float, dict[str, datetime]]] = {}
+_feed_last_post_cache_lock = threading.Lock()
+FEED_LAST_POST_TTL_SECONDS = 300
+
+
+def _parse_reader_timestamp(ts: str) -> datetime | None:
+    """Parse a reader entries timestamp (ISO, possibly space-separated / naive)
+    into an aware UTC datetime. Returns None if unparseable."""
+    ts = (ts or "").strip()
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def get_feed_last_post_dates() -> dict[str, datetime]:
+    """Newest entry timestamp per feed (published, then updated, then first
+    seen), read straight from the reader DB in one GROUP BY. Cached per-user
+    with a short TTL. Feeds with no entries are simply absent from the map."""
+    db_key = str(tenancy.reader_db_path())
+    now = time.time()
+    with _feed_last_post_cache_lock:
+        cached = _feed_last_post_cache.get(db_key)
+        if cached and now - cached[0] < FEED_LAST_POST_TTL_SECONDS:
+            return dict(cached[1])
+
+    result: dict[str, datetime] = {}
+    try:
+        conn = sqlite3.connect(db_key, uri=False, check_same_thread=False)
+        try:
+            rows = conn.execute(
+                "SELECT feed, MAX(COALESCE(published, updated, first_updated)) "
+                "FROM entries GROUP BY feed"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("get_feed_last_post_dates direct SQL failed")
+        return result
+
+    for feed_url, ts in rows:
+        dt = _parse_reader_timestamp(str(ts)) if ts else None
+        if dt is not None:
+            result[str(feed_url)] = dt
+
+    with _feed_last_post_cache_lock:
+        _feed_last_post_cache[db_key] = (time.time(), dict(result))
+    return result
+
+
 def _refresh_unread_counts_async(generation: int) -> None:
     """Single-flight background scan. Updates cache when done, unless the
     cache was invalidated (generation bumped) after this refresh started."""
@@ -13511,6 +13572,29 @@ def _home_inner(
         if any(f.has_error for f in feeds)
     }
 
+    # Stale-feeds view (Settings → Feeds): every active feed ranked by how long
+    # ago its newest post is, oldest first. Feeds that have never posted (no
+    # entries) sort to the very top so they surface for pruning.
+    folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
+    last_post_dates = get_feed_last_post_dates()
+    _now_utc = datetime.now(timezone.utc)
+    stale_feeds = []
+    for url in all_reader_feed_urls:
+        if url in disabled_feed_urls:
+            continue
+        last_dt = last_post_dates.get(url)
+        fid = feed_to_folder.get(url)
+        stale_feeds.append({
+            "feed_url": url,
+            "feed_title": feed_title_map.get(url, url),
+            "folder_id": fid,
+            "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
+            "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
+            "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
+            "days_since": (_now_utc - last_dt).days if last_dt else None,
+        })
+    stale_feeds.sort(key=lambda x: x["last_post_sort"])
+
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
     try:
@@ -13673,6 +13757,7 @@ def _home_inner(
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
+        "stale_feeds": stale_feeds,
         "posts": posts,
         "selected_entry": selected_entry,
         "message": message,

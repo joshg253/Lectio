@@ -1699,6 +1699,7 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="stale" role="tab" aria-selected="false">Stale</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Utilities</button>
         </div>
 
@@ -1881,6 +1882,31 @@
           </ul>
           {% else %}
           <p class="muted">No deactivated feeds.</p>
+          {% endif %}
+        </div>
+
+        <div class="feeds-tab-panel" data-feeds-panel="stale" hidden>
+          <p class="muted feeds-stale-intro">Active feeds ranked by how long since their newest post — oldest first. Feeds that have never posted appear at the top.</p>
+          {% if stale_feeds %}
+          <ul class="problem-feed-list">
+            {% for row in stale_feeds %}
+            <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+              <div class="problem-feed-row">
+                <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+                <div class="problem-feed-actions">
+                  <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                  <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id if row.folder_id is not none else selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                </div>
+              </div>
+              <div class="problem-feed-meta">
+                <span>{{ row.folder_name }}</span>
+                {% if row.last_post %}<span>Last post: {{ row.last_post }}{% if row.days_since is not none %} ({{ row.days_since }} day{{ 's' if row.days_since != 1 else '' }} ago){% endif %}</span>{% else %}<span>No posts yet</span>{% endif %}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">No feeds to show.</p>
           {% endif %}
         </div>
 
