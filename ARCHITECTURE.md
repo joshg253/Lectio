@@ -78,6 +78,14 @@ work. The root "All Feeds" folder resolves to *every* reader feed (not just
 foldered ones), so orphans and their unread counts are always reachable from the
 top of the tree.
 
+The root is treated as equivalent to Uncategorized for feed placement: both
+`add_feed_to_folder` and `move_feed_to_folder` store a feed folderless (no
+`folder_feeds` row) when the target is the root id or `UNCATEGORIZED_FOLDER_ID`,
+rather than writing a root membership row. This keeps the invariant that a
+`folder_feeds` row always means "filed in a real sub-folder," so a feed added to
+the root consistently surfaces under Uncategorized. `delete_folder`'s move path
+already applies the same rule.
+
 ## Multi-user tenancy
 
 Lectio uses a **storage-layer resolver** so the UI/API and service layers are
@@ -667,6 +675,8 @@ The JS layer reads the CSRF token explicitly from `<meta name="csrf-token">` and
 - `POST /greader/reader/api/0/subscription/edit` and `/quickadd` — stub OK responses
 
 **Pagination:** `?n=<count>` (default 20, cap 10,000), `?c=<continuation>` (published-timestamp in microseconds of the last returned item). `?r=o` reverses order to oldest-first.
+
+**Feed titles:** subscription-list and item-origin titles use the user's overridden feed name (`user_title`) when set, falling back to reader's real title — so synced clients (Capy, etc.) match the sidebar. Note the sync APIs still serve reader's **raw** entry HTML; Lectio's render-time content customizations (sanitization allowlist, lead-image injection, caption/thumbnail strategies) are applied in the web UI only and are not reflected in synced item content.
 
 **Credential sharing:** Uses the same `LECTIO_FEVER_PASSWORD` env var as the Fever API — one API password covers both protocols.
 

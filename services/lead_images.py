@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -112,7 +112,7 @@ class LeadImageService:
             return text
         return cls._BARE_IMG_URL_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -212,7 +212,7 @@ class LeadImageService:
     # followed by a digit or separator (e.g. .../Software-Pro-Cert-ad1.png).
     # Boundaries avoid false positives in words like "uploads", "download", "lead".
     _AD_URL_PATTERNS = re.compile(
-        r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert)",
+        r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert|/fblast/)",
         re.IGNORECASE,
     )
     # Advertisement images flagged by their alt/title text (e.g. SE Radio's
@@ -1136,10 +1136,40 @@ class LeadImageService:
         if not html_text or "<svg" not in html_text.lower():
             return None
         for m in self._INLINE_SVG_RE.finditer(html_text):
-            uri = svg_sanitize.svg_to_data_uri(m.group(0))
+            svg = m.group(0)
+            # Skip decorative glyphs (download/share/nav icons) — e.g. PlayStation
+            # Blog's 20x20 icon--download — so a real inline hero SVG still wins.
+            if self._is_decorative_inline_svg(svg):
+                continue
+            uri = svg_sanitize.svg_to_data_uri(svg)
             if uri:
                 return uri
         return None
+
+    _SVG_OPEN_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
+    _SVG_ICON_CLASS_RE = re.compile(r'class\s*=\s*["\'][^"\']*\bicon(?:s|--)?\b', re.IGNORECASE)
+    _INLINE_SVG_MIN_SIZE = 64
+
+    def _is_decorative_inline_svg(self, svg_html: str) -> bool:
+        """True for icon-sized / icon-classed inline SVGs that are UI glyphs, not
+        article art — so they don't win the inline lead-image slot."""
+        m = self._SVG_OPEN_RE.search(svg_html)
+        open_tag = m.group(0) if m else svg_html
+        if self._SVG_ICON_CLASS_RE.search(open_tag):
+            return True
+        # Explicit small pixel size marks a UI glyph. A real inline-SVG hero scales
+        # via viewBox and rarely pins a tiny width/height, so we only judge on the
+        # declared width/height attributes (not viewBox, which webcomic art keeps
+        # small intentionally).
+        for attr in ("width", "height"):
+            am = re.search(attr + r'\s*=\s*["\']?\s*([0-9]+)', open_tag, re.IGNORECASE)
+            if am:
+                try:
+                    if int(am.group(1)) < self._INLINE_SVG_MIN_SIZE:
+                        return True
+                except ValueError:
+                    pass
+        return False
 
     def extract_media_rss_thumb_url(self, entry: object) -> str | None:
         """Return a media:thumbnail or image-type media:content URL from the entry's RSS fields.
@@ -1830,6 +1860,14 @@ class LeadImageService:
         ):
             return False
 
+        # Banner-shaped hero (e.g. PlayStation Blog's 1900x470 "header-image"):
+        # the <img> declares no width/height, and its extracted bare src carries
+        # no query dims, but its srcset/src resize=W,H reveals a >4:1 ratio.
+        # These are site header banners, not article content.
+        _bw, _bh = self._banner_dims_from_tag(attrs)
+        if _bw and _bh and (_bw / _bh > 4.0 or _bh / _bw > 4.0):
+            return False
+
         # Lazy-loaded site chrome (logos, nav images) uses a data: placeholder src
         # with no srcset and no explicit dimensions. The real URL lives in data-src,
         # but without any sizing signal we can't tell it apart from a logo.
@@ -1840,6 +1878,21 @@ class LeadImageService:
                 return False
 
         return True
+
+    _TAG_RESIZE_DIMS_RE = re.compile(r"(?:resize|fit)=([0-9]+)(?:%2[Cc]|,)([0-9]+)", re.IGNORECASE)
+
+    def _banner_dims_from_tag(self, attrs: dict[str, str]) -> tuple[int | None, int | None]:
+        """Pull the served W,H from a WordPress/Jetpack resize=/fit= hint in the
+        tag's src or srcset, so banner-shaped heroes can be rejected even when the
+        <img> carries no width/height attributes and the bare src has no query."""
+        for val in (attrs.get("src", ""), attrs.get("srcset", ""), attrs.get("data-srcset", "")):
+            m = self._TAG_RESIZE_DIMS_RE.search(val or "")
+            if m:
+                try:
+                    return int(m.group(1)), int(m.group(2))
+                except ValueError:
+                    pass
+        return None, None
 
     def _score_source_image_tag(self, attrs: dict[str, str], resolved_url: str, source_url: str, is_webcomic: bool = False) -> int:
         score = 0
@@ -2162,8 +2215,16 @@ class LeadImageService:
 
     def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None) -> bool:
         # Sanitized inline-SVG data URIs (from services.svg_sanitize, e.g. a
-        # per-feed plugin's hero SVG) are trusted and carry no remote host to vet.
+        # per-feed plugin's hero SVG) are trusted and carry no remote host to vet —
+        # unless they're an icon-classed UI glyph (e.g. a cached download icon),
+        # which we reject so the entry re-resolves to real art.
         if image_url.startswith("data:image/svg+xml,"):
+            try:
+                _decoded = unquote(image_url[len("data:image/svg+xml,"):])
+            except Exception:
+                _decoded = image_url
+            if self._SVG_ICON_CLASS_RE.search(_decoded):
+                return False
             return True
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
@@ -2296,14 +2357,19 @@ class LeadImageService:
                 return False
             if query_h is not None and query_h < self._LEAD_IMAGE_MIN_HEIGHT:
                 return False
-            # Jetpack/WP CDN: resize=W,H (or resize=W%2CH) specifies the exact
-            # served dimensions — they override filename-embedded dimensions.
-            for _rm in re.finditer(r"(?:^|&)resize=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", query, re.IGNORECASE):
+            # Jetpack/WP CDN: resize=W,H / fit=W,H (comma or %2C) specify the exact
+            # served dimensions — they override filename-embedded dimensions. Reject
+            # when a dimension is below minimum, OR when the ratio is banner-shaped
+            # (wider than 4:1 / taller than 1:4) — those are site-wide promo banners,
+            # not article content, e.g. PlayStation Blog's 1900x470 featured banners.
+            for _rm in re.finditer(r"(?:^|&)(?:resize|fit)=([0-9]+)(?:%2[Cc]|,)([0-9]+)(?:&|$)", query, re.IGNORECASE):
                 try:
                     _rw, _rh = int(_rm.group(1)), int(_rm.group(2))
                     if _rw < self._LEAD_IMAGE_MIN_WIDTH or _rh < self._LEAD_IMAGE_MIN_HEIGHT:
                         return False
-                except ValueError:
+                    if _rh and (_rw / _rh > 4.0 or _rh / _rw > 4.0):
+                        return False
+                except (ValueError, ZeroDivisionError):
                     pass
                 break
 

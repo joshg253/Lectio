@@ -45,7 +45,9 @@ The short version:
 - **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
   mark-as-read, manual tags (space-separated; multi-word tags are hyphenated, e.g.
   `games to play` → `games-to-play`), read history, search, and a
-  Readability/web-view proxy.
+  Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
+  that filters the current selection (folder/feed + read state) by tag, and a
+  tag chip in an article's header opens that tag scoped to the article's own feed.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
   inline podcast players (incl. audio borrowed from a separate host feed), file
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
@@ -118,23 +120,29 @@ The short version:
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
   stars onto the surviving feed, so no curation is lost). **Curation is never
   dropped on unsubscribe:** removing a feed that has starred/tagged items offers
-  to move that curation onto another feed first, and **Settings → Feeds** lets you
+  to move that curation onto another feed first (with a **View items** toggle that
+  lists exactly which starred/tagged entries are at stake), and **Settings → Feeds** lets you
   multi-select several feeds and **Combine** them into one survivor (migrating
   their stars, tags, and optionally unread state, then unsubscribing the rest).
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
   you pick the one to keep. Feeds that aren't in any folder (e.g. after
-  a reader migration) are gathered into an **Uncategorized** folder pinned to the
+  a reader migration, or added straight to the "All Feeds" root) are gathered
+  into an **Uncategorized** folder pinned to the
   bottom of the sidebar, so they stay visible and easy to file — right-click a
-  feed there and pick **Add to folder** to categorize it. "All Feeds" always
-  includes them. Right-click a non-empty folder and pick **Delete Folder** to
+  feed there and pick **Add to folder** to categorize it. Adding or moving a feed
+  to the "All Feeds" root leaves it folderless (Uncategorized) rather than pinning
+  it to the root. "All Feeds" always includes them. Right-click a non-empty folder and pick **Delete Folder** to
   choose what happens to the feeds inside: **unsubscribe all**, or **move all to
   another folder** (including Uncategorized/no folder). Empty folders delete with
   a simple confirm. **Double-click** a folder or feed name in the sidebar to open its
-  Properties. In **Settings → Feeds** you can multi-select feeds (or tick a
+  Properties. A feed's **Properties → Info** tab shows its current folder and lets
+  you reassign it (including to Uncategorized) from a dropdown. In **Settings → Feeds** you can multi-select feeds (or tick a
   folder's header checkbox to select all its feeds) and **bulk move, disable/
-  enable, mark-read, refresh, or unsubscribe** them in one action.
+  enable, mark-read, refresh, or unsubscribe** them in one action. A **Stale**
+  sub-tab ranks active feeds by how long since their newest post (oldest first,
+  never-posted feeds at the top) to help find candidates to prune.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.
@@ -147,6 +155,16 @@ The short version:
   - **tt-rss** — single-pass JSON-RPC API import: subscriptions + category folders + starred articles + labels-as-tags.
 
   Every migrator canonicalizes incoming feed URLs (old.reddit → www.reddit, `?alt=rss`, trailing slashes, YouTube channel forms) before subscribing, so variant URLs merge into an existing subscription instead of creating duplicate feeds.
+
+- **Browser-extension quick subscribe** — Lectio answers the `?subscribe=<feed>`
+  (Feedbin) and `?subscribe_to=<feed>` (Nextcloud News) quick-subscription URL
+  patterns on its home page: it opens the **Add Feed** dialog pre-filled with the
+  feed URL (prompting for login first if needed, then returning you to it). To use
+  it with [RSSHub-Radar](https://github.com/DIYgod/RSSHub-Radar), enable **Feedbin**
+  (or **Nextcloud News**) in the extension's quick-subscription settings and set its
+  address override to your Lectio origin (e.g. `https://your-lectio.example`, no
+  trailing slash). Clicking that service in the extension then drops the discovered
+  feed straight into Lectio's Add Feed dialog.
 
 ---
 

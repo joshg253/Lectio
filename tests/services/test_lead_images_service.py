@@ -213,6 +213,66 @@ def test_gog_chrome_subdomains_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
 
 
+def test_source_header_banner_rejected_via_srcset_dims(tmp_path: Path):
+    # PlayStation Blog's article header banner has no width/height attrs and a bare
+    # src with no query, but its srcset carries resize=1900,470 (4:1). It must be
+    # rejected so og:image (the real featured image) wins instead.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    banner_attrs = {
+        "class": "header-image wp-image-420286",
+        "fetchpriority": "high",
+        "src": "https://blog.playstation.com/tachyon/2026/06/c53068d0.png",
+        "srcset": "https://blog.playstation.com/tachyon/2026/06/c53068d0.png?resize=1900%2C470&zoom=1 1900w",
+    }
+    hero_attrs = {
+        "class": "wp-post-image",
+        "src": "https://blog.playstation.com/tachyon/2026/06/fac3adf5.png",
+        "srcset": "https://blog.playstation.com/tachyon/2026/06/fac3adf5.png?resize=1600%2C900 1600w",
+    }
+    assert service._is_source_image_tag_acceptable(banner_attrs, banner_attrs["src"]) is False
+    assert service._is_source_image_tag_acceptable(hero_attrs, hero_attrs["src"]) is True
+
+
+def test_sponsor_icon_and_ad_blast_rejected(tmp_path: Path):
+    # The Daily WTF post: feed content's only image is the Inedo buildmaster-icon
+    # sponsor logo and the source page's first image is an /fblast/ ad blast; the
+    # real image is the og:image author thumb, which must survive.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    sponsor = "https://thedailywtf.com/images/inedo/buildmaster-icon.png"
+    ad_blast = "https://thedailywtf.com/fblast/0816b244af9d4758a39f08bf7cc5aec6"
+    author = "https://s3.amazonaws.com/remy.jetpackshark.com/remy-thumb.jpg"
+    assert service._is_image_url_acceptable(sponsor, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(ad_blast, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(author, None, None, allow_extensionless=True) is True
+
+
+def test_inline_svg_icon_skipped_for_real_hero(tmp_path: Path):
+    # An icon-classed / 20x20 inline <svg> (e.g. PlayStation Blog's download
+    # glyph) must not win the inline lead-image slot; a real large hero <svg>
+    # after it should, and an icon-only body yields no inline SVG lead image.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    icon = '<svg class="icon icon--download" width="20" height="20" viewBox="0 0 20 20"><path d="M8 1z"/></svg>'
+    hero = '<svg viewBox="0 0 800 450"><rect width="800" height="450"/></svg>'
+    assert service._is_decorative_inline_svg(icon) is True
+    assert service._is_decorative_inline_svg(hero) is False
+    assert service._extract_inline_svg_data_uri("x " + icon) is None
+    assert service._extract_inline_svg_data_uri(icon + hero) is not None
+
+
+def test_banner_aspect_ratio_rejected_from_query_dims(tmp_path: Path):
+    # WordPress/Jetpack resize= and fit= query params declare the served size.
+    # A banner-shaped ratio (wider than 4:1) is a site-wide promo, not article
+    # content — e.g. PlayStation Blog's 1900x470 featured banners.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    banner = "https://blog.playstation.com/tachyon/2026/06/c53068d0.png?resize=1900%2C470&zoom=1"
+    fit_banner = "https://example.com/x.jpg?fit=1900,470"
+    hero = "https://blog.playstation.com/tachyon/2026/06/abc.png?resize=1600%2C900"
+    assert service._is_image_url_acceptable(banner, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(fit_banner, None, None, allow_extensionless=True) is False
+    # A normal 16:9 hero at the same CDN must still pass.
+    assert service._is_image_url_acceptable(hero, None, None, allow_extensionless=True) is True
+
+
 def test_extract_thumbnail_reads_lazy_loaded_img(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(

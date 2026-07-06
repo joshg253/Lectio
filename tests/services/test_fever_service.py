@@ -61,10 +61,11 @@ def _make_meta(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _mock_feed(url=_FEED_URL, title="Example Feed", link="https://example.com", updated=None):
+def _mock_feed(url=_FEED_URL, title="Example Feed", link="https://example.com", updated=None, user_title=None):
     f = MagicMock()
     f.url = url
     f.title = title
+    f.user_title = user_title
     f.link = link
     f.updated = updated or datetime(2024, 1, 1, tzinfo=timezone.utc)
     return f

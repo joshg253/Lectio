@@ -286,7 +286,9 @@ class GReaderService:
             ]
             subs.append({
                 "id": f"feed/{url}",
-                "title": feed.title or url,
+                # Prefer the user's overridden feed name (what the Lectio sidebar
+                # shows) so synced clients (Capy, etc.) match the web UI.
+                "title": getattr(feed, "user_title", None) or feed.title or url,
                 "categories": cats,
                 "url": url,
                 "htmlUrl": str(feed.link or ""),
@@ -410,7 +412,7 @@ class GReaderService:
             feed_folder_map = self._build_feed_folder_map(conn)
 
         feed_info = {
-            str(f.url): (f.title or str(f.url), str(f.link or ""))
+            str(f.url): (getattr(f, "user_title", None) or f.title or str(f.url), str(f.link or ""))
             for f in reader.get_feeds()
         }
 

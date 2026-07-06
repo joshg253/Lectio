@@ -194,7 +194,7 @@
       <span class="entry-tag-chip-wrap">
         <a
           class="entry-tag-link {% if selected_tag == tag %}active{% endif %}"
-          href="/?folder_id={{ selected_folder_id }}{% if selected_feed_url %}&list_feed_url={{ selected_feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
+          href="/?folder_id={{ selected_folder_id }}{% if selected_entry.feed_url %}&list_feed_url={{ selected_entry.feed_url | urlencode }}{% endif %}&tag={{ tag | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter=all&star_only=0&resume_read_filter={{ selected_resume_read_filter }}"
           >#{{ tag }}</a
         ><button
           type="button"

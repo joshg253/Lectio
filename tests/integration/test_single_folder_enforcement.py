@@ -78,3 +78,36 @@ def test_multi_folder_cleanup_query_and_resolve(configured):
             "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?", (FEED, folder_b)
         )
     assert _folders_for(FEED) == {folder_b}
+
+
+def _root_id() -> int:
+    with main.get_meta_connection() as conn:
+        return main.get_root_folder_id(conn)
+
+
+def test_add_feed_to_root_is_folderless(configured):
+    # Adding a feed to the root ("All Feeds") stores it folderless so it lands
+    # in the virtual Uncategorized folder, not pinned to a root folder_feeds row.
+    main.add_feed_to_folder(FEED, _root_id())
+    assert _folders_for(FEED) == set()
+
+
+def test_add_feed_to_uncategorized_sentinel_is_folderless(configured):
+    main.add_feed_to_folder(FEED, main.UNCATEGORIZED_FOLDER_ID)
+    assert _folders_for(FEED) == set()
+
+
+def test_move_feed_to_root_clears_membership(configured):
+    folder_a, _ = configured
+    main.add_feed_to_folder(FEED, folder_a)
+    assert _folders_for(FEED) == {folder_a}
+    # Moving to root drops the membership rather than inserting a root row.
+    main.move_feed_to_folder(FEED, folder_a, _root_id())
+    assert _folders_for(FEED) == set()
+
+
+def test_move_feed_to_uncategorized_sentinel_clears_membership(configured):
+    folder_a, _ = configured
+    main.add_feed_to_folder(FEED, folder_a)
+    main.move_feed_to_folder(FEED, folder_a, main.UNCATEGORIZED_FOLDER_ID)
+    assert _folders_for(FEED) == set()

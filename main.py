@@ -1756,7 +1756,13 @@ class _AuthMiddleware(BaseHTTPMiddleware):
                     break
             if _session_logged_in(request):
                 return await call_next(request)
-        next_url = str(request.url)
+        # Store a same-origin relative path (path + query) so _safe_next accepts
+        # it and the user lands back on the deep link after logging in — e.g. a
+        # /?subscribe=<feed> quick-subscription link. An absolute URL would be
+        # rejected by _safe_next as an open-redirect and drop the user on "/".
+        next_url = request.url.path
+        if request.url.query:
+            next_url += "?" + request.url.query
         return RedirectResponse(url=f"/login?next={quote_plus(next_url)}", status_code=303)
 
 
@@ -4138,6 +4144,67 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
             for feed in reader.get_feeds():
                 counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
         return counts
+
+
+# Newest-post-per-feed is derived from a full GROUP BY over the reader entries
+# table, so cache it briefly (keyed per-user by reader DB path) to keep the
+# Settings → Feeds "Stale" view from re-scanning on every home render.
+_feed_last_post_cache: dict[str, tuple[float, dict[str, datetime]]] = {}
+_feed_last_post_cache_lock = threading.Lock()
+FEED_LAST_POST_TTL_SECONDS = 300
+
+
+def _parse_reader_timestamp(ts: str) -> datetime | None:
+    """Parse a reader entries timestamp (ISO, possibly space-separated / naive)
+    into an aware UTC datetime. Returns None if unparseable."""
+    ts = (ts or "").strip()
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def get_feed_last_post_dates() -> dict[str, datetime]:
+    """Newest entry timestamp per feed (published, then updated, then first
+    seen), read straight from the reader DB in one GROUP BY. Cached per-user
+    with a short TTL. Feeds with no entries are simply absent from the map."""
+    db_key = str(tenancy.reader_db_path())
+    now = time.time()
+    with _feed_last_post_cache_lock:
+        cached = _feed_last_post_cache.get(db_key)
+        if cached and now - cached[0] < FEED_LAST_POST_TTL_SECONDS:
+            return dict(cached[1])
+
+    result: dict[str, datetime] = {}
+    try:
+        conn = sqlite3.connect(db_key, uri=False, check_same_thread=False)
+        try:
+            rows = conn.execute(
+                "SELECT feed, MAX(COALESCE(published, updated, first_updated)) "
+                "FROM entries GROUP BY feed"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        LOGGER.exception("get_feed_last_post_dates direct SQL failed")
+        return result
+
+    for feed_url, ts in rows:
+        dt = _parse_reader_timestamp(str(ts)) if ts else None
+        if dt is not None:
+            result[str(feed_url)] = dt
+
+    with _feed_last_post_cache_lock:
+        _feed_last_post_cache[db_key] = (time.time(), dict(result))
+    return result
 
 
 def _refresh_unread_counts_async(generation: int) -> None:
@@ -11499,17 +11566,25 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         reader.add_feed(feed_url, exist_ok=True)
 
     with get_meta_connection() as conn:
-        # Single-folder invariant: a feed lives in exactly one folder. Drop any
-        # existing memberships before recording the new one so re-adding a feed
-        # moves it rather than leaving it in multiple folders.
-        conn.execute(
-            "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
-            (feed_url, folder_id),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-            (folder_id, feed_url),
-        )
+        # Root ("All Feeds") is treated the same as Uncategorized: a feed placed
+        # there is stored folderless (no folder_feeds row) rather than pinned to
+        # the root folder, so it surfaces under the virtual Uncategorized folder.
+        root_id = get_root_folder_id(conn)
+        folderless = folder_id in (UNCATEGORIZED_FOLDER_ID, root_id)
+        if folderless:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+        else:
+            # Single-folder invariant: a feed lives in exactly one folder. Drop any
+            # existing memberships before recording the new one so re-adding a feed
+            # moves it rather than leaving it in multiple folders.
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
+                (feed_url, folder_id),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                (folder_id, feed_url),
+            )
     invalidate_meta_structure_cache()
     if websub_service:
         _uid = tenancy.current_user_id()
@@ -11536,6 +11611,40 @@ def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dic
     except Exception:  # noqa: BLE001
         pass
     return {"tagged": tagged, "stars": int(stars)}
+
+
+def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list[dict]:
+    """List the specific curated entries a feed carries (manual tags and/or a
+    star) so the unsubscribe dialog can show exactly what would be lost. Each
+    item is ``{title, link, starred, tags: [display names]}``. Starred-but-
+    untagged and tagged-but-unstarred entries are both included."""
+    starred_ids = {
+        str(r[0]) for r in conn.execute(
+            "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (feed_url,)
+        )
+    }
+    items: list[dict] = []
+    try:
+        for e in reader.get_entries(feed=feed_url):
+            tags = [
+                key[len(MANUAL_TAG_KEY_PREFIX):].strip()
+                for key in (_extract_tag_key(t) for t in reader.get_tags(e.resource_id))
+                if key and key.startswith(MANUAL_TAG_KEY_PREFIX)
+            ]
+            starred = e.id in starred_ids
+            if not tags and not starred:
+                continue
+            items.append({
+                "title": e.title or e.link or e.id,
+                "link": e.link or "",
+                "starred": starred,
+                "tags": sorted(tags),
+            })
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("feed_curation_items failed for %s", feed_url)
+    # Starred first, then by title, so the most deliberate curation leads.
+    items.sort(key=lambda it: (not it["starred"], str(it["title"]).casefold()))
+    return items
 
 
 def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_url: str) -> dict:
@@ -11852,21 +11961,33 @@ def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -
         return
 
     with get_meta_connection() as conn:
-        target_row = conn.execute(
-            "SELECT id FROM folders WHERE id = ?",
-            (to_folder_id,),
-        ).fetchone()
-        if not target_row:
-            raise ValueError("Target folder does not exist.")
+        # Root ("All Feeds") is treated the same as Uncategorized: moving a feed
+        # there leaves it folderless (no folder_feeds row) so it surfaces under
+        # the virtual Uncategorized folder rather than being pinned to root.
+        root_id = get_root_folder_id(conn)
+        folderless = to_folder_id in (UNCATEGORIZED_FOLDER_ID, root_id)
+        if not folderless:
+            target_row = conn.execute(
+                "SELECT id FROM folders WHERE id = ?",
+                (to_folder_id,),
+            ).fetchone()
+            if not target_row:
+                raise ValueError("Target folder does not exist.")
 
-        conn.execute(
-            "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
-            (from_folder_id, feed_url),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-            (to_folder_id, feed_url),
-        )
+        if folderless:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE feed_url = ?",
+                (feed_url,),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                (from_folder_id, feed_url),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                (to_folder_id, feed_url),
+            )
     invalidate_meta_structure_cache()
 
 
@@ -13200,6 +13321,8 @@ def home(
     no_rss_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    subscribe: str | None = None,
+    subscribe_to: str | None = None,
 ):
     # Limit concurrent expensive home renders (DB queries + context building).
     # Release before returning StreamingResponse so slow network delivery on the
@@ -13227,6 +13350,7 @@ def home(
             no_rss_url=no_rss_url,
             chunk=chunk,
             chunk_delta=chunk_delta,
+            subscribe=subscribe or subscribe_to,
         )
     finally:
         _home_request_semaphore.release()
@@ -13249,6 +13373,7 @@ def _home_inner(
     no_rss_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    subscribe: str | None = None,
 ):
     # Allow client to suggest a preferred read_filter via header for SPA/AJAX calls.
     # Use it only when no explicit `read_filter` was supplied in the URL/form.
@@ -13491,6 +13616,29 @@ def _home_inner(
         if any(f.has_error for f in feeds)
     }
 
+    # Stale-feeds view (Settings → Feeds): every active feed ranked by how long
+    # ago its newest post is, oldest first. Feeds that have never posted (no
+    # entries) sort to the very top so they surface for pruning.
+    folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
+    last_post_dates = get_feed_last_post_dates()
+    _now_utc = datetime.now(timezone.utc)
+    stale_feeds = []
+    for url in all_reader_feed_urls:
+        if url in disabled_feed_urls:
+            continue
+        last_dt = last_post_dates.get(url)
+        fid = feed_to_folder.get(url)
+        stale_feeds.append({
+            "feed_url": url,
+            "feed_title": feed_title_map.get(url, url),
+            "folder_id": fid,
+            "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
+            "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
+            "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
+            "days_since": (_now_utc - last_dt).days if last_dt else None,
+        })
+    stale_feeds.sort(key=lambda x: x["last_post_sort"])
+
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
     try:
@@ -13653,10 +13801,15 @@ def _home_inner(
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
+        "stale_feeds": stale_feeds,
         "posts": posts,
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,
+        # Quick-subscription deep link (e.g. RSSHub-Radar pointed at Lectio via
+        # the Feedbin/Nextcloud News override). Only pass through http(s) URLs so
+        # the auto-opened Add Feed dialog can't be primed with a junk scheme.
+        "subscribe_url": subscribe if (subscribe or "").strip().lower().startswith(("http://", "https://")) else None,
         "auto_refresh_enabled": _arm > 0,
         "auto_refresh_minutes": _arm,
         "auto_refresh_option_minutes": AUTO_REFRESH_OPTION_MINUTES,
@@ -17937,6 +18090,20 @@ def feed_curation_count_route(feed_url: str = Query(...)):
         return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
     counts["candidates"] = candidates
     return JSONResponse(counts)
+
+
+@app.get("/feeds/curation-items")
+def feed_curation_items_route(feed_url: str = Query(...)):
+    """List the exact curated entries (tagged and/or starred) a feed carries, so
+    the unsubscribe dialog can show what would be lost before you confirm."""
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                items = feed_curation_items(reader, conn, feed_url)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[curation] items failed for %s: %s", feed_url, exc)
+        return JSONResponse({"error": "Could not read this feed's curated items."}, status_code=500)
+    return JSONResponse({"items": items})
 
 
 @app.post("/feeds/combine")
