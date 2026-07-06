@@ -5,38 +5,20 @@ this file only tracks what's still open.
 
 ## Now
 
-### CodeQL — model our guards as sanitizers (advanced setup) — BUILT, pending first Actions run
+### CodeQL — custom guard-aware query still flags SSRF sinks
 
-CodeQL default setup kept re-flagging guarded sinks as false positives:
-`py/full-ssrf` on `url_guard.safe_get` (guarded by `is_safe_outbound_url`) and
-`py/path-injection` on scraped/DeviantArt feed-file paths (guarded by
-`assert_safe_feed_id` + UUID ids), previously **dismissed** by hand in the
-code-scanning UI.
+The advanced setup is **live and green on every push** (`.github/workflows/codeql.yml`
+→ `.github/codeql/codeql-config.yml` → custom query pack in `.github/codeql/queries/`
+with guard-aware `py/lectio/full-ssrf` / `py/lectio/path-injection`, `query-filters`
+dropping the stock `py/full-ssrf` / `py/path-injection`). The `.ql` compile green
+and `py/path-injection` is cleanly suppressed.
 
-Done: repo switched to **advanced** setup; `.github/workflows/codeql.yml` wired
-to `.github/codeql/codeql-config.yml`, which adds a custom **query pack**
-(`.github/codeql/queries/`) with guard-aware copies of the two queries
-(`py/lectio/full-ssrf`, `py/lectio/path-injection`) that model our guards as
-`Sanitizer` barriers, and `query-filters` that drop the stock `py/full-ssrf` /
-`py/path-injection`. Barriers: nodes inside the audited `safe_get`/`safe_head`/
-`safe_get_async` wrappers + `ensure_safe_outbound_url` return (SSRF); uses of an
-SSA variable validated by `assert_safe_feed_id` (path). **Remaining:** confirm the
-`.ql` compiles green on the GitHub Actions run and that the two alerts no longer
-fire; the barrier `.ql` may need a tweak to the exact `codeql/python-queries`
-library API version.
-
-### Page Feed builder — point-and-click element picker (PR B) — SHIPPED
-
-The interactive picker is built. The Add-Feed Page Feed section has a "Pick from
-page" button (link_list mode) that loads the source page in a sandboxed iframe via
-`GET /scraped-feeds/picker-frame` — the existing sanitized same-origin source
-proxy (`build_source_proxy_response(..., picker=True)`) with a small injected
-script that outlines links on hover and posts the clicked link's href to the
-parent. `POST /scraped-feeds/pick` resolves that href to a selector server-side
-via `scraper_service.pick_page_feed_selector` (reusing `_candidate_selector_for_anchor`,
-so it produces the same selectors as the suggestion chips), which fills the box
-and re-runs the existing live preview. Scoped to link_list mode; JS-heavy /
-frame-blocked pages degrade to the suggestion chips.
+**Remaining:** the guard-aware `py/lectio/full-ssrf` query still reports **4 open
+alerts** — the `safe_get`/`safe_head`/`safe_get_async` + `ensure_safe_outbound_url`
+barriers don't cover those 4 sinks. Triage them: either extend the barrier to the
+real guard path, or confirm they're genuinely unguarded and fix. Also open in
+code-scanning: `py/stack-trace-exposure` (2), `py/url-redirection` (2),
+`py/incomplete-url-substring-sanitization` (1) — review/triage.
 
 
 ## Later
