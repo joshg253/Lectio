@@ -2164,7 +2164,7 @@
             <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">
               <option value="-1">Uncategorized (no folder)</option>
               {% for opt in folder_options if opt.depth > 0 %}
-              <option value="{{ opt.id }}">{{ opt.path }}</option>
+              <option value="{{ opt.id }}">{{ opt.name }}</option>
               {% endfor %}
             </select>
             <span id="feed-prop-folder-status" class="feed-prop-inline-status"></span>
