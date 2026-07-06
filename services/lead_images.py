@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import feedparser
 import httpx
@@ -2192,8 +2192,16 @@ class LeadImageService:
 
     def _is_image_url_acceptable(self, image_url: str, width: int | None, height: int | None, *, allow_extensionless: bool = False, skip_logo_patterns: bool = False, source_url: str | None = None) -> bool:
         # Sanitized inline-SVG data URIs (from services.svg_sanitize, e.g. a
-        # per-feed plugin's hero SVG) are trusted and carry no remote host to vet.
+        # per-feed plugin's hero SVG) are trusted and carry no remote host to vet —
+        # unless they're an icon-classed UI glyph (e.g. a cached download icon),
+        # which we reject so the entry re-resolves to real art.
         if image_url.startswith("data:image/svg+xml,"):
+            try:
+                _decoded = unquote(image_url[len("data:image/svg+xml,"):])
+            except Exception:
+                _decoded = image_url
+            if self._SVG_ICON_CLASS_RE.search(_decoded):
+                return False
             return True
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
