@@ -213,6 +213,19 @@ def test_gog_chrome_subdomains_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
 
 
+def test_sponsor_icon_and_ad_blast_rejected(tmp_path: Path):
+    # The Daily WTF post: feed content's only image is the Inedo buildmaster-icon
+    # sponsor logo and the source page's first image is an /fblast/ ad blast; the
+    # real image is the og:image author thumb, which must survive.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    sponsor = "https://thedailywtf.com/images/inedo/buildmaster-icon.png"
+    ad_blast = "https://thedailywtf.com/fblast/0816b244af9d4758a39f08bf7cc5aec6"
+    author = "https://s3.amazonaws.com/remy.jetpackshark.com/remy-thumb.jpg"
+    assert service._is_image_url_acceptable(sponsor, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(ad_blast, None, None, allow_extensionless=True) is False
+    assert service._is_image_url_acceptable(author, None, None, allow_extensionless=True) is True
+
+
 def test_inline_svg_icon_skipped_for_real_hero(tmp_path: Path):
     # An icon-classed / 20x20 inline <svg> (e.g. PlayStation Blog's download
     # glyph) must not win the inline lead-image slot; a real large hero <svg>

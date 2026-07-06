@@ -112,7 +112,7 @@ class LeadImageService:
             return text
         return cls._BARE_IMG_URL_RE.sub(r'<img src="\1">', text)
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image)",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -212,7 +212,7 @@ class LeadImageService:
     # followed by a digit or separator (e.g. .../Software-Pro-Cert-ad1.png).
     # Boundaries avoid false positives in words like "uploads", "download", "lead".
     _AD_URL_PATTERNS = re.compile(
-        r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert)",
+        r"(?:[-_/]ads?[-_./]|[-_]ad[0-9]|/advert|/fblast/)",
         re.IGNORECASE,
     )
     # Advertisement images flagged by their alt/title text (e.g. SE Radio's
