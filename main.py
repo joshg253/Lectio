@@ -11499,17 +11499,25 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
         reader.add_feed(feed_url, exist_ok=True)
 
     with get_meta_connection() as conn:
-        # Single-folder invariant: a feed lives in exactly one folder. Drop any
-        # existing memberships before recording the new one so re-adding a feed
-        # moves it rather than leaving it in multiple folders.
-        conn.execute(
-            "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
-            (feed_url, folder_id),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-            (folder_id, feed_url),
-        )
+        # Root ("All Feeds") is treated the same as Uncategorized: a feed placed
+        # there is stored folderless (no folder_feeds row) rather than pinned to
+        # the root folder, so it surfaces under the virtual Uncategorized folder.
+        root_id = get_root_folder_id(conn)
+        folderless = folder_id in (UNCATEGORIZED_FOLDER_ID, root_id)
+        if folderless:
+            conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+        else:
+            # Single-folder invariant: a feed lives in exactly one folder. Drop any
+            # existing memberships before recording the new one so re-adding a feed
+            # moves it rather than leaving it in multiple folders.
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE feed_url = ? AND folder_id != ?",
+                (feed_url, folder_id),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                (folder_id, feed_url),
+            )
     invalidate_meta_structure_cache()
     if websub_service:
         _uid = tenancy.current_user_id()
@@ -11852,21 +11860,33 @@ def move_feed_to_folder(feed_url: str, from_folder_id: int, to_folder_id: int) -
         return
 
     with get_meta_connection() as conn:
-        target_row = conn.execute(
-            "SELECT id FROM folders WHERE id = ?",
-            (to_folder_id,),
-        ).fetchone()
-        if not target_row:
-            raise ValueError("Target folder does not exist.")
+        # Root ("All Feeds") is treated the same as Uncategorized: moving a feed
+        # there leaves it folderless (no folder_feeds row) so it surfaces under
+        # the virtual Uncategorized folder rather than being pinned to root.
+        root_id = get_root_folder_id(conn)
+        folderless = to_folder_id in (UNCATEGORIZED_FOLDER_ID, root_id)
+        if not folderless:
+            target_row = conn.execute(
+                "SELECT id FROM folders WHERE id = ?",
+                (to_folder_id,),
+            ).fetchone()
+            if not target_row:
+                raise ValueError("Target folder does not exist.")
 
-        conn.execute(
-            "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
-            (from_folder_id, feed_url),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
-            (to_folder_id, feed_url),
-        )
+        if folderless:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE feed_url = ?",
+                (feed_url,),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                (from_folder_id, feed_url),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                (to_folder_id, feed_url),
+            )
     invalidate_meta_structure_cache()
 
 

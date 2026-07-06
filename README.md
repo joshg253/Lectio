@@ -125,10 +125,12 @@ The short version:
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
   you pick the one to keep. Feeds that aren't in any folder (e.g. after
-  a reader migration) are gathered into an **Uncategorized** folder pinned to the
+  a reader migration, or added straight to the "All Feeds" root) are gathered
+  into an **Uncategorized** folder pinned to the
   bottom of the sidebar, so they stay visible and easy to file — right-click a
-  feed there and pick **Add to folder** to categorize it. "All Feeds" always
-  includes them. Right-click a non-empty folder and pick **Delete Folder** to
+  feed there and pick **Add to folder** to categorize it. Adding or moving a feed
+  to the "All Feeds" root leaves it folderless (Uncategorized) rather than pinning
+  it to the root. "All Feeds" always includes them. Right-click a non-empty folder and pick **Delete Folder** to
   choose what happens to the feeds inside: **unsubscribe all**, or **move all to
   another folder** (including Uncategorized/no folder). Empty folders delete with
   a simple confirm. **Double-click** a folder or feed name in the sidebar to open its
