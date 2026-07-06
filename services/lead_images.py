@@ -1136,10 +1136,40 @@ class LeadImageService:
         if not html_text or "<svg" not in html_text.lower():
             return None
         for m in self._INLINE_SVG_RE.finditer(html_text):
-            uri = svg_sanitize.svg_to_data_uri(m.group(0))
+            svg = m.group(0)
+            # Skip decorative glyphs (download/share/nav icons) — e.g. PlayStation
+            # Blog's 20x20 icon--download — so a real inline hero SVG still wins.
+            if self._is_decorative_inline_svg(svg):
+                continue
+            uri = svg_sanitize.svg_to_data_uri(svg)
             if uri:
                 return uri
         return None
+
+    _SVG_OPEN_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
+    _SVG_ICON_CLASS_RE = re.compile(r'class\s*=\s*["\'][^"\']*\bicon(?:s|--)?\b', re.IGNORECASE)
+    _INLINE_SVG_MIN_SIZE = 64
+
+    def _is_decorative_inline_svg(self, svg_html: str) -> bool:
+        """True for icon-sized / icon-classed inline SVGs that are UI glyphs, not
+        article art — so they don't win the inline lead-image slot."""
+        m = self._SVG_OPEN_RE.search(svg_html)
+        open_tag = m.group(0) if m else svg_html
+        if self._SVG_ICON_CLASS_RE.search(open_tag):
+            return True
+        # Explicit small pixel size marks a UI glyph. A real inline-SVG hero scales
+        # via viewBox and rarely pins a tiny width/height, so we only judge on the
+        # declared width/height attributes (not viewBox, which webcomic art keeps
+        # small intentionally).
+        for attr in ("width", "height"):
+            am = re.search(attr + r'\s*=\s*["\']?\s*([0-9]+)', open_tag, re.IGNORECASE)
+            if am:
+                try:
+                    if int(am.group(1)) < self._INLINE_SVG_MIN_SIZE:
+                        return True
+                except ValueError:
+                    pass
+        return False
 
     def extract_media_rss_thumb_url(self, entry: object) -> str | None:
         """Return a media:thumbnail or image-type media:content URL from the entry's RSS fields.

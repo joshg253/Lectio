@@ -213,6 +213,19 @@ def test_gog_chrome_subdomains_rejected(tmp_path: Path):
     assert service._is_image_url_acceptable(content, None, None, skip_logo_patterns=True) is True
 
 
+def test_inline_svg_icon_skipped_for_real_hero(tmp_path: Path):
+    # An icon-classed / 20x20 inline <svg> (e.g. PlayStation Blog's download
+    # glyph) must not win the inline lead-image slot; a real large hero <svg>
+    # after it should, and an icon-only body yields no inline SVG lead image.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    icon = '<svg class="icon icon--download" width="20" height="20" viewBox="0 0 20 20"><path d="M8 1z"/></svg>'
+    hero = '<svg viewBox="0 0 800 450"><rect width="800" height="450"/></svg>'
+    assert service._is_decorative_inline_svg(icon) is True
+    assert service._is_decorative_inline_svg(hero) is False
+    assert service._extract_inline_svg_data_uri("x " + icon) is None
+    assert service._extract_inline_svg_data_uri(icon + hero) is not None
+
+
 def test_banner_aspect_ratio_rejected_from_query_dims(tmp_path: Path):
     # WordPress/Jetpack resize= and fit= query params declare the served size.
     # A banner-shaped ratio (wider than 4:1) is a site-wide promo, not article
