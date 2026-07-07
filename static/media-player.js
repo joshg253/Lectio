@@ -102,7 +102,9 @@
     if (!src) return '';
     try {
       var u = new URL(src, location.href);
-      if (u.protocol === 'http:' || u.protocol === 'https:') return src;
+      // Return the reconstructed absolute URL, not the input string, so the
+      // value assigned to src/href is provably a normalized http(s) URL.
+      if (u.protocol === 'http:' || u.protocol === 'https:') return u.href;
     } catch (e) {}
     return '';
   }
