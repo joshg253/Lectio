@@ -119,6 +119,10 @@ class LeadImageService:
     # (e.g. p_1x1a.jpg, blank-2x2.gif). The lookahead is lenient to handle
     # names like "1x1a" where a letter follows the dimension.
     _TINY_DIM_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,2})x([0-9]{1,2})(?:[/_.\-a-z]|$)", re.IGNORECASE)
+    # Unresolved client-side template placeholder in a scraped <img src> —
+    # ${...} (JS template literal) or {{...}} (mustache/Angular/Vue). Such a URL
+    # is a template stub, never a real image.
+    _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]*\}|\{\{[^}]*\}\}")
     # CMS theme/plugin directories and known CMS admin resource CDNs are never
     # article images — always site-level assets. Checked even when skip_logo_patterns=True.
     # Path patterns checked against parsed.path; domain patterns against parsed.netloc.
@@ -2243,6 +2247,13 @@ class LeadImageService:
             if self._SVG_ICON_CLASS_RE.search(_decoded):
                 return False
             return True
+        # Reject URLs carrying an unresolved client-side template placeholder —
+        # ${...} (JS template literal), {{...}} (mustache/Angular/Vue), or a bare
+        # {token}. Some pages (e.g. c-sharpcorner) ship an inline <img> template
+        # like src="${challenge.MinorCategoryImage}" that the body scanner would
+        # otherwise scrape, yielding a URL the browser can't load (→ thumb flicker).
+        if self._TEMPLATE_PLACEHOLDER_RE.search(image_url):
+            return False
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
