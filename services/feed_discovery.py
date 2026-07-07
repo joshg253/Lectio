@@ -184,7 +184,9 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
       feeds:  list of {"url": str, "title": str | None}
       message: str (human-readable, empty on success)
     """
-    url = rewrite_known_site_url(url)
+    rewritten = rewrite_known_site_url(url)
+    was_rewritten = rewritten != url
+    url = rewritten
     try:
         resp, _escalated = _get_with_escalation(url, timeout=timeout)
     except url_guard.UnsafeURLError:
@@ -203,6 +205,11 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     body_len = len(resp.content)
 
     if resp.is_success and (_ct_is_feed(ct) or _body_is_feed(resp.text)):
+        if was_rewritten:
+            # The pasted URL was a page mapped to a known feed host — not a
+            # "direct feed URL". Return it as a discovered feed so the dialog
+            # shows the resolved address instead of claiming it was pasted.
+            return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": ""}
         return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": "", "direct": True}
 
     if not resp.is_success:
