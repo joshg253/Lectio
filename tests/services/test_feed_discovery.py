@@ -217,6 +217,10 @@ class TestPinboardRewrite:
         assert rewrite_known_site_url("https://www.pinboard.in/popular/") == \
             "https://feeds.pinboard.in/rss/popular/"
 
+    def test_explicit_port_and_case(self):
+        assert rewrite_known_site_url("https://Pinboard.in:443/popular/") == \
+            "https://feeds.pinboard.in/rss/popular/"
+
     def test_missing_trailing_slash(self):
         assert rewrite_known_site_url("https://pinboard.in/popular") == \
             "https://feeds.pinboard.in/rss/popular/"

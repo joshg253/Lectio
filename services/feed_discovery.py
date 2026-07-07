@@ -1,12 +1,15 @@
 """RSS/Atom auto-discovery helpers."""
 from __future__ import annotations
 
+import logging
 import re
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from services import url_guard
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _guarded_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx.Response:
@@ -128,7 +131,8 @@ _PINBOARD_SEGMENT_RE = re.compile(
 
 def _pinboard_feed_url(url: str) -> str | None:
     parsed = urlparse(url)
-    if parsed.netloc.lower() not in ("pinboard.in", "www.pinboard.in"):
+    # hostname (not netloc): strips an explicit port and lowercases.
+    if (parsed.hostname or "") not in ("pinboard.in", "www.pinboard.in"):
         return None
     segments = [s for s in parsed.path.split("/") if s]
     if not segments or not all(_PINBOARD_SEGMENT_RE.match(s) for s in segments):
@@ -146,6 +150,9 @@ def rewrite_known_site_url(url: str) -> str:
         try:
             rewritten = rewriter(url)
         except Exception:
+            # A rewriter bug must never break Add Feed (the URL just falls
+            # through to generic discovery) — but don't hide it either.
+            _LOGGER.exception("site feed rewriter %s failed for %r", rewriter.__name__, url)
             continue
         if rewritten:
             return rewritten

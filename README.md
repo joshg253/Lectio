@@ -118,7 +118,7 @@ The short version:
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
-  mappings for sites whose pages don't advertise their feed — paste a
+  mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter
   and the matching feeds.pinboard.in feed is found automatically), Page Feeds (turn a
   feedless page into a feed: click a link on a rendered preview of the page to
