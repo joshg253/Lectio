@@ -36,6 +36,18 @@ Examples:
 
 Temporary overrides must not silently overwrite remembered preferences. Leaving the override context should restore the base preference.
 
+### Global audio player
+
+The persistent audio player is a deliberate exception to the pane-swap lifecycle.
+The entry view is loaded via `/entries/pane` swaps, so any `<audio>` inside it is
+destroyed on navigation. Instead a single `<audio>` + control bar lives in
+`templates/index.html` outside the swap target and is owned by
+`static/media-player.js`; podcast posts inject a `.podcast-player` Play trigger
+(`_apply_entry_media`) that hands the track URL/title to the global bar. Player
+state (current track, position, playback speed) is transient client-side state
+only — no server or DB involvement — with playback speed persisted to
+`localStorage`.
+
 ## Adaptive layout model
 
 Lectio uses responsive layouts rather than a fixed three-pane assumption:

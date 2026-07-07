@@ -163,8 +163,10 @@ def test_audio_enclosure_injects_player(env):
     _add(content="<p>show notes</p>",
          enclosures=[{"href": "https://cdn.test/ep1.mp3", "type": "audio/mpeg", "length": 9999999}])
     d = _detail()
-    assert "<audio" in d["content_html"]
-    assert "/entries/media/audio" in d["content_html"]
+    # v1 global player: the entry injects a trigger that loads the track into the
+    # persistent player bar, not an inline <audio> that would be lost on pane-swap.
+    assert "podcast-play-trigger" in d["content_html"]
+    assert 'data-audio-src="/entries/media/audio' in d["content_html"]
 
 
 def test_pdf_enclosure_listed_as_attachment(env):

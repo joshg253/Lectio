@@ -13,5 +13,8 @@
   },
   "chat.tools.terminal.autoApprove": {
     "uv": true
+  },
+  "files.associations": {
+    "templates/*.html": "jinja-html"
   }
 }

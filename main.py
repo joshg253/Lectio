@@ -440,7 +440,7 @@ def _static_asset_version() -> str:
         _static = Path(__file__).parent / "static"
         combined = b"".join(
             (_static / name).read_bytes()
-            for name in ("style.css", "themes/dark.css")
+            for name in ("style.css", "themes/dark.css", "media-player.js")
         )
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
@@ -10582,12 +10582,19 @@ def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
         _safe_entry_id = quote_plus(entry_id)
         _media_play_url = f"/entries/media/audio?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
         _media_dl_url = f"/entries/media/download?feed_url={_safe_feed_url}&entry_id={_safe_entry_id}"
+        _track_title = html.escape(getattr(entry, "title", None) or "Audio", quote=True)
+        # A trigger that loads the track into the persistent global player bar
+        # (owned by static/media-player.js) instead of an inline <audio> element,
+        # which would be ripped out of the DOM on pane-swap and stop playback.
         _audio_player = (
-            f'<div class="podcast-player" style="margin:1em 0;">'
-            f'<audio controls preload="metadata" style="width:100%" src="{_media_play_url}"></audio>'
-            f'<div style="margin-top:6px; font-size:0.85em;">'
-            f'<a href="{_media_dl_url}" download>Download audio</a>'
-            f'</div>'
+            f'<div class="podcast-player" data-audio-src="{_media_play_url}" '
+            f'data-audio-download="{_media_dl_url}" data-audio-title="{_track_title}">'
+            f'<button type="button" class="podcast-play-trigger" '
+            f'aria-label="Play audio in player">'
+            f'<span class="podcast-play-trigger-icon" aria-hidden="true">▶</span>'
+            f'<span class="podcast-play-trigger-label">Play audio</span>'
+            f'</button>'
+            f'<a class="podcast-download-link" href="{_media_dl_url}" download>Download</a>'
             f'</div>'
         )
         content_html = _audio_player + (content_html or "")

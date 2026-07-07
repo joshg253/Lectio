@@ -3582,6 +3582,14 @@ body[data-keyboard-open="1"] .action-modal-panel {
   color: var(--muted);
 }
 
+/* Unsubscribe-migration modal: each radio choice sits on its own line instead
+   of flowing inline after the move-target input. */
+#unsub-migrate-curation .action-modal-label {
+  display: block;
+  margin-top: 0.5rem;
+}
+#unsub-migrate-curation .action-modal-input { margin-top: 0.25rem; }
+
 .action-modal-label-hint {
   font-weight: normal;
   opacity: 0.75;
@@ -6359,3 +6367,76 @@ textarea.hl-draft-pattern {
 .settings-yt-quota { font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid var(--border); color: var(--fg); }
 .settings-yt-quota--low { border-color: var(--accent); color: var(--accent); }
 .settings-yt-quota--exhausted { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+
+/* --- Podcast play trigger (injected into entry content) --- */
+.podcast-player {
+  display: flex; align-items: center; gap: 0.75rem;
+  margin: 1em 0; flex-wrap: wrap;
+}
+.podcast-play-trigger {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.9rem; border-radius: 999px;
+  border: 1px solid var(--accent, #4a90d9);
+  background: var(--accent, #4a90d9); color: #fff;
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+.podcast-play-trigger:hover { filter: brightness(1.08); }
+.podcast-play-trigger-icon { font-size: 0.8em; }
+.podcast-download-link { font-size: 0.85em; color: var(--link, #4a90d9); }
+
+/* --- Persistent global audio player bar --- */
+/* When active, the panes shrink by the bar's height so it sits below the app
+   (reserving space) rather than floating over the bottom of the panes. */
+body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
+.global-audio-player {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 200;
+  min-height: var(--gap-h, 3.4rem); box-sizing: border-box;
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--elevated-bg, var(--bg-secondary, #1c1c1c));
+  border-top: 1px solid var(--border, #333);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.25);
+  color: var(--fg, #eee);
+}
+.global-audio-player[hidden] { display: none; }
+.global-audio-player button {
+  font: inherit; color: inherit; background: none; border: none; cursor: pointer;
+}
+.global-audio-player .gap-play {
+  flex: 0 0 auto; width: 2.2rem; height: 2.2rem; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.95rem;
+  background: var(--accent, #4a90d9); color: #fff;
+}
+.global-audio-player .gap-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 0.2rem;
+}
+.global-audio-player .gap-title {
+  font-weight: 600; font-size: 0.9rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.global-audio-player .gap-title.is-link { cursor: pointer; }
+.global-audio-player .gap-title.is-link:hover { color: var(--link, #4a90d9); text-decoration: underline; }
+.global-audio-player .gap-scrub {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.75rem; color: var(--muted, #999);
+}
+.global-audio-player .gap-seek { flex: 1 1 auto; min-width: 0; accent-color: var(--accent, #4a90d9); cursor: pointer; }
+.global-audio-player .gap-cur, .global-audio-player .gap-dur {
+  flex: 0 0 auto; font-variant-numeric: tabular-nums; min-width: 3ch;
+}
+.global-audio-player .gap-dur { text-align: right; }
+.global-audio-player .gap-speed {
+  flex: 0 0 auto; padding: 0.25rem 0.5rem; border-radius: 6px;
+  border: 1px solid var(--border, #444); font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.global-audio-player .gap-download {
+  flex: 0 0 auto; color: var(--link, #4a90d9); text-decoration: none; font-size: 1.1rem;
+}
+.global-audio-player .gap-download[hidden] { display: none; }
+.global-audio-player .gap-close {
+  flex: 0 0 auto; color: var(--muted, #999); font-size: 0.95rem; padding: 0.25rem;
+}
+.global-audio-player .gap-close:hover { color: var(--fg, #eee); }
