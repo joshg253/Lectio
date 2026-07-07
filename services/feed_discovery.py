@@ -110,6 +110,48 @@ _FEED_QUERY_PARAMS = ["feed=rss2", "feed=rss", "feed=atom", "feed=json"]
 _HEADERS = {"User-Agent": "Lectio/1.0 (RSS auto-discovery; +https://github.com/joshg253/Lectio)"}
 
 
+# --- Site-specific URL → feed rewrites -------------------------------------
+# Some sites publish feeds on a separate host with no <link rel="alternate">
+# on the HTML page (so generic discovery can't find them). Each rewriter takes
+# the pasted URL and returns a known feed URL, or None if it doesn't apply.
+
+# Pinboard page paths use the same segment grammar as its feed paths
+# (https://pinboard.in/popular/ → https://feeds.pinboard.in/rss/popular/),
+# including tag/user/source filters like /u:name/t:tag/ and private-feed
+# segments like /secret:xxxx/. Segments outside this grammar (e.g. /search/,
+# /settings/) mean the page has no direct feed equivalent.
+_PINBOARD_SEGMENT_RE = re.compile(
+    r"^(?:popular|recent|private|unread|untagged|starred|network"
+    r"|[ut]:[^/]+|from:[^/]+|secret:[^/]+)$"
+)
+
+
+def _pinboard_feed_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.netloc.lower() not in ("pinboard.in", "www.pinboard.in"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments or not all(_PINBOARD_SEGMENT_RE.match(s) for s in segments):
+        return None
+    return "https://feeds.pinboard.in/rss/" + "/".join(segments) + "/"
+
+
+_SITE_FEED_REWRITES = [_pinboard_feed_url]
+
+
+def rewrite_known_site_url(url: str) -> str:
+    """Map a page URL to its known feed URL for sites generic discovery can't
+    handle. Returns the input unchanged when no rewriter applies."""
+    for rewriter in _SITE_FEED_REWRITES:
+        try:
+            rewritten = rewriter(url)
+        except Exception:
+            continue
+        if rewritten:
+            return rewritten
+    return url
+
+
 def _ct_is_feed(content_type: str) -> bool:
     base = content_type.split(";")[0].strip().lower()
     return base in _FEED_MIME_TYPES or "rss" in base or "atom" in base
@@ -142,6 +184,7 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
       feeds:  list of {"url": str, "title": str | None}
       message: str (human-readable, empty on success)
     """
+    url = rewrite_known_site_url(url)
     try:
         resp, _escalated = _get_with_escalation(url, timeout=timeout)
     except url_guard.UnsafeURLError:
@@ -256,6 +299,7 @@ def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str]
     it so reader's later refresh fetch escalates too (otherwise the feed
     subscribes but never updates).
     """
+    url = rewrite_known_site_url(url)
     try:
         resp, escalated = _get_with_escalation(url, timeout=timeout)
     except Exception:
