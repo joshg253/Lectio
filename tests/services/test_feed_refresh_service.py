@@ -251,3 +251,70 @@ def test_get_problematic_feeds_formats_retry_display(tmp_path: Path):
     row = rows[0]
     assert row["feed_url"] == "https://example.com/problem.xml"
     assert row["next_retry_display"] == "formatted"
+
+
+class _NewFeedReader(_FakeReader):
+    """get_feed reports last_updated=None (never fetched) for the given URLs."""
+    def __init__(self, never_updated_urls: set[str], fail_urls: set[str] | None = None):
+        super().__init__(fail_urls)
+        self.never_updated_urls = set(never_updated_urls)
+
+    def get_feed(self, feed_url: str, _default=None):
+        class _F:
+            update_after = None
+            last_updated = None if feed_url in self.never_updated_urls else 1.0
+        return _F()
+
+
+def test_domain_backoff_skips_already_fetched_feed(tmp_path: Path):
+    """A feed that has fetched before stays skipped while its domain is in backoff."""
+    db_path = tmp_path / "meta.sqlite"
+    reader = _NewFeedReader(never_updated_urls=set())
+    service = _build_service(db_path, reader, [], [])
+
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at) VALUES (?, ?, ?)",
+            ("example.com", 13, time.time() + 3600),
+        )
+
+    service.update_feeds(["https://example.com/other.xml"])
+    assert reader.updated == []
+
+
+def test_domain_backoff_does_not_block_first_fetch_of_new_feed(tmp_path: Path):
+    """A just-subscribed feed (never fetched) gets its initial refresh even while
+    the domain is in backoff earned by other feeds' failures — otherwise the new
+    subscription sits empty and invisible for hours (pinboard t:tag 500s put
+    feeds.pinboard.in in backoff, silently skipping a newly added feed)."""
+    db_path = tmp_path / "meta.sqlite"
+    new_url = "https://example.com/new.xml"
+    reader = _NewFeedReader(never_updated_urls={new_url})
+    service = _build_service(db_path, reader, [], [])
+
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at) VALUES (?, ?, ?)",
+            ("example.com", 13, time.time() + 3600),
+        )
+
+    service.update_feeds([new_url])
+    assert reader.updated == [new_url]
+
+
+def test_feed_level_backoff_still_applies_to_new_feed(tmp_path: Path):
+    """The new-feed exemption bypasses only the domain backoff; a feed-level
+    backoff on the feed itself is still honored."""
+    db_path = tmp_path / "meta.sqlite"
+    new_url = "https://example.com/new.xml"
+    reader = _NewFeedReader(never_updated_urls={new_url})
+    service = _build_service(db_path, reader, [], [])
+
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO feed_failure_state(feed_url, consecutive_failures, next_retry_at, last_error) VALUES (?, ?, ?, ?)",
+            (new_url, 2, time.time() + 3600, "boom"),
+        )
+
+    service.update_feeds([new_url])
+    assert reader.updated == []
