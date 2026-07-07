@@ -23,55 +23,49 @@ code-scanning: `py/stack-trace-exposure` (2), `py/url-redirection` (2),
 
 ## Later
 
-### Global audio player — persistent play-across-navigation (DONE)
+### Dev.to filtered-feed adapter (NEXT UP)
 
-**Shipped:** a single persistent `<audio>` + control bar in `templates/index.html`
-(outside the pane-swap target), owned by `static/media-player.js`. Podcast posts
-inject a `.podcast-player` Play trigger (`_apply_entry_media` in `main.py`) that
-loads the track (title + `/entries/media/audio` URL) into the global bar, so
-playback survives navigation. Controls: play/pause, seek scrubber, playback-speed
-cycle (persisted to `localStorage`), download, close. Client-side state only; no
-backend/schema changes. **Still deferred (v2):** queue/playlist across a folder,
-remember position per episode, Media Session API (lock-screen / hardware keys).
+**Problem:** `https://dev.to/feed` and tag feeds (subscribed: C++, C#, Python)
+are firehoses (~60-70 posts/day per tag) and include non-English posts. Dev.to's
+RSS offers no filtering, but its **public, unauthenticated** JSON API does.
 
-<details><summary>Original spec</summary>
+**Verified API facts (tested live 2026-07-08):**
+- `GET https://dev.to/api/articles` — each article has `language` (e.g. `"en"`),
+  `positive_reactions_count`, `comments_count`, `reading_time_minutes`,
+  `tag_list`, `cover_image`, `published_timestamp`, `url`, `description`.
+- `?tag=python&top=7` works (top posts of last N days for a tag, ranked by
+  reactions). `?state=rising` works. `?tags_exclude=a,b` documented.
+  `?language=en` is **ignored** — must filter client-side on the `language`
+  field. `per_page` up to at least 80.
 
-**Problem:** audio stops the moment you click another post. The entry view loads
-via pane-swaps (`/entries/pane`), so the `<audio>` element lives inside the
-swapped-out content and gets ripped out of the DOM on navigation — killing
-playback.
+**Design (agreed with user):**
+- No Settings/OAuth integration — a **feed adapter** like the DeviantArt feeds:
+  generate a local feed the `reader` library ingests. Study `services/deviantart*`
+  + the `deviantart-feeds` folder layout and `scraped_feeds` for the pattern
+  (local feed file + refresh hook + meta table).
+- Per-feed config: tag (optional = front page), `top` window (N days, optional),
+  English-only (filter on the API's own `language` label — the user explicitly
+  wants the *source's* classification, not our language detection), optionally a
+  min-reactions threshold and `tags_exclude`.
+- Add-feed UX: `rewrite_known_site_url()` in `services/feed_discovery.py` (built
+  for pinboard) handles pure URL rewrites, but dev.to needs *config* — a dialog
+  section or distinct flow may fit better. Keep it simple.
+- One polite API request per refresh (good-web-citizen rules apply). Existing
+  dev.to subs can be migrated manually.
 
-**Scope (confirmed with user):** audio only; a **persistent player bar with real
-controls** — now-playing title, play/pause, seek scrubber, playback speed — that
-survives navigation. Shows up at the top (or bottom) of the app.
+### Per-entry "Move to feed…" action
 
-**Approach:**
-- Host a **single persistent `<audio>` element + control bar** in
-  `templates/index.html`, *outside* the entry-pane swap target, hidden until
-  something plays. Because the element never leaves the DOM, playback continues
-  across pane swaps.
-- Entry-pane audio "play" controls become **triggers that load the track**
-  (title + URL) into the global player instead of rendering an inline `<audio>`
-  that gets swapped away. A new static JS module owns the player.
-- State stays **client-side** (current track, position, playback speed) in the JS
-  module. **No server/DB changes** for v1.
+Moving starred/tagged entries between feeds is all-or-nothing today (the
+unsubscribe-migration modal). Add a per-entry "Move to feed…" action (entry
+context menu) reusing that modal's star-archive/tag-carry machinery so individual
+saved posts can be cherry-picked to another feed — e.g. when swapping a firehose
+feed for a filtered variant.
 
-**Reuse (don't reinvent):**
-- Audio detection/handling already exists: standard `<enclosure>` plus Media RSS
-  `media:content` recovery via `services/podcast_audio.py`; current inline audio
-  rendering is in `templates/_entry_pane.html` (~L408, the audio-feed-suggestion
-  / player region). Reroute that play action into the global player.
-- Match the plain-HTML/JS, no-build-step frontend conventions; keyboard-first.
+### Global audio player — deferred v2 ideas
 
-**Files:** `templates/index.html` (persistent bar), `templates/_entry_pane.html`
-(reroute play → global player), a new static JS/CSS module. No backend/schema
-changes.
-
-**Defer (v2 ideas):** queue/playlist of audio across a folder, remember position
-per episode, Media Session API (lock-screen / hardware-key controls), speed
-presets.
-
-</details>
+Shipped in PR #111 (see git history). Still deferred: queue/playlist of audio
+across a folder, remember position per episode, Media Session API (lock-screen /
+hardware-key controls), speed presets.
 
 ### Uncategorized orphan-feed cleanup (script built — needs a live run)
 
