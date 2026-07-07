@@ -117,7 +117,10 @@ The short version:
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
-- **Feed management** — OPML, RSS/Atom auto-discovery, Page Feeds (turn a
+- **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
+  mappings for sites whose pages don't advertise their feeds — paste a
+  pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter
+  and the matching feeds.pinboard.in feed is found automatically), Page Feeds (turn a
   feedless page into a feed: click a link on a rendered preview of the page to
   derive a selector, pick from suggested CSS selectors, or type your own; preview
   the exact items before saving; and optionally backfill items already on the

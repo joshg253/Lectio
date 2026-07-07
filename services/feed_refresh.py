@@ -241,12 +241,23 @@ class FeedRefreshService:
                     # Also respect reader's built-in update_after, which captures
                     # Retry-After from 429/503 responses and Cache-Control max-age.
                     reader_update_after: float | None = None
+                    never_updated = False
                     try:
                         _feed_obj = reader.get_feed(feed_url, None)
                         if _feed_obj and _feed_obj.update_after:
                             reader_update_after = _feed_obj.update_after.timestamp()
+                        never_updated = bool(_feed_obj) and _feed_obj.last_updated is None
                     except Exception:
                         pass
+
+                    # A just-subscribed feed (never fetched) gets its first fetch even
+                    # while its domain is in backoff: the backoff was earned by *other*
+                    # feeds' failures, and skipping here leaves the new subscription
+                    # empty (invisible under the unread filter) for hours with no
+                    # explanation. One first request to a new URL is still polite;
+                    # feed-level backoff still applies once this feed itself fails.
+                    if never_updated:
+                        domain_next_retry = None
 
                     effective_next_retry = (
                         max(

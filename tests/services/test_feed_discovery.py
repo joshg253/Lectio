@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls
+from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls, rewrite_known_site_url
 
 
 class TestCtIsFeed:
@@ -179,3 +179,66 @@ class TestDiscoverFeedUrls:
             with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/blog")
         assert result == [feed_url]
+
+
+class TestPinboardRewrite:
+    """pinboard.in pages have no <link rel=alternate>; page URLs map directly
+    to feeds.pinboard.in feed URLs (same u:/t:/from: segment grammar)."""
+
+    def test_popular(self):
+        assert rewrite_known_site_url("https://pinboard.in/popular/") == \
+            "https://feeds.pinboard.in/rss/popular/"
+
+    def test_recent(self):
+        assert rewrite_known_site_url("https://pinboard.in/recent/") == \
+            "https://feeds.pinboard.in/rss/recent/"
+
+    def test_user(self):
+        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/") == \
+            "https://feeds.pinboard.in/rss/u:jsmith/"
+
+    def test_user_with_tags(self):
+        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/t:python/t:web/") == \
+            "https://feeds.pinboard.in/rss/u:jsmith/t:python/t:web/"
+
+    def test_tag_only(self):
+        assert rewrite_known_site_url("https://pinboard.in/t:linux/") == \
+            "https://feeds.pinboard.in/rss/t:linux/"
+
+    def test_user_from_source(self):
+        assert rewrite_known_site_url("https://pinboard.in/u:jsmith/from:twitter/") == \
+            "https://feeds.pinboard.in/rss/u:jsmith/from:twitter/"
+
+    def test_secret_private(self):
+        assert rewrite_known_site_url("https://pinboard.in/secret:abc123/u:jsmith/private/") == \
+            "https://feeds.pinboard.in/rss/secret:abc123/u:jsmith/private/"
+
+    def test_www_host(self):
+        assert rewrite_known_site_url("https://www.pinboard.in/popular/") == \
+            "https://feeds.pinboard.in/rss/popular/"
+
+    def test_explicit_port_and_case(self):
+        assert rewrite_known_site_url("https://Pinboard.in:443/popular/") == \
+            "https://feeds.pinboard.in/rss/popular/"
+
+    def test_missing_trailing_slash(self):
+        assert rewrite_known_site_url("https://pinboard.in/popular") == \
+            "https://feeds.pinboard.in/rss/popular/"
+
+    def test_non_feed_page_unchanged(self):
+        for url in (
+            "https://pinboard.in/",
+            "https://pinboard.in/search/?query=x",
+            "https://pinboard.in/settings/",
+            "https://pinboard.in/howto/",
+        ):
+            assert rewrite_known_site_url(url) == url
+
+    def test_other_host_unchanged(self):
+        assert rewrite_known_site_url("https://example.com/popular/") == \
+            "https://example.com/popular/"
+
+    def test_feeds_host_untouched(self):
+        # Pasting the feed URL itself must pass through unchanged.
+        url = "https://feeds.pinboard.in/rss/popular/"
+        assert rewrite_known_site_url(url) == url
