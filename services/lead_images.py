@@ -229,8 +229,13 @@ class LeadImageService:
         r"(?:\bbanner ad\b|\bad banner\b|\badvertisement\b)",
         re.IGNORECASE,
     )
+    # "profile" only counts as an avatar hint at a real segment boundary
+    # (/profile/, profile.jpg, profile_pic, -profile-), NOT embedded mid-slug in a
+    # multi-word title — DeviantArt art filenames like
+    # "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry "profile" as a
+    # title word (preceded by "_") and must not be mistaken for a headshot.
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?\b|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
+        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
         re.IGNORECASE,
     )
     # Code-forge avatar URLs are a single user segment + .png on the forge host

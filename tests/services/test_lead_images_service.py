@@ -1217,6 +1217,20 @@ def test_twitter_card_and_brand_logo_rejected(tmp_path: Path):
     )
 
 
+def test_avatar_hint_not_triggered_by_profile_in_artwork_title(tmp_path: Path):
+    # A DeviantArt piece titled "…Profile…" carries "profile" as a title word in
+    # its filename (preceded by "_"); it must not be mistaken for an author headshot.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    art = (
+        "/f/xx/dmdcn02.jpg/v1/fill/w_1280,h_854,q_75,strp/"
+        "collared_peccary_profile__enclosure__by_artist_dmdcn02-fullview.jpg"
+    )
+    assert service._AVATAR_HINT_PATTERNS.search(art) is None
+    # Real profile/avatar paths still flagged.
+    assert service._AVATAR_HINT_PATTERNS.search("/users/profile.jpg") is not None
+    assert service._AVATAR_HINT_PATTERNS.search("/user-profile-photo.png") is not None
+
+
 def test_inline_from_reader_falls_back_to_feed_content_image(tmp_path: Path):
     # ArtStation-style: the page is a JS SPA with no og:image, but the feed
     # embeds the image inline, so the chunk-backfill fallback should find it.
