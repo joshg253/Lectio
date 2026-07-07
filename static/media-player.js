@@ -32,7 +32,8 @@
   }
 
   function loadSpeed() {
-    var v = parseFloat(localStorage.getItem(SPEED_KEY));
+    var v = 1;
+    try { v = parseFloat(localStorage.getItem(SPEED_KEY)); } catch (e) {}
     return (v && SPEEDS.indexOf(v) !== -1) ? v : 1;
   }
 
@@ -61,6 +62,9 @@
   }
 
   function play(src, title, downloadUrl, returnUrl) {
+    src = safeMediaUrl(src);
+    downloadUrl = safeMediaUrl(downloadUrl);
+    if (!src) return;
     if (src !== currentSrc) {
       currentSrc = src;
       audio.src = src;
@@ -92,6 +96,17 @@
     }
   }
 
+  // Adopted URLs originate in feed content; only allow http(s) or same-origin
+  // relative URLs so e.g. a javascript: href can never reach audio.src/dlLink.
+  function safeMediaUrl(src) {
+    if (!src) return '';
+    try {
+      var u = new URL(src, location.href);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return src;
+    } catch (e) {}
+    return '';
+  }
+
   function mediaSrc(el) {
     var src = el.currentSrc || el.getAttribute('src') || '';
     if (!src) {
@@ -106,11 +121,13 @@
   // each with a Play trigger that routes into the global player, so playback is
   // unified and survives navigation.
   function adoptInlineAudio(root) {
-    var list = (root || document).querySelectorAll('audio:not(.gap-audio)');
+    root = root || document;
+    var list = Array.prototype.slice.call(root.querySelectorAll('audio:not(.gap-audio)'));
+    if (root.matches && root.matches('audio:not(.gap-audio)')) list.push(root);
     for (var i = 0; i < list.length; i++) {
       var el = list[i];
       if (el.getAttribute('data-gap-adopted')) continue;
-      var src = mediaSrc(el);
+      var src = safeMediaUrl(mediaSrc(el));
       if (!src) continue;
       el.setAttribute('data-gap-adopted', '1');
       try { el.pause(); } catch (e) {}
@@ -118,16 +135,33 @@
       var t = document.querySelector('.entry-pane-title-link, .entry-pane-title');
       if (t) title = (t.textContent || '').trim();
 
+      // Build with DOM APIs — src/title come from feed content, so they must
+      // never be interpolated into markup strings.
       var host = document.createElement('div');
       host.className = 'podcast-player';
       host.setAttribute('data-audio-src', src);
       host.setAttribute('data-audio-title', title || 'Audio');
       host.setAttribute('data-audio-download', src);
-      host.innerHTML =
-        '<button type="button" class="podcast-play-trigger" aria-label="Play audio in player">' +
-        '<span class="podcast-play-trigger-icon" aria-hidden="true">▶</span>' +
-        '<span class="podcast-play-trigger-label">Play audio</span></button>' +
-        '<a class="podcast-download-link" href="' + src.replace(/"/g, '%22') + '" download>Download</a>';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'podcast-play-trigger';
+      btn.setAttribute('aria-label', 'Play audio in player');
+      var icon = document.createElement('span');
+      icon.className = 'podcast-play-trigger-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = '▶';
+      var label = document.createElement('span');
+      label.className = 'podcast-play-trigger-label';
+      label.textContent = 'Play audio';
+      btn.appendChild(icon);
+      btn.appendChild(label);
+      var dl = document.createElement('a');
+      dl.className = 'podcast-download-link';
+      dl.href = src;
+      dl.setAttribute('download', '');
+      dl.textContent = 'Download';
+      host.appendChild(btn);
+      host.appendChild(dl);
       if (el.parentNode) {
         el.parentNode.replaceChild(host, el);
       }
@@ -224,9 +258,9 @@
     var host = document.querySelector('.panes') || document.body;
     new MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {
-        if (mutations[i].addedNodes && mutations[i].addedNodes.length) {
-          adoptInlineAudio(document);
-          return;
+        var added = mutations[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          if (added[j].nodeType === 1) adoptInlineAudio(added[j]);
         }
       }
     }).observe(host, { childList: true, subtree: true });

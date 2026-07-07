@@ -165,8 +165,12 @@ def test_audio_enclosure_injects_player(env):
     d = _detail()
     # v1 global player: the entry injects a trigger that loads the track into the
     # persistent player bar, not an inline <audio> that would be lost on pane-swap.
+    assert "<audio" not in d["content_html"]
     assert "podcast-play-trigger" in d["content_html"]
+    assert 'aria-label="Play audio in player"' in d["content_html"]
     assert 'data-audio-src="/entries/media/audio' in d["content_html"]
+    assert 'data-audio-download="/entries/media/download' in d["content_html"]
+    assert "podcast-download-link" in d["content_html"]
 
 
 def test_pdf_enclosure_listed_as_attachment(env):

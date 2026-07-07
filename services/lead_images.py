@@ -2248,8 +2248,9 @@ class LeadImageService:
                 return False
             return True
         # Reject URLs carrying an unresolved client-side template placeholder —
-        # ${...} (JS template literal), {{...}} (mustache/Angular/Vue), or a bare
-        # {token}. Some pages (e.g. c-sharpcorner) ship an inline <img> template
+        # ${...} (JS template literal) or {{...}} (mustache/Angular/Vue); bare
+        # {token} is deliberately not matched (single braces appear in some real
+        # URLs). Some pages (e.g. c-sharpcorner) ship an inline <img> template
         # like src="${challenge.MinorCategoryImage}" that the body scanner would
         # otherwise scrape, yielding a URL the browser can't load (→ thumb flicker).
         if self._TEMPLATE_PLACEHOLDER_RE.search(image_url):
