@@ -1156,7 +1156,7 @@
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" checked /> Move it to another feed:</label>
         <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
         <datalist id="unsub-migrate-candidates"></datalist>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" value="skip" /> Don't move — just unsubscribe (stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" value="skip" />Just unsubscribe (stars are archived; tags are lost)</label>
       </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>
@@ -13986,6 +13986,26 @@
       // e = email (not yet implemented — placeholder)
     });
   </script>
+
+  <!-- Persistent global audio player. Lives outside the entry-pane swap target
+       so playback survives navigation. Hidden until a track is loaded. -->
+  <div id="global-audio-player" class="global-audio-player" hidden>
+    <audio class="gap-audio" preload="metadata"></audio>
+    <button type="button" class="gap-play" aria-label="Play">▶</button>
+    <div class="gap-main">
+      <div class="gap-title" title=""></div>
+      <div class="gap-scrub">
+        <span class="gap-cur">0:00</span>
+        <input type="range" class="gap-seek" min="0" max="0" step="1" value="0"
+               aria-label="Seek" />
+        <span class="gap-dur">0:00</span>
+      </div>
+    </div>
+    <button type="button" class="gap-speed" aria-label="Playback speed">1×</button>
+    <a class="gap-download" href="#" download aria-label="Download audio" hidden>⇩</a>
+    <button type="button" class="gap-close" aria-label="Close player">✕</button>
+  </div>
+  <script src="/static/media-player.js?v={{ static_asset_version }}"></script>
 
 </body>
 </html>

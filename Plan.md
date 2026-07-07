@@ -23,7 +23,18 @@ code-scanning: `py/stack-trace-exposure` (2), `py/url-redirection` (2),
 
 ## Later
 
-### Global audio player — persistent play-across-navigation (NEXT UP)
+### Global audio player — persistent play-across-navigation (DONE)
+
+**Shipped:** a single persistent `<audio>` + control bar in `templates/index.html`
+(outside the pane-swap target), owned by `static/media-player.js`. Podcast posts
+inject a `.podcast-player` Play trigger (`_apply_entry_media` in `main.py`) that
+loads the track (title + `/entries/media/audio` URL) into the global bar, so
+playback survives navigation. Controls: play/pause, seek scrubber, playback-speed
+cycle (persisted to `localStorage`), download, close. Client-side state only; no
+backend/schema changes. **Still deferred (v2):** queue/playlist across a folder,
+remember position per episode, Media Session API (lock-screen / hardware keys).
+
+<details><summary>Original spec</summary>
 
 **Problem:** audio stops the moment you click another post. The entry view loads
 via pane-swaps (`/entries/pane`), so the `<audio>` element lives inside the
@@ -59,6 +70,8 @@ changes.
 **Defer (v2 ideas):** queue/playlist of audio across a folder, remember position
 per episode, Media Session API (lock-screen / hardware-key controls), speed
 presets.
+
+</details>
 
 ### Uncategorized orphan-feed cleanup (script built — needs a live run)
 

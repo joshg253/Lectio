@@ -48,8 +48,16 @@ The short version:
   Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
   that filters the current selection (folder/feed + read state) by tag, and a
   tag chip in an article's header opens that tag scoped to the article's own feed.
+- **Persistent audio player** — podcast/audio posts show a **Play** button that
+  loads the track into a global player bar pinned to the bottom of the app
+  (now-playing title, play/pause, seek scrubber, playback speed). Because the
+  player lives outside the article view, playback keeps going as you move between
+  posts instead of stopping the moment you navigate away. Any audio a feed embeds
+  in its own post body is pulled into the same bar (so you never get two streams at
+  once), and clicking the now-playing title jumps back to the post it came from
+  without interrupting playback.
 - **Rich content** — embeds that actually render (curated trusted-host allowlist),
-  inline podcast players (incl. audio borrowed from a separate host feed), file
+  podcast audio (incl. audio borrowed from a separate host feed), file
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
   article lost its player (the feed stripped the `<iframe>` before Lectio kept
   them), the missing YouTube/Bandcamp/SoundCloud embed is recovered from the

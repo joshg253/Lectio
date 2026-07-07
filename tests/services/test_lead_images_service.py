@@ -1179,6 +1179,75 @@ def test_source_image_ignores_related_posts_section(tmp_path: Path):
     assert url is None
 
 
+def test_source_image_ignores_recommended_videos_widget(tmp_path: Path):
+    # c-sharpcorner posts with no image of their own render a "Recommended Videos"
+    # widget whose thumbnails belong to OTHER articles — never borrow one.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = (
+        "<main></main>"
+        '<div class="videos-section"><ul class="videoList"><li>'
+        '<img width="320" height="180" '
+        'src="https://www.c-sharpcorner.com/article/other/Media/mqdefault.jpg">'
+        "</li></ul></div>"
+    )
+
+    url = service._extract_preferred_source_image_url(
+        html,
+        "https://www.c-sharpcorner.com/article/post/",
+        "https://www.c-sharpcorner.com/article/post/",
+    )
+
+    assert url is None
+
+
+def test_twitter_card_and_brand_logo_rejected(tmp_path: Path):
+    # Generic share-card / site-wordmark og:image files must not become lead images.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://www.c-sharpcorner.com/UploadFile/TwitterCard/twitter_card_logo.png",
+        None,
+        None,
+    )
+    assert not service._is_image_url_acceptable(
+        "https://www.c-sharpcorner.com/images/csharp-corner-new.png", None, None
+    )
+    # A real per-article image on the same host stays acceptable.
+    assert service._is_image_url_acceptable(
+        "https://www.c-sharpcorner.com/article/post/Media/hero.jpg", 800, 450
+    )
+
+
+def test_template_placeholder_url_rejected(tmp_path: Path):
+    # An inline JS/mustache <img> template scraped from a source page yields a URL
+    # with an unresolved placeholder the browser can't load (→ thumb flicker).
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert not service._is_image_url_acceptable(
+        "https://www.c-sharpcorner.com/article/foo/${challenge.MinorCategoryImage}",
+        None,
+        None,
+    )
+    assert not service._is_image_url_acceptable(
+        "https://example.com/img/{{thumbnail}}.jpg", None, None
+    )
+    assert service._is_image_url_acceptable(
+        "https://example.com/article/hero.jpg", 800, 450
+    )
+
+
+def test_avatar_hint_not_triggered_by_profile_in_artwork_title(tmp_path: Path):
+    # A DeviantArt piece titled "…Profile…" carries "profile" as a title word in
+    # its filename (preceded by "_"); it must not be mistaken for an author headshot.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    art = (
+        "/f/xx/dmdcn02.jpg/v1/fill/w_1280,h_854,q_75,strp/"
+        "collared_peccary_profile__enclosure__by_artist_dmdcn02-fullview.jpg"
+    )
+    assert service._AVATAR_HINT_PATTERNS.search(art) is None
+    # Real profile/avatar paths still flagged.
+    assert service._AVATAR_HINT_PATTERNS.search("/users/profile.jpg") is not None
+    assert service._AVATAR_HINT_PATTERNS.search("/user-profile-photo.png") is not None
+
+
 def test_inline_from_reader_falls_back_to_feed_content_image(tmp_path: Path):
     # ArtStation-style: the page is a JS SPA with no og:image, but the feed
     # embeds the image inline, so the chunk-backfill fallback should find it.

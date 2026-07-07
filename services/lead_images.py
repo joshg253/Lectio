@@ -119,6 +119,10 @@ class LeadImageService:
     # (e.g. p_1x1a.jpg, blank-2x2.gif). The lookahead is lenient to handle
     # names like "1x1a" where a letter follows the dimension.
     _TINY_DIM_RE = re.compile(r"(?:^|[/_.-])([0-9]{1,2})x([0-9]{1,2})(?:[/_.\-a-z]|$)", re.IGNORECASE)
+    # Unresolved client-side template placeholder in a scraped <img src> —
+    # ${...} (JS template literal) or {{...}} (mustache/Angular/Vue). Such a URL
+    # is a template stub, never a real image.
+    _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\$\{[^}]*\}|\{\{[^}]*\}\}")
     # CMS theme/plugin directories and known CMS admin resource CDNs are never
     # article images — always site-level assets. Checked even when skip_logo_patterns=True.
     # Path patterns checked against parsed.path; domain patterns against parsed.netloc.
@@ -143,7 +147,14 @@ class LeadImageService:
         # to on a post with no real featured image (e.g. a WP preview entry). Keep
         # the "-small" suffix so per-episode artwork like "E_293_Podcast_Title.jpg"
         # (Real Python) is NOT rejected.
-        r"|podcast[-_]title[-_]small",
+        r"|podcast[-_]title[-_]small"
+        # "/TwitterCard/…" — publisher's generic Twitter/OG share-card graphic
+        # (e.g. c-sharpcorner's UploadFile/TwitterCard/twitter_card_logo.png), a
+        # site-brand logo served as og:image/twitter:image on image-less posts.
+        r"|twitter[-_]?card"
+        # "csharp-corner-new" — c-sharpcorner's brand wordmark at /images/, shipped
+        # as og:image on posts that have no featured image of their own.
+        r"|csharp[-_]corner[-_]new",
         re.IGNORECASE,
     )
     # Domains that serve only CMS admin/template assets (never user content images).
@@ -222,8 +233,13 @@ class LeadImageService:
         r"(?:\bbanner ad\b|\bad banner\b|\badvertisement\b)",
         re.IGNORECASE,
     )
+    # "profile" only counts as an avatar hint at a real segment boundary
+    # (/profile/, profile.jpg, profile_pic, -profile-), NOT embedded mid-slug in a
+    # multi-word title — DeviantArt art filenames like
+    # "collared_peccary_profile__enclosure__by_…-fullview.jpg" carry "profile" as a
+    # title word (preceded by "_") and must not be mistaken for a headshot.
     _AVATAR_HINT_PATTERNS = re.compile(
-        r"(?:avatar|author(?:-image)?\b|byline|profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
+        r"(?:avatar|author(?:-image)?\b|byline|(?<![a-zA-Z0-9_])profile|headshot|user(?:-image|pic)?|gravatar|(?<![a-zA-Z0-9])round(?![a-zA-Z0-9]))",
         re.IGNORECASE,
     )
     # Code-forge avatar URLs are a single user segment + .png on the forge host
@@ -255,6 +271,11 @@ class LeadImageService:
         r'<(div|section|aside|nav|ul)\b[^>]*\bclass=["\'][^"\']*'
         r'(?:related[-_]content|related[-_]posts|recent[-_]posts|more[-_]posts|'
         r'you[-_]might|you[-_]may|see[-_]also|read[-_]next|post[-_]nav|'
+        # c-sharpcorner renders a "Recommended Videos" widget (class
+        # "videos-section" wrapping a "videoList" <ul>) whose thumbnails are
+        # OTHER articles' video stills. With no real og:image on the page these
+        # would otherwise win the body scan and show a sibling post's image.
+        r'videos?[-_]section|recommended[-_]?videos|'
         # WordPress "Megaphone" podcast theme (e.g. se-radio.net): the
         # recent/related-episode widget is `megaphone-items megaphone-posts`,
         # whose thumbnails belong to OTHER episodes. The article's own featured
@@ -2226,6 +2247,14 @@ class LeadImageService:
             if self._SVG_ICON_CLASS_RE.search(_decoded):
                 return False
             return True
+        # Reject URLs carrying an unresolved client-side template placeholder —
+        # ${...} (JS template literal) or {{...}} (mustache/Angular/Vue); bare
+        # {token} is deliberately not matched (single braces appear in some real
+        # URLs). Some pages (e.g. c-sharpcorner) ship an inline <img> template
+        # like src="${challenge.MinorCategoryImage}" that the body scanner would
+        # otherwise scrape, yielding a URL the browser can't load (→ thumb flicker).
+        if self._TEMPLATE_PLACEHOLDER_RE.search(image_url):
+            return False
         parsed = urlparse(image_url)
         if parsed.scheme not in {"http", "https"}:
             return False
