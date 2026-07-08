@@ -397,10 +397,17 @@ def update_devto_feed_config(conn: sqlite3.Connection, reader, feed_id: str, con
     row = conn.execute("SELECT * FROM devto_feeds WHERE id = ?", (feed_id,)).fetchone()
     if not row:
         raise ValueError(f"unknown devto feed {feed_id}")
+    # Regenerate the auto title so it reflects the new filters (e.g. the
+    # "top 7d, ≥10 reactions" suffix). Only when the stored title is still the
+    # auto-generated one for the OLD config — a hand-picked title is kept.
+    # (Display-name overrides live in reader's user_title and are unaffected.)
+    feed_title = str(row["feed_title"])
+    if feed_title == default_title(_config_from_row(row)):
+        feed_title = default_title(config)
     conn.execute(
-        "UPDATE devto_feeds SET tag = ?, top_days = ?, english_only = ?,"
+        "UPDATE devto_feeds SET feed_title = ?, tag = ?, top_days = ?, english_only = ?,"
         " min_reactions = ?, tags_exclude = ? WHERE id = ?",
-        ((config.get("tag") or "").strip().lower() or None, config.get("top_days"),
+        (feed_title, (config.get("tag") or "").strip().lower() or None, config.get("top_days"),
          1 if config.get("english_only") else 0, config.get("min_reactions"),
          (config.get("tags_exclude") or "").strip() or None, feed_id),
     )
