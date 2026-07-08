@@ -105,10 +105,14 @@ Two reader-view issues to investigate:
 - Some image feeds render a tiny lead image (e.g. noirlab.edu images feed,
   entry IMG_4611-CC): likely the feed offers a small thumb and the strategy
   never upgrades to the full-size `content.src` / og:image.
-- Navigating between (image-heavy?) articles sometimes triggers a full app
-  refresh instead of the in-place pane swap — reproducible on noirlab and
-  DeviantArt feeds. Suspect the pane-swap fetch failing (timeout? large
-  payload?) and falling back to a hard navigation.
+- Article-nav full refresh: MITIGATED 2026-07-08 — the pane-swap catch-all
+  was hard-reloading on any exception in the post-swap binder pipeline even
+  though the pane had already rendered (server logs showed /entries/pane
+  never fails). The fallback now only fires when the pane truly failed to
+  load; post-swap errors are console.error'd instead. FOLLOW-UP: the
+  underlying entry-specific binder exception still exists — when it recurs,
+  grab the '[lectio] entry-pane post-swap enhancement failed' console error
+  to identify and fix the actual binder.
 
 ### Dev.to feed migration (manual, after adapter deploy)
 
