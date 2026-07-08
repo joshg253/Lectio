@@ -285,11 +285,10 @@ def _deviation_to_entry(d: dict) -> dict | None:
         parts.append(f'<p>by {_esc(author)} on DeviantArt</p>')
     # DA browse/gallery responses don't include deviation tags (those need
     # /deviation/metadata calls); carry them through if a caller supplies them.
-    raw_tags = d.get("tags") or []
     tags = [
-        str(t.get("tag_name") if isinstance(t, dict) else t)
-        for t in raw_tags
-        if (t.get("tag_name") if isinstance(t, dict) else t)
+        str(name)
+        for t in (d.get("tags") or [])
+        if (name := t.get("tag_name") if isinstance(t, dict) else t)
     ]
     return {
         "id": str(devid),
