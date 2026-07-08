@@ -10,7 +10,7 @@ this file only tracks what's still open.
 Full code-scanning triage completed (fix/codeql-triage branch):
 - **4 `py/lectio/full-ssrf` — fixed in code.** Webhooks + probe_frameability now
   route through the modeled `ensure_safe_outbound_url` barrier (they were guarded,
-  but via the boolean `is_safe_outbound_url` form the query can't see); the
+  but via the boolean `is_safe_outbound_url` form that the query can't see); the
   feed-properties title refetch and YouTube channelId page fetch were genuinely
   unguarded and now use `url_guard.safe_get` (per-hop redirect revalidation).
 - **1 real open redirect fixed** — `GET /login?next=` already-logged-in shortcut
