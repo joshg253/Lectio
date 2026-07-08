@@ -112,12 +112,26 @@ def test_tags_normalized_both_sides(env):
     assert "e-win" not in _unread_ids()
 
 
-def test_dry_run_marks_nothing(env):
+def test_dry_run_marks_nothing_and_returns_preview_shape(env):
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "-deals", apply=False)
-    assert result["count"] == 2
-    assert {e["entry_id"] for e in result["entries"]} == {"e-deal", "e-mixed"}
+    # Dry-run returns the Test-panel shape: matches/total_scanned/total_matches.
+    assert result["total_matches"] == 2
+    assert result["total_scanned"] == 5
+    assert {e["entry_id"] for e in result["matches"]} == {"e-deal", "e-mixed"}
+    assert all("read" in e and "published" in e for e in result["matches"])
     assert len(_unread_ids()) == 5  # nothing marked
+
+
+def test_dry_run_includes_read_entries(env):
+    reader = main.get_reader()
+    reader.mark_entry_as_read((FEED, "e-deal"))
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "-deals", apply=False)
+    # The already-read e-deal still shows in the preview, flagged read.
+    assert result["total_matches"] == 2
+    flags = {e["entry_id"]: e["read"] for e in result["matches"]}
+    assert flags == {"e-deal": True, "e-mixed": False}
 
 
 def test_empty_lists_error(env):

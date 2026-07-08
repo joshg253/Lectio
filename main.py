@@ -5228,8 +5228,14 @@ def _run_tag_filter(
     their feed-provided tags (entry_feed_tags) hit the exclude list, or when
     an include list is set and the entry is tagged but matches none of it.
     Untagged entries are always kept — a feed that stops tagging must not
-    have its whole firehose suppressed."""
+    have its whole firehose suppressed.
+
+    ``apply=False`` previews like _dry_run_pattern — read + unread entries,
+    newest first — and returns the dry-run shape the Test panel renders
+    (matches / total_scanned / total_matches / truncated)."""
     global _unread_counts_generation
+    _DRY_MAX_ENTRIES = 1000
+    _DRY_RESULT_LIMIT = 20
 
     include, exclude = parse_tag_filter_spec(spec)
     if not include and not exclude:
@@ -5266,14 +5272,30 @@ def _run_tag_filter(
                 feed_tag_cache[feed_url] = per_feed
             return per_feed.get(entry_id, set())
 
-        def iter_unread():
+        def iter_entries():
+            # Apply acts on unread only; dry-run previews read + unread so the
+            # Test panel is useful even after the rule has already run.
+            read_arg = False if apply else None
             if feed_urls is None:
-                yield from reader.get_entries(read=False)
+                yield from reader.get_entries(read=read_arg)
             else:
                 for furl in feed_urls:
-                    yield from reader.get_entries(feed=furl, read=False)
+                    yield from reader.get_entries(feed=furl, read=read_arg)
 
-        for entry in iter_unread():
+        def feed_title(fu: str) -> str:
+            if fu not in feed_title_cache:
+                try:
+                    f = reader.get_feed(fu)
+                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                except Exception:
+                    feed_title_cache[fu] = fu
+            return feed_title_cache[fu]
+
+        total_scanned = 0
+        for entry in iter_entries():
+            if not apply and total_scanned >= _DRY_MAX_ENTRIES:
+                break
+            total_scanned += 1
             fu = str(entry.feed_url or "")
             eid = str(entry.id)
             tags = entry_tags(fu, eid)
@@ -5283,19 +5305,24 @@ def _run_tag_filter(
             if not suppress:
                 continue
             to_mark.append((fu, eid))
-            if len(matched_entries) < _ENTRY_DETAIL_CAP:
-                if fu not in feed_title_cache:
-                    try:
-                        f = reader.get_feed(fu)
-                        feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
-                    except Exception:
-                        feed_title_cache[fu] = fu
+            if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
                 matched_entries.append({
                     "feed_url": fu,
                     "entry_id": eid,
                     "title": str(entry.title or ""),
                     "link": str(entry.link or ""),
-                    "feed_title": feed_title_cache.get(fu, fu),
+                    "feed_title": feed_title(fu),
+                })
+            elif not apply and len(matched_entries) < _DRY_RESULT_LIMIT:
+                published = entry_effective_date(entry)
+                matched_entries.append({
+                    "feed_url": fu,
+                    "entry_id": eid,
+                    "title": str(entry.title or ""),
+                    "link": str(entry.link or ""),
+                    "feed_title": feed_title(fu),
+                    "published": published.isoformat() if published else None,
+                    "read": bool(entry.read),
                 })
 
         if apply:
@@ -5311,6 +5338,14 @@ def _run_tag_filter(
         )
         _unread_counts_generation += 1
 
+    if not apply:
+        return {
+            "matches": matched_entries,
+            "total_scanned": total_scanned,
+            "total_matches": len(to_mark),
+            "truncated": len(to_mark) > _DRY_RESULT_LIMIT,
+            "count": len(to_mark),
+        }
     return {"count": len(to_mark), "entries": matched_entries}
 
 
