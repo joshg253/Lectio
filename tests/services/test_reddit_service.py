@@ -38,6 +38,12 @@ def test_redditor_from_feed_url(url, expected):
     ("https://www.reddit.com/r/buildapcsales/.rss", True),
     ("https://example.com/feed", False),
     ("https://news.ycombinator.com/rss", False),
+    ("https://reddit.com.evil.com/r/x/.rss", False),
+    ("https://evil.com/feed?ref=reddit.com", False),
+    ("https://reddit.com./r/x/.rss", True),          # trailing-dot host
+    ("https://OLD.REDDIT.COM/r/x/.rss", True),       # case-insensitive host
+    ("not a url", False),                            # malformed
+    ("http:///r/x/.rss", False),                     # empty host
 ])
 def test_is_reddit_feed_url(url, is_reddit):
     assert svc.is_reddit_feed_url(url) == is_reddit

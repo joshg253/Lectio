@@ -5,20 +5,27 @@ this file only tracks what's still open.
 
 ## Now
 
-### CodeQL — custom guard-aware query still flags SSRF sinks
+### CodeQL — triage DONE 2026-07-07 (verify alerts auto-close after merge)
 
-The advanced setup is **live and green on every push** (`.github/workflows/codeql.yml`
-→ `.github/codeql/codeql-config.yml` → custom query pack in `.github/codeql/queries/`
-with guard-aware `py/lectio/full-ssrf` / `py/lectio/path-injection`, `query-filters`
-dropping the stock `py/full-ssrf` / `py/path-injection`). The `.ql` compile green
-and `py/path-injection` is cleanly suppressed.
+Full code-scanning triage completed (fix/codeql-triage branch):
+- **4 `py/lectio/full-ssrf` — fixed in code.** Webhooks + probe_frameability now
+  route through the modeled `ensure_safe_outbound_url` barrier (they were guarded,
+  but via the boolean `is_safe_outbound_url` form that the query can't see); the
+  feed-properties title refetch and YouTube channelId page fetch were genuinely
+  unguarded and now use `url_guard.safe_get` (per-hop redirect revalidation).
+- **1 real open redirect fixed** — `GET /login?next=` already-logged-in shortcut
+  redirected to raw `next`; now sanitized via `_safe_next` like the POST path.
+- **Host substring checks hardened** — `is_reddit_feed_url` and the YouTube
+  URL helpers (`_is_youtube_host`) now do exact host suffix matching.
+- **`actions/missing-workflow-permissions`** — ci.yml given `contents: read`.
+- **Dismissed as false positive with per-alert comments:** all
+  `py/stack-trace-exposure` (str(exc) messages in JSON errors — no traceback,
+  deliberate operator UX), all remaining `py/url-redirection` (fixed local
+  `/?...` paths with int-typed ids + quote_plus params, or `_safe_next`-guarded),
+  test-only + strategy-dispatch `py/incomplete-url-substring-sanitization`.
 
-**Remaining:** the guard-aware `py/lectio/full-ssrf` query still reports **4 open
-alerts** — the `safe_get`/`safe_head`/`safe_get_async` + `ensure_safe_outbound_url`
-barriers don't cover those 4 sinks. Triage them: either extend the barrier to the
-real guard path, or confirm they're genuinely unguarded and fix. Also open in
-code-scanning: `py/stack-trace-exposure` (2), `py/url-redirection` (2),
-`py/incomplete-url-substring-sanitization` (1) — review/triage.
+**Remaining:** after the branch merges to main, confirm the next CodeQL analysis
+auto-closes the code-fixed alerts (141-144, 120, 54/55/57, 8, 1).
 
 
 ## Later
