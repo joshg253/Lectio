@@ -11762,6 +11762,7 @@ def feed_curation_items(reader, conn: sqlite3.Connection, feed_url: str) -> list
             if not tags and not starred:
                 continue
             items.append({
+                "id": e.id,
                 "title": e.title or e.link or e.id,
                 "link": e.link or "",
                 "starred": starred,

@@ -137,7 +137,9 @@ The short version:
   stars onto the surviving feed, so no curation is lost). **Curation is never
   dropped on unsubscribe:** removing a feed that has starred/tagged items offers
   to move that curation onto another feed first (with a **View items** toggle that
-  lists exactly which starred/tagged entries are at stake), and **Settings → Feeds** lets you
+  lists exactly which starred/tagged entries are at stake — each with a checkbox,
+  so a subset can be cherry-picked to a different feed via **Move selected to
+  feed…** before confirming), and **Settings → Feeds** lets you
   multi-select several feeds and **Combine** them into one survivor (migrating
   their stars, tags, and optionally unread state, then unsubscribing the rest).
   Individual posts can also be cherry-picked: the entry context menu's

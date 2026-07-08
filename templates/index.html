@@ -6396,6 +6396,14 @@
             ul.className = 'unsub-migrate-item-list';
             list.forEach(it => {
               const li = document.createElement('li');
+              // Checkbox so individual items can be cherry-picked to another
+              // feed before the unsubscribe (feeds the Move selected button).
+              const cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.className = 'unsub-migrate-item-check';
+              cb.value = it.id || '';
+              li.appendChild(cb);
+              li.appendChild(document.createTextNode(' '));
               const star = it.starred ? '★ ' : '';
               const a = document.createElement('a');
               a.href = it.link || '#'; a.target = '_blank'; a.rel = 'noopener noreferrer';
@@ -6410,6 +6418,40 @@
               ul.appendChild(li);
             });
             itemsEl.appendChild(ul);
+            const moveSelBtn = document.createElement('button');
+            moveSelBtn.type = 'button';
+            moveSelBtn.className = 'feed-prop-inline-btn';
+            moveSelBtn.textContent = 'Move selected to feed…';
+            moveSelBtn.addEventListener('click', () => {
+              const picked = Array.from(itemsEl.querySelectorAll('.unsub-migrate-item-check:checked'))
+                .map(c => ({ feedUrl, entryId: c.value }))
+                .filter(e => e.entryId);
+              if (!picked.length) { showToastMessage('Select items to move first.'); return; }
+              openMoveToFeedModal(
+                picked,
+                `Move ${picked.length} selected item${picked.length === 1 ? '' : 's'} to another feed before unsubscribing.`,
+                async () => {
+                  // Reload the items list and the counts note so the dialog
+                  // reflects what curation is still at stake.
+                  itemsEl._loaded = false;
+                  itemsEl.hidden = true;
+                  if (viewBtn) viewBtn.textContent = 'View items';
+                  try {
+                    const rc = await fetch('/feeds/curation-count?feed_url=' + encodeURIComponent(feedUrl), { credentials: 'same-origin' });
+                    const dc = await rc.json();
+                    const parts = [];
+                    if (dc.stars) parts.push(`${dc.stars} starred`);
+                    if (dc.tagged) parts.push(`${dc.tagged} tagged`);
+                    if (parts.length) {
+                      noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}. Move them onto another feed so they aren't lost?`;
+                    } else {
+                      curationEl.hidden = true;
+                    }
+                  } catch (_) { /* stale note is harmless */ }
+                }
+              );
+            });
+            itemsEl.appendChild(moveSelBtn);
             itemsEl._loaded = true;
           } catch (_) {
             itemsEl.textContent = 'Could not load items.';
@@ -8363,7 +8405,7 @@
     // Shared driver for the move-to-feed modal. `entries` is a list of
     // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
     // batch endpoint. `bodyText` describes what's being moved.
-    async function openMoveToFeedModal(entries, bodyText) {
+    async function openMoveToFeedModal(entries, bodyText, onDone) {
       if (!entries.length) return;
       const modal = document.getElementById('move-entry-modal');
       const bodyEl = document.getElementById('move-entry-body');
@@ -8422,6 +8464,7 @@
             showToastMessage(data.message || 'Moved.');
             // Reload the list panes so star/tag badges and read state reflect the move.
             loadScopePanesWithoutFullRefresh(window.location.href, false);
+            onDone?.(data);
           } else {
             showToastMessage(data.error || 'Move failed.');
             confirmBtn.disabled = false;
