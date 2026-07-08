@@ -6794,6 +6794,7 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
     except Exception:
+        LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
     return tags[:MAX_FEED_TAG_SUGGESTIONS]
 

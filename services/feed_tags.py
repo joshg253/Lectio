@@ -96,9 +96,11 @@ class FeedTagService:
 
     def get_tags_for_entry(self, feed_url: str, entry_id: str) -> list[str]:
         with self._get_meta_connection() as conn:
+            # rowid order = insertion order = the feed's own tag order
+            # (replace-per-entry rewrites all of an entry's rows together).
             rows = conn.execute(
                 "SELECT tag FROM entry_feed_tags"
-                " WHERE feed_url = ? AND entry_id = ? ORDER BY tag",
+                " WHERE feed_url = ? AND entry_id = ? ORDER BY rowid",
                 (feed_url, entry_id),
             ).fetchall()
         return [row[0] for row in rows]
