@@ -8400,7 +8400,6 @@
         labelToUrl.set(uniq, c.url);
         const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
       });
-      targetSel._labelToUrl = labelToUrl;
       targetSel.oninput = () => { confirmBtn.disabled = !labelToUrl.has(targetSel.value); };
 
       confirmBtn.onclick = async () => {

@@ -11849,16 +11849,18 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         result["error"] = "Entry is already in that feed."
         return result
 
-    # Resolve the entry inside the target feed: GUID, else normalized link.
+    # Resolve the entry inside the target feed: GUID (direct lookup, no feed
+    # scan), else normalized link.
     target_id = None
-    src_link_norm = normalize_entry_link_for_dedupe(src.link)
-    for e in reader.get_entries(feed=target_url):
-        if e.id == entry_id:
-            target_id = e.id
-            break
-        if src_link_norm and normalize_entry_link_for_dedupe(e.link) == src_link_norm:
-            target_id = e.id
-            break
+    if reader.get_entry((target_url, entry_id), None) is not None:
+        target_id = entry_id
+    else:
+        src_link_norm = normalize_entry_link_for_dedupe(src.link)
+        if src_link_norm:
+            for e in reader.get_entries(feed=target_url):
+                if normalize_entry_link_for_dedupe(e.link) == src_link_norm:
+                    target_id = e.id
+                    break
     if target_id is None:
         ed: dict = {
             "feed_url": target_url,
@@ -11898,6 +11900,9 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         (feed_url, entry_id),
     ).fetchone()
     if row:
+        # OR IGNORE: if the target copy is already starred, its own saved_at
+        # wins — the outcome (starred at target, unstarred at source) is the
+        # same either way, which is what result["star"] reports.
         conn.execute(
             "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
             (target_url, target_id, row["saved_at"]),
