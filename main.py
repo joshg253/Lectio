@@ -5441,13 +5441,15 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     return len(all_to_suppress)
 
 
-def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> None:
+def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     """Auto-mark Shorts as read for YouTube feeds that have hide-shorts enabled
     (per-feed pref, or every refreshed YouTube feed when the global toggle is on).
 
     Called from _run_automation_after_refresh right after entries land (link/hashtag
     signals) and again after duration enhancement so ≤60s videos without a #shorts
-    tag are also caught."""
+    tag are also caught. Returns the number of entries marked read."""
+    if not any("youtube.com" in u for u in refreshed_feed_urls):
+        return 0
     try:
         with get_meta_connection() as conn:
             shorts_urls = {
@@ -5462,9 +5464,10 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> None:
                 u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
             }
         if shorts_targets:
-            _mark_existing_shorts_read(shorts_targets)
+            return _mark_existing_shorts_read(shorts_targets)
     except Exception:
         LOGGER.exception("[automation] error applying hide-shorts")
+    return 0
 
 
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
@@ -12581,10 +12584,11 @@ def _scheduled_refresh_tick() -> None:
         websub_service.maybe_discover_hubs(list(feeds_to_refresh), tenancy.current_user_id())
     # Enhancement still runs in this scheduler thread (same total work as before),
     # just after the fast automation pass. A second hide-shorts pass afterward
-    # catches ≤60s videos that only the freshly-fetched durations can identify.
+    # catches ≤60s videos that only the freshly-fetched durations can identify;
+    # invalidate again only if it actually marked something.
     _enhance_feeds_background(list(feeds_to_refresh))
-    _apply_hide_shorts(feeds_to_refresh)
-    invalidate_unread_counts_cache()
+    if _apply_hide_shorts(feeds_to_refresh):
+        invalidate_unread_counts_cache()
 
 
 def _run_daily_maintenance() -> None:
