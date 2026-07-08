@@ -5448,7 +5448,11 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     Called from _run_automation_after_refresh right after entries land (link/hashtag
     signals) and again after duration enhancement so ≤60s videos without a #shorts
     tag are also caught. Returns the number of entries marked read."""
-    if not any("youtube.com" in u for u in refreshed_feed_urls):
+    def _is_yt_host(u: str) -> bool:
+        host = urlparse(u).hostname or ""
+        return host == "youtube.com" or host.endswith(".youtube.com")
+
+    if not any(_is_yt_host(u) for u in refreshed_feed_urls):
         return 0
     try:
         with get_meta_connection() as conn:
