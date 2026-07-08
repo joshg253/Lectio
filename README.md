@@ -61,7 +61,9 @@ The short version:
   attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
   article lost its player (the feed stripped the `<iframe>` before Lectio kept
   them), the missing YouTube/Bandcamp/SoundCloud embed is recovered from the
-  source page and re-attached. Bandcamp single-track players (domain-locked to
+  source page and re-attached — including videos behind click-to-load facades
+  (thumbnail-only lazy embeds, e.g. guitarworld.com), where the page HTML never
+  contains an iframe at all. Bandcamp single-track players (domain-locked to
   the original publisher, so they'd otherwise show "not available") fall back to
   the album player so they actually stream. Titles that arrive HTML-encoded (or
   double-encoded, as Tumblr does — `Magus&rsquo; Castle`) are decoded so they read

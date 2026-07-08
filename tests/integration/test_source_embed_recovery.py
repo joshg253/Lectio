@@ -62,6 +62,53 @@ def test_extract_no_iframe_is_empty():
     assert main._extract_source_embed_iframes("<p>no embeds here</p>") == []
 
 
+def test_extract_youtube_facade_thumbnail():
+    # guitarworld.com pattern: click-to-load facade, no iframe in raw HTML.
+    html = (
+        '<div class="youtube-video youtube-facade" id="youtube-hIsHUwJZa_o">'
+        '<img src="https://img.youtube.com/vi/hIsHUwJZa_o/maxresdefault.jpg">'
+        "</div>"
+    )
+    out = main._extract_source_embed_iframes(html)
+    assert out and out[0][0] == "yt:hIsHUwJZa_o"
+    assert "/embed/hIsHUwJZa_o" in out[0][1]
+
+
+def test_extract_facade_thumbnail_needs_video_ancestor_hint():
+    # A bare /vi/ thumbnail with no video-ish container (e.g. a random article
+    # image that happens to be a YouTube thumb) is not treated as an embed.
+    html = (
+        '<div class="article-body"><figure>'
+        f'<img src="https://i.ytimg.com/vi/{VID}/hqdefault.jpg">'
+        "</figure></div>"
+    )
+    assert main._extract_source_embed_iframes(html) == []
+
+
+def test_extract_facade_thumbnail_host_case_insensitive():
+    html = (
+        '<div class="youtube-facade">'
+        f'<img src="https://I.YTIMG.COM/vi/{VID}/maxresdefault.jpg">'
+        "</div>"
+    )
+    out = main._extract_source_embed_iframes(html)
+    assert out and out[0][0] == f"yt:{VID}"  # ID case preserved
+
+
+def test_extract_lite_youtube_element():
+    out = main._extract_source_embed_iframes(f'<lite-youtube videoid="{VID}"></lite-youtube>')
+    assert out and out[0][0] == f"yt:{VID}"
+
+
+def test_extract_facade_dedupes_against_iframe_of_same_video():
+    html = (
+        f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>'
+        f'<div class="youtube-facade"><img src="https://i.ytimg.com/vi/{VID}/maxresdefault.jpg"></div>'
+    )
+    out = main._extract_source_embed_iframes(html)
+    assert len([c for c, _ in out if c == f"yt:{VID}"]) == 1
+
+
 def test_place_fills_empty_p_after_heading():
     body = "<h3>Burial official video</h3><p></p><h3>Live on KEXP</h3><p></p>"
     items = [
