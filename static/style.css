@@ -5606,6 +5606,18 @@ mark.highlight-mark {
 }
 a.hl-hist-entry-title:hover { text-decoration: underline; color: var(--link, #2060cc); }
 .hl-hist-entry-more { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--muted, #888); font-style: italic; }
+/* Dedup "kept" rows: the surviving copy each duplicate was matched against */
+.hl-hist-entry-row--kept .hl-hist-entry-title { color: var(--muted, #888); }
+.hl-hist-entry-kept-chip {
+  align-self: flex-start;
+  font-size: 0.65rem;
+  padding: 0 0.35rem;
+  border-radius: 8px;
+  background: var(--accent-soft, #e8f0ff);
+  color: var(--accent, #2060cc);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 /* Draft row */
 .hl-draft-row {

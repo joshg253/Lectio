@@ -114,3 +114,61 @@ def test_safe_dedup_returns_entries_list(monkeypatch):
     assert isinstance(result["entries"], list)
     if result["count"] > 0:
         assert len(result["entries"]) == result["count"]
+
+
+@contextmanager
+def _fake_reader_ctx_per_feed(entries):
+    reader = MagicMock()
+    reader.get_entries.side_effect = lambda **kw: [e for e in entries if e.feed_url == kw.get("feed")]
+    reader.get_feeds.return_value = []
+    reader.mark_entry_as_read = MagicMock()
+    yield reader
+
+
+def test_slug_dedup_returns_kept_list(monkeypatch):
+    conn = _make_conn()
+    conn.execute("INSERT INTO folders VALUES (99, 'All Feeds', NULL)")
+    conn.execute("INSERT INTO folders VALUES (1, 'Test', 99)")
+    conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed1.example.com/rss')")
+    conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed2.example.com/rss')")
+    conn.commit()
+
+    e1 = _fake_entry("https://feed1.example.com/rss", "id1", "https://example.com/article/some-post", "Some Post", "Feed 1")
+    e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.com/article/some-post", "Some Post", "Feed 2")
+    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
+
+    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1",
+                                 match_method="slug", window_hours=168)
+
+    assert result["count"] == 1
+    assert "kept" in result and len(result["kept"]) == 1
+    marked_ids = {e["entry_id"] for e in result["entries"]}
+    kept_ids = {e["entry_id"] for e in result["kept"]}
+    # The keeper is the group survivor, never also marked.
+    assert marked_ids | kept_ids == {"id1", "id2"}
+    assert not (marked_ids & kept_ids)
+    kept = result["kept"][0]
+    assert kept["title"] == "Some Post" and kept["link"]
+
+
+def test_safe_dedup_returns_kept_list(monkeypatch):
+    conn = _make_conn()
+    conn.execute("INSERT INTO folders VALUES (99, 'All Feeds', NULL)")
+    conn.execute("INSERT INTO folders VALUES (1, 'Test', 99)")
+    conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed1.example.com/rss')")
+    conn.execute("INSERT INTO folder_feeds VALUES (1, 'https://feed2.example.com/rss')")
+    conn.commit()
+
+    body = "word " * 40
+    e1 = _fake_entry("https://feed1.example.com/rss", "id1", "https://example.com/p/identical-long-slug", "A Story With Enough Words Here")
+    e2 = _fake_entry("https://feed2.example.com/rss", "id2", "https://example.org/p/identical-long-slug", "A Story With Enough Words Here")
+    e1.summary = body
+    e2.summary = body
+    monkeypatch.setattr(main, "get_reader", lambda: _fake_reader_ctx_per_feed([e1, e2]))
+
+    result = main._run_now_dedup(conn=conn, scope="folder", scope_id="1",
+                                 match_method="safe", window_hours=168)
+
+    assert result["count"] == 1
+    assert len(result["kept"]) == 1
+    assert {result["entries"][0]["entry_id"], result["kept"][0]["entry_id"]} == {"id1", "id2"}
