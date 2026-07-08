@@ -127,3 +127,39 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
     finally:
         main._meta_conn_local.pool = None
         tenancy._layout = saved
+
+
+def test_fresh_schema_has_entry_feed_tags(fresh_meta):
+    assert "entry_feed_tags" in _tables(fresh_meta)
+    assert {"feed_url", "entry_id", "tag", "first_seen_at"} <= _columns(
+        fresh_meta, "entry_feed_tags"
+    )
+
+
+def test_existing_db_gains_entry_feed_tags(tmp_path):
+    """A meta DB provisioned before entry_feed_tags existed must gain the table
+    when the per-user startup migration re-runs ensure_meta_schema."""
+    saved = tenancy._layout
+    main._meta_conn_local.pool = None
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    try:
+        legacy = sqlite3.connect(str(tenancy.meta_db_path()))
+        legacy.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)")
+        legacy.commit()
+        legacy.close()
+        main._meta_conn_local.pool = None
+
+        main.ensure_meta_schema()
+
+        conn = main.get_meta_connection()
+        assert "entry_feed_tags" in _tables(conn)
+        # The DB-backed suggestion lookup must not raise on the upgraded DB.
+        assert main.feed_tag_service.get_tags_for_entry("https://x.test/feed", "e1") == []
+    finally:
+        main._meta_conn_local.pool = None
+        tenancy._layout = saved

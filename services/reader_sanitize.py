@@ -31,6 +31,45 @@ from services import html_sanitize
 
 LOGGER = logging.getLogger("lectio.reader_sanitize")
 
+# Injected sink for feed-provided entry tags: fn(feed_url, [(entry_id, tags)]).
+# reader discards <category> data at ingest, so the parser (the only place the
+# raw feedparser result exists) hands tags to whoever registered here
+# (FeedTagService in main). Parsing runs synchronously in the caller's tenancy
+# context, so the sink's meta-DB writes land in the right per-user DB.
+_entry_tag_sink = None
+
+
+def set_entry_tag_sink(sink) -> None:
+    global _entry_tag_sink
+    _entry_tag_sink = sink
+
+
+def _collect_entry_tags(url, result, entries) -> None:
+    sink = _entry_tag_sink
+    if sink is None:
+        return
+    try:
+        from services.feed_tags import extract_feed_entry_tags
+
+        # Re-derive each raw entry's reader id rather than zipping by index:
+        # _process_feed skips entries it can't process, so positions may not
+        # line up. reader's id derivation is `id`, with a link fallback for
+        # RSS-family feeds only.
+        processed_ids = {e.id for e in entries}
+        is_rss = str(getattr(result, "version", "") or "").startswith("rss")
+        pairs = []
+        for raw_entry in result.entries:
+            rid = raw_entry.get("id") or (raw_entry.get("link") if is_rss else None)
+            if not rid or rid not in processed_ids:
+                continue
+            tags = extract_feed_entry_tags(raw_entry)
+            if tags:
+                pairs.append((str(rid), tags))
+        if pairs:
+            sink(url, pairs)
+    except Exception:  # a tag write must never fail a feed parse
+        LOGGER.warning("entry tag capture failed for %s", url, exc_info=True)
+
 
 def _sanitize_entry(entry):
     """Return ``entry`` with its content/summary run through html_sanitize."""
@@ -61,6 +100,7 @@ class SanitizingFeedparserParser(FeedparserParser):
             response_headers=headers or {},
         )
         feed, entries = _process_feed(url, result)
+        _collect_entry_tags(url, result, entries)
         return feed, [_sanitize_entry(e) for e in entries]
 
 

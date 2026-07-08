@@ -16,20 +16,15 @@ rationale.)
 
 ## Later
 
-### Feed-provided tags as suggested manual tags (+ chip in post header)
+### DeviantArt tag suggestions need the metadata endpoint
 
-Many feeds ship per-entry tags (`<category>` in RSS/Atom; e.g. freeCodeCamp,
-dev.to, WordPress blogs). Surface these in the post header as suggestion chips
-with a **+** icon — clicking one adds it as one of Our Tags on that entry (via
-the existing `set_manual_tags_for_entry` append path).
-
-Blocker to solve first: the `reader` library does not persist entry categories
-(no `Entry.categories`/tags attribute), so feed tags are lost at ingest.
-Capture them ourselves — a reader ingest hook or a post-refresh pass over the
-raw parsed feed — into a meta-DB table (`entry_feed_tags(feed_url, entry_id,
-tag)`, per-user migrated). Normalize to Lectio tag format (lowercase,
-hyphenated) at display time. Synthetic-feed adapters (dev.to, DeviantArt,
-scraper) can write their tag data into the same table directly.
+Feed-provided tag capture is SHIPPED (`entry_feed_tags`, captured by the
+sanitizing parser; see ARCHITECTURE "Feed-provided tag suggestions"), and
+synthetic adapters route tags through it by emitting `<category>` in their
+generated RSS. DeviantArt's browse/gallery API responses don't include
+deviation tags, though — those require extra `/deviation/metadata` calls
+(rate-limit cost). If DA tag chips are wanted, batch metadata lookups (up to
+50 deviationids per call) during sync and emit the results as `<category>`.
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 
@@ -74,6 +69,9 @@ also have any of these." Current state:
 - Consider factoring the shared shape (fetch → filter → synthesize RSS →
   tenant-aware storage) so the third such adapter doesn't copy-paste the first
   two.
+- The `entry_feed_tags` capture layer (shipped) already persists each entry's
+  raw `<category>` tags per user — usable for exclude-filtering entries of
+  feeds that only exist as plain RSS, without re-parsing.
 
 ### Dev.to feed migration (manual, after adapter deploy)
 

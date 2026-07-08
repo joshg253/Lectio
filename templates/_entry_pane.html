@@ -205,6 +205,22 @@
         >×</button>
       </span>
       {% endfor %} {% endif %}
+      {% if selected_entry.feed_tag_suggestions %}
+      <span class="entry-tag-suggestions" aria-label="Feed tag suggestions">
+        {% for tag in selected_entry.feed_tag_suggestions %}
+        <button
+          type="button"
+          class="entry-tag-chip suggestion"
+          data-tag-suggestion="{{ tag }}"
+          data-tag-input="entry-tags-input"
+          title="Add #{{ tag }} to this post"
+          aria-label="Add #{{ tag }} to this post"
+        >
+          <span aria-hidden="true">+</span>{{ tag }}
+        </button>
+        {% endfor %}
+      </span>
+      {% endif %}
       <form
         method="post"
         action="/entries/tags"
@@ -265,20 +281,6 @@
           value=""
         />
         <button type="submit" class="entry-tags-submit">Apply</button>
-        {% if selected_entry.feed_tag_suggestions %}
-        <div class="entry-tag-suggestions" aria-label="Feed tag suggestions">
-          {% for tag in selected_entry.feed_tag_suggestions %}
-          <button
-            type="button"
-            class="entry-tag-chip suggestion"
-            data-tag-suggestion="{{ tag }}"
-            data-tag-input="entry-tags-input"
-          >
-            {{ tag }}
-          </button>
-          {% endfor %}
-        </div>
-        {% endif %}
       </form>
       {% if selected_entry.link %}
       <div class="entry-pane-alt-actions">

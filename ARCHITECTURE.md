@@ -626,6 +626,14 @@ Three functions run at startup to apply strategy and display defaults without us
 
 All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explicitly chosen a strategy in Feed Properties). To add a new tagger, follow the same pattern and register it in `lifespan()`.
 
+## Feed-provided tag suggestions (`entry_feed_tags`)
+
+`reader` discards entry categories (RSS/Atom `<category>`) at ingest — its `Entry` type has no tags attribute — so Lectio captures them itself at the only point the raw feedparser result exists: `SanitizingFeedparserParser.__call__` (`services/reader_sanitize.py`). After `_process_feed`, the parser hands `(entry_id, tags)` pairs to an **injected sink** (`set_entry_tag_sink`, wired in `main` to `FeedTagService.record_entry_tags`), keeping services free of main/DB imports. Design notes:
+
+- **Tenancy for free.** Parsing runs synchronously inside `reader.update_feed(s)`, always in a user context (request thread or `_run_in_user_context` background threads), so the sink's `get_meta_connection()` resolves the correct per-user meta DB at call time — the same guarantee `get_reader()` relies on. The service itself is tenancy-unaware (LeadImageService pattern).
+- **Id mapping re-derives, never zips.** `_process_feed` skips unparsable entries, so positions don't line up; the capture re-derives each raw entry's reader id (`id`, falling back to `link` for RSS-family feeds) and keeps only ids present in the processed set. A sink failure is logged and swallowed — tag capture must never fail a feed parse.
+- **Storage** (`services/feed_tags.py`): per-user table `entry_feed_tags(feed_url, entry_id, tag, first_seen_at, PK(feed_url, entry_id, tag))`. Tags are stored **raw** (case-preserving) and normalized to Lectio tag format (`normalize_tag_value`) only at display — the raw text is the data foundation for future tag-filtered feed adapters. Replace-per-entry semantics: re-seeing an entry replaces its rows (publisher edits propagate); entries absent from the current fetch window keep theirs. Rows are pruned on feed removal and follow feed-URL migrations (`_feed_url_tables`); no other retention.
+- **UI.** The entry pane shows the captured tags (minus already-applied manual tags, compared normalized-to-normalized) as **+** chips in the tags row; clicking one applies it through the existing `/entries/tags` append pipeline. This replaced an earlier ephemeral implementation that re-fetched the live feed in a background thread and fuzzy-matched entries against an in-memory cache — the DB lookup is exact-key and instant.
 ## Lead image pipeline
 
 `LeadImageService` (services/lead_images.py) resolves a hero image for each entry using a layered strategy:

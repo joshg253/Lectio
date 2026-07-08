@@ -13386,17 +13386,20 @@
             return;
           }
 
-          const existingTokens = targetInput.value
+          // Directly apply the suggested tag via the tags form's submit
+          // pipeline (validation, merge, append-mode POST, pane refresh).
+          // Any partially typed input is included in the same apply — the
+          // pane re-render on success would drop it otherwise.
+          const typedTokens = targetInput.value
             .split(/\s+/)
-            .map((token) => token.trim())
+            .map((token) => token.trim().replace(/^#+/, '').toLowerCase())
             .filter(Boolean);
-          const existingLookup = new Set(existingTokens.map((token) => token.replace(/^#+/, '').toLowerCase()));
-          if (!existingLookup.has(normalizedSuggestion)) {
-            existingTokens.push(normalizedSuggestion);
-            targetInput.value = existingTokens.join(' ');
+          if (!typedTokens.includes(normalizedSuggestion)) {
+            typedTokens.push(normalizedSuggestion);
           }
-
-          targetInput.focus();
+          targetInput.value = typedTokens.join(' ');
+          suggestionButton.disabled = true;
+          entryTagsForm?.querySelector('button[type="submit"]')?.click();
         });
       }
 

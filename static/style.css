@@ -2579,14 +2579,12 @@ button:hover, .button-link:hover {
   opacity: 1;
 }
 
+/* Suggestion chips sit inline in the tags row, next to the manual chips. */
 .entry-tag-suggestions {
-  display: flex;
+  display: inline-flex;
   gap: 0.3rem;
   flex-wrap: wrap;
-  width: auto;
-  margin-top: 0.35rem;
-  padding-top: 0.35rem;
-  border-top: 1px solid var(--line);
+  align-items: center;
 }
 
 .entry-tags-input {
@@ -2714,6 +2712,16 @@ button:hover, .button-link:hover {
   background: transparent;
   opacity: 0.85;
   cursor: pointer;
+}
+
+.entry-tag-chip.suggestion > span {
+  margin-right: 0.15em;
+  font-weight: 600;
+}
+
+.entry-tag-chip.suggestion[disabled] {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .entry-tag-chip.suggestion:hover {
