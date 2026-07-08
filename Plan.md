@@ -43,6 +43,23 @@ Make Lectio usable as a read-it-later app. Two parts:
   against subscribed gallery feeds — add newly-watched artists, and surface (or
   optionally remove) feeds for artists no longer watched.
 
+### Tag-filtered feed adapters: multi-include + exclude semantics (freeCodeCamp, dev.to)
+
+Wanted rule shape: "include articles with any of these tag(s), but not if they
+also have any of these." Current state:
+
+- **dev.to adapter** supports one include `tag` plus `tags_exclude` (passed to
+  the API). Extend to multiple include tags (one API call per include tag,
+  merged + deduped by article id, exclusion applied client-side on `tag_list`).
+- **freeCodeCamp** is Ghost: per-tag RSS exists (`/news/tag/<slug>/rss/`) and
+  entries carry `<category>` tags, but there's no public filtered API. Adapter
+  design: fetch the per-tag RSS for each include tag (or the main feed for
+  tag-less "all"), merge + dedupe, drop entries whose categories hit the
+  exclude list. Same synthetic-feed pattern as `services/devto.py`.
+- Consider factoring the shared shape (fetch → filter → synthesize RSS →
+  tenant-aware storage) so the third such adapter doesn't copy-paste the first
+  two.
+
 ### Dev.to feed migration (manual, after adapter deploy)
 
 The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see

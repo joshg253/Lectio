@@ -9108,6 +9108,75 @@
         });
       });
 
+      // Shared "show matched articles" expansion for a run-log row. Used by both
+      // the global History tab and the per-rule history panel. `h` is a
+      // /automation/history row; the button + lazy-loaded entry list are
+      // appended to `item`.
+      function hlAttachHistoryExpansion(item, h) {
+        if (!h.entries_affected) return;
+        const n = h.entries_affected;
+        const expandBtn = document.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'hl-hist-expand-btn';
+        expandBtn.title = 'Show matched articles';
+        expandBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">expand_more</span>';
+        let entryList = null;
+        expandBtn.addEventListener('click', async () => {
+          if (entryList) {
+            const collapsed = entryList.classList.toggle('is-collapsed');
+            expandBtn.querySelector('.material-symbols-rounded').textContent = collapsed ? 'expand_more' : 'expand_less';
+            return;
+          }
+          entryList = document.createElement('div');
+          entryList.className = 'hl-hist-entry-list';
+          entryList.textContent = 'Loading…';
+          item.appendChild(entryList);
+          expandBtn.querySelector('.material-symbols-rounded').textContent = 'expand_less';
+          try {
+            const er = await fetch(`/automation/history/${h.id}/entries`, { credentials: 'same-origin' });
+            const ed = await er.json();
+            entryList.textContent = '';
+            const entries = ed.entries || [];
+            if (entries.length === 0) {
+              entryList.textContent = 'No detail stored for this run.';
+            } else {
+              entries.forEach(e => {
+                const row = document.createElement('div');
+                row.className = 'hl-hist-entry-row';
+                if (e.role === 'kept') row.classList.add('hl-hist-entry-row--kept');
+                const feedEl = document.createElement('span');
+                feedEl.className = 'hl-hist-entry-feed';
+                feedEl.textContent = e.feed_title || e.feed_url || '';
+                const titleEl = e.link
+                  ? document.createElement('a')
+                  : document.createElement('span');
+                titleEl.className = 'hl-hist-entry-title';
+                titleEl.textContent = e.title || '(untitled)';
+                if (e.link) { titleEl.href = e.link; titleEl.target = '_blank'; titleEl.rel = 'noopener noreferrer'; }
+                row.appendChild(feedEl);
+                row.appendChild(titleEl);
+                if (e.role === 'kept') {
+                  const keptChip = document.createElement('span');
+                  keptChip.className = 'hl-hist-entry-kept-chip';
+                  keptChip.textContent = 'kept';
+                  keptChip.title = 'Surviving copy — duplicates were matched against this entry';
+                  row.appendChild(keptChip);
+                }
+                entryList.appendChild(row);
+              });
+              const markedShown = entries.filter(e => e.role !== 'kept').length;
+              if (n > markedShown) {
+                const moreEl = document.createElement('p');
+                moreEl.className = 'hl-hist-entry-more';
+                moreEl.textContent = `… and ${n - markedShown} more`;
+                entryList.appendChild(moreEl);
+              }
+            }
+          } catch { entryList.textContent = 'Failed to load matches.'; }
+        });
+        item.appendChild(expandBtn);
+      }
+
       async function hlLoadHistory() {
         const listEl = document.getElementById('hl-history-list');
         if (!listEl) return;
@@ -9153,6 +9222,7 @@
             tsEl.className = 'hl-history-ts';
             tsEl.textContent = new Date(row.run_at).toLocaleString();
             el.appendChild(tsEl);
+            hlAttachHistoryExpansion(el, row);
             listEl.appendChild(el);
           }
         } catch { listEl.innerHTML = '<p class="hl-empty">Failed to load history.</p>'; }
@@ -9546,59 +9616,7 @@
                     item.appendChild(timeEl);
                     item.appendChild(countEl);
                     item.appendChild(trigBadge);
-                    if (n > 0) {
-                      const expandBtn = document.createElement('button');
-                      expandBtn.type = 'button';
-                      expandBtn.className = 'hl-hist-expand-btn';
-                      expandBtn.title = 'Show matched articles';
-                      expandBtn.innerHTML = '<span class="material-symbols-rounded" aria-hidden="true">expand_more</span>';
-                      let entryList = null;
-                      expandBtn.addEventListener('click', async () => {
-                        if (entryList) {
-                          const collapsed = entryList.classList.toggle('is-collapsed');
-                          expandBtn.querySelector('.material-symbols-rounded').textContent = collapsed ? 'expand_more' : 'expand_less';
-                          return;
-                        }
-                        entryList = document.createElement('div');
-                        entryList.className = 'hl-hist-entry-list';
-                        entryList.textContent = 'Loading…';
-                        item.appendChild(entryList);
-                        expandBtn.querySelector('.material-symbols-rounded').textContent = 'expand_less';
-                        try {
-                          const er = await fetch(`/automation/history/${h.id}/entries`, { credentials: 'same-origin' });
-                          const ed = await er.json();
-                          entryList.textContent = '';
-                          const entries = ed.entries || [];
-                          if (entries.length === 0) {
-                            entryList.textContent = 'No detail stored for this run.';
-                          } else {
-                            entries.forEach(e => {
-                              const row = document.createElement('div');
-                              row.className = 'hl-hist-entry-row';
-                              const feedEl = document.createElement('span');
-                              feedEl.className = 'hl-hist-entry-feed';
-                              feedEl.textContent = e.feed_title || e.feed_url || '';
-                              const titleEl = e.link
-                                ? document.createElement('a')
-                                : document.createElement('span');
-                              titleEl.className = 'hl-hist-entry-title';
-                              titleEl.textContent = e.title || '(untitled)';
-                              if (e.link) { titleEl.href = e.link; titleEl.target = '_blank'; titleEl.rel = 'noopener noreferrer'; }
-                              row.appendChild(feedEl);
-                              row.appendChild(titleEl);
-                              entryList.appendChild(row);
-                            });
-                            if (n > entries.length) {
-                              const moreEl = document.createElement('p');
-                              moreEl.className = 'hl-hist-entry-more';
-                              moreEl.textContent = `… and ${n - entries.length} more`;
-                              entryList.appendChild(moreEl);
-                            }
-                          }
-                        } catch { entryList.textContent = 'Failed to load matches.'; }
-                      });
-                      item.appendChild(expandBtn);
-                    }
+                    hlAttachHistoryExpansion(item, h);
                     panel.appendChild(item);
                   });
                 }

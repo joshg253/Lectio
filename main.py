@@ -3149,7 +3149,8 @@ def ensure_meta_schema() -> None:
                 entry_id TEXT NOT NULL,
                 title    TEXT,
                 link     TEXT,
-                feed_title TEXT
+                feed_title TEXT,
+                role     TEXT NOT NULL DEFAULT 'marked'
             )
             """
         )
@@ -3157,6 +3158,13 @@ def ensure_meta_schema() -> None:
             "CREATE INDEX IF NOT EXISTS rule_run_log_entries_log_id"
             " ON rule_run_log_entries (log_id)"
         )
+        try:
+            # 'marked' = entry was marked read; 'kept' = the surviving copy of a
+            # dedup group, logged so run history shows what each duplicate matched.
+            conn.execute("ALTER TABLE rule_run_log_entries ADD COLUMN role TEXT NOT NULL DEFAULT 'marked'")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dedup_false_matches (
@@ -4463,7 +4471,14 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     from collections import defaultdict as _dd
 
     def _mk_pair(a: dict, b: dict) -> tuple[str, str]:
-        return (a["link"], b["link"]) if a["published_ts"] <= b["published_ts"] else (b["link"], a["link"])
+        # Tie-break equal timestamps by link so the pair key is canonical
+        # regardless of iteration order — otherwise the same duplicate can be
+        # emitted as both (A,B) and (B,A) and BOTH copies get marked read.
+        ta = a["published_ts"] or 0.0
+        tb = b["published_ts"] or 0.0
+        if ta != tb:
+            return (a["link"], b["link"]) if ta < tb else (b["link"], a["link"])
+        return (a["link"], b["link"]) if a["link"] <= b["link"] else (b["link"], a["link"])
 
     def _index_to_pairs(idx: dict) -> set[tuple[str, str]]:
         pairs: set[tuple[str, str]] = set()
@@ -4903,12 +4918,16 @@ def _run_now_dedup(
         pair_modes = _safe_dedup_find_pairs(records)
         link_to_rec = {r["link"]: r for r in records if r["link"]}
         to_mark: set[tuple[str, str]] = set()
+        kept_keys: set[tuple[str, str]] = set()
         for (keep_link, mark_link), _modes in pair_modes.items():
             if keep_link + "||" + mark_link in false_matches:
                 continue
             mark_rec = link_to_rec.get(mark_link)
             if mark_rec:
                 to_mark.add((mark_rec["feed_url"], mark_rec["entry_id"]))
+                keep_rec = link_to_rec.get(keep_link)
+                if keep_rec:
+                    kept_keys.add((keep_rec["feed_url"], keep_rec["entry_id"]))
         with get_reader() as reader:
             for feed_url, entry_id in to_mark:
                 reader.mark_entry_as_read((feed_url, entry_id))
@@ -4921,14 +4940,16 @@ def _run_now_dedup(
             )
             _unread_counts_generation += 1
         rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
-        matched_entries = [
-            {"feed_url": fu, "entry_id": eid,
-             "title": rec_map.get((fu, eid), {}).get("title", ""),
-             "link": rec_map.get((fu, eid), {}).get("link", ""),
-             "feed_title": rec_map.get((fu, eid), {}).get("feed_title", "")}
-            for fu, eid in to_mark
-        ]
-        return {"count": len(to_mark), "entries": matched_entries}
+
+        def _rec_info(fu: str, eid: str) -> dict:
+            return {"feed_url": fu, "entry_id": eid,
+                    "title": rec_map.get((fu, eid), {}).get("title", ""),
+                    "link": rec_map.get((fu, eid), {}).get("link", ""),
+                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", "")}
+
+        matched_entries = [_rec_info(fu, eid) for fu, eid in to_mark]
+        kept_entries = [_rec_info(fu, eid) for fu, eid in kept_keys - to_mark]
+        return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
     slug_index: dict[str, list[dict]] = {}
     title_index: dict[str, list[dict]] = {}
@@ -4972,12 +4993,15 @@ def _run_now_dedup(
                 LOGGER.exception("run-now-dedup: error reading feed %s", feed_url)
 
         to_mark: set[tuple[str, str]] = set()
+        kept_keys: set[tuple[str, str]] = set()
 
         if match_method == "slug":
             for slug, entries in slug_index.items():
                 if len({e["feed_url"] for e in entries}) < 2:
                     continue
-                for e in sorted(entries, key=lambda e: e["published_ts"] or 0)[1:]:
+                sorted_entries = sorted(entries, key=lambda e: e["published_ts"] or 0)
+                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
+                for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
 
         if match_method == "title":
@@ -4989,6 +5013,7 @@ def _run_now_dedup(
                 newest_ts = sorted_entries[-1]["published_ts"] or 0.0
                 if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
                     continue
+                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
 
@@ -5001,6 +5026,7 @@ def _run_now_dedup(
                 newest_ts = sorted_entries[-1]["published_ts"] or 0.0
                 if oldest_ts > 0 and newest_ts > 0 and (newest_ts - oldest_ts) > window_secs:
                     continue
+                kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
 
@@ -5018,7 +5044,9 @@ def _run_now_dedup(
                             if sim < _FUZZY_THRESHOLD:
                                 continue
                             newer = ej if ts_i <= ts_j else ei
+                            older = ei if newer is ej else ej
                             to_mark.add((newer["feed_url"], newer["entry_id"]))
+                            kept_keys.add((older["feed_url"], older["entry_id"]))
 
         for feed_url, entry_id in to_mark:
             reader.mark_entry_as_read((feed_url, entry_id))
@@ -5039,14 +5067,16 @@ def _run_now_dedup(
         + list(fuzzy_entries.get(k, []) for k in fuzzy_entries)
     )
     entry_map = {(r["feed_url"], r["entry_id"]): r for sublist in all_info for r in sublist}
-    matched_entries = [
-        {"feed_url": fu, "entry_id": eid,
-         "title": entry_map.get((fu, eid), {}).get("title", ""),
-         "link": entry_map.get((fu, eid), {}).get("link", ""),
-         "feed_title": entry_map.get((fu, eid), {}).get("feed_title", "")}
-        for fu, eid in to_mark
-    ]
-    return {"count": len(to_mark), "entries": matched_entries}
+
+    def _entry_info(fu: str, eid: str) -> dict:
+        return {"feed_url": fu, "entry_id": eid,
+                "title": entry_map.get((fu, eid), {}).get("title", ""),
+                "link": entry_map.get((fu, eid), {}).get("link", ""),
+                "feed_title": entry_map.get((fu, eid), {}).get("feed_title", "")}
+
+    matched_entries = [_entry_info(fu, eid) for fu, eid in to_mark]
+    kept_entries = [_entry_info(fu, eid) for fu, eid in kept_keys - to_mark]
+    return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
 
 def _run_now_pattern(
@@ -5152,15 +5182,16 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
         " VALUES (?, ?, ?, ?, ?, ?, 'auto')",
         (now, rule_type, scope, scope_id, keyword, result["count"]),
     )
-    auto_entries = result.get("entries") or []
-    if auto_entries and cur.lastrowid:
+    rows = [(e, "marked") for e in (result.get("entries") or [])]
+    rows += [(e, "kept") for e in (result.get("kept") or [])]
+    if rows and cur.lastrowid:
         conn.executemany(
             "INSERT INTO rule_run_log_entries"
-            " (log_id, feed_url, entry_id, title, link, feed_title)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            " (log_id, feed_url, entry_id, title, link, feed_title, role)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             [(cur.lastrowid, e["feed_url"], e["entry_id"],
-              e["title"], e["link"], e["feed_title"])
-             for e in auto_entries],
+              e["title"], e["link"], e["feed_title"], role)
+             for e, role in rows],
         )
 
 
@@ -15851,13 +15882,14 @@ def rules_run_now_route(
             (datetime.now().isoformat(), type, scope, scope_id, keyword, result.get("count", 0)),
         )
         log_id = cur.lastrowid
-        entries = result.get("entries") or []
-        if entries and log_id:
+        log_rows = [(e, "marked") for e in (result.get("entries") or [])]
+        log_rows += [(e, "kept") for e in (result.get("kept") or [])]
+        if log_rows and log_id:
             conn.executemany(
-                "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id, title, link, feed_title)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"])
-                 for e in entries],
+                "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id, title, link, feed_title, role)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role)
+                 for e, role in log_rows],
             )
     result["ok"] = True
     return JSONResponse(result)
@@ -15909,7 +15941,7 @@ def automation_history_route(
 def automation_history_entries_route(log_id: int):
     with get_meta_connection() as conn:
         rows = conn.execute(
-            "SELECT feed_url, entry_id, title, link, feed_title"
+            "SELECT feed_url, entry_id, title, link, feed_title, role"
             " FROM rule_run_log_entries WHERE log_id = ? ORDER BY rowid",
             (log_id,),
         ).fetchall()
