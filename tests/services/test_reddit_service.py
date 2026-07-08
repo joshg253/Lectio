@@ -38,6 +38,8 @@ def test_redditor_from_feed_url(url, expected):
     ("https://www.reddit.com/r/buildapcsales/.rss", True),
     ("https://example.com/feed", False),
     ("https://news.ycombinator.com/rss", False),
+    ("https://reddit.com.evil.com/r/x/.rss", False),
+    ("https://evil.com/feed?ref=reddit.com", False),
 ])
 def test_is_reddit_feed_url(url, is_reddit):
     assert svc.is_reddit_feed_url(url) == is_reddit

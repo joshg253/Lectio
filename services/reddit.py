@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -100,8 +100,15 @@ def get_me(access_token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def is_reddit_feed_url(url: str) -> bool:
-    """True if *url* is a Reddit feed URL (old. or www.)."""
-    return "reddit.com" in url
+    """True if *url* is a Reddit feed URL (old. or www.).
+
+    Exact host suffix match, not substring — "reddit.com.evil.com" must not pass.
+    """
+    try:
+        host = (urlparse(url).netloc or "").lower().rstrip(".")
+    except Exception:
+        return False
+    return host == "reddit.com" or host.endswith(".reddit.com")
 
 
 def subreddit_from_feed_url(url: str) -> str | None:

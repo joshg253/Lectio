@@ -7270,7 +7270,10 @@ def get_feed_properties(feed_url: str) -> dict:
             current_title = str(props.get("title") or "")
             if current_title == feed_url or current_title.startswith("http"):
                 try:
-                    resp = httpx.get(feed_url, timeout=3.0, follow_redirects=True)
+                    # SSRF-guarded: feed_url comes straight from the query string,
+                    # so validate it (and every redirect hop) before fetching.
+                    with url_guard.build_client(timeout=3.0) as _tc:
+                        resp = url_guard.safe_get(_tc, feed_url)
                     if resp.status_code == 200 and resp.content:
                         parsed = feedparser.parse(resp.content)
                         fetched_title = None
@@ -8714,8 +8717,7 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         return {"blocked": True, "reason": "unsupported-url-scheme"}
 
     try:
-        if not url_guard.is_safe_outbound_url(source_url):
-            raise url_guard.UnsafeURLError(source_url)
+        source_url = url_guard.ensure_safe_outbound_url(source_url)
         with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
             with client.stream("GET", source_url) as response:
                 blocked, reason = is_probably_frame_blocked(response.headers)
@@ -11401,6 +11403,17 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
     return len(to_sync)
 
 
+def _is_youtube_host(host: str) -> bool:
+    """True for youtube.com / youtu.be and their subdomains (exact suffix match,
+    not substring — "youtube.com.evil.com" must not pass)."""
+    host = (host or "").lower().rstrip(".")
+    return (
+        host in ("youtube.com", "youtu.be")
+        or host.endswith(".youtube.com")
+        or host.endswith(".youtu.be")
+    )
+
+
 def normalize_youtube_feed_url(feed_url: str) -> str:
     """Normalize various YouTube URLs (channel, handle, short links, video pages)
     to the canonical channel feed URL when possible.
@@ -11412,7 +11425,7 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
         host = (parsed.netloc or "").lower()
 
         # Already a YouTube feed
-        if "youtube.com" in host and parsed.path and "feeds/videos.xml" in parsed.path:
+        if _is_youtube_host(host) and parsed.path and "feeds/videos.xml" in parsed.path:
             return feed_url
 
         # Direct /channel/UC... path
@@ -11424,9 +11437,13 @@ def normalize_youtube_feed_url(feed_url: str) -> str:
             return normalized
 
         # If it's any youtube domain (including youtu.be), try fetching page and extracting channelId
-        if "youtube.com" in host or "youtu.be" in host:
+        if _is_youtube_host(host):
             try:
-                resp = httpx.get(feed_url, timeout=6.0, follow_redirects=True, headers={"User-Agent": "Lectio/1.0"})
+                # SSRF-guarded: the host check above stops lookalike domains, and
+                # safe_get revalidates every redirect hop (youtu.be bounces to
+                # youtube.com; a crafted link must not bounce somewhere internal).
+                with url_guard.build_client(timeout=6.0, headers={"User-Agent": "Lectio/1.0"}) as _yc:
+                    resp = url_guard.safe_get(_yc, feed_url)
                 text = resp.text
             except Exception:
                 return feed_url
@@ -12900,7 +12917,7 @@ def entry_frame_check(url: str):
 @app.get("/login")
 def login_page(request: Request, next: str = "/"):
     if not AUTH_ENABLED or _session_logged_in(request):
-        return RedirectResponse(url=next or "/", status_code=303)
+        return RedirectResponse(url=_safe_next(next), status_code=303)
     return templates.TemplateResponse(
         request,
         "login.html",
@@ -14641,7 +14658,10 @@ def delete_folder_route(
 
 
 def _is_youtube_url(url: str) -> bool:
-    return "youtube.com" in url or "youtu.be" in url
+    try:
+        return _is_youtube_host(urlparse(url).netloc)
+    except Exception:
+        return False
 
 
 def _devto_config_from_form(tag: str, top_days: str, english_only: str,

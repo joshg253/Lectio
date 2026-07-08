@@ -41,7 +41,9 @@ def test_unknown_format_falls_back_to_generic():
 
 
 def test_send_webhook_rejects_unsafe_url(monkeypatch):
-    monkeypatch.setattr(webhooks, "is_safe_outbound_url", lambda _u: False)
+    def _reject(_u):
+        raise webhooks.UnsafeURLError(_u)
+    monkeypatch.setattr(webhooks, "ensure_safe_outbound_url", _reject)
     ok, err = webhooks.send_webhook("http://169.254.169.254/latest/meta-data", {"x": 1})
     assert ok is False
     assert err
@@ -53,7 +55,7 @@ def test_send_webhook_rejects_empty_url():
 
 
 def test_send_webhook_posts_json_on_safe_url(monkeypatch):
-    monkeypatch.setattr(webhooks, "is_safe_outbound_url", lambda _u: True)
+    monkeypatch.setattr(webhooks, "ensure_safe_outbound_url", lambda u: u)
     captured = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -76,7 +78,7 @@ def test_send_webhook_posts_json_on_safe_url(monkeypatch):
 
 
 def test_send_webhook_non_2xx_is_failure(monkeypatch):
-    monkeypatch.setattr(webhooks, "is_safe_outbound_url", lambda _u: True)
+    monkeypatch.setattr(webhooks, "ensure_safe_outbound_url", lambda u: u)
 
     def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "http://internal/"})

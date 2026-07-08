@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import httpx
 
-from services.url_guard import is_safe_outbound_url
+from services.url_guard import UnsafeURLError, ensure_safe_outbound_url
 
 WEBHOOK_VALID_FORMATS = frozenset({"generic", "ifttt"})
 
@@ -64,7 +64,11 @@ def send_webhook(url: str, payload: dict) -> tuple[bool, str | None]:
     followed (a 3xx is treated as a non-2xx failure rather than chased to a
     possibly-internal target).
     """
-    if not url or not is_safe_outbound_url(url):
+    try:
+        url = ensure_safe_outbound_url(url) if url else ""
+    except UnsafeURLError:
+        url = ""
+    if not url:
         return False, "unsafe or empty webhook URL"
     try:
         with httpx.Client(follow_redirects=False, timeout=_TIMEOUT_SECONDS) as client:
