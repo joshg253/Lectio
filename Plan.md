@@ -16,6 +16,33 @@ rationale.)
 
 ## Later
 
+### Instapaper-alternative: reader-only view for saved/starred items
+
+Make Lectio usable as a read-it-later app. Two parts:
+
+- **Reader-only browsing view** for saved/starred items — a clean, distraction-free
+  reading surface (no triage chrome), keyboard-first navigation through the
+  starred/saved backlog.
+- **Beef up Star to capture full article content.** Starring must guarantee the
+  complete article is persisted (readability-extracted full text into the starred
+  archive, not just the feed's summary/truncated body), so items remain readable
+  after the feed entry ages out or the source goes away. Audit what the starred
+  archive stores today and fill the gap.
+
+### DeviantArt watchlist sync: auto-resume + reconcile
+
+`sync_deviantart_watchlist` is add-only and stops at DeviantArt's rate cap with
+"added N so far, ~M left", requiring a manual re-click to continue. Improve:
+
+- **Auto-resume:** when the sync hits the cap, schedule a background continuation
+  (honor DA's `Retry-After` header — `_request_with_backoff` already reads it —
+  falling back to a conservative delay) and keep going until the watchlist is
+  fully imported, updating `deviantart_sync_status` as it progresses. Route the
+  background work through `_run_in_user_context`.
+- **Maintenance reconcile:** during daily maintenance, diff the DA watchlist
+  against subscribed gallery feeds — add newly-watched artists, and surface (or
+  optionally remove) feeds for artists no longer watched.
+
 ### Dev.to feed migration (manual, after adapter deploy)
 
 The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see

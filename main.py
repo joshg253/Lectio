@@ -5441,6 +5441,32 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     return len(all_to_suppress)
 
 
+def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> None:
+    """Auto-mark Shorts as read for YouTube feeds that have hide-shorts enabled
+    (per-feed pref, or every refreshed YouTube feed when the global toggle is on).
+
+    Called from _run_automation_after_refresh right after entries land (link/hashtag
+    signals) and again after duration enhancement so ≤60s videos without a #shorts
+    tag are also caught."""
+    try:
+        with get_meta_connection() as conn:
+            shorts_urls = {
+                str(r["feed_url"])
+                for r in conn.execute(
+                    "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
+                ).fetchall()
+            }
+        shorts_targets = refreshed_feed_urls & shorts_urls
+        if youtube_hide_shorts_global():
+            shorts_targets = shorts_targets | {
+                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
+            }
+        if shorts_targets:
+            _mark_existing_shorts_read(shorts_targets)
+    except Exception:
+        LOGGER.exception("[automation] error applying hide-shorts")
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
@@ -5473,26 +5499,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     except Exception:
         LOGGER.exception("[guid-churn] error during cross-feed dedup")
 
-    # Hide Shorts: auto-mark Shorts as read for YouTube feeds that have it enabled.
-    try:
-        with get_meta_connection() as conn:
-            shorts_urls = {
-                str(r["feed_url"])
-                for r in conn.execute(
-                    "SELECT feed_url FROM feed_display_prefs WHERE hide_shorts = 1"
-                ).fetchall()
-            }
-        shorts_targets = refreshed_feed_urls & shorts_urls
-        # Global toggle: hide Shorts on every refreshed YouTube feed, regardless of
-        # the per-feed pref.
-        if youtube_hide_shorts_global():
-            shorts_targets = shorts_targets | {
-                u for u in refreshed_feed_urls if "youtube.com/feeds/videos.xml" in u
-            }
-        if shorts_targets:
-            _mark_existing_shorts_read(shorts_targets)
-    except Exception:
-        LOGGER.exception("[automation] error applying hide-shorts")
+    _apply_hide_shorts(refreshed_feed_urls)
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
@@ -12564,11 +12571,20 @@ def _scheduled_refresh_tick() -> None:
             len(feeds_to_refresh),
             len(folders_to_mark),
         )
-    feed_refresh_service.update_feeds(feeds_to_refresh)
+    # Refresh without enhancement so automation (hide-shorts, mark-read, dedup)
+    # runs as soon as entries land, instead of queuing behind the network-heavy
+    # lead-image / duration pass over the whole batch.
+    feed_refresh_service.update_feeds(feeds_to_refresh, enhance=False)
     _run_automation_after_refresh(feeds_to_refresh)
     invalidate_unread_counts_cache()
     if websub_service:
         websub_service.maybe_discover_hubs(list(feeds_to_refresh), tenancy.current_user_id())
+    # Enhancement still runs in this scheduler thread (same total work as before),
+    # just after the fast automation pass. A second hide-shorts pass afterward
+    # catches ≤60s videos that only the freshly-fetched durations can identify.
+    _enhance_feeds_background(list(feeds_to_refresh))
+    _apply_hide_shorts(feeds_to_refresh)
+    invalidate_unread_counts_cache()
 
 
 def _run_daily_maintenance() -> None:
