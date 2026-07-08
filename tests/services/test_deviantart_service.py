@@ -373,3 +373,23 @@ def _call_with_json_ct(fn, *args):
     client.get.return_value = _resp(200, {"username": "me"})
     with patch("httpx.Client", return_value=client):
         return fn(*args)
+
+
+def test_deviation_to_entry_carries_tags_when_present():
+    dev = {"deviationid": "d1", "url": "https://da/x", "title": "T",
+           "tags": [{"tag_name": "fantasy"}, "landscape"]}
+    e = da._deviation_to_entry(dev)
+    assert e is not None
+    assert e["tags"] == ["fantasy", "landscape"]
+
+
+def test_deviation_to_entry_no_tags_field():
+    e = da._deviation_to_entry({"deviationid": "d1", "url": "https://da/x"})
+    assert e is not None
+    assert e["tags"] == []
+
+
+def test_item_xml_emits_category_per_tag():
+    e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
+         "published_at": "2026-07-01T00:00:00+00:00", "tags": ["fantasy"]}
+    assert "<category>fantasy</category>" in da._item_xml(e)
