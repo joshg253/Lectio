@@ -5349,14 +5349,80 @@ def _run_tag_filter(
     return {"count": len(to_mark), "entries": matched_entries}
 
 
+def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | None:
+    """The feed-scoped tag_filter rule for feed_url (the one the post-header
+    chips manage), or None. Folder/global tag_filter rules are left alone."""
+    row = conn.execute(
+        "SELECT rowid, keyword, enabled FROM highlight_keywords"
+        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
+        (feed_url,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, sign: str) -> dict:
+    """Toggle a signed tag on the feed's tag_filter rule from the post-header
+    chips. Same sign already present → remove it; opposite sign → flip it;
+    otherwise append. Creates the rule (enabled) on first use, deletes it when
+    the spec empties, and applies the new spec to unread entries immediately.
+    Returns {spec, active, applied_count}."""
+    normalized = normalize_tag_value(tag)
+    if not normalized or sign not in ("+", "-"):
+        return {"error": "invalid tag"}
+
+    rule = get_feed_tag_filter_rule(conn, feed_url)
+    tokens: list[tuple[str, str]] = []  # (sign, normalized) in spec order
+    if rule:
+        for token in str(rule["keyword"] or "").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            token_sign = "-" if token[0] == "-" else "+"
+            value = normalize_tag_value(token.lstrip("+-"))
+            if value and (token_sign, value) not in tokens:
+                tokens.append((token_sign, value))
+
+    if (sign, normalized) in tokens:
+        tokens.remove((sign, normalized))  # toggle off
+    else:
+        opposite = "-" if sign == "+" else "+"
+        if (opposite, normalized) in tokens:
+            tokens.remove((opposite, normalized))
+        tokens.append((sign, normalized))
+
+    spec = ", ".join(f"{s}{v}" for s, v in tokens)
+    if rule and not tokens:
+        conn.execute("DELETE FROM highlight_keywords WHERE rowid = ?", (rule["rowid"],))
+    elif rule:
+        conn.execute(
+            "UPDATE highlight_keywords SET keyword = ?, enabled = 1 WHERE rowid = ?",
+            (spec, rule["rowid"]),
+        )
+    elif tokens:
+        add_highlight_keyword(conn, "feed", feed_url, spec, "yellow",
+                              rule_type="tag_filter", enabled=1)
+
+    applied = 0
+    if tokens:
+        result = _run_tag_filter(conn, "feed", feed_url, spec)
+        if "error" not in result:
+            applied = int(result.get("count", 0))
+            if applied > 0:
+                _log_auto_run(conn, datetime.now().isoformat(), "tag_filter",
+                              "feed", feed_url, spec, result, trigger="manual")
+
+    return {"spec": spec, "active": {v: s for s, v in tokens}, "applied_count": applied}
+
+
 def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,
-                  scope_id: str, keyword: str, result: dict) -> None:
+                  scope_id: str, keyword: str, result: dict,
+                  trigger: str = "auto") -> None:
     """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
     cur = conn.execute(
         "INSERT INTO rule_run_log"
         " (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'auto')",
-        (now, rule_type, scope, scope_id, keyword, result["count"]),
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (now, rule_type, scope, scope_id, keyword, result["count"], trigger),
     )
     rows = [(e, "marked") for e in (result.get("entries") or [])]
     rows += [(e, "kept") for e in (result.get("kept") or [])]
@@ -9868,6 +9934,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "manual_tags": [],
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
+        "feed_tag_filter_signs": {},
         "feed_icon_url": None,
         "is_orphan_archive": True,
     }
@@ -11173,17 +11240,23 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         raw_feed_tags = get_feed_tag_suggestions(entry.feed_url, entry.id)
-        # Tags are stored raw; normalize to Lectio tag format for display and
-        # compare normalized-to-normalized so an applied "machine-learning"
-        # suppresses a raw "Machine Learning" suggestion.
-        manual_tag_set = {normalize_tag_value(tag) for tag in manual_tags}
+        # Tags are stored raw; normalize to Lectio tag format for display. The
+        # chips are feed-filter controls ([- tag +] toggling the feed's
+        # tag_filter rule), so all of the entry's feed tags show — including
+        # ones already applied as manual tags.
         feed_tag_suggestions = []
         for raw_tag in raw_feed_tags:
             normalized = normalize_tag_value(raw_tag)
-            if not normalized or normalized in manual_tag_set:
-                continue
-            if normalized not in feed_tag_suggestions:
+            if normalized and normalized not in feed_tag_suggestions:
                 feed_tag_suggestions.append(normalized)
+        # Current +/- state of the feed's tag_filter rule, so active signs render lit.
+        feed_tag_filter_signs: dict[str, str] = {}
+        if feed_tag_suggestions:
+            with get_meta_connection() as _rule_conn:
+                _rule = get_feed_tag_filter_rule(_rule_conn, str(entry.feed_url))
+            if _rule:
+                _inc, _exc = parse_tag_filter_spec(str(_rule["keyword"] or ""))
+                feed_tag_filter_signs = {t: "+" for t in _inc} | {t: "-" for t in _exc}
 
         # Check if entry is saved
         is_saved = False
@@ -11496,6 +11569,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags": manual_tags,
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "feed_tag_filter_signs": feed_tag_filter_signs,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,
             "audio_feed_suggestion": _audio_feed_suggestion,
@@ -15936,6 +16010,22 @@ def rules_dry_run_route(
         return JSONResponse({"error": result["error"]}, status_code=400)
     result["ok"] = True
     result["type"] = type
+    return JSONResponse(result)
+
+
+@app.post("/rules/tag-filter/toggle")
+def tag_filter_toggle_route(
+    feed_url: str = Form(...),
+    tag: str = Form(...),
+    sign: str = Form(...),
+):
+    """Post-header chip action: toggle +tag/-tag on the feed's tag_filter rule
+    and apply it to unread entries immediately."""
+    with get_meta_connection() as conn:
+        result = toggle_feed_tag_filter(conn, feed_url, tag, sign)
+    if "error" in result:
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    result["ok"] = True
     return JSONResponse(result)
 
 

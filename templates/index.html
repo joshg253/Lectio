@@ -13368,42 +13368,45 @@
         });
       }
 
-      for (const suggestionButton of document.querySelectorAll('[data-tag-suggestion]')) {
-        if (suggestionButton.dataset.boundClick) {
+      // Feed-tag filter chips: [ − tag + ] in the post header. Each sign
+      // toggles ±tag on this feed's Tag Filter rule (creating/deleting the
+      // rule as needed) and applies it to unread entries immediately.
+      for (const signButton of document.querySelectorAll('[data-tag-filter-sign]')) {
+        if (signButton.dataset.boundClick) {
           continue;
         }
-        suggestionButton.dataset.boundClick = '1';
-        suggestionButton.addEventListener('click', () => {
-          const inputId = suggestionButton.getAttribute('data-tag-input');
-          const suggestedTag = suggestionButton.getAttribute('data-tag-suggestion');
-          if (!inputId || !suggestedTag) {
+        signButton.dataset.boundClick = '1';
+        signButton.addEventListener('click', async () => {
+          const tag = signButton.getAttribute('data-tag-filter-tag');
+          const sign = signButton.getAttribute('data-tag-filter-sign');
+          const feedUrlInput = entryTagsForm?.querySelector('input[name="feed_url"]');
+          const feedUrl = feedUrlInput instanceof HTMLInputElement ? feedUrlInput.value : '';
+          if (!tag || !sign || !feedUrl) {
             return;
           }
-
-          const targetInput = document.getElementById(inputId);
-          if (!(targetInput instanceof HTMLInputElement)) {
-            return;
+          signButton.disabled = true;
+          try {
+            const body = new URLSearchParams({ feed_url: feedUrl, tag, sign });
+            const resp = await fetch('/rules/tag-filter/toggle', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              credentials: 'same-origin',
+              body: body.toString(),
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) throw new Error(data.error || 'failed');
+            const nowActive = (data.active || {})[tag] === sign;
+            const verb = sign === '-' ? 'Filtering out' : 'Keeping only';
+            const n = data.applied_count || 0;
+            showToastMessage(nowActive
+              ? `${verb} #${tag} on this feed${n ? ` — ${n} marked read` : ''}`
+              : `Removed ${sign}${tag} from this feed's filter`);
+            // Re-render so chip states and the unread list reflect the rule.
+            loadEntryPaneWithoutFullRefresh(window.location.href, false);
+          } catch (err) {
+            showToastMessage('Filter update failed: ' + (err.message || err));
+            signButton.disabled = false;
           }
-
-          const normalizedSuggestion = suggestedTag.trim().replace(/^#+/, '').toLowerCase();
-          if (!normalizedSuggestion) {
-            return;
-          }
-
-          // Directly apply the suggested tag via the tags form's submit
-          // pipeline (validation, merge, append-mode POST, pane refresh).
-          // Any partially typed input is included in the same apply — the
-          // pane re-render on success would drop it otherwise.
-          const typedTokens = targetInput.value
-            .split(/\s+/)
-            .map((token) => token.trim().replace(/^#+/, '').toLowerCase())
-            .filter(Boolean);
-          if (!typedTokens.includes(normalizedSuggestion)) {
-            typedTokens.push(normalizedSuggestion);
-          }
-          targetInput.value = typedTokens.join(' ');
-          suggestionButton.disabled = true;
-          entryTagsForm?.querySelector('button[type="submit"]')?.click();
         });
       }
 

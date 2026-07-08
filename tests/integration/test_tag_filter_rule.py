@@ -163,3 +163,63 @@ def test_disabled_rule_does_not_run(env):
                                    rule_type="tag_filter", enabled=0)
     main._run_automation_after_refresh({FEED})
     assert len(_unread_ids()) == 5
+
+
+# --- post-header chip toggles (toggle_feed_tag_filter) ---
+
+def _rule_keyword(conn):
+    row = conn.execute(
+        "SELECT keyword, enabled FROM highlight_keywords WHERE type='tag_filter'"
+        " AND scope='feed' AND scope_id=?", (FEED,)
+    ).fetchone()
+    return (row["keyword"], row["enabled"]) if row else None
+
+
+def test_toggle_creates_rule_and_applies(env):
+    with main.get_meta_connection() as conn:
+        result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+    assert result["spec"] == "-deals"
+    assert result["active"] == {"deals": "-"}
+    assert result["applied_count"] == 2  # applied immediately
+    assert _unread_ids() == {"e-linux", "e-win", "e-untagged"}
+    with main.get_meta_connection() as conn:
+        assert _rule_keyword(conn) == ("-deals", 1)
+
+
+def test_toggle_same_sign_removes_and_empty_deletes_rule(env):
+    with main.get_meta_connection() as conn:
+        main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+        result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+    assert result["spec"] == ""
+    assert result["active"] == {}
+    with main.get_meta_connection() as conn:
+        assert _rule_keyword(conn) is None  # rule deleted when spec empties
+
+
+def test_toggle_opposite_sign_flips(env):
+    with main.get_meta_connection() as conn:
+        main.toggle_feed_tag_filter(conn, FEED, "linux", "-")
+        result = main.toggle_feed_tag_filter(conn, FEED, "linux", "+")
+    assert result["spec"] == "+linux"
+    assert result["active"] == {"linux": "+"}
+
+
+def test_toggle_appends_to_existing_spec(env):
+    with main.get_meta_connection() as conn:
+        main.toggle_feed_tag_filter(conn, FEED, "linux", "+")
+        result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+    assert result["spec"] == "+linux, -deals"
+
+
+def test_toggle_reenables_disabled_rule(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
+                                   rule_type="tag_filter", enabled=0)
+        main.toggle_feed_tag_filter(conn, FEED, "sponsored", "-")
+        assert _rule_keyword(conn) == ("-deals, -sponsored", 1)
+
+
+def test_toggle_invalid_input(env):
+    with main.get_meta_connection() as conn:
+        assert "error" in main.toggle_feed_tag_filter(conn, FEED, "  ", "-")
+        assert "error" in main.toggle_feed_tag_filter(conn, FEED, "x", "!")

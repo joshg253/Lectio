@@ -206,18 +206,30 @@
       </span>
       {% endfor %} {% endif %}
       {% if selected_entry.feed_tag_suggestions %}
-      <span class="entry-tag-suggestions" aria-label="Feed tag suggestions">
+      <span class="entry-tag-suggestions" aria-label="Feed tags — filter this feed">
         {% for tag in selected_entry.feed_tag_suggestions %}
-        <button
-          type="button"
-          class="entry-tag-chip suggestion"
-          data-tag-suggestion="{{ tag }}"
-          data-tag-input="entry-tags-input"
-          title="Add #{{ tag }} to this post"
-          aria-label="Add #{{ tag }} to this post"
-        >
-          <span aria-hidden="true">+</span>{{ tag }}
-        </button>
+        {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
+        <span class="entry-tag-chip suggestion feed-tag-filter-chip">
+          <button
+            type="button"
+            class="feed-tag-filter-sign minus{% if active_sign == '-' %} active{% endif %}"
+            data-tag-filter-tag="{{ tag }}"
+            data-tag-filter-sign="-"
+            title="Filter out #{{ tag }} posts on this feed"
+            aria-label="Filter out #{{ tag }} posts on this feed"
+            aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
+          >−</button>
+          <span class="feed-tag-filter-name">{{ tag }}</span>
+          <button
+            type="button"
+            class="feed-tag-filter-sign plus{% if active_sign == '+' %} active{% endif %}"
+            data-tag-filter-tag="{{ tag }}"
+            data-tag-filter-sign="+"
+            title="Keep only #{{ tag }} posts on this feed"
+            aria-label="Keep only #{{ tag }} posts on this feed"
+            aria-pressed="{{ 'true' if active_sign == '+' else 'false' }}"
+          >+</button>
+        </span>
         {% endfor %}
       </span>
       {% endif %}
