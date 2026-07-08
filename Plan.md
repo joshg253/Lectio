@@ -5,27 +5,13 @@ this file only tracks what's still open.
 
 ## Now
 
-### CodeQL — triage DONE 2026-07-07 (verify alerts auto-close after merge)
-
-Full code-scanning triage completed (fix/codeql-triage branch):
-- **4 `py/lectio/full-ssrf` — fixed in code.** Webhooks + probe_frameability now
-  route through the modeled `ensure_safe_outbound_url` barrier (they were guarded,
-  but via the boolean `is_safe_outbound_url` form that the query can't see); the
-  feed-properties title refetch and YouTube channelId page fetch were genuinely
-  unguarded and now use `url_guard.safe_get` (per-hop redirect revalidation).
-- **1 real open redirect fixed** — `GET /login?next=` already-logged-in shortcut
-  redirected to raw `next`; now sanitized via `_safe_next` like the POST path.
-- **Host substring checks hardened** — `is_reddit_feed_url` and the YouTube
-  URL helpers (`_is_youtube_host`) now do exact host suffix matching.
-- **`actions/missing-workflow-permissions`** — ci.yml given `contents: read`.
-- **Dismissed as false positive with per-alert comments:** all
-  `py/stack-trace-exposure` (str(exc) messages in JSON errors — no traceback,
-  deliberate operator UX), all remaining `py/url-redirection` (fixed local
-  `/?...` paths with int-typed ids + quote_plus params, or `_safe_next`-guarded),
-  test-only + strategy-dispatch `py/incomplete-url-substring-sanitization`.
-
-**Remaining:** after the branch merges to main, confirm the next CodeQL analysis
-auto-closes the code-fixed alerts (141-144, 120, 54/55/57, 8, 1).
+(nothing — CodeQL triage completed and verified 2026-07-08: the code-scanning
+board is at **zero open alerts**. The fixes merged in PR #114 auto-closed their
+alerts; the `_safe_next`-guarded login redirect re-flagged once post-merge
+(alert 152) and was dismissed — the stock query can't model a
+validate-and-return-same-string sanitizer, so any future edit near
+`RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
+rationale.)
 
 
 ## Later
@@ -33,11 +19,11 @@ auto-closes the code-fixed alerts (141-144, 120, 54/55/57, 8, 1).
 ### Dev.to feed migration (manual, after adapter deploy)
 
 The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see
-ARCHITECTURE.md "dev.to filtered feeds"). Remaining user step: replace the four
-existing raw dev.to subscriptions (front page + C++/C#/Python tag feeds) with
-filtered adapter feeds via the Add Feed dialog, carrying starred posts over
-either all-at-once (unsubscribe-migration modal) or per-entry via the shipped
-"Move to feed…" context-menu action.
+ARCHITECTURE.md "dev.to filtered feeds"), along with the migration tooling
+(per-entry "Move to feed…", batch "Move visible to feed…", and chunked moves
+in the unsubscribe dialog — all merged via PRs #115/#117/#118). Remaining user
+step: replace the four existing raw dev.to subscriptions (front page +
+C++/C#/Python tag feeds) with filtered adapter feeds via the Add Feed dialog.
 
 ### Global audio player — deferred v2 ideas
 
