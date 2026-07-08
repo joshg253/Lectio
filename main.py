@@ -10264,11 +10264,14 @@ _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
-    Three passes, in order: (1) replace a bare body link that points at the same
+    Four passes, in order: (1) replace a bare body link that points at the same
     media — so the player takes the place of the link the feed showed instead of
-    the embed; (2) fill empty ``<p></p>`` placeholders that follow a heading (the
-    stripped embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in
-    document order; (3) append whatever's left at the bottom."""
+    the embed; (2) fill empty video-container divs (a class hinting
+    youtube/video with no content left inside — the husk a stripped facade
+    leaves behind, e.g. guitarworld's ``<div class="youtube-video">``); (3)
+    fill empty ``<p></p>`` placeholders that follow a heading (the stripped
+    embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in document
+    order; (4) append whatever's left at the bottom."""
     if not items:
         return content_html
     from bs4 import BeautifulSoup
@@ -10302,7 +10305,25 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             target.replace_with(repl)
         remaining.remove((canonical, embed))
 
-    # Pass 2 — fill empty <p> placeholders that follow a heading.
+    # Pass 2 — fill empty video-container divs (stripped-facade husks), in
+    # document order, so the player lands where the page had it.
+    if remaining:
+        husks = []
+        for d in soup.find_all("div"):
+            blob = " ".join(d.get("class") or []).lower()
+            if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")) \
+                    and blob != "video":
+                continue
+            if d.get_text(strip=True) or d.find(["img", "iframe", "audio", "video"]):
+                continue
+            if any(d in h.descendants for h in husks):
+                continue  # inner box of a husk already claimed
+            husks.append(d)
+        for d, (canonical, embed) in zip(husks, list(remaining), strict=False):
+            d.replace_with(BeautifulSoup(embed, "html.parser"))
+            remaining.remove((canonical, embed))
+
+    # Pass 3 — fill empty <p> placeholders that follow a heading.
     if remaining:
         empties = []
         for p in soup.find_all("p"):
@@ -10316,10 +10337,31 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             remaining.remove((canonical, embed))
 
     out = str(soup)
-    # Pass 3 — append leftovers.
+    # Pass 4 — append leftovers.
     if remaining:
         out += "".join(f'<p class="lectio-embed">{e}</p>' for _, e in remaining)
     return out
+
+
+_HUSK_CLASS_RE = re.compile(r'class="[^"]*(?:youtube|video-embed|video-container|video-aspect)[^"]*"')
+
+
+def _body_has_embed_husk(body: str) -> bool:
+    """True when the body contains an empty video-container div (the husk a
+    stripped click-to-load facade leaves behind). Cheap regex prefilter, then
+    the same emptiness check the placement pass uses."""
+    if not body or not _HUSK_CLASS_RE.search(body):
+        return False
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(body, "html.parser")
+    for d in soup.find_all("div"):
+        blob = " ".join(d.get("class") or []).lower()
+        if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")):
+            continue
+        if not d.get_text(strip=True) and not d.find(["img", "iframe", "audio", "video"]):
+            return True
+    return False
 
 
 def _inject_recovered_source_embeds(content_html, entry):
@@ -10345,7 +10387,15 @@ def _inject_recovered_source_embeds(content_html, entry):
         # leave the body unchanged; the embed fills in on a later open. Many pages
         # are already cached by the lead-image scraper, so this often hits.
         lead_image_service.queue_source_html_fetch(link)
-        return content_html
+        # Exception: when the body carries a stripped-embed husk (an empty
+        # video-container div), a player almost certainly belongs there — the
+        # cache is just cold (in-memory, cleared on restart). Wait briefly for
+        # the queued fetch so the first open shows the video too; the husk
+        # check keeps ordinary embed-less entries on the fast path.
+        if _body_has_embed_husk(body) and lead_image_service.wait_for_source_html_fetch(link, timeout=2.5):
+            cached = lead_image_service.get_cached_source_html(link)
+        if cached is None:
+            return content_html
     _base, raw_html = cached
     items = _extract_source_embed_iframes(raw_html, body)
     if not items:

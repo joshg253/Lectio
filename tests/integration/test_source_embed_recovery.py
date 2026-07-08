@@ -130,6 +130,36 @@ def test_place_replaces_matching_bare_link():
     assert "youtube-embed-container" in out
 
 
+def test_place_fills_empty_video_husk_div():
+    # guitarworld feed bodies keep the stripped facade's empty container div;
+    # the recovered player should land there (top of the article), not at the
+    # bottom.
+    body = (
+        '<article><div class="youtube-video"><div class="video-aspect-box"></div></div>'
+        "<p>First real paragraph.</p></article>"
+    )
+    out = main._place_recovered_embeds(body, [(f"yt:{VID}", f'<iframe src="https://www.youtube.com/embed/{VID}"></iframe>')])
+    assert out.index(f"/embed/{VID}") < out.index("First real paragraph")
+    assert 'class="youtube-video"' not in out  # husk consumed, not duplicated
+
+
+def test_place_husk_ignores_divs_with_content():
+    body = '<div class="video-wrap"><img src="poster.jpg"></div><p>text</p>'
+    out = main._place_recovered_embeds(body, [(f"yt:{VID}", "<iframe></iframe>")])
+    # Div has content → not a husk; embed appended at bottom instead.
+    assert '<img src="poster.jpg"' in out
+    assert 'class="lectio-embed"' in out  # fell through to the append pass
+
+
+def test_body_has_embed_husk():
+    husk = '<article><div class="youtube-video"><div class="video-aspect-box"></div></div><p>t</p></article>'
+    assert main._body_has_embed_husk(husk)
+    # Container with content is not a husk; plain text has none.
+    assert not main._body_has_embed_husk('<div class="video-wrap"><img src="x.jpg"></div>')
+    assert not main._body_has_embed_husk("<p>no video here</p>")
+    assert not main._body_has_embed_husk("")
+
+
 def test_place_appends_leftovers_at_bottom():
     body = "<p>Article body, no slots or links.</p>"
     items = [(f"yt:{VID}", main._youtube_embed_html(VID))]
