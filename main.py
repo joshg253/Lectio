@@ -10264,11 +10264,14 @@ _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str]] | list[tuple[str, str]]) -> str:
     """Insert recovered embeds where they belong, not just at the bottom.
 
-    Three passes, in order: (1) replace a bare body link that points at the same
+    Four passes, in order: (1) replace a bare body link that points at the same
     media — so the player takes the place of the link the feed showed instead of
-    the embed; (2) fill empty ``<p></p>`` placeholders that follow a heading (the
-    stripped embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in
-    document order; (3) append whatever's left at the bottom."""
+    the embed; (2) fill empty video-container divs (a class hinting
+    youtube/video with no content left inside — the husk a stripped facade
+    leaves behind, e.g. guitarworld's ``<div class="youtube-video">``); (3)
+    fill empty ``<p></p>`` placeholders that follow a heading (the stripped
+    embed slots, e.g. theobelisk's ``<h3>title</h3><p></p>``), in document
+    order; (4) append whatever's left at the bottom."""
     if not items:
         return content_html
     from bs4 import BeautifulSoup
@@ -10302,7 +10305,25 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             target.replace_with(repl)
         remaining.remove((canonical, embed))
 
-    # Pass 2 — fill empty <p> placeholders that follow a heading.
+    # Pass 2 — fill empty video-container divs (stripped-facade husks), in
+    # document order, so the player lands where the page had it.
+    if remaining:
+        husks = []
+        for d in soup.find_all("div"):
+            blob = " ".join(d.get("class") or []).lower()
+            if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")) \
+                    and blob != "video":
+                continue
+            if d.get_text(strip=True) or d.find(["img", "iframe", "audio", "video"]):
+                continue
+            if any(d in h.descendants for h in husks):
+                continue  # inner box of a husk already claimed
+            husks.append(d)
+        for d, (canonical, embed) in zip(husks, list(remaining), strict=False):
+            d.replace_with(BeautifulSoup(embed, "html.parser"))
+            remaining.remove((canonical, embed))
+
+    # Pass 3 — fill empty <p> placeholders that follow a heading.
     if remaining:
         empties = []
         for p in soup.find_all("p"):
@@ -10316,7 +10337,7 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
             remaining.remove((canonical, embed))
 
     out = str(soup)
-    # Pass 3 — append leftovers.
+    # Pass 4 — append leftovers.
     if remaining:
         out += "".join(f'<p class="lectio-embed">{e}</p>' for _, e in remaining)
     return out
