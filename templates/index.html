@@ -4724,6 +4724,7 @@
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
       const token = ++entryPaneRequestToken;
       let currentUrlHasEntry = false;
+      let paneSwapped = false;
 
       try {
         const currentUrl = new URL(window.location.href, window.location.origin);
@@ -4766,6 +4767,7 @@
         }
 
         currentPane.replaceWith(nextPane);
+        paneSwapped = true;
         applyLocalTimestamps(nextPane);
         applyRelativeTimestamps(nextPane);
         applyAbsoluteTimestamps(nextPane);
@@ -4804,8 +4806,17 @@
           }
         }
       } catch (_error) {
-        window.location.href = url;
-        throw _error;
+        // Full-page fallback ONLY when the pane never made it in (fetch/parse
+        // failed). Once the swap has happened the content is on screen — an
+        // exception in the post-swap enhancement/binder pipeline must not
+        // throw it away with a hard reload (this was the random "app
+        // refreshes while browsing articles" bug: entry-specific content
+        // tripping one binder nuked the whole session).
+        if (!paneSwapped) {
+          window.location.href = url;
+          throw _error;
+        }
+        console.error('[lectio] entry-pane post-swap enhancement failed (pane content is fine):', _error);
       }
     }
 
