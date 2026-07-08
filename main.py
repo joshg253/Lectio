@@ -10158,40 +10158,89 @@ def _extract_source_embed_iframes(
     (sandbox + referrer policy) since it's injected at render time. The canonical
     link (``yt:<id>`` for YouTube, else the embed's fallback ``<a href>`` so a
     Bandcamp/SoundCloud player can be matched to its bare album/track link in the
-    body) drives in-context placement; ``None`` when no link can be derived."""
-    if not raw_html or "<iframe" not in raw_html.lower():
+    body) drives in-context placement; ``None`` when no link can be derived.
+
+    Besides real ``<iframe>``s, recognizes click-to-load YouTube **facades**
+    (e.g. guitarworld.com): pages whose JS swaps a thumbnail for the iframe on
+    click, so the raw HTML only carries a ``/vi/<id>/`` thumbnail image inside
+    a video-ish container, or a ``<lite-youtube videoid=…>`` element."""
+    if not raw_html:
+        return []
+    lower_html = raw_html.lower()
+    has_iframe = "<iframe" in lower_html
+    has_facade = "/vi/" in lower_html or "lite-youtube" in lower_html
+    if not (has_iframe or has_facade):
         return []
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(raw_html, "html.parser")
     existing = (existing_html or "").lower()
     seen: set[str] = set()
+    seen_yt: set[str] = set()
     out: list[tuple[str | None, str]] = []
-    for ifr in soup.find_all("iframe"):
-        src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
-        if not src or not html_sanitize._embed_host_allowed(src):
-            continue
-        key = src.split("?", 1)[0].lower()
-        if key in seen or key in existing:
-            continue
-        seen.add(key)
-        vid = None
-        if "youtu" in src.lower():
-            _em = re.search(r"/embed/([\w-]{11})", src)
-            vid = _em.group(1) if _em else youtube_duration_service.extract_video_id(src)
-        if vid:
-            out.append((f"yt:{vid}", _youtube_embed_html(vid)))
-        else:
-            cleaned = html_sanitize.sanitize_html(str(ifr))
-            if "<iframe" in cleaned.lower():
-                # iframe content is parsed as raw text (the fallback <a> is a
-                # string, not a tag), so match its href out of the inner markup —
-                # the canonical album/track link for matching the body's bare link.
-                _am = re.search(r'href=["\']([^"\']+)["\']', ifr.decode_contents())
-                canonical = _am.group(1) if _am else None
-                out.append((canonical, cleaned))
-        if len(out) >= limit:
-            break
+
+    def _emit_youtube(vid: str) -> None:
+        if vid in seen_yt or f"/embed/{vid}" in existing:
+            return
+        seen_yt.add(vid)
+        out.append((f"yt:{vid}", _youtube_embed_html(vid)))
+
+    if has_iframe:
+        for ifr in soup.find_all("iframe"):
+            if len(out) >= limit:
+                break
+            src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+            if not src or not html_sanitize._embed_host_allowed(src):
+                continue
+            key = src.split("?", 1)[0].lower()
+            if key in seen or key in existing:
+                continue
+            seen.add(key)
+            vid = None
+            if "youtu" in src.lower():
+                _em = re.search(r"/embed/([\w-]{11})", src)
+                vid = _em.group(1) if _em else youtube_duration_service.extract_video_id(src)
+            if vid:
+                _emit_youtube(vid)
+            else:
+                cleaned = html_sanitize.sanitize_html(str(ifr))
+                if "<iframe" in cleaned.lower():
+                    # iframe content is parsed as raw text (the fallback <a> is a
+                    # string, not a tag), so match its href out of the inner markup —
+                    # the canonical album/track link for matching the body's bare link.
+                    _am = re.search(r'href=["\']([^"\']+)["\']', ifr.decode_contents())
+                    canonical = _am.group(1) if _am else None
+                    out.append((canonical, cleaned))
+
+    if has_facade:
+        # <lite-youtube videoid="…"> custom elements (the common facade library).
+        for el in soup.find_all("lite-youtube"):
+            if len(out) >= limit:
+                break
+            vid = str(el.get("videoid") or "").strip()
+            if re.fullmatch(r"[\w-]{11}", vid):
+                _emit_youtube(vid)
+        # Facade thumbnails: an <img> pointing at the video's /vi/<id>/ thumb.
+        # Require a video-ish ancestor class/id so unrelated "related videos"
+        # thumbnails elsewhere on the page don't get pulled in.
+        for img in soup.find_all("img"):
+            if len(out) >= limit:
+                break
+            src = str(img.get("src") or img.get("data-src") or "")
+            m = re.search(r"(?:ytimg\.com|youtube\.com)/vi/([\w-]{11})/", src)
+            if not m:
+                continue
+            node, hinted = img, False
+            for _ in range(4):
+                node = node.parent
+                if node is None:
+                    break
+                blob = " ".join([*(node.get("class") or []), str(node.get("id") or "")]).lower()
+                if any(h in blob for h in ("youtube", "video", "facade", "embed", "player")):
+                    hinted = True
+                    break
+            if hinted:
+                _emit_youtube(m.group(1))
     return out
 
 
