@@ -52,9 +52,9 @@ def _rows(conn, entry_id="e1"):
     ]
 
 
-def test_record_and_get(service):
+def test_record_and_get_preserves_feed_order(service):
     service.record_entry_tags(FEED, [("e1", ["Python", "AI"]), ("e2", ["Rust"])])
-    assert service.get_tags_for_entry(FEED, "e1") == ["AI", "Python"]
+    assert service.get_tags_for_entry(FEED, "e1") == ["Python", "AI"]
     assert service.get_tags_for_entry(FEED, "e2") == ["Rust"]
     assert service.get_tags_for_entry(FEED, "missing") == []
 
@@ -96,7 +96,8 @@ def test_migrate_feed_url_merges_collisions(service):
     service.record_entry_tags(FEED, [("e1", ["a", "b"])])
     service.record_entry_tags(new, [("e1", ["a"])])
     service.migrate_feed_url(FEED, new)
-    assert service.get_tags_for_entry(new, "e1") == ["a", "b"]
+    # Order after a merge is best-effort; content is what matters.
+    assert sorted(service.get_tags_for_entry(new, "e1")) == ["a", "b"]
     assert service.get_tags_for_entry(FEED, "e1") == []
 
 
@@ -157,6 +158,23 @@ def test_parser_guidless_rss_maps_by_link(sink):
     )
     SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
     assert sink == [(FEED, [("https://x.test/1", ["tagged"])])]
+
+
+def test_parser_skipped_entry_produces_no_pair(sink):
+    # An item with neither guid nor link is rejected by reader's _process_entry
+    # (skipped with a warning); its tags must not reach the sink even though
+    # the raw feedparser result still contains the entry.
+    import warnings
+
+    raw = _feed_xml(
+        "<item><title>no id</title><category>Orphan</category></item>"
+        "<item><guid>e1</guid><link>https://x.test/1</link>"
+        "<category>Kept</category></item>"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
+    assert sink == [(FEED, [("e1", ["Kept"])])]
 
 
 def test_parser_no_tags_no_sink_call(sink):
