@@ -175,15 +175,31 @@ def _rule_keyword(conn):
     return (row["keyword"], row["enabled"]) if row else None
 
 
-def test_toggle_creates_rule_and_applies(env):
+def test_toggle_creates_rule_disabled_no_apply(env):
+    # Chips are a tuning surface: the rule is created OFF and nothing is
+    # marked read until it's armed in Automation.
     with main.get_meta_connection() as conn:
         result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
     assert result["spec"] == "-deals"
     assert result["active"] == {"deals": "-"}
-    assert result["applied_count"] == 2  # applied immediately
+    assert result["enabled"] is False
+    assert result["applied_count"] == 0
+    assert len(_unread_ids()) == 5  # untouched
+    with main.get_meta_connection() as conn:
+        assert _rule_keyword(conn) == ("-deals", 0)
+
+
+def test_toggle_on_enabled_rule_applies_immediately(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-sponsored", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+    assert result["spec"] == "-sponsored, -deals"
+    assert result["enabled"] is True
+    assert result["applied_count"] == 2
     assert _unread_ids() == {"e-linux", "e-win", "e-untagged"}
     with main.get_meta_connection() as conn:
-        assert _rule_keyword(conn) == ("-deals", 1)
+        assert _rule_keyword(conn) == ("-sponsored, -deals", 1)
 
 
 def test_toggle_same_sign_removes_and_empty_deletes_rule(env):
@@ -211,12 +227,14 @@ def test_toggle_appends_to_existing_spec(env):
     assert result["spec"] == "+linux, -deals"
 
 
-def test_toggle_reenables_disabled_rule(env):
+def test_toggle_preserves_enabled_state(env):
+    # Chip edits never flip the switch: a disabled rule stays disabled.
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
                                    rule_type="tag_filter", enabled=0)
         main.toggle_feed_tag_filter(conn, FEED, "sponsored", "-")
-        assert _rule_keyword(conn) == ("-deals, -sponsored", 1)
+        assert _rule_keyword(conn) == ("-deals, -sponsored", 0)
+    assert len(_unread_ids()) == 5
 
 
 def test_toggle_invalid_input(env):

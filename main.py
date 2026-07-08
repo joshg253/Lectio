@@ -5363,9 +5363,11 @@ def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | 
 def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, sign: str) -> dict:
     """Toggle a signed tag on the feed's tag_filter rule from the post-header
     chips. Same sign already present → remove it; opposite sign → flip it;
-    otherwise append. Creates the rule (enabled) on first use, deletes it when
-    the spec empties, and applies the new spec to unread entries immediately.
-    Returns {spec, active, applied_count}."""
+    otherwise append. Creates the rule DISABLED on first use — the chips are a
+    tuning surface; the user arms the rule in Automation when it's ready — and
+    deletes it when the spec empties. The new spec is applied to unread
+    entries immediately only when the rule is already enabled.
+    Returns {spec, active, enabled, applied_count}."""
     normalized = normalize_tag_value(tag)
     if not normalized or sign not in ("+", "-"):
         return {"error": "invalid tag"}
@@ -5391,19 +5393,20 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
         tokens.append((sign, normalized))
 
     spec = ", ".join(f"{s}{v}" for s, v in tokens)
+    enabled = bool(rule and rule["enabled"])
     if rule and not tokens:
         conn.execute("DELETE FROM highlight_keywords WHERE rowid = ?", (rule["rowid"],))
     elif rule:
         conn.execute(
-            "UPDATE highlight_keywords SET keyword = ?, enabled = 1 WHERE rowid = ?",
+            "UPDATE highlight_keywords SET keyword = ? WHERE rowid = ?",
             (spec, rule["rowid"]),
         )
     elif tokens:
         add_highlight_keyword(conn, "feed", feed_url, spec, "yellow",
-                              rule_type="tag_filter", enabled=1)
+                              rule_type="tag_filter", enabled=0)
 
     applied = 0
-    if tokens:
+    if tokens and enabled:
         result = _run_tag_filter(conn, "feed", feed_url, spec)
         if "error" not in result:
             applied = int(result.get("count", 0))
@@ -5411,7 +5414,8 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
                 _log_auto_run(conn, datetime.now().isoformat(), "tag_filter",
                               "feed", feed_url, spec, result, trigger="manual")
 
-    return {"spec": spec, "active": {v: s for s, v in tokens}, "applied_count": applied}
+    return {"spec": spec, "active": {v: s for s, v in tokens},
+            "enabled": enabled, "applied_count": applied}
 
 
 def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,

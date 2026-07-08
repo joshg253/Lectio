@@ -2744,14 +2744,24 @@ button:hover, .button-link:hover {
   color: var(--ink);
 }
 
-.feed-tag-filter-sign.minus.active {
+.feed-tag-filter-sign.include,
+.feed-tag-filter-sign.exclude {
+  font-size: 0.62em;
+  padding: 0 0.3em;
+}
+
+.feed-tag-filter-sign.include.active {
+  opacity: 1;
+  color: #4caf7d;
+}
+
+.feed-tag-filter-sign.exclude.active {
   opacity: 1;
   color: #e05c5c;
 }
 
-.feed-tag-filter-sign.plus.active {
-  opacity: 1;
-  color: #4caf7d;
+.feed-tag-filter-sign.add-tag {
+  font-weight: 700;
 }
 
 .feed-tag-filter-sign[disabled] {

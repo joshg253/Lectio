@@ -210,25 +210,35 @@
         {% for tag in selected_entry.feed_tag_suggestions %}
         {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
         <span class="entry-tag-chip suggestion feed-tag-filter-chip">
+          {% if tag not in selected_entry.manual_tags %}
           <button
             type="button"
-            class="feed-tag-filter-sign minus{% if active_sign == '-' %} active{% endif %}"
-            data-tag-filter-tag="{{ tag }}"
-            data-tag-filter-sign="-"
-            title="Filter out #{{ tag }} posts on this feed"
-            aria-label="Filter out #{{ tag }} posts on this feed"
-            aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
-          >−</button>
+            class="feed-tag-filter-sign add-tag"
+            data-tag-suggestion="{{ tag }}"
+            data-tag-input="entry-tags-input"
+            title="Add #{{ tag }} to this post"
+            aria-label="Add #{{ tag }} to this post"
+          >+</button>
+          {% endif %}
           <span class="feed-tag-filter-name">{{ tag }}</span>
           <button
             type="button"
-            class="feed-tag-filter-sign plus{% if active_sign == '+' %} active{% endif %}"
+            class="feed-tag-filter-sign include{% if active_sign == '+' %} active{% endif %}"
             data-tag-filter-tag="{{ tag }}"
             data-tag-filter-sign="+"
-            title="Keep only #{{ tag }} posts on this feed"
-            aria-label="Keep only #{{ tag }} posts on this feed"
+            title="Feed filter: keep only #{{ tag }} posts"
+            aria-label="Feed filter: keep only #{{ tag }} posts"
             aria-pressed="{{ 'true' if active_sign == '+' else 'false' }}"
-          >+</button>
+          >▲</button>
+          <button
+            type="button"
+            class="feed-tag-filter-sign exclude{% if active_sign == '-' %} active{% endif %}"
+            data-tag-filter-tag="{{ tag }}"
+            data-tag-filter-sign="-"
+            title="Feed filter: drop #{{ tag }} posts"
+            aria-label="Feed filter: drop #{{ tag }} posts"
+            aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
+          >▼</button>
         </span>
         {% endfor %}
       </span>

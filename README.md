@@ -49,10 +49,12 @@ The short version:
   that filters the current selection (folder/feed + read state) by tag, and a
   tag chip in an article's header opens that tag scoped to the article's own feed.
   Feeds that publish per-entry tags (RSS/Atom `<category>`, e.g. dev.to or
-  WordPress blogs) show them as **[ − tag + ]** chips in the post header —
-  captured at ingest so they render instantly. The signs edit that feed's
-  Tag Filter rule in place: **−** filters the tag out, **+** keeps only that
-  tag, applied to unread posts immediately and toggled off by a second click.
+  WordPress blogs) show them as **[ + tag ▲ ▼ ]** chips in the post header —
+  captured at ingest so they render instantly. **+** adds the tag as one of
+  your own tags on that post; **▲**/**▼** build the feed's Tag Filter rule
+  (keep-only / drop). The rule starts **off** so you can tune it while
+  browsing, then arm it in the Automation rules list; once on, chip edits
+  apply to unread posts immediately.
 - **Persistent audio player** — podcast/audio posts show a **Play** button that
   loads the track into a global player bar pinned to the bottom of the app
   (now-playing title, play/pause, seek scrubber, playback speed). Because the

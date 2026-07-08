@@ -13368,9 +13368,39 @@
         });
       }
 
-      // Feed-tag filter chips: [ − tag + ] in the post header. Each sign
-      // toggles ±tag on this feed's Tag Filter rule (creating/deleting the
-      // rule as needed) and applies it to unread entries immediately.
+      // Feed-tag chips [ + tag ▲ ▼ ]: the leading + applies the tag as one of
+      // Our Tags via the tags form's submit pipeline.
+      for (const suggestionButton of document.querySelectorAll('[data-tag-suggestion]')) {
+        if (suggestionButton.dataset.boundClick) {
+          continue;
+        }
+        suggestionButton.dataset.boundClick = '1';
+        suggestionButton.addEventListener('click', () => {
+          const inputId = suggestionButton.getAttribute('data-tag-input');
+          const suggestedTag = suggestionButton.getAttribute('data-tag-suggestion');
+          const targetInput = inputId ? document.getElementById(inputId) : null;
+          const normalizedSuggestion = (suggestedTag || '').trim().replace(/^#+/, '').toLowerCase();
+          if (!normalizedSuggestion || !(targetInput instanceof HTMLInputElement)) {
+            return;
+          }
+          // Merge with anything already typed — the pane re-render on success
+          // would drop it otherwise.
+          const typedTokens = targetInput.value
+            .split(/\s+/)
+            .map((token) => token.trim().replace(/^#+/, '').toLowerCase())
+            .filter(Boolean);
+          if (!typedTokens.includes(normalizedSuggestion)) {
+            typedTokens.push(normalizedSuggestion);
+          }
+          targetInput.value = typedTokens.join(' ');
+          suggestionButton.disabled = true;
+          entryTagsForm?.querySelector('button[type="submit"]')?.click();
+        });
+      }
+
+      // ▲/▼ toggle ±tag on this feed's Tag Filter rule. The rule is created
+      // DISABLED so it can be tuned while browsing; it only marks entries
+      // read once armed in Automation (then chip edits apply immediately).
       for (const signButton of document.querySelectorAll('[data-tag-filter-sign]')) {
         if (signButton.dataset.boundClick) {
           continue;
@@ -13396,10 +13426,13 @@
             const data = await resp.json();
             if (!resp.ok || data.error) throw new Error(data.error || 'failed');
             const nowActive = (data.active || {})[tag] === sign;
-            const verb = sign === '-' ? 'Filtering out' : 'Keeping only';
+            const verb = sign === '-' ? 'Dropping' : 'Keeping only';
             const n = data.applied_count || 0;
+            const armed = data.enabled
+              ? (n ? ` — ${n} marked read` : '')
+              : ' (rule off — enable it in Automation)';
             showToastMessage(nowActive
-              ? `${verb} #${tag} on this feed${n ? ` — ${n} marked read` : ''}`
+              ? `Filter: ${verb.toLowerCase()} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
             // Re-render so chip states and the unread list reflect the rule.
             loadEntryPaneWithoutFullRefresh(window.location.href, false);
