@@ -53,25 +53,32 @@ Make Lectio usable as a read-it-later app. Two parts:
   against subscribed gallery feeds — add newly-watched artists, and surface (or
   optionally remove) feeds for artists no longer watched.
 
-### Tag-filtered feed adapters: multi-include + exclude semantics (freeCodeCamp, dev.to)
+### Tag filtering for firehose feeds: multi-include + exclude semantics
 
 Wanted rule shape: "include articles with any of these tag(s), but not if they
-also have any of these." Current state:
+also have any of these." Target firehoses: freeCodeCamp, dev.to, MakeUseOf,
+Lifehacker, How-To-Geek.
 
-- **dev.to adapter** supports one include `tag` plus `tags_exclude` (passed to
-  the API). Extend to multiple include tags (one API call per include tag,
-  merged + deduped by article id, exclusion applied client-side on `tag_list`).
-- **freeCodeCamp** is Ghost: per-tag RSS exists (`/news/tag/<slug>/rss/`) and
-  entries carry `<category>` tags, but there's no public filtered API. Adapter
-  design: fetch the per-tag RSS for each include tag (or the main feed for
-  tag-less "all"), merge + dedupe, drop entries whose categories hit the
-  exclude list. Same synthetic-feed pattern as `services/devto.py`.
-- Consider factoring the shared shape (fetch → filter → synthesize RSS →
-  tenant-aware storage) so the third such adapter doesn't copy-paste the first
-  two.
-- The `entry_feed_tags` capture layer (shipped) already persists each entry's
-  raw `<category>` tags per user — usable for exclude-filtering entries of
-  feeds that only exist as plain RSS, without re-parsing.
+The `entry_feed_tags` capture layer (shipped 2026-07-08) reframes this:
+freeCodeCamp (Ghost), MakeUseOf, Lifehacker, and How-To-Geek all carry
+per-entry `<category>` tags in their plain RSS (verified), and those tags are
+now persisted per user at ingest. So instead of one synthetic-feed adapter per
+site, build a **generic per-feed tag filter**:
+
+- Per-feed include/exclude tag lists (Feed Properties; store in a meta table
+  or `feed_display_prefs`-style prefs), evaluated against `entry_feed_tags` —
+  matching is on normalized tags. Filtered entries are auto-marked read (or
+  hidden) at refresh time, mirroring how rules/dedup suppression works, so
+  triage views stay clean without deleting data.
+- One ingest-ordering caveat: tags are captured during parse, so the filter
+  pass must run after `update_feed` completes (post-refresh step in
+  `FeedRefreshService`), not inside the parser sink.
+- **dev.to adapter** stays API-based (its value is language/reaction
+  filtering, not just tags): extend to multiple include tags — one API call
+  per include tag, merged + deduped by article id, exclusion applied
+  client-side on `tag_list`.
+- freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
+  if include-list recall from the main feed's window is insufficient.
 
 ### Dev.to feed migration (manual, after adapter deploy)
 
