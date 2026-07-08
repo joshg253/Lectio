@@ -1294,6 +1294,18 @@
 
       <div id="afd-pick" class="afd-pick" hidden></div>
 
+      <div id="afd-devto" class="afd-pf" hidden>
+        <label class="action-modal-label">Tag <span class="action-modal-label-hint">(blank = front page)</span></label>
+        <input id="afd-devto-tag" placeholder="e.g. python" autocomplete="off" />
+        <label class="action-modal-label">Top posts window <span class="action-modal-label-hint">(days; blank = latest posts)</span></label>
+        <input id="afd-devto-top" type="number" min="1" placeholder="e.g. 7" />
+        <label class="action-modal-label">Minimum reactions <span class="action-modal-label-hint">(blank = no minimum)</span></label>
+        <input id="afd-devto-minreact" type="number" min="1" placeholder="e.g. 10" />
+        <label class="action-modal-label">Exclude tags <span class="action-modal-label-hint">(comma-separated, optional)</span></label>
+        <input id="afd-devto-exclude" placeholder="e.g. webdev, career" autocomplete="off" />
+        <label class="fakefeedz-mode-label"><input type="checkbox" id="afd-devto-english" checked /> English-only (uses dev.to's own language label)</label>
+      </div>
+
       <details id="afd-pf" class="afd-pf" hidden>
         <summary class="afd-pf-toggle">Page Feed options</summary>
         <label class="action-modal-label">Feed title <span class="action-modal-label-hint">(optional)</span></label>
@@ -1346,6 +1358,11 @@
       <form id="afd-feed-form" method="post" action="/feeds" hidden>
         <input type="hidden" name="feed_url" id="afd-ff-url" />
         <input type="hidden" name="folder_id" id="afd-ff-folder" />
+        <input type="hidden" name="devto_tag" id="afd-ff-devto-tag" />
+        <input type="hidden" name="devto_top_days" id="afd-ff-devto-top" />
+        <input type="hidden" name="devto_english_only" id="afd-ff-devto-english" />
+        <input type="hidden" name="devto_min_reactions" id="afd-ff-devto-minreact" />
+        <input type="hidden" name="devto_tags_exclude" id="afd-ff-devto-exclude" />
       </form>
       <form id="afd-pf-form" method="post" action="/scraped-feeds" hidden>
         <input type="hidden" name="source_url" id="afd-pff-url" />
@@ -2220,6 +2237,30 @@
         </div>
       </div>
       <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>
+        <!-- dev.to filtered feeds: filter config -->
+        <div id="feed-prop-devto-section" hidden>
+          <h4 class="feed-prop-section-title">dev.to filters</h4>
+          <dl class="feed-properties-grid">
+            <dt>Tag</dt>
+            <dd><input type="text" id="feed-prop-devto-tag" class="feed-prop-title-input" placeholder="blank = front page" autocomplete="off" /></dd>
+            <dt>Top window</dt>
+            <dd><input type="number" id="feed-prop-devto-top" class="feed-prop-title-input" min="1" placeholder="days; blank = latest posts" /></dd>
+            <dt>Min reactions</dt>
+            <dd><input type="number" id="feed-prop-devto-minreact" class="feed-prop-title-input" min="1" placeholder="blank = no minimum" /></dd>
+            <dt>Exclude tags</dt>
+            <dd><input type="text" id="feed-prop-devto-exclude" class="feed-prop-title-input" placeholder="comma-separated" autocomplete="off" /></dd>
+          </dl>
+          <div class="feed-prop-toggles">
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-devto-english" class="feed-prop-checkbox" />
+              <span>English-only (uses dev.to's own language label)</span>
+            </label>
+          </div>
+          <div class="feed-prop-footer">
+            <button type="button" id="feed-prop-devto-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save &amp; refetch</button>
+            <span id="feed-prop-devto-status" class="feed-prop-inline-status"></span>
+          </div>
+        </div>
         <!-- YouTube feeds: simplified controls -->
         <div id="feed-prop-yt-section" hidden>
           <h4 class="feed-prop-section-title">YouTube options</h4>
@@ -5324,6 +5365,21 @@
         }
         if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
 
+        // dev.to filtered feeds: show + fill the filter-config section
+        const devtoSection = document.getElementById('feed-prop-devto-section');
+        if (devtoSection) {
+          devtoSection.hidden = !data.devto;
+          if (data.devto) {
+            document.getElementById('feed-prop-devto-tag').value = data.devto.tag || '';
+            document.getElementById('feed-prop-devto-top').value = data.devto.top_days || '';
+            document.getElementById('feed-prop-devto-minreact').value = data.devto.min_reactions || '';
+            document.getElementById('feed-prop-devto-exclude').value = data.devto.tags_exclude || '';
+            document.getElementById('feed-prop-devto-english').checked = !!data.devto.english_only;
+            document.getElementById('feed-prop-devto-save').dataset.devtoFeedId = data.devto_feed_id || '';
+            document.getElementById('feed-prop-devto-status').textContent = '';
+          }
+        }
+
         // Toggle YouTube vs standard tuning sections
         const isYoutubeFeed = !!data.is_youtube_feed;
         const isDevFeed = feedUrl.includes('/dev/feeds/');
@@ -6753,6 +6809,33 @@
         }
       }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
+    });
+
+    document.getElementById('feed-prop-devto-save')?.addEventListener('click', async () => {
+      const saveBtn = document.getElementById('feed-prop-devto-save');
+      const statusEl = document.getElementById('feed-prop-devto-status');
+      const feedId = saveBtn.dataset.devtoFeedId;
+      if (!feedId) return;
+      saveBtn.disabled = true;
+      statusEl.textContent = 'Saving…';
+      try {
+        const resp = await fetch(`/devto-feeds/${encodeURIComponent(feedId)}/config`, {
+          method: 'POST',
+          body: new URLSearchParams({
+            devto_tag: document.getElementById('feed-prop-devto-tag').value.trim(),
+            devto_top_days: document.getElementById('feed-prop-devto-top').value.trim(),
+            devto_english_only: document.getElementById('feed-prop-devto-english').checked ? '1' : '0',
+            devto_min_reactions: document.getElementById('feed-prop-devto-minreact').value.trim(),
+            devto_tags_exclude: document.getElementById('feed-prop-devto-exclude').value.trim(),
+          }),
+        });
+        const json = await resp.json();
+        statusEl.textContent = json.ok ? 'Saved — feed refetched.' : (json.error || 'Save failed.');
+      } catch (e) {
+        statusEl.textContent = 'Save failed.';
+      } finally {
+        saveBtn.disabled = false;
+      }
     });
 
     feedPropInjectSourceImages?.addEventListener('change', async () => {
@@ -13258,7 +13341,24 @@
       const feedForm      = document.getElementById('afd-feed-form');
       const pfForm        = document.getElementById('afd-pf-form');
 
-      let checkTimer = null, selectedFeedUrl = null, isPageFeedMode = false, isChecking = false;
+      let checkTimer = null, selectedFeedUrl = null, isPageFeedMode = false, isChecking = false, isDevToMode = false;
+      const devtoSection = document.getElementById('afd-devto');
+
+      // Mirror of the server's parse_devto_url: front-page/tag/feed URLs only
+      // (user pages keep their normal small RSS). Returns {tag} or null.
+      function devtoParse(url) {
+        let u;
+        try { u = new URL(url); } catch (_) { return null; }
+        if (u.hostname !== 'dev.to' && u.hostname !== 'www.dev.to') return null;
+        const parts = u.pathname.split('/').filter(Boolean);
+        if (!parts.length) return { tag: null };
+        if (parts[0] === 't' && parts.length >= 2) return { tag: parts[1].toLowerCase() };
+        if (parts[0] === 'feed') {
+          if (parts.length === 1) return { tag: null };
+          if (parts.length >= 3 && parts[1] === 'tag') return { tag: parts[2].toLowerCase() };
+        }
+        return null;
+      }
 
       function reset() {
         urlInput.value = '';
@@ -13274,8 +13374,14 @@
         if (_sug) { _sug.hidden = true; document.getElementById('afd-pf-suggestions-chips').innerHTML = ''; }
         if (_prev) { _prev.hidden = true; _prev.innerHTML = ''; }
         modal.querySelector('input[name="afd-mode"][value="link_list"]').checked = true;
+        devtoSection.hidden = true;
+        document.getElementById('afd-devto-tag').value = '';
+        document.getElementById('afd-devto-top').value = '';
+        document.getElementById('afd-devto-minreact').value = '';
+        document.getElementById('afd-devto-exclude').value = '';
+        document.getElementById('afd-devto-english').checked = true;
         submitBtn.disabled = true; submitBtn.textContent = 'Add Feed';
-        selectedFeedUrl = null; isPageFeedMode = false;
+        selectedFeedUrl = null; isPageFeedMode = false; isDevToMode = false;
         spinner.hidden = true; isChecking = false;
         newFolderRow.hidden = true; newFolderName.value = '';
       }
@@ -13298,6 +13404,18 @@
 
       async function run(url) {
         if (isChecking) return;
+        // dev.to front-page/tag URLs get the filtered API-backed adapter — show
+        // its config instead of probing (the raw RSS is an unfiltered firehose).
+        const devto = devtoParse(url);
+        if (devto) {
+          setMsg('dev.to detected — this will create a filtered feed via the dev.to API.', 'ok');
+          pickEl.hidden = true; pfSection.hidden = true; isPageFeedMode = false;
+          devtoSection.hidden = false; isDevToMode = true; selectedFeedUrl = url;
+          if (devto.tag) document.getElementById('afd-devto-tag').value = devto.tag;
+          submitBtn.textContent = 'Add dev.to Feed'; submitBtn.disabled = false;
+          return;
+        }
+        devtoSection.hidden = true; isDevToMode = false;
         isChecking = true; spinner.hidden = false; submitBtn.disabled = true;
         setMsg(''); pickEl.hidden = true; pickEl.innerHTML = ''; pfSection.hidden = true;
         selectedFeedUrl = null; isPageFeedMode = false;
@@ -13409,6 +13527,11 @@
         } else {
           document.getElementById('afd-ff-url').value    = selectedFeedUrl;
           document.getElementById('afd-ff-folder').value = fid;
+          document.getElementById('afd-ff-devto-tag').value      = isDevToMode ? document.getElementById('afd-devto-tag').value.trim() : '';
+          document.getElementById('afd-ff-devto-top').value      = isDevToMode ? document.getElementById('afd-devto-top').value.trim() : '';
+          document.getElementById('afd-ff-devto-english').value  = isDevToMode ? (document.getElementById('afd-devto-english').checked ? '1' : '0') : '';
+          document.getElementById('afd-ff-devto-minreact').value = isDevToMode ? document.getElementById('afd-devto-minreact').value.trim() : '';
+          document.getElementById('afd-ff-devto-exclude').value  = isDevToMode ? document.getElementById('afd-devto-exclude').value.trim() : '';
           feedForm.submit();
         }
       });
