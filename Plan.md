@@ -88,6 +88,17 @@ published/updated on the entry; changing it likely means a meta-DB override
 consulted by the sort/display layer (reader's EntryData is ingest-owned), or
 re-synthesizing the entry.
 
+### New subscription missing from feed tree (but posts show)
+
+Right after Add Feed, the new feed's posts appeared in the posts list but the
+feed itself was absent from the sidebar feed tree (observed 2026-07-08 with a
+Lifehacker section feed). Suspect the sidebar tree/unread-count cache isn't
+invalidated on subscribe. Compounding UX: two subscriptions with identical
+titles (Lifehacker main + section feed both titled "Lifehacker") are
+indistinguishable in the tree — led to unsubscribing the wrong one; consider
+auto-disambiguating duplicate display titles (e.g. suffix from the feed URL
+path) or showing the URL in the tree tooltip.
+
 ### Small lead image + article-nav full refresh (noirlab, DeviantArt)
 
 Two reader-view issues to investigate:
