@@ -14644,6 +14644,22 @@ def _is_youtube_url(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
 
 
+def _devto_config_from_form(tag: str, top_days: str, english_only: str,
+                            min_reactions: str, tags_exclude: str) -> dict:
+    """Shared form→config parsing for the add-feed and config-update routes.
+
+    Checkbox semantics: the dialogs always post english_only as "1"/"0"; an
+    omitted/empty field defaults to English-only in both routes.
+    """
+    return {
+        "tag": tag.strip(),
+        "top_days": int(top_days) if top_days.strip().isdigit() else None,
+        "english_only": (english_only.strip() or "1").lower() not in ("0", "false", "off"),
+        "min_reactions": int(min_reactions) if min_reactions.strip().isdigit() else None,
+        "tags_exclude": tags_exclude.strip(),
+    }
+
+
 @app.post("/feeds")
 def create_feed(
     feed_url: str = Form(...),
@@ -14663,15 +14679,10 @@ def create_feed(
     # detects a dev.to URL; a bare POST without them still works with defaults.
     devto_parsed = devto_service.parse_devto_url(url)
     if devto_parsed:
-        config = {
-            "tag": (devto_tag.strip() or devto_parsed.get("tag") or ""),
-            "top_days": int(devto_top_days) if devto_top_days.strip().isdigit() else None,
-            # Checkbox semantics: the dialog always posts the field ("1"/"0");
-            # a bare POST without it gets the English-only default.
-            "english_only": (devto_english_only or "1") not in ("0", "false", "off"),
-            "min_reactions": int(devto_min_reactions) if devto_min_reactions.strip().isdigit() else None,
-            "tags_exclude": devto_tags_exclude.strip(),
-        }
+        config = _devto_config_from_form(
+            devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude
+        )
+        config["tag"] = config["tag"] or devto_parsed.get("tag") or ""
         try:
             with get_meta_connection() as conn:
                 with get_reader() as reader:
@@ -14902,24 +14913,20 @@ def update_devto_feed_config_route(
     devto_tags_exclude: str = Form(""),
 ):
     """Update a dev.to feed's filter config from the feed Properties modal."""
-    config = {
-        "tag": devto_tag.strip(),
-        "top_days": int(devto_top_days) if devto_top_days.strip().isdigit() else None,
-        "english_only": devto_english_only not in ("0", "false", "off", ""),
-        "min_reactions": int(devto_min_reactions) if devto_min_reactions.strip().isdigit() else None,
-        "tags_exclude": devto_tags_exclude.strip(),
-    }
+    config = _devto_config_from_form(
+        devto_tag, devto_top_days, devto_english_only, devto_min_reactions, devto_tags_exclude
+    )
     try:
         with get_meta_connection() as conn:
             with get_reader() as reader:
                 devto_service.update_devto_feed_config(conn, reader, feed_id, config)
     except devto_service.DevToRateLimited:
         return JSONResponse({"error": "dev.to rate limit — try again in a bit."}, status_code=429)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=404)
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[devto] config update failed for %s: %s", feed_id, exc)
-        return JSONResponse({"error": f"Update failed: {exc}"}, status_code=502)
+    except ValueError:
+        return JSONResponse({"error": "Feed not found."}, status_code=404)
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[devto] config update failed for %s", feed_id)
+        return JSONResponse({"error": "Update failed — see server logs."}, status_code=502)
     return JSONResponse({"ok": True})
 
 

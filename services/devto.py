@@ -181,7 +181,10 @@ def fetch_articles(config: dict) -> list[dict]:
     resp = _request(_API_URL, params=_build_params(config))
     if resp.status_code != 200:
         raise RuntimeError(f"dev.to fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
-    articles = resp.json()
+    try:
+        articles = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"dev.to fetch failed: invalid JSON ({exc})") from exc
     if not isinstance(articles, list):
         raise RuntimeError("dev.to fetch failed: unexpected response shape")
     return [a for a in articles if isinstance(a, dict) and _passes_filters(a, config)]
@@ -433,8 +436,11 @@ def refresh_all_devto_feeds(conn: sqlite3.Connection, max_feeds: int = 40) -> No
         if max_feeds and max_feeds > 0:
             query += f" LIMIT {int(max_feeds)}"
         rows = conn.execute(query).fetchall()
-    except Exception:
-        return  # table may not exist in some test envs
+    except sqlite3.OperationalError as exc:
+        # Table may legitimately not exist in some test envs; anything else
+        # (renamed column, bad migration) still surfaces at debug level.
+        LOGGER.debug("[devto] skipping refresh; devto_feeds unavailable: %s", exc)
+        return
     for row in rows:
         try:
             refresh_devto_feed_by_id(conn, str(row["id"]))
