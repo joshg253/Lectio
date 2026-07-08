@@ -50,6 +50,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from services import bluesky
 from services import deviantart as deviantart_service
+from services import devto as devto_service
 from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
 from services import quire as quire_service
@@ -238,6 +239,7 @@ UNCATEGORIZED_FOLDER_NAME = "Uncategorized"
 
 scraper_service.init(DATA_DIR)
 deviantart_service.init(DATA_DIR)
+devto_service.init(DATA_DIR)
 
 
 def _da_seed_lead_image(feed_url: str, entry_id: str, image_url: str) -> None:
@@ -251,6 +253,19 @@ def _da_seed_lead_image(feed_url: str, entry_id: str, image_url: str) -> None:
 
 
 deviantart_service.set_lead_image_sink(_da_seed_lead_image)
+
+
+def _devto_seed_lead_image(feed_url: str, entry_id: str, image_url: str) -> None:
+    """Sink for the dev.to service: store the API cover image as the entry's lead
+    image (DB + live cache) unless one is already cached (preserve customizations)."""
+    try:
+        if not lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, ""):
+            lead_image_service.store_entry_lead_image(feed_url, entry_id, image_url)
+    except Exception:
+        LOGGER.exception("[devto] failed to seed lead image for %s", entry_id)
+
+
+devto_service.set_lead_image_sink(_devto_seed_lead_image)
 DEFAULT_AUTO_REFRESH_MINUTES = 60
 MIN_AUTO_REFRESH_MINUTES = 5
 MANUAL_REFRESH_COOLDOWN_SECONDS = 60
@@ -3231,6 +3246,35 @@ def ensure_meta_schema() -> None:
                 content TEXT,
                 published_at TEXT NOT NULL,
                 UNIQUE(deviantart_feed_id, deviationid)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS devto_feeds (
+                id TEXT PRIMARY KEY,
+                feed_title TEXT NOT NULL,
+                tag TEXT,
+                top_days INTEGER,
+                english_only INTEGER NOT NULL DEFAULT 1,
+                min_reactions INTEGER,
+                tags_exclude TEXT,
+                created_at TEXT NOT NULL,
+                last_synced_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS devto_entries (
+                id TEXT PRIMARY KEY,
+                devto_feed_id TEXT NOT NULL REFERENCES devto_feeds(id),
+                article_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                entry_url TEXT,
+                content TEXT,
+                published_at TEXT NOT NULL,
+                UNIQUE(devto_feed_id, article_id)
             )
             """
         )
@@ -7148,6 +7192,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "SELECT DISTINCT folder_id FROM folder_feeds WHERE feed_url = ?",
             (feed_url,),
         ).fetchall()
+        _devto_id = devto_service.devto_feed_id_from_url(feed_url)
 
         _now_ts = time.time()
         _feed_next_retry = float(_feed_backoff_row["next_retry_at"]) if _feed_backoff_row and _feed_backoff_row["next_retry_at"] else None
@@ -7202,6 +7247,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "smart_min_scale": float(_disp["smart_min_scale"]) if _disp.get("smart_min_scale") is not None else None,
             "fill_zoom": float(_disp["fill_zoom"]) if _disp.get("fill_zoom") is not None else None,
             "is_youtube_feed": "youtube.com/feeds/videos.xml" in feed_url,
+            "devto_feed_id": _devto_id,
+            "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
@@ -11785,6 +11832,7 @@ def purge_orphaned_feed(
        and format-upgrade paths only).
     3. Delete the feed via the appropriate path:
        - DeviantArt rendered feed → deviantart_service.delete_deviantart_feed
+       - dev.to rendered feed     → devto_service.delete_devto_feed
        - Scraped (file://) feed   → scraper_service.delete_scraped_feed
        - Plain feed               → reader.delete_feed
     4. Unsubscribe from the WebSub hub (best-effort; guard for disabled websub).
@@ -11840,9 +11888,12 @@ def purge_orphaned_feed(
 
     # Step 3 — dispatch the delete via the appropriate path.
     da_id = deviantart_service.deviantart_feed_id_from_url(feed_url)
-    feed_id = None if da_id else scraper_service.scraped_feed_id_from_url(feed_url)
+    devto_id = None if da_id else devto_service.devto_feed_id_from_url(feed_url)
+    feed_id = None if (da_id or devto_id) else scraper_service.scraped_feed_id_from_url(feed_url)
     if da_id:
         deviantart_service.delete_deviantart_feed(conn, reader, da_id)
+    elif devto_id:
+        devto_service.delete_devto_feed(conn, reader, devto_id)
     elif feed_id:
         scraper_service.delete_scraped_feed(conn, reader, feed_id)
     else:
@@ -12238,6 +12289,7 @@ def _scheduled_refresh_tick() -> None:
             app.state.last_scheduled_refresh_started_at = time.monotonic()
             with get_meta_connection() as _sc:
                 scraper_service.refresh_all_scraped_feeds(_sc)
+                devto_service.refresh_all_devto_feeds(_sc)
                 _da_cid, _da_secret = get_deviantart_credentials()
                 deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
                 _reddit_token = get_reddit_user_token()
@@ -14593,10 +14645,49 @@ def _is_youtube_url(url: str) -> bool:
 
 
 @app.post("/feeds")
-def create_feed(feed_url: str = Form(...), folder_id: int = Form(...)):
+def create_feed(
+    feed_url: str = Form(...),
+    folder_id: int = Form(...),
+    devto_tag: str = Form(""),
+    devto_top_days: str = Form(""),
+    devto_english_only: str = Form(""),
+    devto_min_reactions: str = Form(""),
+    devto_tags_exclude: str = Form(""),
+):
     url = feed_url.strip()
     target_url = url
     auto_discovered = False
+
+    # dev.to front-page/tag URLs become filtered API-backed feeds (the raw RSS is
+    # an unfiltered firehose). The Add-Feed dialog shows the filter fields when it
+    # detects a dev.to URL; a bare POST without them still works with defaults.
+    devto_parsed = devto_service.parse_devto_url(url)
+    if devto_parsed:
+        config = {
+            "tag": (devto_tag.strip() or devto_parsed.get("tag") or ""),
+            "top_days": int(devto_top_days) if devto_top_days.strip().isdigit() else None,
+            # Checkbox semantics: the dialog always posts the field ("1"/"0");
+            # a bare POST without it gets the English-only default.
+            "english_only": (devto_english_only or "1") not in ("0", "false", "off"),
+            "min_reactions": int(devto_min_reactions) if devto_min_reactions.strip().isdigit() else None,
+            "tags_exclude": devto_tags_exclude.strip(),
+        }
+        try:
+            with get_meta_connection() as conn:
+                with get_reader() as reader:
+                    _fid, file_url = devto_service.create_devto_feed(conn, reader, config)
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (folder_id, file_url),
+                )
+            invalidate_meta_structure_cache()
+            msg = f"dev.to feed added ({devto_service.default_title(config)})."
+        except devto_service.DevToRateLimited:
+            msg = "dev.to rate limit — try again in a bit."
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[devto] add failed for %s: %s", url, exc)
+            msg = f"dev.to add failed: {exc}"
+        return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
 
     # DeviantArt: when connected, "adding" an artist just Watches them on DeviantArt
     # — their posts arrive via the single combined Watch feed, so we don't create a
@@ -14799,6 +14890,37 @@ def delete_scraped_feed_route(
 @app.get("/feeds/properties")
 def feed_properties(feed_url: str):
     return JSONResponse(get_feed_properties(feed_url))
+
+
+@app.post("/devto-feeds/{feed_id}/config")
+def update_devto_feed_config_route(
+    feed_id: str,
+    devto_tag: str = Form(""),
+    devto_top_days: str = Form(""),
+    devto_english_only: str = Form(""),
+    devto_min_reactions: str = Form(""),
+    devto_tags_exclude: str = Form(""),
+):
+    """Update a dev.to feed's filter config from the feed Properties modal."""
+    config = {
+        "tag": devto_tag.strip(),
+        "top_days": int(devto_top_days) if devto_top_days.strip().isdigit() else None,
+        "english_only": devto_english_only not in ("0", "false", "off", ""),
+        "min_reactions": int(devto_min_reactions) if devto_min_reactions.strip().isdigit() else None,
+        "tags_exclude": devto_tags_exclude.strip(),
+    }
+    try:
+        with get_meta_connection() as conn:
+            with get_reader() as reader:
+                devto_service.update_devto_feed_config(conn, reader, feed_id, config)
+    except devto_service.DevToRateLimited:
+        return JSONResponse({"error": "dev.to rate limit — try again in a bit."}, status_code=429)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[devto] config update failed for %s: %s", feed_id, exc)
+        return JSONResponse({"error": f"Update failed: {exc}"}, status_code=502)
+    return JSONResponse({"ok": True})
 
 
 @app.post("/feeds/set-user-title")
@@ -18518,6 +18640,7 @@ def refresh(
         )
     with get_meta_connection() as conn:
         scraper_service.refresh_all_scraped_feeds(conn)
+        devto_service.refresh_all_devto_feeds(conn)
         # Only touch DeviantArt when it's actually configured — avoids needless work
         # (and the access-token settings lookup) for the common no-DA setup.
         _da_cid, _da_secret = get_deviantart_credentials()

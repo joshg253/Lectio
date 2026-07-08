@@ -124,7 +124,10 @@ The short version:
   feedless page into a feed: click a link on a rendered preview of the page to
   derive a selector, pick from suggested CSS selectors, or type your own; preview
   the exact items before saving; and optionally backfill items already on the
-  page), YouTube &
+  page), dev.to filtered feeds (paste a dev.to front-page or tag URL and the Add
+  Feed dialog offers filters the raw RSS firehose lacks: top-posts window,
+  English-only via dev.to's own language label, minimum reactions, excluded tags —
+  editable later in feed Properties → Tuning), YouTube &
   DeviantArt sync, Bluesky image recovery (bsky.app RSS is text-only — Lectio pulls
   each post's images from the AT Protocol API so they show in the reader, including
   content-labeled posts), per-folder cadence, feed compare, fetch-history & automations

@@ -23,35 +23,14 @@ code-scanning: `py/stack-trace-exposure` (2), `py/url-redirection` (2),
 
 ## Later
 
-### Dev.to filtered-feed adapter (NEXT UP)
+### Dev.to feed migration (manual, after adapter deploy)
 
-**Problem:** `https://dev.to/feed` and tag feeds (subscribed: C++, C#, Python)
-are firehoses (~60-70 posts/day per tag) and include non-English posts. Dev.to's
-RSS offers no filtering, but its **public, unauthenticated** JSON API does.
-
-**Verified API facts (tested live 2026-07-08):**
-- `GET https://dev.to/api/articles` — each article has `language` (e.g. `"en"`),
-  `positive_reactions_count`, `comments_count`, `reading_time_minutes`,
-  `tag_list`, `cover_image`, `published_timestamp`, `url`, `description`.
-- `?tag=python&top=7` works (top posts of last N days for a tag, ranked by
-  reactions). `?state=rising` works. `?tags_exclude=a,b` documented.
-  `?language=en` is **ignored** — must filter client-side on the `language`
-  field. `per_page` up to at least 80.
-
-**Design (agreed with user):**
-- No Settings/OAuth integration — a **feed adapter** like the DeviantArt feeds:
-  generate a local feed the `reader` library ingests. Study `services/deviantart*`
-  + the `deviantart-feeds` folder layout and `scraped_feeds` for the pattern
-  (local feed file + refresh hook + meta table).
-- Per-feed config: tag (optional = front page), `top` window (N days, optional),
-  English-only (filter on the API's own `language` label — the user explicitly
-  wants the *source's* classification, not our language detection), optionally a
-  min-reactions threshold and `tags_exclude`.
-- Add-feed UX: `rewrite_known_site_url()` in `services/feed_discovery.py` (built
-  for pinboard) handles pure URL rewrites, but dev.to needs *config* — a dialog
-  section or distinct flow may fit better. Keep it simple.
-- One polite API request per refresh (good-web-citizen rules apply). Existing
-  dev.to subs can be migrated manually.
+The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see
+ARCHITECTURE.md "dev.to filtered feeds"). Remaining user step: replace the four
+existing raw dev.to subscriptions (front page + C++/C#/Python tag feeds) with
+filtered adapter feeds via the Add Feed dialog, carrying any starred posts over
+(all-or-nothing via the unsubscribe-migration modal today; the per-entry
+"Move to feed…" item below would allow cherry-picking).
 
 ### Per-entry "Move to feed…" action
 
