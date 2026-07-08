@@ -173,7 +173,12 @@ call site — otherwise its thumbnails persist to the default tenant and appear 
 duration enhancement to `_spawn_feed_enhancement` (a daemon thread wrapped in
 `_run_in_user_context`, with a per-feed in-flight guard so concurrent manual /
 scheduled runs don't duplicate fetches), so the request returns promptly while
-images fill in shortly after. Each refresh path (manual, single-feed, scheduled)
+images fill in shortly after. The scheduled tick (`_scheduled_refresh_tick`)
+follows the same ordering: ingest with `enhance=False`, run automation
+(hide-shorts, mark-read, dedup) immediately so entries are triaged as soon as
+they land, then run enhancement in the scheduler thread, followed by a second
+hide-shorts pass to catch Shorts identifiable only by their freshly-fetched
+duration (≤60s, no `#shorts` hashtag). Each refresh path (manual, single-feed, scheduled)
 calls `invalidate_unread_counts_cache()` after ingest so newly-arrived entries
 update the folder "new" badges immediately instead of waiting out the
 stale-while-revalidate TTL. Both the async refresh and the *cold* synchronous
