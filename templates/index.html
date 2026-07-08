@@ -10533,7 +10533,9 @@
         tagExcludeInput.value = prefill.tags_exclude || '';
         tagExcludeRow.appendChild(tagExcludeInput);
 
-        draft.appendChild(tagExcludeRow);
+        // Directly below the include-tags field (before the feed picker), so the
+        // keep/drop pair reads as one unit rather than trailing the whole form.
+        folderSel.insertAdjacentElement('afterend', tagExcludeRow);
 
         // ── YouTube playlist sub-row: playlist + options (youtube_playlist only) ─
         const ytRow = document.createElement('div');
