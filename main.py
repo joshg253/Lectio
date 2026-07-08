@@ -14780,7 +14780,7 @@ def delete_folder_route(
 def _is_youtube_url(url: str) -> bool:
     try:
         return _is_youtube_host(urlparse(url).netloc)
-    except Exception:
+    except ValueError:  # urlparse rejects some malformed inputs (e.g. bad IPv6)
         return False
 
 
