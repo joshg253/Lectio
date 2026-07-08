@@ -263,9 +263,26 @@ def test_update_config_refetches_and_rewrites(tmp_path):
         })
     row = conn.execute("SELECT * FROM devto_feeds WHERE id = ?", (F1,)).fetchone()
     assert row["top_days"] == 7 and row["min_reactions"] == 10
+    # Auto-generated title follows the new filters.
+    assert row["feed_title"] == "dev.to #python (top 7d, ≥10 reactions)"
     assert fetch.call_args[0][0]["top_days"] == 7
     assert (devto._dir() / f"{F1}.xml").exists()
     reader.update_feed.assert_called_once()
+
+
+def test_update_config_preserves_custom_title(tmp_path):
+    conn = _db()
+    conn.execute(
+        "INSERT INTO devto_feeds (id, feed_title, tag, english_only, created_at, last_synced_at)"
+        " VALUES (?, 'My Python Picks', 'python', 1, 'now', 'now')",
+        (F1,),
+    )
+    with patch("services.devto.fetch_articles", return_value=[]):
+        devto.update_devto_feed_config(conn, MagicMock(), F1, {
+            "tag": "python", "top_days": 7, "english_only": True,
+        })
+    row = conn.execute("SELECT feed_title FROM devto_feeds WHERE id = ?", (F1,)).fetchone()
+    assert row["feed_title"] == "My Python Picks"
 
 
 def test_delete_devto_feed_removes_row_and_file():
