@@ -9378,16 +9378,8 @@
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = (ruleType === 'youtube_playlist' && !rule.keyword) ? 'all videos'
-              : ((ruleType === 'tag_filter' && !rule.keyword) ? 'any tags' : rule.keyword);
+            badge.textContent = (ruleType === 'youtube_playlist' && !rule.keyword) ? 'all videos' : rule.keyword;
             row.appendChild(badge);
-
-            if (ruleType === 'tag_filter' && rule.tags_exclude) {
-              const exBadge = document.createElement('span');
-              exBadge.className = 'hl-rule-badge hl-rule-excl-badge';
-              exBadge.textContent = '−' + rule.tags_exclude;
-              row.appendChild(exBadge);
-            }
 
             if (rule.is_regex) {
               const rb = document.createElement('span');
@@ -9516,7 +9508,6 @@
                 yt_include_shorts: rule.yt_include_shorts ? 1 : 0,
                 yt_min_minutes: rule.yt_min_minutes || 0,
                 yt_max_minutes: rule.yt_max_minutes || 0,
-                tags_exclude: rule.tags_exclude || '',
               });
               const resp = await fetch('/rules/dry-run?' + qs.toString(), { credentials: 'same-origin' });
               const data = await resp.json();
@@ -9539,7 +9530,7 @@
               const ruleLabel = ruleType === 'deduplicate'
                 ? `Deduplicate (${rule.keyword}) in ${scopeLabel}`
                 : (ruleType === 'tag_filter'
-                  ? `Tag filter (keep: ${rule.keyword || 'any'}${rule.tags_exclude ? ', drop: ' + rule.tags_exclude : ''}) in ${scopeLabel}`
+                  ? `Tag filter (${rule.keyword}) in ${scopeLabel}`
                   : `"${rule.keyword}" mark-as-read in ${scopeLabel}`);
               if (!window.confirm(`Run rule now on all matching unread entries?\n\n${ruleLabel}\n\nThis cannot be undone.`)) return;
               runBtn.disabled = true;
@@ -9552,7 +9543,6 @@
                   search_in: rule.search_in || 'title',
                   dedup_window_hours: rule.dedup_window_hours || 168,
                   exclude_scope_ids: rule.exclude_scope_ids || '',
-                  tags_exclude: rule.tags_exclude || '',
                 });
                 const resp = await fetch('/rules/run-now', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
                 const data = await resp.json();
@@ -10515,28 +10505,6 @@
 
         draft.appendChild(webhookRow);
 
-        // ── Tag-filter sub-row: exclude tags (tag_filter only) ───────────
-        const tagExcludeRow = document.createElement('div');
-        tagExcludeRow.className = 'hl-draft-form-subrow hl-draft-tag-exclude-row';
-
-        const tagExcludeLabel = document.createElement('span');
-        tagExcludeLabel.className = 'hl-draft-field-label';
-        tagExcludeLabel.textContent = 'but not tagged:';
-        tagExcludeRow.appendChild(tagExcludeLabel);
-
-        const tagExcludeInput = document.createElement('input');
-        tagExcludeInput.type = 'text';
-        tagExcludeInput.className = 'hl-draft-pattern hl-draft-tag-exclude';
-        tagExcludeInput.placeholder = 'exclude tags, e.g. deals sponsored';
-        tagExcludeInput.maxLength = 1000;
-        tagExcludeInput.autocomplete = 'off';
-        tagExcludeInput.value = prefill.tags_exclude || '';
-        tagExcludeRow.appendChild(tagExcludeInput);
-
-        // Directly below the include-tags field (before the feed picker), so the
-        // keep/drop pair reads as one unit rather than trailing the whole form.
-        folderSel.insertAdjacentElement('afterend', tagExcludeRow);
-
         // ── YouTube playlist sub-row: playlist + options (youtube_playlist only) ─
         const ytRow = document.createElement('div');
         ytRow.className = 'hl-draft-form-subrow hl-draft-yt-row';
@@ -10655,12 +10623,11 @@
           excludeRow.style.display = isGlobalDedup ? '' : 'none';
           webhookRow.style.display = isWebhook ? '' : 'none';
           ytRow.style.display = isYtPlaylist ? '' : 'none';
-          tagExcludeRow.style.display = isTagFilter ? '' : 'none';
           // For the playlist rule the keyword is an OPTIONAL filter (empty = all
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)'
             : (t === 'instapaper' ? 'optional keyword filter (blank = save all)'
-            : (isTagFilter ? 'keep only feed tags, e.g. linux android (blank = exclude-only)' : 'keyword or pattern'));
+            : (isTagFilter ? 'comma-separated feed tags: +python, -rust (+ keeps only, - drops)' : 'keyword or pattern'));
           // The feed picker shows for every type, including deduplicate — dedup can
           // run across an explicit set of selected feeds (>=2). Selection is decoupled
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
@@ -10698,11 +10665,8 @@
           }
 
           const pattern = patInput.value.trim();
-          const tagsExclude = tagExcludeInput.value.trim();
-          // youtube_playlist, instapaper, and quire allow an empty keyword (all in
-          // scope); tag_filter allows it when an exclude list is given.
-          if (!pattern && ruleType === 'tag_filter' && !tagsExclude) { patInput.focus(); return; }
-          if (!pattern && !['youtube_playlist', 'instapaper', 'quire', 'tag_filter'].includes(ruleType)) { patInput.focus(); return; }
+          // youtube_playlist, instapaper, and quire allow an empty keyword (all in scope).
+          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
@@ -10733,8 +10697,7 @@
                          yt_include_shorts: ytShortsCheck.checked ? 1 : 0,
                          yt_mark_read: ytMarkCheck.checked ? 1 : 0,
                          yt_min_minutes: parseInt(ytMinInput.value || '0', 10) || 0,
-                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0,
-                         tags_exclude: tagsExclude });
+                         yt_max_minutes: parseInt(ytMaxInput.value || '0', 10) || 0 });
         });
 
         return draft;
@@ -10756,7 +10719,6 @@
           yt_include_shorts: r.yt_include_shorts ? 1 : 0,
           yt_mark_read: (r.yt_mark_read !== undefined ? r.yt_mark_read : 1) ? 1 : 0,
           yt_min_minutes: r.yt_min_minutes || 0, yt_max_minutes: r.yt_max_minutes || 0,
-          tags_exclude: r.tags_exclude || '',
         });
       }
 

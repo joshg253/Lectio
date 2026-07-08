@@ -29,7 +29,7 @@ def _db():
     )
     conn.execute(
         "CREATE TABLE devto_entries (id TEXT PRIMARY KEY, devto_feed_id TEXT,"
-        " article_id TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT,"
+        " article_id TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT, tags TEXT NOT NULL DEFAULT '',"
         " UNIQUE(devto_feed_id, article_id))"
     )
     return conn
@@ -342,3 +342,36 @@ def test_categories_flow_into_tag_sink_at_ingest():
     finally:
         reader_sanitize.set_entry_tag_sink(None)
     assert captured == [[("101", ["python", "tutorial"])]]
+
+
+def test_tags_survive_persistence_roundtrip():
+    """Regression: the feed XML is regenerated from devto_entries rows, so tags
+    must persist there — _article_to_entry alone carrying tags is not enough."""
+    conn = _db()
+    conn.execute(
+        "INSERT INTO devto_feeds (id, feed_title, tag, created_at) VALUES (?, 't', 'python', 'now')",
+        (F1,),
+    )
+    devto._upsert_entries(conn, F1, [_article(id=1)])
+    devto._write_feed_file(conn, F1)
+    xml = (devto._dir() / f"{F1}.xml").read_text()
+    assert "<category>python</category>" in xml
+    assert "<category>tutorial</category>" in xml
+
+
+def test_reseen_article_backfills_tags():
+    """Rows persisted before the tags column existed get their tags refreshed
+    when the article is re-seen in the API window."""
+    conn = _db()
+    conn.execute(
+        "INSERT INTO devto_feeds (id, feed_title, tag, created_at) VALUES (?, 't', 'python', 'now')",
+        (F1,),
+    )
+    conn.execute(
+        "INSERT INTO devto_entries (id, devto_feed_id, article_id, title, published_at)"
+        " VALUES ('row1', ?, '1', 'old', '2026-07-01T00:00:00+00:00')",
+        (F1,),
+    )
+    assert devto._upsert_entries(conn, F1, [_article(id=1)]) == 0  # not new
+    row = conn.execute("SELECT tags FROM devto_entries WHERE article_id='1'").fetchone()
+    assert row["tags"] == "python,tutorial"

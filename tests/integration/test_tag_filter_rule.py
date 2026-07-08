@@ -1,7 +1,7 @@
 """tag_filter rule: suppress (mark read) unread entries by their feed-provided
-tags in entry_feed_tags — include list (keyword) keeps only matching tagged
-entries, exclude list (tags_exclude) drops matches, untagged entries are
-always kept."""
+tags in entry_feed_tags. The rule spec lives in `keyword` as one comma-separated
+field — `+tag` (or bare) keeps only matching tagged entries, `-tag` drops
+matches; exclude wins; untagged entries are always kept."""
 from __future__ import annotations
 
 import datetime as dt
@@ -59,37 +59,36 @@ def _unread_ids() -> set[str]:
     return {str(e.id) for e in reader.get_entries(feed=FEED, read=False)}
 
 
-def test_parse_tag_filter_list():
-    # Comma/space separated; tokens are normalized; multi-word tags are
-    # written in their hyphenated Lectio form (windows-11, not "Windows 11").
-    assert main.parse_tag_filter_list("Linux, #AI  windows-11") == {
-        "linux", "ai", "windows-11"
-    }
-    assert main.parse_tag_filter_list("  , #") == set()
-    assert main.parse_tag_filter_list(None) == set()
+def test_parse_tag_filter_spec():
+    # Comma-separated; leading - = exclude, leading + (or bare) = include;
+    # tokens are normalized, so multi-word tags can be typed with spaces.
+    assert main.parse_tag_filter_spec("+python, -rust") == ({"python"}, {"rust"})
+    assert main.parse_tag_filter_spec("Linux, #AI, -Windows 11") == (
+        {"linux", "ai"}, {"windows-11"}
+    )
+    assert main.parse_tag_filter_spec("  , #, -") == (set(), set())
+    assert main.parse_tag_filter_spec(None) == (set(), set())
 
 
-def test_rule_persists_tags_exclude(env):
+def test_rule_persists_spec(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "linux", "yellow",
-                                   rule_type="tag_filter", enabled=1,
-                                   tags_exclude="deals sponsored")
+        main.add_highlight_keyword(conn, "feed", FEED, "+linux, -deals", "yellow",
+                                   rule_type="tag_filter", enabled=1)
         r = main.get_highlight_keywords(conn)[0]
     assert r["type"] == "tag_filter"
-    assert r["keyword"] == "linux"
-    assert r["tags_exclude"] == "deals sponsored"
+    assert r["keyword"] == "+linux, -deals"
 
 
 def test_exclude_only_rule(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "", "deals")
+        result = main._run_tag_filter(conn, "feed", FEED, "-deals")
     assert result["count"] == 2  # e-deal + e-mixed
     assert _unread_ids() == {"e-linux", "e-win", "e-untagged"}
 
 
 def test_include_list_keeps_untagged(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "linux", "")
+        result = main._run_tag_filter(conn, "feed", FEED, "+linux")
     # e-win and e-deal are tagged but match no include tag → suppressed;
     # e-untagged has no tags → kept; e-linux and e-mixed match → kept.
     assert result["count"] == 2
@@ -98,7 +97,7 @@ def test_include_list_keeps_untagged(env):
 
 def test_exclude_wins_over_include(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "linux", "deals")
+        result = main._run_tag_filter(conn, "feed", FEED, "linux, -deals")
     # e-mixed matches include (linux) but also exclude (deals) → suppressed.
     assert result["count"] == 3  # e-win, e-deal, e-mixed
     assert _unread_ids() == {"e-linux", "e-untagged"}
@@ -106,16 +105,16 @@ def test_exclude_wins_over_include(env):
 
 def test_tags_normalized_both_sides(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "", "WINDOWS-11")
-    # The stored raw tag "Windows 11" normalizes to windows-11; the rule's
-    # "WINDOWS-11" does too — the match happens on normalized values.
+        result = main._run_tag_filter(conn, "feed", FEED, "-Windows 11")
+    # The stored raw tag "Windows 11" and the spec token both normalize to
+    # windows-11 — the match happens on normalized values.
     assert result["count"] == 1
     assert "e-win" not in _unread_ids()
 
 
 def test_dry_run_marks_nothing(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "", "deals", apply=False)
+        result = main._run_tag_filter(conn, "feed", FEED, "-deals", apply=False)
     assert result["count"] == 2
     assert {e["entry_id"] for e in result["entries"]} == {"e-deal", "e-mixed"}
     assert len(_unread_ids()) == 5  # nothing marked
@@ -123,15 +122,14 @@ def test_dry_run_marks_nothing(env):
 
 def test_empty_lists_error(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "", "  , #")
+        result = main._run_tag_filter(conn, "feed", FEED, "  , #, -")
     assert "error" in result
 
 
 def test_automation_after_refresh_runs_and_logs(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "", "yellow",
-                                   rule_type="tag_filter", enabled=1,
-                                   tags_exclude="deals")
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
+                                   rule_type="tag_filter", enabled=1)
 
     main._run_automation_after_refresh({FEED, OTHER_FEED})
 
@@ -147,8 +145,7 @@ def test_automation_after_refresh_runs_and_logs(env):
 
 def test_disabled_rule_does_not_run(env):
     with main.get_meta_connection() as conn:
-        main.add_highlight_keyword(conn, "feed", FEED, "", "yellow",
-                                   rule_type="tag_filter", enabled=0,
-                                   tags_exclude="deals")
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow",
+                                   rule_type="tag_filter", enabled=0)
     main._run_automation_after_refresh({FEED})
     assert len(_unread_ids()) == 5
