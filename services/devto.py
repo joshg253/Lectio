@@ -231,6 +231,7 @@ def _article_to_entry(a: dict) -> dict | None:
         "content": "".join(parts),
         "published_at": published_at,
         "image_src": img,
+        "tags": [str(t) for t in tags] if isinstance(tags, list) else [],
     }
 
 
@@ -251,7 +252,13 @@ def _item_xml(e: dict) -> str:
         f"      <guid isPermaLink=\"false\">{_esc(str(e['id']))}</guid>\n"
         f"      {pub}\n"
         f"      <description><![CDATA[{e.get('content') or ''}]]></description>\n"
-        "    </item>"
+        # <category> per tag: ingest captures these into entry_feed_tags
+        # (suggestion chips) via the sanitizing parser's tag sink.
+        + "".join(
+            f"      <category>{_esc(str(t))}</category>\n"
+            for t in (e.get("tags") or [])
+        )
+        + "    </item>"
     )
 
 

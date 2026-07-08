@@ -283,6 +283,13 @@ def _deviation_to_entry(d: dict) -> dict | None:
         parts.append(f'<p><a href="{_esc(link)}"><img src="{_esc(img)}" alt="{_esc(title)}"></a></p>')
     if author:
         parts.append(f'<p>by {_esc(author)} on DeviantArt</p>')
+    # DA browse/gallery responses don't include deviation tags (those need
+    # /deviation/metadata calls); carry them through if a caller supplies them.
+    tags = [
+        str(name)
+        for t in (d.get("tags") or [])
+        if (name := t.get("tag_name") if isinstance(t, dict) else t)
+    ]
     return {
         "id": str(devid),
         "title": title,
@@ -291,6 +298,7 @@ def _deviation_to_entry(d: dict) -> dict | None:
         "published_at": published_at,
         "is_mature": bool(d.get("is_mature")),
         "image_src": img or "",
+        "tags": tags,
     }
 
 
@@ -311,7 +319,13 @@ def _item_xml(e: dict) -> str:
         f"      <guid isPermaLink=\"false\">{_esc(str(e['id']))}</guid>\n"
         f"      {pub}\n"
         f"      <description><![CDATA[{e.get('content') or ''}]]></description>\n"
-        "    </item>"
+        # <category> per tag: ingest captures these into entry_feed_tags
+        # (suggestion chips) via the sanitizing parser's tag sink.
+        + "".join(
+            f"      <category>{_esc(str(t))}</category>\n"
+            for t in (e.get("tags") or [])
+        )
+        + "    </item>"
     )
 
 

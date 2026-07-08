@@ -299,3 +299,46 @@ def test_delete_devto_feed_removes_row_and_file():
     assert conn.execute("SELECT COUNT(*) FROM devto_entries").fetchone()[0] == 0
     assert not (devto._dir() / f"{F1}.xml").exists()
     reader.delete_feed.assert_called_once()
+
+
+def test_article_to_entry_carries_tags():
+    e = devto._article_to_entry(_article())
+    assert e is not None
+    assert e["tags"] == ["python", "tutorial"]
+    e2 = devto._article_to_entry(_article(tag_list=None))
+    assert e2 is not None and e2["tags"] == []
+
+
+def test_item_xml_emits_category_per_tag():
+    e = {"id": "101", "title": "T", "entry_url": "https://dev.to/p",
+         "content": "<p>hi</p>", "published_at": "2026-07-01T00:00:00+00:00",
+         "tags": ["python", "a&b"]}
+    xml = devto._item_xml(e)
+    assert "<category>python</category>" in xml
+    assert "<category>a&amp;b</category>" in xml
+
+
+def test_item_xml_no_tags_no_category():
+    e = {"id": "101", "title": "T", "entry_url": "https://dev.to/p",
+         "content": "", "published_at": "2026-07-01T00:00:00+00:00"}
+    assert "<category>" not in devto._item_xml(e)
+
+
+def test_categories_flow_into_tag_sink_at_ingest():
+    """End to end: generated synthetic RSS parsed by the sanitizing parser
+    delivers the article tags to the entry tag sink (entry_feed_tags)."""
+    import io
+
+    from services import reader_sanitize
+    from services.reader_sanitize import SanitizingFeedparserParser
+
+    e = devto._article_to_entry(_article())
+    xml = devto._generate_rss_xml("dev.to #python", "https://dev.to/t/python", [e])
+
+    captured = []
+    reader_sanitize.set_entry_tag_sink(lambda url, pairs: captured.append(pairs))
+    try:
+        SanitizingFeedparserParser()("file:///x/devto.xml", io.BytesIO(xml.encode()), {})
+    finally:
+        reader_sanitize.set_entry_tag_sink(None)
+    assert captured == [[("101", ["python", "tutorial"])]]
