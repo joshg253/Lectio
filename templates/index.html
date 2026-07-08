@@ -1151,13 +1151,14 @@
       <p id="unsub-migrate-body" class="action-modal-hint"></p>
       <div id="unsub-migrate-curation" hidden>
         <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" checked /> Move items to another feed:</label>
-        <div id="unsub-migrate-move-panel">
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" checked />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Move items to another feed:</label>
+        <div id="unsub-migrate-move-panel" hidden>
           <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
           <datalist id="unsub-migrate-candidates"></datalist>
+          <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
           <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
         </div>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" value="skip" />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
       </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>
@@ -6362,7 +6363,11 @@
           const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
         });
         targetSel._labelToUrl = labelToUrl;
-        moveRadio.checked = candidates.length > 0;
+        // "Just unsubscribe" is the default so the dialog opens clean (no list);
+        // picking "Move items" reveals the picker + item list.
+        const skipRadio = document.getElementById('unsub-migrate-skip');
+        if (skipRadio) skipRadio.checked = true;
+        moveRadio.checked = false;
         moveRadio.disabled = candidates.length === 0;
         curationEl.hidden = false;
         if (itemsEl) { itemsEl.innerHTML = ''; itemsEl._loaded = false; }
@@ -6379,6 +6384,19 @@
         function checkedIds() {
           return Array.from(itemsEl?.querySelectorAll('.unsub-migrate-item-check:checked') || [])
             .map(c => c.value).filter(Boolean);
+        }
+        const selectAllCb = document.getElementById('unsub-migrate-select-all');
+        function syncSelectAllState() {
+          if (!selectAllCb) return;
+          const boxes = Array.from(itemsEl?.querySelectorAll('.unsub-migrate-item-check') || []);
+          const checked = boxes.filter(b => b.checked).length;
+          selectAllCb.checked = boxes.length > 0 && checked === boxes.length;
+          selectAllCb.indeterminate = checked > 0 && checked < boxes.length;
+        }
+        function onSelectAllToggle() {
+          const boxes = itemsEl?.querySelectorAll('.unsub-migrate-item-check') || [];
+          boxes.forEach(b => { b.checked = selectAllCb.checked; });
+          syncConfirmState();
         }
         function syncConfirmState() {
           const moving = hasCuration && currentChoice() === 'move';
@@ -6411,7 +6429,7 @@
               cb.className = 'unsub-migrate-item-check';
               cb.checked = true;
               cb.value = it.id || '';
-              cb.addEventListener('change', syncConfirmState);
+              cb.addEventListener('change', () => { syncSelectAllState(); syncConfirmState(); });
               lbl.appendChild(cb);
               lbl.appendChild(document.createTextNode(' ' + (it.starred ? '★ ' : '') + (it.title || it.link || '(untitled)')));
               li.appendChild(lbl);
@@ -6431,6 +6449,7 @@
             });
             itemsEl.appendChild(ul);
             itemsEl._loaded = true;
+            syncSelectAllState();
           } catch (_) {
             itemsEl.textContent = 'Could not load items.';
           }
@@ -6444,6 +6463,7 @@
         function cleanup() {
           confirmBtn.removeEventListener('click', onConfirm);
           targetSel.removeEventListener('input', onTargetInput);
+          selectAllCb?.removeEventListener('change', onSelectAllToggle);
           modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.removeEventListener('change', onChoiceChange));
           modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.removeEventListener('click', onCancel));
           confirmBtn.disabled = false;
@@ -6490,10 +6510,11 @@
         function onCancel() { cleanup(); resolve(false); }
         confirmBtn.addEventListener('click', onConfirm);
         targetSel.addEventListener('input', onTargetInput);
+        selectAllCb?.addEventListener('change', onSelectAllToggle);
         modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.addEventListener('change', onChoiceChange));
         modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.addEventListener('click', onCancel));
+        if (selectAllCb) { selectAllCb.checked = true; selectAllCb.indeterminate = false; }
         syncConfirmState();
-        if (hasCuration && moveRadio.checked) loadItems();
       });
     }
     window.unsubscribeFeedInteractive = unsubscribeFeedInteractive;
