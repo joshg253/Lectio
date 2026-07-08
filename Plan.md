@@ -16,6 +16,21 @@ rationale.)
 
 ## Later
 
+### Feed-provided tags as suggested manual tags (+ chip in post header)
+
+Many feeds ship per-entry tags (`<category>` in RSS/Atom; e.g. freeCodeCamp,
+dev.to, WordPress blogs). Surface these in the post header as suggestion chips
+with a **+** icon — clicking one adds it as one of Our Tags on that entry (via
+the existing `set_manual_tags_for_entry` append path).
+
+Blocker to solve first: the `reader` library does not persist entry categories
+(no `Entry.categories`/tags attribute), so feed tags are lost at ingest.
+Capture them ourselves — a reader ingest hook or a post-refresh pass over the
+raw parsed feed — into a meta-DB table (`entry_feed_tags(feed_url, entry_id,
+tag)`, per-user migrated). Normalize to Lectio tag format (lowercase,
+hyphenated) at display time. Synthetic-feed adapters (dev.to, DeviantArt,
+scraper) can write their tag data into the same table directly.
+
 ### Instapaper-alternative: reader-only view for saved/starred items
 
 Make Lectio usable as a read-it-later app. Two parts:
