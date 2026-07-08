@@ -1151,12 +1151,14 @@
       <p id="unsub-migrate-body" class="action-modal-hint"></p>
       <div id="unsub-migrate-curation" hidden>
         <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
-        <button type="button" id="unsub-migrate-view-btn" class="feed-prop-inline-btn">View items</button>
-        <div id="unsub-migrate-items" class="unsub-migrate-items" hidden></div>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" checked /> Move it to another feed:</label>
-        <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
-        <datalist id="unsub-migrate-candidates"></datalist>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" value="skip" />Just unsubscribe (stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" checked />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Move items to another feed:</label>
+        <div id="unsub-migrate-move-panel" hidden>
+          <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />
+          <datalist id="unsub-migrate-candidates"></datalist>
+          <label class="action-modal-label unsub-migrate-select-all-row"><input type="checkbox" id="unsub-migrate-select-all" checked /> Select all</label>
+          <div id="unsub-migrate-items" class="unsub-migrate-items"></div>
+        </div>
       </div>
       <div class="action-modal-actions">
         <button type="button" class="action-modal-cancel" data-close-modal="unsub-migrate-modal">Cancel</button>
@@ -1226,6 +1228,7 @@
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
+    <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -3973,6 +3976,7 @@
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
+    const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -6317,7 +6321,7 @@
       const targetList = document.getElementById('unsub-migrate-candidates');
       const confirmBtn = document.getElementById('unsub-migrate-confirm');
       const moveRadio = document.getElementById('unsub-migrate-move');
-      const viewBtn = document.getElementById('unsub-migrate-view-btn');
+      const movePanel = document.getElementById('unsub-migrate-move-panel');
       const itemsEl = document.getElementById('unsub-migrate-items');
       if (!modal) { // fallback: plain confirm
         if (!window.confirm(`Unsubscribe from "${title}"?`)) return false;
@@ -6359,13 +6363,14 @@
           const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
         });
         targetSel._labelToUrl = labelToUrl;
-        moveRadio.checked = candidates.length > 0;
+        // "Just unsubscribe" is the default so the dialog opens clean (no list);
+        // picking "Move items" reveals the picker + item list.
+        const skipRadio = document.getElementById('unsub-migrate-skip');
+        if (skipRadio) skipRadio.checked = true;
+        moveRadio.checked = false;
         moveRadio.disabled = candidates.length === 0;
-        targetSel.disabled = !moveRadio.checked;
         curationEl.hidden = false;
-        // Reset the collapsible "what would be lost" list; loaded lazily on click.
-        if (itemsEl) { itemsEl.hidden = true; itemsEl.innerHTML = ''; itemsEl._loaded = false; }
-        if (viewBtn) viewBtn.textContent = 'View items';
+        if (itemsEl) { itemsEl.innerHTML = ''; itemsEl._loaded = false; }
       } else {
         curationEl.hidden = true;
       }
@@ -6373,32 +6378,67 @@
       modal.removeAttribute('hidden');
 
       return new Promise((resolve) => {
-        function onChoiceChange() {
-          const choice = modal.querySelector('input[name="unsub-migrate-choice"]:checked')?.value;
-          targetSel.disabled = choice !== 'move';
+        function currentChoice() {
+          return modal.querySelector('input[name="unsub-migrate-choice"]:checked')?.value;
         }
-        async function onViewToggle() {
-          if (!itemsEl) return;
-          if (!itemsEl.hidden) { itemsEl.hidden = true; if (viewBtn) viewBtn.textContent = 'View items'; return; }
-          if (viewBtn) viewBtn.textContent = 'Hide items';
-          itemsEl.hidden = false;
-          if (itemsEl._loaded) return;
+        function checkedIds() {
+          return Array.from(itemsEl?.querySelectorAll('.unsub-migrate-item-check:checked') || [])
+            .map(c => c.value).filter(Boolean);
+        }
+        const selectAllCb = document.getElementById('unsub-migrate-select-all');
+        function syncSelectAllState() {
+          if (!selectAllCb) return;
+          const boxes = Array.from(itemsEl?.querySelectorAll('.unsub-migrate-item-check') || []);
+          const checked = boxes.filter(b => b.checked).length;
+          selectAllCb.checked = boxes.length > 0 && checked === boxes.length;
+          selectAllCb.indeterminate = checked > 0 && checked < boxes.length;
+        }
+        function onSelectAllToggle() {
+          const boxes = itemsEl?.querySelectorAll('.unsub-migrate-item-check') || [];
+          boxes.forEach(b => { b.checked = selectAllCb.checked; });
+          syncConfirmState();
+        }
+        function syncConfirmState() {
+          const moving = hasCuration && currentChoice() === 'move';
+          if (movePanel) movePanel.hidden = !moving;
+          confirmBtn.textContent = moving ? 'Move & Unsubscribe' : 'Unsubscribe';
+          if (!moving) { confirmBtn.disabled = false; return; }
+          const targetOk = Boolean(targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value));
+          // Enabled once at least one item is checked and a target is picked;
+          // before the list loads, itemsEl._loaded is false and we hold off.
+          confirmBtn.disabled = !(targetOk && itemsEl._loaded && checkedIds().length > 0);
+        }
+        async function loadItems() {
+          if (!itemsEl || itemsEl._loaded) return;
           itemsEl.textContent = 'Loading…';
           try {
             const r = await fetch('/feeds/curation-items?feed_url=' + encodeURIComponent(feedUrl), { credentials: 'same-origin' });
             const data = r.ok ? await r.json() : { items: [] };
             const list = data.items || [];
             itemsEl.innerHTML = '';
-            if (!list.length) { itemsEl.textContent = 'No curated items found.'; itemsEl._loaded = true; return; }
+            if (!list.length) { itemsEl.textContent = 'No curated items found.'; itemsEl._loaded = true; syncConfirmState(); return; }
             const ul = document.createElement('ul');
             ul.className = 'unsub-migrate-item-list';
             list.forEach(it => {
               const li = document.createElement('li');
-              const star = it.starred ? '★ ' : '';
-              const a = document.createElement('a');
-              a.href = it.link || '#'; a.target = '_blank'; a.rel = 'noopener noreferrer';
-              a.textContent = star + (it.title || it.link || '(untitled)');
-              li.appendChild(a);
+              const lbl = document.createElement('label');
+              // All checked by default: the common case is "move everything";
+              // uncheck to leave an item behind (its star gets archived).
+              const cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.className = 'unsub-migrate-item-check';
+              cb.checked = true;
+              cb.value = it.id || '';
+              cb.addEventListener('change', () => { syncSelectAllState(); syncConfirmState(); });
+              lbl.appendChild(cb);
+              lbl.appendChild(document.createTextNode(' ' + (it.starred ? '★ ' : '') + (it.title || it.link || '(untitled)')));
+              li.appendChild(lbl);
+              if (it.link) {
+                const a = document.createElement('a');
+                a.href = it.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                a.textContent = ' ↗'; a.title = 'Open article';
+                li.appendChild(a);
+              }
               if (it.tags && it.tags.length) {
                 const tagSpan = document.createElement('span');
                 tagSpan.className = 'unsub-migrate-item-tags';
@@ -6409,24 +6449,58 @@
             });
             itemsEl.appendChild(ul);
             itemsEl._loaded = true;
+            syncSelectAllState();
           } catch (_) {
             itemsEl.textContent = 'Could not load items.';
           }
+          syncConfirmState();
         }
+        function onChoiceChange() {
+          syncConfirmState();
+          if (hasCuration && currentChoice() === 'move') loadItems();
+        }
+        function onTargetInput() { syncConfirmState(); }
         function cleanup() {
           confirmBtn.removeEventListener('click', onConfirm);
-          viewBtn?.removeEventListener('click', onViewToggle);
+          targetSel.removeEventListener('input', onTargetInput);
+          selectAllCb?.removeEventListener('change', onSelectAllToggle);
           modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.removeEventListener('change', onChoiceChange));
           modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.removeEventListener('click', onCancel));
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Unsubscribe';
           modal.setAttribute('hidden', '');
         }
         async function onConfirm() {
           let migrateTo = null;
-          if (hasCuration) {
-            const choice = modal.querySelector('input[name="unsub-migrate-choice"]:checked')?.value;
-            if (choice === 'move') {
-              migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
-              if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose the "Don’t move" option.'); return; }
+          let moveSubset = null;
+          if (hasCuration && currentChoice() === 'move') {
+            migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
+            if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
+            const ids = checkedIds();
+            const total = itemsEl?.querySelectorAll('.unsub-migrate-item-check').length || 0;
+            if (!ids.length) { window.alert('Select at least one item to move, or choose "Just unsubscribe".'); return; }
+            // Everything checked → the whole-feed migration path (also carries
+            // read-state slugs). A subset → batch-move just those first, then
+            // plain unsubscribe (unmoved stars get archived as usual).
+            if (ids.length < total) moveSubset = ids;
+          }
+          confirmBtn.disabled = true;
+          if (moveSubset) {
+            try {
+              const resp = await fetch('/entries/move-to-feed-batch', {
+                method: 'POST',
+                body: new URLSearchParams({
+                  entries: JSON.stringify(moveSubset.map(id => [feedUrl, id])),
+                  target_url: migrateTo,
+                }),
+              });
+              const data = await resp.json();
+              if (!data.ok) { window.alert(data.error || 'Move failed.'); confirmBtn.disabled = false; return; }
+              migrateTo = null; // subset moved by hand; don't run the whole-feed migration
+            } catch (_) {
+              window.alert('Move failed — network error.');
+              confirmBtn.disabled = false;
+              return;
             }
           }
           cleanup();
@@ -6435,9 +6509,12 @@
         }
         function onCancel() { cleanup(); resolve(false); }
         confirmBtn.addEventListener('click', onConfirm);
-        viewBtn?.addEventListener('click', onViewToggle);
+        targetSel.addEventListener('input', onTargetInput);
+        selectAllCb?.addEventListener('change', onSelectAllToggle);
         modal.querySelectorAll('input[name="unsub-migrate-choice"]').forEach(rb => rb.addEventListener('change', onChoiceChange));
         modal.querySelectorAll('[data-close-modal="unsub-migrate-modal"]').forEach(b => b.addEventListener('click', onCancel));
+        if (selectAllCb) { selectAllCb.checked = true; selectAllCb.indeterminate = false; }
+        syncConfirmState();
       });
     }
     window.unsubscribeFeedInteractive = unsubscribeFeedInteractive;
@@ -7326,6 +7403,7 @@
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -7674,6 +7752,7 @@
             setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -8356,15 +8435,11 @@
       });
     });
 
-    postMoveToFeedButton?.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const feedUrl = contextPostFeedUrl;
-      const entryId = contextPostEntryId;
-      const title = contextPostTitle;
-      hideAllContextMenus();
-      if (!feedUrl || !entryId) return;
-
+    // Shared driver for the move-to-feed modal. `entries` is a list of
+    // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
+    // batch endpoint. `bodyText` describes what's being moved.
+    async function openMoveToFeedModal(entries, bodyText, onDone) {
+      if (!entries.length) return;
       const modal = document.getElementById('move-entry-modal');
       const bodyEl = document.getElementById('move-entry-body');
       const targetSel = document.getElementById('move-entry-target');
@@ -8372,7 +8447,7 @@
       const confirmBtn = document.getElementById('move-entry-confirm');
       if (!modal || !targetSel || !confirmBtn) return;
 
-      bodyEl.textContent = title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.';
+      bodyEl.textContent = bodyText;
       targetSel.value = '';
       targetList.innerHTML = '';
       confirmBtn.disabled = true;
@@ -8382,7 +8457,7 @@
       // migration picker uses, so it doesn't depend on what's in the DOM).
       let candidates = [];
       try {
-        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(feedUrl)}`);
+        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(entries[0].feedUrl)}`);
         const d = await r.json();
         candidates = d.candidates || [];
       } catch (_) { /* picker just stays empty */ }
@@ -8407,17 +8482,22 @@
         if (!targetUrl) return;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Moving…';
+        const body = entries.length === 1
+          ? new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl })
+          : new URLSearchParams({
+              entries: JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])),
+              target_url: targetUrl,
+            });
+        const endpoint = entries.length === 1 ? '/entries/move-to-feed' : '/entries/move-to-feed-batch';
         try {
-          const resp = await fetch('/entries/move-to-feed', {
-            method: 'POST',
-            body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, target_url: targetUrl }),
-          });
+          const resp = await fetch(endpoint, { method: 'POST', body });
           const data = await resp.json();
           if (data.ok) {
             modal.setAttribute('hidden', '');
-            showToastMessage(data.message || 'Entry moved.');
+            showToastMessage(data.message || 'Moved.');
             // Reload the list panes so star/tag badges and read state reflect the move.
             loadScopePanesWithoutFullRefresh(window.location.href, false);
+            onDone?.(data);
           } else {
             showToastMessage(data.error || 'Move failed.');
             confirmBtn.disabled = false;
@@ -8432,6 +8512,40 @@
 
       modal.removeAttribute('hidden');
       targetSel.focus();
+    }
+
+    postMoveToFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const title = contextPostTitle;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openMoveToFeedModal(
+        [{ feedUrl, entryId }],
+        title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.'
+      );
+    });
+
+    postMoveVisibleButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAllContextMenus();
+      // "Visible" = every post currently rendered in the list — i.e. whatever
+      // survives the active filters (tag, search, unread, star).
+      const entries = Array.from(document.querySelectorAll('.posts .post-item'))
+        .map(el => ({
+          feedUrl: el.getAttribute('data-post-feed-url') || '',
+          entryId: el.getAttribute('data-post-entry-id') || '',
+        }))
+        .filter(e => e.feedUrl && e.entryId);
+      if (!entries.length) return;
+      openMoveToFeedModal(
+        entries,
+        `Move the ${entries.length} visible post${entries.length === 1 ? '' : 's'} to another feed. ` +
+        'Posts already in the target feed are skipped.'
+      );
     });
 
     postClearImgCacheButton?.addEventListener('click', async (event) => {

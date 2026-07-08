@@ -136,13 +136,19 @@ The short version:
   tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
   stars onto the surviving feed, so no curation is lost). **Curation is never
   dropped on unsubscribe:** removing a feed that has starred/tagged items offers
-  to move that curation onto another feed first (with a **View items** toggle that
-  lists exactly which starred/tagged entries are at stake), and **Settings → Feeds** lets you
+  to move that curation onto another feed first: choosing **Move items to
+  another feed** lists every starred/tagged entry at stake with a checkbox
+  (all selected by default), so you can uncheck the ones to leave behind and
+  **Move & Unsubscribe** in one step; **Just unsubscribe** skips the migration
+  (unmoved stars are archived). Also, **Settings → Feeds** lets you
   multi-select several feeds and **Combine** them into one survivor (migrating
   their stars, tags, and optionally unread state, then unsubscribing the rest).
   Individual posts can also be cherry-picked: the entry context menu's
   **Move to feed…** carries one entry's star, tags, and read state onto another
-  feed (useful when swapping a firehose feed for a filtered variant).
+  feed, and **Move visible to feed…** batch-moves everything currently shown in
+  the post list — filter first (tag, search, unread, starred), then move the
+  survivors in one go (useful when swapping a firehose feed for a filtered
+  variant); posts already in the target feed are skipped.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
