@@ -18459,6 +18459,71 @@ def move_entry_to_feed_route(
                          "message": f"Entry moved{carried}."})
 
 
+_MOVE_BATCH_CAP = 500
+
+
+@app.post("/entries/move-to-feed-batch")
+def move_entries_to_feed_batch_route(
+    entries: str = Form(...),
+    target_url: str = Form(...),
+):
+    """Move a batch of entries' curation to another feed.
+
+    ``entries`` is a JSON array of ``[feed_url, entry_id]`` pairs (the visible
+    post list). Entries already living in the target feed are skipped, not
+    errors — a folder-wide "move visible" naturally includes the target's own
+    posts. Per-entry semantics are ``_move_entry_to_feed``'s.
+    """
+    target = target_url.strip()
+    try:
+        pairs = json.loads(entries)
+        assert isinstance(pairs, list)
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": "Bad entries payload."}, status_code=400)
+    if len(pairs) > _MOVE_BATCH_CAP:
+        return JSONResponse(
+            {"ok": False, "error": f"Too many entries (max {_MOVE_BATCH_CAP} per move)."},
+            status_code=400,
+        )
+    moved = skipped = failed = stars = tags = 0
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                for pair in pairs:
+                    if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
+                        failed += 1
+                        continue
+                    feed_url, entry_id = str(pair[0]).strip(), str(pair[1])
+                    if feed_url == target:
+                        skipped += 1
+                        continue
+                    result = _move_entry_to_feed(reader, conn, feed_url, entry_id, target)
+                    if result["ok"]:
+                        moved += 1
+                        stars += 1 if result["star"] else 0
+                        tags += result["tags"]
+                    else:
+                        failed += 1
+                        LOGGER.warning("[move-entry] batch item failed %s in %s: %s",
+                                       entry_id, feed_url, result["error"])
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[move-entry] batch move to %s failed", target)
+        return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
+    bits = []
+    if stars:
+        bits.append(f"{stars} star{'s' if stars != 1 else ''}")
+    if tags:
+        bits.append(f"{tags} tag{'s' if tags != 1 else ''}")
+    carried = f" (carried {' + '.join(bits)})" if bits else ""
+    msg = f"Moved {moved} entr{'ies' if moved != 1 else 'y'}{carried}."
+    if skipped:
+        msg += f" {skipped} already in that feed."
+    if failed:
+        msg += f" {failed} failed — see server logs."
+    return JSONResponse({"ok": True, "moved": moved, "skipped": skipped,
+                         "failed": failed, "message": msg})
+
+
 @app.get("/feeds/curation-items")
 def feed_curation_items_route(feed_url: str = Query(...)):
     """List the exact curated entries (tagged and/or starred) a feed carries, so

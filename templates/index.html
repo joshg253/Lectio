@@ -1226,6 +1226,7 @@
     <button type="button" id="ctx-post-mark-below-read" class="context-menu-item">Read below</button>
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
+    <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -3973,6 +3974,7 @@
     const postCopyUrlButton = document.getElementById('ctx-post-copy-url');
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
+    const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -7326,6 +7328,7 @@
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -7674,6 +7677,7 @@
             setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -8356,15 +8360,11 @@
       });
     });
 
-    postMoveToFeedButton?.addEventListener('click', async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const feedUrl = contextPostFeedUrl;
-      const entryId = contextPostEntryId;
-      const title = contextPostTitle;
-      hideAllContextMenus();
-      if (!feedUrl || !entryId) return;
-
+    // Shared driver for the move-to-feed modal. `entries` is a list of
+    // {feedUrl, entryId}; one entry uses the single endpoint, more uses the
+    // batch endpoint. `bodyText` describes what's being moved.
+    async function openMoveToFeedModal(entries, bodyText) {
+      if (!entries.length) return;
       const modal = document.getElementById('move-entry-modal');
       const bodyEl = document.getElementById('move-entry-body');
       const targetSel = document.getElementById('move-entry-target');
@@ -8372,7 +8372,7 @@
       const confirmBtn = document.getElementById('move-entry-confirm');
       if (!modal || !targetSel || !confirmBtn) return;
 
-      bodyEl.textContent = title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.';
+      bodyEl.textContent = bodyText;
       targetSel.value = '';
       targetList.innerHTML = '';
       confirmBtn.disabled = true;
@@ -8382,7 +8382,7 @@
       // migration picker uses, so it doesn't depend on what's in the DOM).
       let candidates = [];
       try {
-        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(feedUrl)}`);
+        const r = await fetch(`/feeds/curation-count?feed_url=${encodeURIComponent(entries[0].feedUrl)}`);
         const d = await r.json();
         candidates = d.candidates || [];
       } catch (_) { /* picker just stays empty */ }
@@ -8407,15 +8407,19 @@
         if (!targetUrl) return;
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Moving…';
+        const body = entries.length === 1
+          ? new URLSearchParams({ feed_url: entries[0].feedUrl, entry_id: entries[0].entryId, target_url: targetUrl })
+          : new URLSearchParams({
+              entries: JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])),
+              target_url: targetUrl,
+            });
+        const endpoint = entries.length === 1 ? '/entries/move-to-feed' : '/entries/move-to-feed-batch';
         try {
-          const resp = await fetch('/entries/move-to-feed', {
-            method: 'POST',
-            body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, target_url: targetUrl }),
-          });
+          const resp = await fetch(endpoint, { method: 'POST', body });
           const data = await resp.json();
           if (data.ok) {
             modal.setAttribute('hidden', '');
-            showToastMessage(data.message || 'Entry moved.');
+            showToastMessage(data.message || 'Moved.');
             // Reload the list panes so star/tag badges and read state reflect the move.
             loadScopePanesWithoutFullRefresh(window.location.href, false);
           } else {
@@ -8432,6 +8436,40 @@
 
       modal.removeAttribute('hidden');
       targetSel.focus();
+    }
+
+    postMoveToFeedButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const title = contextPostTitle;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openMoveToFeedModal(
+        [{ feedUrl, entryId }],
+        title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.'
+      );
+    });
+
+    postMoveVisibleButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAllContextMenus();
+      // "Visible" = every post currently rendered in the list — i.e. whatever
+      // survives the active filters (tag, search, unread, star).
+      const entries = Array.from(document.querySelectorAll('.posts .post-item'))
+        .map(el => ({
+          feedUrl: el.getAttribute('data-post-feed-url') || '',
+          entryId: el.getAttribute('data-post-entry-id') || '',
+        }))
+        .filter(e => e.feedUrl && e.entryId);
+      if (!entries.length) return;
+      openMoveToFeedModal(
+        entries,
+        `Move the ${entries.length} visible post${entries.length === 1 ? '' : 's'} to another feed. ` +
+        'Posts already in the target feed are skipped.'
+      );
     });
 
     postClearImgCacheButton?.addEventListener('click', async (event) => {

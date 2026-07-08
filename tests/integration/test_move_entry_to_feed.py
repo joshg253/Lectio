@@ -119,3 +119,38 @@ def test_move_rejects_missing_entry_and_feed_and_self(env):
     assert _move(entry_id="nope")["error"] == "Entry not found."
     assert _move(target="https://example.test/unknown")["error"] == "Target feed not found."
     assert _move(target=SRC)["error"] == "Entry is already in that feed."
+
+
+def _batch(pairs, target=DST):
+    import json
+    resp = main.move_entries_to_feed_batch_route(entries=json.dumps(pairs), target_url=target)
+    return json.loads(bytes(resp.body))
+
+
+def test_batch_move_moves_skips_and_reports(env):
+    with main.get_reader() as reader:
+        reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+        for i in (1, 2):
+            reader.add_entry({"feed_url": SRC, "id": f"e{i}", "title": f"P{i}",
+                              "link": f"https://example.test/{i}"})
+        reader.add_entry({"feed_url": DST, "id": "d1", "title": "D1",
+                          "link": "https://example.test/d1"})
+    _star(SRC, "e1")
+    data = _batch([[SRC, "e1"], [SRC, "e2"], [DST, "d1"], [SRC, "missing"]])
+    assert data["ok"]
+    assert data["moved"] == 2 and data["skipped"] == 1 and data["failed"] == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((DST, "e1")) and reader.get_entry((DST, "e2"))
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM saved_entries WHERE feed_url=? AND entry_id='e1'", (DST,)
+        ).fetchone()
+
+
+def test_batch_move_rejects_oversize_and_bad_payload(env):
+    import json
+    data = _batch([[SRC, str(i)] for i in range(main._MOVE_BATCH_CAP + 1)])
+    assert not data["ok"] and "Too many" in data["error"]
+    resp = main.move_entries_to_feed_batch_route(entries="not json", target_url=DST)
+    assert not json.loads(bytes(resp.body))["ok"]

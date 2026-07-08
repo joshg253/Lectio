@@ -142,7 +142,10 @@ The short version:
   their stars, tags, and optionally unread state, then unsubscribing the rest).
   Individual posts can also be cherry-picked: the entry context menu's
   **Move to feed…** carries one entry's star, tags, and read state onto another
-  feed (useful when swapping a firehose feed for a filtered variant).
+  feed, and **Move visible to feed…** batch-moves everything currently shown in
+  the post list — filter first (tag, search, unread, starred), then move the
+  survivors in one go (useful when swapping a firehose feed for a filtered
+  variant); posts already in the target feed are skipped.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
