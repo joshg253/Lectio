@@ -85,6 +85,16 @@ def test_extract_facade_thumbnail_needs_video_ancestor_hint():
     assert main._extract_source_embed_iframes(html) == []
 
 
+def test_extract_facade_thumbnail_host_case_insensitive():
+    html = (
+        '<div class="youtube-facade">'
+        f'<img src="https://I.YTIMG.COM/vi/{VID}/maxresdefault.jpg">'
+        "</div>"
+    )
+    out = main._extract_source_embed_iframes(html)
+    assert out and out[0][0] == f"yt:{VID}"  # ID case preserved
+
+
 def test_extract_lite_youtube_element():
     out = main._extract_source_embed_iframes(f'<lite-youtube videoid="{VID}"></lite-youtube>')
     assert out and out[0][0] == f"yt:{VID}"

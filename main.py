@@ -10168,7 +10168,11 @@ def _extract_source_embed_iframes(
         return []
     lower_html = raw_html.lower()
     has_iframe = "<iframe" in lower_html
-    has_facade = "/vi/" in lower_html or "lite-youtube" in lower_html
+    has_facade = (
+        "ytimg.com/vi/" in lower_html
+        or "youtube.com/vi/" in lower_html
+        or "lite-youtube" in lower_html
+    )
     if not (has_iframe or has_facade):
         return []
     from bs4 import BeautifulSoup
@@ -10180,7 +10184,10 @@ def _extract_source_embed_iframes(
     out: list[tuple[str | None, str]] = []
 
     def _emit_youtube(vid: str) -> None:
-        if vid in seen_yt or f"/embed/{vid}" in existing:
+        # `existing` is lowercased, so lower the needle too (IDs are
+        # case-sensitive, but two same-page IDs differing only by case don't
+        # happen in practice, and erring toward skip is harmless here).
+        if vid in seen_yt or f"/embed/{vid}".lower() in existing:
             return
         seen_yt.add(vid)
         out.append((f"yt:{vid}", _youtube_embed_html(vid)))
@@ -10227,7 +10234,7 @@ def _extract_source_embed_iframes(
             if len(out) >= limit:
                 break
             src = str(img.get("src") or img.get("data-src") or "")
-            m = re.search(r"(?:ytimg\.com|youtube\.com)/vi/([\w-]{11})/", src)
+            m = re.search(r"(?:ytimg\.com|youtube\.com)/vi/([\w-]{11})/", src, re.IGNORECASE)
             if not m:
                 continue
             node, hinted = img, False
