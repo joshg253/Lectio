@@ -48,6 +48,10 @@ The short version:
   Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
   that filters the current selection (folder/feed + read state) by tag, and a
   tag chip in an article's header opens that tag scoped to the article's own feed.
+  Feeds that publish per-entry tags (RSS/Atom `<category>`, e.g. dev.to or
+  WordPress blogs) get **+** suggestion chips in the post header — captured at
+  ingest so they show instantly; clicking one adds it as your own tag on that
+  post, and already-added tags aren't re-offered.
 - **Persistent audio player** — podcast/audio posts show a **Play** button that
   loads the track into a global player bar pinned to the bottom of the app
   (now-playing title, play/pause, seek scrubber, playback speed). Because the

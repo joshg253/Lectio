@@ -448,7 +448,6 @@ def _is_hotlink_img_host(netloc: str) -> bool:
 MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
 MAX_MANUAL_TAGS = 12
 MAX_FEED_TAG_SUGGESTIONS = 8
-FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS = 900
 TAG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.#+][A-Za-z0-9_.#+-]{0,31}$")
 def _static_asset_version() -> str:
     try:
@@ -1337,9 +1336,6 @@ class _PerUserDict:
         return self._d().values()
 
 
-feed_tag_suggestion_cache_lock = threading.Lock()
-feed_tag_suggestion_cache = _PerUserDict()
-_feed_tag_fetch_in_progress: set[str] = set()
 # Short in-memory TTL cache for tag counts to avoid repeatedly scanning
 # reader entries on every request. Small TTL keeps counts fresh while
 # preventing repeated expensive work during rapid navigation.
@@ -2821,6 +2817,17 @@ def ensure_meta_schema() -> None:
                 image_url TEXT,
                 fetched_at REAL NOT NULL,
                 PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_feed_tags (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                first_seen_at REAL NOT NULL,
+                PRIMARY KEY (feed_url, entry_id, tag)
             )
             """
         )
@@ -6529,6 +6536,14 @@ _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 # Quire calls feed the per-user sliding-window rate meter (per-minute/hour).
 quire_service.set_usage_sink(record_quire_call)
 
+from services import reader_sanitize
+from services.feed_tags import FeedTagService
+
+# Feed-provided entry tags (<category>) captured at ingest: the sanitizing
+# feed parser hands raw tag data to this service via the sink below.
+feed_tag_service = FeedTagService(get_meta_connection=get_meta_connection)
+reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
+
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
@@ -6774,143 +6789,14 @@ def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
         return get_manual_tags_for_resource(reader, entry.resource_id)
 
 
-def extract_feed_entry_tags(raw_entry: object) -> list[str]:
-    values: list[str] = []
-
-    raw_tags = getattr(raw_entry, "tags", None)
-    if raw_tags:
-        for raw_tag in raw_tags:
-            term = getattr(raw_tag, "term", None)
-            label = getattr(raw_tag, "label", None)
-            scheme = getattr(raw_tag, "scheme", None)
-            if isinstance(raw_tag, dict):
-                term = term or raw_tag.get("term")
-                label = label or raw_tag.get("label")
-                scheme = scheme or raw_tag.get("scheme")
-            tag_value = term or label or scheme
-            if tag_value:
-                values.append(str(tag_value))
-
-    category = getattr(raw_entry, "category", None)
-    if category:
-        values.append(str(category))
-
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        compact = " ".join(value.strip().split())
-        if not compact:
-            continue
-        lowered = compact.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        cleaned.append(compact)
-    return cleaned
-
-
-def _score_feed_entry_match(
-    raw_entry: object,
-    entry_id: str,
-    entry_link: str | None,
-    entry_title: str | None,
-) -> int:
-    score = 0
-    candidate_id = str(getattr(raw_entry, "id", "") or "")
-    candidate_link = str(getattr(raw_entry, "link", "") or "")
-    candidate_title = str(getattr(raw_entry, "title", "") or "")
-
-    if candidate_id and candidate_id == entry_id:
-        score += 6
-    if entry_link and candidate_link and candidate_link == entry_link:
-        score += 5
-    if entry_link and candidate_link and candidate_link.split("?")[0] == entry_link.split("?")[0]:
-        score += 2
-    if entry_title and candidate_title and candidate_title.strip() == entry_title.strip():
-        score += 1
-
-    return score
-
-
-def get_feed_tag_suggestions(
-    feed_url: str,
-    entry_id: str,
-    entry_link: str | None,
-    entry_title: str | None,
-) -> list[str]:
-    now = time.monotonic()
-    with feed_tag_suggestion_cache_lock:
-        cached = feed_tag_suggestion_cache.get(feed_url)
-    if cached and (now - cached[0]) < FEED_TAG_SUGGESTION_CACHE_TTL_SECONDS:
-        candidate_entries = cached[1]
-    else:
-        # Don't block the entry-detail response on a live HTTP feed fetch.
-        # Populate the cache in a background thread; return [] for this request.
-        # Tag suggestions will appear on the next entry open from the same feed.
-        with feed_tag_suggestion_cache_lock:
-            already_fetching = feed_url in _feed_tag_fetch_in_progress
-            if not already_fetching:
-                _feed_tag_fetch_in_progress.add(feed_url)
-
-        if not already_fetching:
-            def _fetch_tags(url: str = feed_url) -> None:
-                try:
-                    with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-                        response = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
-                    response.raise_for_status()
-                    parsed = feedparser.parse(response.content)
-                    candidates: list[dict[str, object]] = []
-                    for raw_entry in list(parsed.entries)[:120]:
-                        tags = extract_feed_entry_tags(raw_entry)
-                        if not tags:
-                            continue
-                        candidates.append({
-                            "id": str(getattr(raw_entry, "id", "") or ""),
-                            "link": str(getattr(raw_entry, "link", "") or ""),
-                            "title": str(getattr(raw_entry, "title", "") or ""),
-                            "tags": tags,
-                        })
-                    with feed_tag_suggestion_cache_lock:
-                        feed_tag_suggestion_cache[url] = (time.monotonic(), candidates)
-                except Exception:
-                    pass
-                finally:
-                    with feed_tag_suggestion_cache_lock:
-                        _feed_tag_fetch_in_progress.discard(url)
-
-            threading.Thread(target=_fetch_tags, daemon=True).start()
+def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
+    """Feed-provided tags captured at ingest (entry_feed_tags meta table)."""
+    try:
+        tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
+    except Exception:
+        LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
-
-    best_score = 0
-    best_tags: list[str] = []
-    for candidate in candidate_entries:
-        score = 0
-        candidate_id = str(candidate.get("id", "") or "")
-        candidate_link = str(candidate.get("link", "") or "")
-        candidate_title = str(candidate.get("title", "") or "")
-
-        if candidate_id and candidate_id == entry_id:
-            score += 6
-        if entry_link and candidate_link and candidate_link == entry_link:
-            score += 5
-        if entry_link and candidate_link and candidate_link.split("?")[0] == entry_link.split("?")[0]:
-            score += 2
-        if entry_title and candidate_title and candidate_title.strip() == entry_title.strip():
-            score += 1
-
-        if score > best_score:
-            best_score = score
-            candidate_tags = candidate.get("tags", [])
-            if isinstance(candidate_tags, list):
-                best_tags = [str(tag) for tag in candidate_tags][:MAX_FEED_TAG_SUGGESTIONS]
-            else:
-                best_tags = []
-            if score >= 8:
-                break
-
-    if best_score <= 0:
-        return []
-    return best_tags[:MAX_FEED_TAG_SUGGESTIONS]
+    return tags[:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()
@@ -11103,14 +10989,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, _audio_feed_suggestion = _apply_entry_media(content_html, entry, feed_url, entry_id)
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
-        feed_tag_suggestions = get_feed_tag_suggestions(
-            feed_url=entry.feed_url,
-            entry_id=entry.id,
-            entry_link=entry.link,
-            entry_title=entry.title,
-        )
-        manual_tag_set = {tag.lower() for tag in manual_tags}
-        feed_tag_suggestions = [tag for tag in feed_tag_suggestions if tag.strip().lower() not in manual_tag_set]
+        raw_feed_tags = get_feed_tag_suggestions(entry.feed_url, entry.id)
+        # Tags are stored raw; normalize to Lectio tag format for display and
+        # compare normalized-to-normalized so an applied "machine-learning"
+        # suppresses a raw "Machine Learning" suggestion.
+        manual_tag_set = {normalize_tag_value(tag) for tag in manual_tags}
+        feed_tag_suggestions = []
+        for raw_tag in raw_feed_tags:
+            normalized = normalize_tag_value(raw_tag)
+            if not normalized or normalized in manual_tag_set:
+                continue
+            if normalized not in feed_tag_suggestions:
+                feed_tag_suggestions.append(normalized)
 
         # Check if entry is saved
         is_saved = False
@@ -12192,6 +12082,12 @@ def purge_orphaned_feed(
         scraper_service.delete_scraped_feed(conn, reader, feed_id)
     else:
         reader.delete_feed(feed_url, missing_ok=True)
+
+    # Prune captured feed-provided tags (best-effort).
+    try:
+        feed_tag_service.delete_for_feed(feed_url)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("[purge] entry_feed_tags cleanup failed for %s", feed_url)
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
@@ -18382,6 +18278,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
         "read_history",
         "feed_failure_state",
         "entry_lead_images",
+        "entry_feed_tags",
         "feed_lead_image_strategy",
         "disabled_feeds",
         "feed_display_prefs",
