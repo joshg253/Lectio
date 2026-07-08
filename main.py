@@ -3162,8 +3162,9 @@ def ensure_meta_schema() -> None:
             # 'marked' = entry was marked read; 'kept' = the surviving copy of a
             # dedup group, logged so run history shows what each duplicate matched.
             conn.execute("ALTER TABLE rule_run_log_entries ADD COLUMN role TEXT NOT NULL DEFAULT 'marked'")
-        except Exception:
-            pass
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dedup_false_matches (
