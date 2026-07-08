@@ -11825,6 +11825,131 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     return counts
 
 
+def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_id: str,
+                        target_url: str) -> dict:
+    """Move one entry's curation (star, manual tags, read state) onto *target_url*.
+
+    Single-entry counterpart of ``_migrate_curation``: the entry is matched into
+    the target feed by GUID, else normalized link, else synthesized there. The
+    source entry itself stays in its feed (reader can't delete feed-provided
+    entries) but is marked read and stripped of its star/tags so it stops
+    surfacing as curated content.
+
+    Returns {"ok": bool, "synth": bool, "tags": n, "star": bool, "error": str|None}.
+    """
+    result = {"ok": False, "synth": False, "tags": 0, "star": False, "error": None}
+    src = reader.get_entry((feed_url, entry_id), None)
+    if src is None:
+        result["error"] = "Entry not found."
+        return result
+    if reader.get_feed(target_url, None) is None:
+        result["error"] = "Target feed not found."
+        return result
+    if target_url == feed_url:
+        result["error"] = "Entry is already in that feed."
+        return result
+
+    # Resolve the entry inside the target feed: GUID (direct lookup, no feed
+    # scan), else normalized link.
+    target_id = None
+    if reader.get_entry((target_url, entry_id), None) is not None:
+        target_id = entry_id
+    else:
+        src_link_norm = normalize_entry_link_for_dedupe(src.link)
+        if src_link_norm:
+            for e in reader.get_entries(feed=target_url):
+                if normalize_entry_link_for_dedupe(e.link) == src_link_norm:
+                    target_id = e.id
+                    break
+    if target_id is None:
+        ed: dict = {
+            "feed_url": target_url,
+            "id": entry_id,
+            "title": src.title or "",
+            "link": src.link or entry_id,
+        }
+        if src.published:
+            ed["published"] = src.published
+        if getattr(src, "content", None):
+            ed["content"] = [{"value": src.content[0].value}]
+        elif src.summary:
+            ed["summary"] = src.summary
+        try:
+            reader.add_entry(ed)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[move-entry] synth add_entry failed %s -> %s", entry_id, target_url)
+            result["error"] = "Could not create the entry in the target feed."
+            return result
+        target_id = entry_id
+        result["synth"] = True
+
+    # Manual tags: re-key onto the target resource, then clear from the source.
+    keys = [_extract_tag_key(t) for t in reader.get_tags(src.resource_id)]
+    keys = [k for k in keys if k and k.startswith(MANUAL_TAG_KEY_PREFIX)]
+    for key in keys:
+        try:
+            reader.set_tag((target_url, target_id), key)
+            reader.delete_tag(src.resource_id, key, missing_ok=True)
+            result["tags"] += 1
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[move-entry] tag move failed %s on %s", key, entry_id)
+
+    # Star: move the saved_entries row.
+    row = conn.execute(
+        "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        (feed_url, entry_id),
+    ).fetchone()
+    if row:
+        # OR IGNORE: if the target copy is already starred, its own saved_at
+        # wins — the outcome (starred at target, unstarred at source) is the
+        # same either way, which is what result["star"] reports.
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (target_url, target_id, row["saved_at"]),
+        )
+        conn.execute(
+            "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+        result["star"] = True
+
+    # Read state: the target copy inherits the source's state; the leftover
+    # source entry is marked read so it stops showing up in unread views.
+    when = datetime.now().isoformat()
+    read_rows = []
+    try:
+        if src.read:
+            reader.mark_entry_as_read((target_url, target_id))
+            read_rows.append((target_url, target_id))
+        else:
+            reader.mark_entry_as_unread((target_url, target_id))
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("[move-entry] target read-state sync failed %s", target_id)
+    if not src.read:
+        try:
+            reader.mark_entry_as_read((feed_url, entry_id))
+            read_rows.append((feed_url, entry_id))
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[move-entry] mark source read failed %s", entry_id)
+    if read_rows:
+        conn.executemany(
+            """
+            INSERT INTO entry_read_state (feed_url, entry_id, read_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at
+            """,
+            [(fu, eid, when) for fu, eid in read_rows],
+        )
+    conn.commit()
+
+    if result["tags"] or result["star"]:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    invalidate_unread_counts_cache()
+    result["ok"] = True
+    return result
+
+
 def purge_orphaned_feed(
     reader,
     conn: sqlite3.Connection,
@@ -18246,6 +18371,36 @@ def feed_curation_count_route(feed_url: str = Query(...)):
         return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
     counts["candidates"] = candidates
     return JSONResponse(counts)
+
+
+@app.post("/entries/move-to-feed")
+def move_entry_to_feed_route(
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+    target_url: str = Form(...),
+):
+    """Move one entry's curation (star, manual tags, read state) to another feed.
+
+    The entry is matched into the target by GUID/normalized link, or synthesized
+    there; the source copy is marked read and stripped of its star/tags.
+    """
+    try:
+        with get_reader() as reader:
+            with get_meta_connection() as conn:
+                result = _move_entry_to_feed(reader, conn, feed_url.strip(), entry_id, target_url.strip())
+    except Exception:  # noqa: BLE001 — details stay in the log, not the response
+        LOGGER.exception("[move-entry] failed for %s in %s", entry_id, feed_url)
+        return JSONResponse({"ok": False, "error": "Move failed — see server logs."}, status_code=502)
+    if not result["ok"]:
+        return JSONResponse({"ok": False, "error": result["error"]}, status_code=400)
+    bits = []
+    if result["star"]:
+        bits.append("star")
+    if result["tags"]:
+        bits.append(f"{result['tags']} tag{'s' if result['tags'] != 1 else ''}")
+    carried = f" (moved {' + '.join(bits)})" if bits else ""
+    return JSONResponse({"ok": True, "synthesized": result["synth"],
+                         "message": f"Entry moved{carried}."})
 
 
 @app.get("/feeds/curation-items")

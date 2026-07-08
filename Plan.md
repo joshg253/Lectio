@@ -35,17 +35,9 @@ auto-closes the code-fixed alerts (141-144, 120, 54/55/57, 8, 1).
 The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see
 ARCHITECTURE.md "dev.to filtered feeds"). Remaining user step: replace the four
 existing raw dev.to subscriptions (front page + C++/C#/Python tag feeds) with
-filtered adapter feeds via the Add Feed dialog, carrying any starred posts over
-(all-or-nothing via the unsubscribe-migration modal today; the per-entry
-"Move to feed…" item below would allow cherry-picking).
-
-### Per-entry "Move to feed…" action
-
-Moving starred/tagged entries between feeds is all-or-nothing today (the
-unsubscribe-migration modal). Add a per-entry "Move to feed…" action (entry
-context menu) reusing that modal's star-archive/tag-carry machinery so individual
-saved posts can be cherry-picked to another feed — e.g. when swapping a firehose
-feed for a filtered variant.
+filtered adapter feeds via the Add Feed dialog, carrying starred posts over
+either all-at-once (unsubscribe-migration modal) or per-entry via the shipped
+"Move to feed…" context-menu action.
 
 ### Global audio player — deferred v2 ideas
 

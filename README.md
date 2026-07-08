@@ -138,6 +138,9 @@ The short version:
   lists exactly which starred/tagged entries are at stake), and **Settings → Feeds** lets you
   multi-select several feeds and **Combine** them into one survivor (migrating
   their stars, tags, and optionally unread state, then unsubscribing the rest).
+  Individual posts can also be cherry-picked: the entry context menu's
+  **Move to feed…** carries one entry's star, tags, and read state onto another
+  feed (useful when swapping a firehose feed for a filtered variant).
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
