@@ -10343,6 +10343,27 @@ def _place_recovered_embeds(content_html: str, items: list[tuple[str | None, str
     return out
 
 
+_HUSK_CLASS_RE = re.compile(r'class="[^"]*(?:youtube|video-embed|video-container|video-aspect)[^"]*"')
+
+
+def _body_has_embed_husk(body: str) -> bool:
+    """True when the body contains an empty video-container div (the husk a
+    stripped click-to-load facade leaves behind). Cheap regex prefilter, then
+    the same emptiness check the placement pass uses."""
+    if not body or not _HUSK_CLASS_RE.search(body):
+        return False
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(body, "html.parser")
+    for d in soup.find_all("div"):
+        blob = " ".join(d.get("class") or []).lower()
+        if not any(h in blob for h in ("youtube", "video-embed", "video-container", "video-aspect")):
+            continue
+        if not d.get_text(strip=True) and not d.find(["img", "iframe", "audio", "video"]):
+            return True
+    return False
+
+
 def _inject_recovered_source_embeds(content_html, entry):
     """Recover media embeds from the source page when the feed body has none.
 
@@ -10366,7 +10387,15 @@ def _inject_recovered_source_embeds(content_html, entry):
         # leave the body unchanged; the embed fills in on a later open. Many pages
         # are already cached by the lead-image scraper, so this often hits.
         lead_image_service.queue_source_html_fetch(link)
-        return content_html
+        # Exception: when the body carries a stripped-embed husk (an empty
+        # video-container div), a player almost certainly belongs there — the
+        # cache is just cold (in-memory, cleared on restart). Wait briefly for
+        # the queued fetch so the first open shows the video too; the husk
+        # check keeps ordinary embed-less entries on the fast path.
+        if _body_has_embed_husk(body) and lead_image_service.wait_for_source_html_fetch(link, timeout=2.5):
+            cached = lead_image_service.get_cached_source_html(link)
+        if cached is None:
+            return content_html
     _base, raw_html = cached
     items = _extract_source_embed_iframes(raw_html, body)
     if not items:
