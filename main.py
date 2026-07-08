@@ -3053,6 +3053,11 @@ def ensure_meta_schema() -> None:
         except Exception:
             pass
         try:
+            # tag_filter rules: exclude-tags list (the include list rides in `keyword`)
+            conn.execute("ALTER TABLE highlight_keywords ADD COLUMN tags_exclude TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             conn.execute("UPDATE highlight_keywords SET sort_order = rowid WHERE sort_order = 0")
         except Exception:
@@ -3624,7 +3629,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -3633,7 +3638,7 @@ _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
 def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order,"
+        " email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids, sort_order, tags_exclude,"
         " webhook_url, webhook_format, webhook_batch,"
         " yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
         " yt_min_minutes, yt_max_minutes"
@@ -3668,6 +3673,7 @@ def add_highlight_keyword(
     yt_mark_read: bool = True,
     yt_min_minutes: int = 0,
     yt_max_minutes: int = 0,
+    tags_exclude: str = "",
 ) -> None:
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         raise ValueError(f"Invalid scope: {scope}")
@@ -3687,8 +3693,8 @@ def add_highlight_keyword(
         "  email_to, batch_time, batch_count, cc_me, dedup_window_hours, exclude_scope_ids,"
         "  webhook_url, webhook_format, webhook_batch,"
         "  yt_playlist_id, yt_playlist_title, yt_include_shorts, yt_mark_read,"
-        "  yt_min_minutes, yt_max_minutes)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "  yt_min_minutes, yt_max_minutes, tags_exclude)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (scope, scope_id, keyword.strip(), color, 1 if is_regex else 0, 1 if enabled else 0,
          rule_type, search_in, delivery,
          email_to.strip(), batch_time.strip(), max(0, int(batch_count or 0)), 1 if cc_me else 0,
@@ -3696,7 +3702,8 @@ def add_highlight_keyword(
          webhook_url.strip(), webhook_format, 1 if webhook_batch else 0,
          yt_playlist_id.strip(), yt_playlist_title.strip(),
          1 if yt_include_shorts else 0, 1 if yt_mark_read else 0,
-         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0))),
+         max(0, int(yt_min_minutes or 0)), max(0, int(yt_max_minutes or 0)),
+         tags_exclude.strip()),
     )
 
 
@@ -5180,6 +5187,116 @@ def _run_now_pattern(
     return {"count": len(to_mark), "entries": matched_entries}
 
 
+def parse_tag_filter_list(raw: str | None) -> set[str]:
+    """Parse a comma/space-separated tag list into normalized tag values."""
+    values: set[str] = set()
+    for token in re.split(r"[,\s]+", raw or ""):
+        normalized = normalize_tag_value(token)
+        if normalized:
+            values.add(normalized)
+    return values
+
+
+def _run_tag_filter(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    tags_include_raw: str,
+    tags_exclude_raw: str,
+    *,
+    apply: bool = True,
+) -> dict:
+    """Execute (or dry-run) a tag_filter rule: mark unread entries read when
+    their feed-provided tags (entry_feed_tags) hit the exclude list, or when
+    an include list is set and the entry is tagged but matches none of it.
+    Untagged entries are always kept — a feed that stops tagging must not
+    have its whole firehose suppressed."""
+    global _unread_counts_generation
+
+    include = parse_tag_filter_list(tags_include_raw)
+    exclude = parse_tag_filter_list(tags_exclude_raw)
+    if not include and not exclude:
+        return {"error": "at least one include or exclude tag is required"}
+
+    if scope == "folder":
+        try:
+            int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
+
+    to_mark: list[tuple[str, str]] = []
+    matched_entries: list[dict] = []
+    _ENTRY_DETAIL_CAP = 50
+
+    with get_reader() as reader:
+        feed_title_cache: dict[str, str] = {}
+        # Normalized tag lookup per feed, loaded lazily one feed at a time.
+        feed_tag_cache: dict[str, dict[str, set[str]]] = {}
+
+        def entry_tags(feed_url: str, entry_id: str) -> set[str]:
+            per_feed = feed_tag_cache.get(feed_url)
+            if per_feed is None:
+                per_feed = {}
+                rows = conn.execute(
+                    "SELECT entry_id, tag FROM entry_feed_tags WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchall()
+                for row in rows:
+                    normalized = normalize_tag_value(row["tag"])
+                    if normalized:
+                        per_feed.setdefault(str(row["entry_id"]), set()).add(normalized)
+                feed_tag_cache[feed_url] = per_feed
+            return per_feed.get(entry_id, set())
+
+        def iter_unread():
+            if feed_urls is None:
+                yield from reader.get_entries(read=False)
+            else:
+                for furl in feed_urls:
+                    yield from reader.get_entries(feed=furl, read=False)
+
+        for entry in iter_unread():
+            fu = str(entry.feed_url or "")
+            eid = str(entry.id)
+            tags = entry_tags(fu, eid)
+            if not tags:
+                continue  # untagged entries are always kept
+            suppress = bool(tags & exclude) or bool(include and not (tags & include))
+            if not suppress:
+                continue
+            to_mark.append((fu, eid))
+            if len(matched_entries) < _ENTRY_DETAIL_CAP:
+                if fu not in feed_title_cache:
+                    try:
+                        f = reader.get_feed(fu)
+                        feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                    except Exception:
+                        feed_title_cache[fu] = fu
+                matched_entries.append({
+                    "feed_url": fu,
+                    "entry_id": eid,
+                    "title": str(entry.title or ""),
+                    "link": str(entry.link or ""),
+                    "feed_title": feed_title_cache.get(fu, fu),
+                })
+
+        if apply:
+            for feed_url, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_url, entry_id))
+
+    if apply and to_mark:
+        when = datetime.now().isoformat()
+        conn.executemany(
+            "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+            [(fu, eid, when) for fu, eid in to_mark],
+        )
+        _unread_counts_generation += 1
+
+    return {"count": len(to_mark), "entries": matched_entries}
+
+
 def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,
                   scope_id: str, keyword: str, result: dict) -> None:
     """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
@@ -5560,7 +5677,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         enabled_rules = [
             r for r in all_rules
-            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article")
+            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
         ]
         if not enabled_rules:
             return
@@ -5588,6 +5705,18 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                         with get_meta_connection() as conn:
                             result = _run_now_pattern(conn, "feed", feed_url, keyword, is_regex, search_in)
+                            if "error" not in result and result.get("count", 0) > 0:
+                                _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
+
+                elif rule_type == "tag_filter":
+                    tags_exclude = str(rule.get("tags_exclude") or "")
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+
+                        with get_meta_connection() as conn:
+                            result = _run_tag_filter(conn, "feed", feed_url, keyword, tags_exclude)
                             if "error" not in result and result.get("count", 0) > 0:
                                 _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
 
@@ -6951,6 +7080,7 @@ _AUTOMATION_TYPE_LABELS = {
     "youtube_playlist": "Add to YT playlist",
     "instapaper": "Save to Instapaper",
     "quire": "Add to Quire",
+    "tag_filter": "Tag filter",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
@@ -6963,6 +7093,15 @@ def _automation_rule_detail(rule: dict) -> str:
         return f"{rule.get('color') or 'yellow'} · matches {search_in}"
     if rule_type == "mark_as_read":
         return f"matches {search_in}"
+    if rule_type == "tag_filter":
+        keep = str(rule.get("keyword") or "").strip()
+        drop = str(rule.get("tags_exclude") or "").strip()
+        parts = []
+        if keep:
+            parts.append(f"keep {keep}")
+        if drop:
+            parts.append(f"drop {drop}")
+        return " · ".join(parts) or "feed tags"
     if rule_type == "deduplicate":
         method = str(rule.get("keyword") or "slug")
         window = int(rule.get("dedup_window_hours") or 24)
@@ -15588,6 +15727,7 @@ def add_highlight_route(
     yt_mark_read: int = Form(1),
     yt_min_minutes: int = Form(0),
     yt_max_minutes: int = Form(0),
+    tags_exclude: str = Form(""),
 ):
     keyword = keyword.strip()
     if scope not in _HIGHLIGHT_VALID_SCOPES:
@@ -15615,6 +15755,11 @@ def add_highlight_route(
             return JSONResponse({"error": "connect Quire first"}, status_code=400)
         if not quire_project_oid():
             return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
+    elif type == "tag_filter":
+        # keyword = include tags; blank is fine for an exclude-only rule, but at
+        # least one side must yield a valid normalized tag.
+        if not parse_tag_filter_list(keyword) and not parse_tag_filter_list(tags_exclude):
+            return JSONResponse({"error": "at least one include or exclude tag is required"}, status_code=400)
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
@@ -15631,7 +15776,7 @@ def add_highlight_route(
                               webhook_url, webhook_format, bool(webhook_batch),
                               yt_playlist_id, yt_playlist_title,
                               bool(yt_include_shorts), bool(yt_mark_read),
-                              yt_min_minutes, yt_max_minutes)
+                              yt_min_minutes, yt_max_minutes, tags_exclude)
     return JSONResponse({"ok": True, "scope": scope, "scope_id": scope_id, "keyword": keyword,
                          "color": color, "is_regex": bool(is_regex), "type": type,
                          "search_in": search_in, "delivery": delivery,
@@ -15646,7 +15791,8 @@ def add_highlight_route(
                          "yt_include_shorts": bool(yt_include_shorts),
                          "yt_mark_read": bool(yt_mark_read),
                          "yt_min_minutes": max(0, int(yt_min_minutes or 0)),
-                         "yt_max_minutes": max(0, int(yt_max_minutes or 0))})
+                         "yt_max_minutes": max(0, int(yt_max_minutes or 0)),
+                         "tags_exclude": tags_exclude.strip()})
 
 
 @app.post("/highlights/remove")
@@ -15720,9 +15866,12 @@ def rules_dry_run_route(
     yt_include_shorts: int = Query(1),
     yt_min_minutes: int = Query(0),
     yt_max_minutes: int = Query(0),
+    tags_exclude: str = Query(""),
 ):
     with get_meta_connection() as conn:
-        if type == "deduplicate":
+        if type == "tag_filter":
+            result = _run_tag_filter(conn, scope, scope_id, keyword, tags_exclude, apply=False)
+        elif type == "deduplicate":
             match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
             custom: set[str] | None = None
             if feed_urls:
@@ -15759,6 +15908,7 @@ def rules_run_now_route(
     search_in: str = Form("title"),
     dedup_window_hours: int = Form(168),
     exclude_scope_ids: str = Form(""),
+    tags_exclude: str = Form(""),
 ):
     with get_meta_connection() as conn:
         if type == "deduplicate":
@@ -15767,6 +15917,8 @@ def rules_run_now_route(
                                     exclude_scope_ids=exclude_scope_ids)
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        elif type == "tag_filter":
+            result = _run_tag_filter(conn, scope, scope_id, keyword, tags_exclude)
         else:
             return JSONResponse({"error": f"Run Now not supported for type '{type}'"}, status_code=400)
     if "error" in result:

@@ -94,7 +94,11 @@ The short version:
   proxy also handles hotlink protection: if a host refuses an image fetched with
   no referrer, it retries once with the image's own site as the `Referer`, and
   reader/web view routes hotlink-protected images through the proxy too.
-- **Automation** — highlight, mark-as-read, deduplicate, email-article,
+- **Automation** — highlight, mark-as-read, **tag-filter** (tame firehose
+  feeds like MakeUseOf/Lifehacker/How-To-Geek by their own per-entry tags:
+  "keep only these tags, but drop these" — non-matching entries are
+  auto-marked read at refresh; untagged entries are always kept), deduplicate,
+  email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per
   entry), **save-to-Instapaper**, **add-to-YouTube-playlist**, and

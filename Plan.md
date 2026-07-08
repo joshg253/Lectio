@@ -53,32 +53,51 @@ Make Lectio usable as a read-it-later app. Two parts:
   against subscribed gallery feeds — add newly-watched artists, and surface (or
   optionally remove) feeds for artists no longer watched.
 
-### Tag filtering for firehose feeds: multi-include + exclude semantics
+### Tag filtering for firehose feeds — follow-ups
 
-Wanted rule shape: "include articles with any of these tag(s), but not if they
-also have any of these." Target firehoses: freeCodeCamp, dev.to, MakeUseOf,
-Lifehacker, How-To-Geek.
+The generic **tag_filter rule** is SHIPPED (rules engine `tag_filter` type;
+see ARCHITECTURE "Feed-provided tag suggestions"): include/exclude feed-tag
+lists per rule, any scope, auto-mark-read after refresh, dry-run/run-now/
+history. Covers MakeUseOf, Lifehacker, How-To-Geek, freeCodeCamp, and other
+tagged-RSS firehoses (candidates to set up: HackerNoon, GamingOnLinux, Rock
+Paper Shotgun, PlayStation Blog — verify each carries `<category>` tags).
+Remaining follow-ups:
 
-The `entry_feed_tags` capture layer (shipped 2026-07-08) reframes this:
-freeCodeCamp (Ghost), MakeUseOf, Lifehacker, and How-To-Geek all carry
-per-entry `<category>` tags in their plain RSS (verified), and those tags are
-now persisted per user at ingest. So instead of one synthetic-feed adapter per
-site, build a **generic per-feed tag filter**:
-
-- Per-feed include/exclude tag lists (Feed Properties; store in a meta table
-  or `feed_display_prefs`-style prefs), evaluated against `entry_feed_tags` —
-  matching is on normalized tags. Filtered entries are auto-marked read (or
-  hidden) at refresh time, mirroring how rules/dedup suppression works, so
-  triage views stay clean without deleting data.
-- One ingest-ordering caveat: tags are captured during parse, so the filter
-  pass must run after `update_feed` completes (post-refresh step in
-  `FeedRefreshService`), not inside the parser sink.
 - **dev.to adapter** stays API-based (its value is language/reaction
   filtering, not just tags): extend to multiple include tags — one API call
   per include tag, merged + deduped by article id, exclusion applied
   client-side on `tag_list`.
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
+- Multi-word tag entry in rule lists is hyphenated (`windows-11`); consider a
+  tag autocomplete in the rule form fed from entry_feed_tags.
+
+### Remove article from feed (not just move)
+
+Hard-delete a single garbage post from a feed (spam, corrupted entry) —
+`reader.delete_entry` exists; needs a context-menu action + confirm, plus a
+tombstone (guid) so the next refresh doesn't resurrect it while it's still in
+the publisher's feed window.
+
+### Edit post metadata (dates)
+
+Some entries arrive with garbage dates (rendered as Jan 1 1969, i.e. epoch 0)
+and sort to the bottom forever. Add an edit-metadata affordance on a post —
+at minimum the published date via a date picker. reader stores
+published/updated on the entry; changing it likely means a meta-DB override
+consulted by the sort/display layer (reader's EntryData is ingest-owned), or
+re-synthesizing the entry.
+
+### Small lead image + article-nav full refresh (noirlab, DeviantArt)
+
+Two reader-view issues to investigate:
+- Some image feeds render a tiny lead image (e.g. noirlab.edu images feed,
+  entry IMG_4611-CC): likely the feed offers a small thumb and the strategy
+  never upgrades to the full-size `content.src` / og:image.
+- Navigating between (image-heavy?) articles sometimes triggers a full app
+  refresh instead of the in-place pane swap — reproducible on noirlab and
+  DeviantArt feeds. Suspect the pane-swap fetch failing (timeout? large
+  payload?) and falling back to a hard navigation.
 
 ### Dev.to feed migration (manual, after adapter deploy)
 
