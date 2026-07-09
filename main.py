@@ -2827,6 +2827,16 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS entry_date_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                published TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS entry_read_state (
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
@@ -18978,6 +18988,49 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
             return JSONResponse({"ok": False, "error": f"Delete failed: {exc}"}, status_code=500)
     invalidate_unread_counts_cache()
     return JSONResponse({"ok": True})
+
+
+@app.post("/entries/set-date")
+def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), published: str = Form("")):
+    """Override a post's published date (fixes garbage dates — epoch-0 entries
+    sort to the bottom forever).
+
+    reader's EntryData is ingest-owned with no public setter, and the list sort
+    happens in SQL on reader's `published` column — so the corrected date is
+    written straight into that column, and an override row in the meta DB lets
+    the refresh service re-pin it if a refresh re-ingests the feed's original
+    (garbage) value. An empty `published` clears the override (the current
+    stored date is left as-is until the feed next updates the entry).
+    """
+    published = published.strip()
+    with get_reader() as reader:
+        if reader.get_entry((feed_url, entry_id), None) is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not published:
+            with get_meta_connection() as conn:
+                conn.execute(
+                    "DELETE FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+            return JSONResponse({"ok": True, "cleared": True})
+        try:
+            dt = datetime.fromisoformat(published)
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "Invalid date."}, status_code=400)
+        stored = dt.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC column format
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
+                (feed_url, entry_id, stored),
+            )
+        db = reader._storage.get_db()
+        db.execute(
+            "UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
+            (stored, feed_url, entry_id),
+        )
+        db.commit()
+    invalidate_unread_counts_cache()
+    return JSONResponse({"ok": True, "published": stored})
 
 
 @app.post("/entries/move-to-feed")

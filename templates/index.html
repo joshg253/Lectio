@@ -1231,6 +1231,7 @@
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
     <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
+    <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -3980,6 +3981,7 @@
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
     const postDeleteButton = document.getElementById('ctx-post-delete');
+    const postEditDateButton = document.getElementById('ctx-post-edit-date');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -6132,6 +6134,9 @@
       if (actionModalForm) {
         actionModalForm.reset();
       }
+      if (actionModalInput) {
+        actionModalInput.type = 'text';
+      }
     }
 
     function openActionInputModal(config) {
@@ -6149,6 +6154,7 @@
 
       actionModalTitle.textContent = config.title;
       actionModalLabel.textContent = config.label;
+      actionModalInput.type = config.inputType || 'text';
       actionModalInput.placeholder = config.placeholder || '';
       actionModalSubmit.textContent = config.submitLabel || 'Save';
       actionModalInput.value = config.initialValue || '';
@@ -7495,6 +7501,7 @@
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -7845,6 +7852,7 @@
             setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
@@ -8619,6 +8627,37 @@
         [{ feedUrl, entryId }],
         title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.'
       );
+    });
+
+    postEditDateButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openActionInputModal({
+        title: 'Edit published date',
+        label: 'Published',
+        inputType: 'date',
+        submitLabel: 'Save',
+        onSubmit: async (value) => {
+          try {
+            const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, published: value });
+            const resp = await fetch('/entries/set-date', { method: 'POST', body });
+            const data = await resp.json();
+            if (!data.ok) {
+              window.alert(data.error || 'Could not save the date.');
+              return;
+            }
+            // Sorting and the rendered timestamp both derive from the stored
+            // date server-side; a reload is the simple way to reflect both.
+            window.location.reload();
+          } catch (_) {
+            window.alert('Could not save the date.');
+          }
+        },
+      });
     });
 
     postDeleteButton?.addEventListener('click', async (event) => {
