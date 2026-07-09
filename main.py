@@ -18983,9 +18983,9 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
                 reader.delete_entry((feed_url, entry_id), missing_ok=True)
             else:
                 reader._storage.delete_entries([(feed_url, entry_id)])
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             LOGGER.exception("[delete-entry] failed for %s in %s", entry_id, feed_url)
-            return JSONResponse({"ok": False, "error": f"Delete failed: {exc}"}, status_code=500)
+            return JSONResponse({"ok": False, "error": "Delete failed — see server logs."}, status_code=500)
     invalidate_unread_counts_cache()
     return JSONResponse({"ok": True})
 
