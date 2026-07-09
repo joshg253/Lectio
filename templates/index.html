@@ -1650,6 +1650,10 @@
               <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Failed to add</strong> — click to view the artist on DeviantArt:</p>
               <ul id="sett-da-failed-list" class="settings-da-artist-list"></ul>
             </div>
+            <div id="sett-da-deactivated-wrap" hidden>
+              <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Watched but deactivated</strong> — the artist deactivated their DeviantArt account; skipped until it's reactivated (re-checked daily):</p>
+              <ul id="sett-da-deactivated-list" class="settings-da-artist-list"></ul>
+            </div>
             <div id="sett-da-unwatched-wrap" hidden>
               <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Subscribed but no longer watched</strong> — kept on purpose; unsubscribe manually if you want:</p>
               <ul id="sett-da-unwatched-list" class="settings-da-artist-list"></ul>
@@ -10933,11 +10937,12 @@
       // Render the DeviantArt watch-list sync detail (failed / no-longer-watched
       // artists) as links to their DeviantArt profiles, so the user never has to
       // dig through server logs to see which adds failed.
-      function renderDaSyncDetail(detail, connected) {
+      function renderDaSyncDetail(detail, connected, deactivated) {
         const wrap = document.getElementById('sett-da-sync-detail');
         if (!wrap) return;
         const failed = (detail && detail.failed) || [];
         const unwatched = (detail && detail.unwatched) || [];
+        deactivated = deactivated || [];
         const fill = (listId, wrapId, items, withError) => {
           const ul = document.getElementById(listId);
           const box = document.getElementById(wrapId);
@@ -10964,8 +10969,9 @@
           box.hidden = items.length === 0;
         };
         fill('sett-da-failed-list', 'sett-da-failed-wrap', failed, true);
+        fill('sett-da-deactivated-list', 'sett-da-deactivated-wrap', deactivated, false);
         fill('sett-da-unwatched-list', 'sett-da-unwatched-wrap', unwatched, false);
-        wrap.hidden = !connected || (failed.length === 0 && unwatched.length === 0);
+        wrap.hidden = !connected || (failed.length === 0 && deactivated.length === 0 && unwatched.length === 0);
       }
 
       async function loadSettingsData() {
@@ -11203,7 +11209,7 @@
         });
         const daActionStatus = document.getElementById('sett-da-action-status');
         if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
-        renderDaSyncDetail(d.deviantart_sync_detail, daConnected);
+        renderDaSyncDetail(d.deviantart_sync_detail, daConnected, d.deviantart_deactivated);
         // Quire integration: creds, connection status, project picker, usage meter.
         v('sett-quire-id', d.quire_client_id);
         secretField('sett-quire-secret', d.quire_client_secret_set, d.quire_client_secret_masked);

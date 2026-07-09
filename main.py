@@ -1102,15 +1102,23 @@ def _apply_deviantart_image_strategy(conn: sqlite3.Connection, file_url: str) ->
         LOGGER.exception("[deviantart] failed to set inline thumb_strategy for %s", file_url)
 
 
+def _is_da_deactivated_error(exc: Exception) -> bool:
+    """True when a DeviantArt add failed because the artist deactivated their
+    account — DA returns HTTP 400 with ``"Account is inactive."``. Distinct from
+    a 404 (deleted/renamed), so we can park it for a daily reactivation re-check
+    instead of retrying every sync."""
+    return "account is inactive" in str(exc).lower()
+
+
 def _humanize_da_add_error(exc: Exception) -> str:
     """Short, user-facing reason a watch-list add failed, for the Settings list.
 
     DeviantArt gallery fetches raise ``RuntimeError('gallery fetch failed for X:
     HTTP 404: ...')``; surface the status where we can, else a trimmed message."""
     detail = " ".join(str(exc).split())
-    for code, label in (("404", "not found"), ("403", "access denied"),
-                        ("500", "DeviantArt error"), ("deactivated", "deactivated")):
-        if code in detail:
+    for needle, label in (("Account is inactive", "deactivated"), ("404", "not found"),
+                          ("403", "access denied"), ("500", "DeviantArt error")):
+        if needle in detail:
             return label
     return detail[:120] or "unknown error"
 
@@ -1126,6 +1134,34 @@ def _load_da_sync_detail() -> dict:
         except (ValueError, TypeError):
             pass
     return {"failed": [], "unwatched": []}
+
+
+def _da_deactivated_usernames(conn: sqlite3.Connection) -> set[str]:
+    """Lower-cased usernames of watched artists whose DA account is deactivated."""
+    return {str(r["username"]).lower()
+            for r in conn.execute("SELECT username FROM deviantart_deactivated").fetchall()}
+
+
+def _da_deactivated_list() -> list[dict]:
+    """Parked deactivated artists for the Settings UI (opens its own connection)."""
+    try:
+        with get_meta_connection() as conn:
+            return [{"username": str(r["username"])}
+                    for r in conn.execute(
+                        "SELECT username FROM deviantart_deactivated ORDER BY username").fetchall()]
+    except Exception:  # noqa: BLE001 — table missing mid-migration, etc.
+        return []
+
+
+def _record_da_deactivated(conn: sqlite3.Connection, username: str) -> None:
+    """Mark an artist deactivated (idempotent; preserves first_seen_at)."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO deviantart_deactivated (username, first_seen_at, last_checked_at)"
+        " VALUES (?, ?, ?)"
+        " ON CONFLICT(username) DO UPDATE SET last_checked_at = excluded.last_checked_at",
+        (username, now, now),
+    )
 
 
 # One watch-list sync per user at a time: the Settings button, the daily
@@ -1201,12 +1237,17 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
                 "SELECT username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'"
             ).fetchall()
         }
+        # Known-deactivated artists can never be added; skip them here so the sync
+        # stops re-probing (and re-failing) them every run. Daily maintenance
+        # re-checks them for reactivation.
+        deactivated = _da_deactivated_usernames(conn)
         folder_id = _get_or_create_folder_by_name(conn, folder_name)
 
-    to_add = [a for a in watching if a.lower() not in existing]
+    to_add = [a for a in watching if a.lower() not in existing and a.lower() not in deactivated]
     LOGGER.info("[deviantart] watchlist sync: %d watched, %d to add into %r", len(watching), len(to_add), folder_name)
     added = 0
     failed = 0
+    deactivated_this_run = 0
     failed_artists: list[dict[str, str]] = []
     rate_limited = False
     retry_after_s: float | None = None
@@ -1230,9 +1271,17 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
             LOGGER.info("[deviantart] watchlist sync paused at %d/%d (added=%d) — rate limited", i, len(to_add), added)
             break
         except Exception as exc:  # noqa: BLE001
-            failed += 1
-            failed_artists.append({"username": artist, "error": _humanize_da_add_error(exc)})
-            LOGGER.warning("[deviantart] watchlist add failed for %s: %s", artist, exc)
+            if _is_da_deactivated_error(exc):
+                # Deactivated account — park it (not a hard failure); daily
+                # maintenance re-checks for reactivation.
+                deactivated_this_run += 1
+                with get_meta_connection() as conn:
+                    _record_da_deactivated(conn, artist)
+                LOGGER.info("[deviantart] watched artist %s is deactivated — parked for re-check", artist)
+            else:
+                failed += 1
+                failed_artists.append({"username": artist, "error": _humanize_da_add_error(exc)})
+                LOGGER.warning("[deviantart] watchlist add failed for %s: %s", artist, exc)
         if i % 25 == 0:
             LOGGER.info("[deviantart] watchlist sync progress: %d/%d (added=%d failed=%d)", i, len(to_add), added, failed)
             with get_meta_connection() as conn:
@@ -1277,19 +1326,83 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
             final = (f"Rate limited — added {added} so far, ~{remaining} left. "
                      "Auto-resume limit reached; click Sync to continue.")
     else:
-        already = len(watching) - len(to_add)
+        # to_add now excludes both already-subscribed and known-deactivated, so
+        # derive each count from the watch list directly rather than the residual.
+        already = sum(1 for a in watching if a.lower() in existing)
+        deactivated_total = sum(1 for a in watching if a.lower() in deactivated) + deactivated_this_run
         parts = [f"Added {added} of {len(watching)} watched"]
         if already:
             parts.append(f"{already} already subscribed")
         if all_failed:
             parts.append(f"{len(all_failed)} failed")
+        if deactivated_total:
+            parts.append(f"{deactivated_total} deactivated")
         if unwatched:
             parts.append(f"{len(unwatched)} subscribed but no longer watched")
         final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
-    return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
+    return {"added": added, "failed": failed, "deactivated": deactivated_this_run,
+            "total": len(watching), "folder": folder_name,
             "rate_limited": rate_limited, "unwatched": unwatched, "failed_artists": all_failed}
+
+
+def _deviantart_recheck_deactivated(max_checks: int = 40) -> int:
+    """Re-probe parked deactivated artists; subscribe any that reactivated.
+
+    Runs in daily maintenance. For each parked artist, a lightweight gallery
+    fetch tells us the current state: success → reactivated, so create the feed
+    and drop it from the deactivated table; still inactive → bump last_checked_at;
+    rate-limited → stop early (re-check resumes next maintenance run). Capped per
+    run to stay polite against the API quota. Returns the count reactivated."""
+    token = get_deviantart_user_token()
+    if not token:
+        return 0
+    cid, secret = get_deviantart_credentials()
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT username FROM deviantart_deactivated ORDER BY last_checked_at ASC LIMIT ?",
+            (max_checks,),
+        ).fetchall()
+    if not rows:
+        return 0
+    folder_id = None
+    reactivated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        artist = str(row["username"])
+        try:
+            with get_meta_connection() as conn:
+                with get_reader() as reader:
+                    if folder_id is None:
+                        folder_id = _get_or_create_folder_by_name(conn, _deviantart_folder_name())
+                    _fid, file_url = deviantart_service.create_deviantart_feed(
+                        conn, reader, artist, cid, secret, access_token=token, limit=24)
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                    (folder_id, file_url),
+                )
+                conn.execute("DELETE FROM deviantart_deactivated WHERE username = ?", (artist,))
+            reactivated += 1
+            LOGGER.info("[deviantart] deactivated artist %s reactivated — subscribed", artist)
+        except deviantart_service.DeviantArtRateLimited:
+            LOGGER.info("[deviantart] deactivated re-check hit rate limit; stopping this run")
+            break
+        except Exception as exc:  # noqa: BLE001
+            if _is_da_deactivated_error(exc):
+                with get_meta_connection() as conn:
+                    conn.execute(
+                        "UPDATE deviantart_deactivated SET last_checked_at = ? WHERE username = ?",
+                        (now, artist),
+                    )
+            else:
+                # A different error (deleted/renamed) — leave it parked; not worth
+                # promoting to a hard failure from a background re-check.
+                LOGGER.info("[deviantart] deactivated re-check for %s errored (non-inactive): %s", artist, exc)
+    if reactivated:
+        invalidate_meta_structure_cache()
+        invalidate_unread_counts_cache()
+    return reactivated
 
 
 def push_galleries_to_deviantart_watchlist() -> dict:
@@ -3400,6 +3513,19 @@ def ensure_meta_schema() -> None:
                 content TEXT,
                 published_at TEXT NOT NULL,
                 UNIQUE(deviantart_feed_id, deviationid)
+            )
+            """
+        )
+        # Watched artists whose DeviantArt account is deactivated ("Account is
+        # inactive."). Parked here so the watch-list sync stops retrying them on
+        # every run (they can never be added), and daily maintenance re-checks
+        # for reactivation.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deviantart_deactivated (
+                username TEXT PRIMARY KEY,
+                first_seen_at TEXT NOT NULL,
+                last_checked_at TEXT NOT NULL
             )
             """
         )
@@ -13163,6 +13289,13 @@ def _daily_maintenance_for_user() -> None:
                             result.get("added", 0), result.get("total", 0), rate_suffix)
         except Exception:
             LOGGER.exception("[maintenance] DeviantArt watch-list sync failed")
+        # 6b. Re-check parked deactivated artists for reactivation.
+        try:
+            reactivated = _deviantart_recheck_deactivated()
+            if reactivated:
+                LOGGER.info("[maintenance] DeviantArt: %d deactivated artist(s) reactivated and subscribed", reactivated)
+        except Exception:
+            LOGGER.exception("[maintenance] DeviantArt deactivated re-check failed")
 
     # 7. Record this user's last-ran timestamp.
     with get_meta_connection() as conn:
@@ -18450,6 +18583,7 @@ def get_all_settings():
         "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
         "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
         "deviantart_sync_detail": _load_da_sync_detail(),
+        "deviantart_deactivated": _da_deactivated_list(),
         "deviantart_folder_name": _deviantart_folder_name(),
         "quire_client_id": quire_cid,
         "quire_client_secret_set": bool(quire_secret),
