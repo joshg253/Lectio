@@ -1231,6 +1231,7 @@
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
     <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
+    <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
 
@@ -3978,6 +3979,7 @@
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
+    const postDeleteButton = document.getElementById('ctx-post-delete');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -7492,6 +7494,7 @@
           setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -7841,6 +7844,7 @@
             setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postAutomationButton, Boolean(contextPostFeedUrl));
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
@@ -8615,6 +8619,33 @@
         [{ feedUrl, entryId }],
         title ? `Move “${title}” to another feed.` : 'Move this entry to another feed.'
       );
+    });
+
+    postDeleteButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const title = contextPostTitle;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      const label = title ? `“${title}”` : 'this post';
+      if (!window.confirm(`Permanently delete ${label} from this feed? A tombstone stops the next refresh from re-adding it.`)) return;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const resp = await fetch('/entries/delete', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) {
+          window.alert(data.error || 'Delete failed.');
+          return;
+        }
+        const row = document.querySelector(
+          `.posts .post-item[data-post-entry-id="${window.CSS && CSS.escape ? CSS.escape(entryId) : entryId}"]`
+        );
+        row?.remove();
+      } catch (_) {
+        window.alert('Delete failed.');
+      }
     });
 
     postMoveVisibleButton?.addEventListener('click', (event) => {
