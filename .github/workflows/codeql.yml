@@ -14,8 +14,9 @@ name: "CodeQL Advanced"
 on:
   push:
     branches: [ "main" ]
+  # No base-branch filter: stacked PRs are based on the previous stack branch,
+  # not main, so a filter would skip CodeQL on everything but the stack bottom.
   pull_request:
-    branches: [ "main" ]
   schedule:
     - cron: '37 13 * * 6'
 
