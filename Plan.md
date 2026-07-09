@@ -16,16 +16,6 @@ rationale.)
 
 ## Later
 
-### DeviantArt tag suggestions need the metadata endpoint
-
-Feed-provided tag capture is SHIPPED (`entry_feed_tags`, captured by the
-sanitizing parser; see ARCHITECTURE "Feed-provided tag suggestions"), and
-synthetic adapters route tags through it by emitting `<category>` in their
-generated RSS. DeviantArt's browse/gallery API responses don't include
-deviation tags, though — those require extra `/deviation/metadata` calls
-(rate-limit cost). If DA tag chips are wanted, batch metadata lookups (up to
-50 deviation IDs per call) during sync and emit the results as `<category>`.
-
 ### Instapaper-alternative: reader-only view for saved/starred items
 
 Make Lectio usable as a read-it-later app. Two parts:
