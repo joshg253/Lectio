@@ -12026,6 +12026,12 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     with get_reader() as reader:
         reader.add_feed(feed_url, exist_ok=True)
 
+    # Re-adding a feed that already exists in reader as disabled (exist_ok=True
+    # leaves its state untouched) must re-enable it — otherwise the feed stays
+    # excluded from the sidebar tree while its old entries still surface in the
+    # posts list, which reads as "added but missing".
+    enable_feed(feed_url)
+
     with get_meta_connection() as conn:
         # Root ("All Feeds") is treated the same as Uncategorized: a feed placed
         # there is stored folderless (no folder_feeds row) rather than pinned to
