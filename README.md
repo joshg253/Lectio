@@ -49,9 +49,13 @@ The short version:
   that filters the current selection (folder/feed + read state) by tag, and a
   tag chip in an article's header opens that tag scoped to the article's own feed.
   Feeds that publish per-entry tags (RSS/Atom `<category>`, e.g. dev.to or
-  WordPress blogs) get **+** suggestion chips in the post header — captured at
-  ingest so they show instantly; clicking one adds it as your own tag on that
-  post, and already-added tags aren't re-offered.
+  WordPress blogs) show them as **[ + tag ▲ ▼ ]** chips in the post header —
+  captured at ingest so they render instantly (with an article-page fallback
+  for entries the feed never tagged). **+** adds the tag as one of
+  your own tags on that post; **▲**/**▼** build the feed's Tag Filter rule
+  (good tag / drop). The rule starts **off** so you can tune it while
+  browsing, then arm it in the Automation rules list; once on, chip edits
+  apply to unread posts immediately.
 - **Persistent audio player** — podcast/audio posts show a **Play** button that
   loads the track into a global player bar pinned to the bottom of the app
   (now-playing title, play/pause, seek scrubber, playback speed). Because the
@@ -94,7 +98,14 @@ The short version:
   proxy also handles hotlink protection: if a host refuses an image fetched with
   no referrer, it retries once with the image's own site as the `Referer`, and
   reader/web view routes hotlink-protected images through the proxy too.
-- **Automation** — highlight, mark-as-read, deduplicate, email-article,
+- **Automation** — highlight, mark-as-read, **tag-filter** (tame firehose
+  feeds like MakeUseOf/Lifehacker/How-To-Geek by their own per-entry tags:
+  one comma-separated spec — `-rust` drops rust posts, `+python` marks python
+  a *good* tag that rescues posts from drops, `++python` *requires* it
+  (whitelist); the post's **author** works the same way as a pseudo-tag
+  (`-by-some-author` drops their posts, with ▲/▼ right on the author name);
+  suppressed entries are auto-marked read at refresh; untagged
+  entries are always kept), deduplicate, email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per
   entry), **save-to-Instapaper**, **add-to-YouTube-playlist**, and

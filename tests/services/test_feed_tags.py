@@ -207,3 +207,65 @@ def test_no_sink_registered_is_fine():
     )
     _feed, entries = SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
     assert len(entries) == 1
+
+
+# --- extract_page_tags (source-page fallback) ---
+
+from services.feed_tags import extract_page_tags  # noqa: E402
+
+
+def test_page_tags_article_tag_metas():
+    html = '''<html><head>
+      <meta property="article:tag" content="Windows 11">
+      <meta property="article:tag" content="Backup">
+      <meta name="article:tag" content="Storage">
+    </head><body></body></html>'''
+    assert extract_page_tags(html) == ["Windows 11", "Backup", "Storage"]
+
+
+def test_page_tags_keywords_split_and_dedupe():
+    html = '''<meta name="keywords" content="python, AI,  python , machine learning">'''
+    assert extract_page_tags(html) == ["python", "AI", "machine learning"]
+
+
+def test_page_tags_single_quotes_and_parsely():
+    html = "<meta name='parsely-tags' content='linux,gaming'>"
+    assert extract_page_tags(html) == ["linux", "gaming"]
+
+
+def test_page_tags_ignores_other_metas_and_junk():
+    html = '''<meta property="og:title" content="Not a tag">
+      <meta name="description" content="prose, with, commas">
+      <meta property="article:tag" content="">
+      <meta property="article:tag" content="''' + ("x" * 80) + '''">'''
+    assert extract_page_tags(html) == []
+
+
+def test_page_tags_empty_input_and_cap():
+    assert extract_page_tags(None) == []
+    assert extract_page_tags("") == []
+    many = "".join(f'<meta property="article:tag" content="t{i}">' for i in range(40))
+    assert len(extract_page_tags(many)) == 15
+
+
+def test_page_tags_rel_tag_anchors():
+    html = '<a href="/tag/linux/" rel="tag">Linux</a> <a rel="nofollow tag" href="/x">Self-Hosting</a>'
+    assert extract_page_tags(html) == ["Linux", "Self-Hosting"]
+
+
+def test_page_tags_tag_classed_anchors_title_or_slug():
+    # Valnet style: tags-link anchors, some wrapping images (title attr wins);
+    # plain /tag/ links without a tag class are ignored (nav/related noise).
+    html = (
+        '<a class="tags-link image" href="/category/windows/" title="Windows"><img src="x"></a>'
+        '<a class="tags-link" href="/tag/windows-tips/"><span>x</span></a>'
+        '<a href="/tag/unrelated-nav-link/">Nav</a>'
+    )
+    assert extract_page_tags(html) == ["Windows", "windows tips"]
+
+
+def test_junk_tags_dropped_at_capture():
+    raw = _Obj(tags=[{"term": "Uncategorized"}, {"term": "Wildfire"}], category=None)
+    assert extract_feed_entry_tags(raw) == ["Wildfire"]
+    html = '<meta name="keywords" content="uncategorized, General, linux">'
+    assert extract_page_tags(html) == ["linux"]

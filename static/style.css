@@ -2714,13 +2714,65 @@ button:hover, .button-link:hover {
   cursor: pointer;
 }
 
-.entry-tag-chip.suggestion > span {
-  margin-right: 0.15em;
-  font-weight: 600;
+/* Feed-tag filter chips: [ − tag + ] — the signs toggle ±tag on this feed's
+   Tag Filter rule; the name is just a label. */
+.feed-tag-filter-chip {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 0;
+  cursor: default;
 }
 
-.entry-tag-chip.suggestion[disabled] {
-  opacity: 0.4;
+.feed-tag-filter-name {
+  padding: 0 0.15em;
+  align-self: center;
+}
+
+.feed-tag-filter-sign {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  padding: 0 0.35em;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.feed-tag-filter-sign:hover {
+  opacity: 1;
+  color: var(--ink);
+}
+
+.feed-tag-filter-sign.include,
+.feed-tag-filter-sign.exclude {
+  font-size: 0.62em;
+  padding: 0 0.3em;
+}
+
+.feed-tag-filter-sign.include.active {
+  opacity: 1;
+  color: #4caf7d;
+}
+
+.feed-tag-filter-sign.exclude.active {
+  opacity: 1;
+  color: #e05c5c;
+}
+
+.feed-tag-filter-sign.add-tag {
+  font-weight: 700;
+}
+
+/* ▲▼ next to the author name in the entry meta row */
+.author-filter-signs {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.1em;
+}
+
+.feed-tag-filter-sign[disabled] {
+  opacity: 0.3;
   cursor: default;
 }
 

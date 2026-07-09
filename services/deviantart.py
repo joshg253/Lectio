@@ -360,7 +360,8 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     ).fetchall()
     entries = [
         {"id": r["deviationid"], "title": r["title"], "entry_url": r["entry_url"],
-         "content": r["content"], "published_at": r["published_at"]}
+         "content": r["content"], "published_at": r["published_at"],
+         "tags": [t for t in str(r["tags"] or "").split(",") if t]}
         for r in rows
     ]
     xml = _generate_rss_xml(str(row["feed_title"]), _gallery_page_url(str(row["username"])), entries)
@@ -381,13 +382,19 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, deviations: list[dic
         e = _deviation_to_entry(d)
         if not e:
             continue
+        tags_csv = ",".join(e.get("tags") or [])
         cur = conn.execute(
             "INSERT OR IGNORE INTO deviantart_entries"
-            " (id, deviantart_feed_id, deviationid, title, entry_url, content, published_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"], e["content"], e["published_at"]),
+            " (id, deviantart_feed_id, deviationid, title, entry_url, content, published_at, tags)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"], e["content"], e["published_at"], tags_csv),
         )
         added += cur.rowcount
+        if cur.rowcount == 0 and tags_csv:
+            conn.execute(
+                "UPDATE deviantart_entries SET tags = ? WHERE deviantart_feed_id = ? AND deviationid = ? AND tags != ?",
+                (tags_csv, feed_id, e["id"], tags_csv),
+            )
         # Seed the lead-image service (DB + live cache) with the API image URL.
         # entry_id there is the reader entry id, which equals our <guid> = deviationid.
         if e["image_src"] and _lead_image_sink is not None:

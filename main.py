@@ -3293,6 +3293,16 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Comma-joined tag slugs; the synthetic RSS is regenerated from these
+        # rows, so tags must persist here to come out as <category> elements.
+        try:
+            conn.execute("ALTER TABLE devto_entries ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE deviantart_entries ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE deviantart_feeds ADD COLUMN source TEXT NOT NULL DEFAULT 'gallery'")
         except Exception:
@@ -3624,7 +3634,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -5180,14 +5190,281 @@ def _run_now_pattern(
     return {"count": len(to_mark), "entries": matched_entries}
 
 
+def parse_tag_filter_spec(raw: str | None) -> tuple[set[str], set[str], set[str]]:
+    """Parse a tag-filter spec into (require, good, exclude) normalized sets.
+
+    Comma-separated tokens with three strengths:
+      ``-tag``  exclude — blocks the entry;
+      ``+tag``  (or bare) good — rescues an entry from excludes, but its
+                absence never cuts anything;
+      ``++tag`` require — tagged entries WITHOUT any required tag are cut
+                (whitelist mode, opt-in).
+    Commas (not spaces) separate, so multi-word tags can be typed as-is —
+    ``+windows 11, -rust`` — and normalize_tag_value hyphenates them to
+    match the stored form.
+    """
+    require: set[str] = set()
+    good: set[str] = set()
+    exclude: set[str] = set()
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token.startswith("++"):
+            target, token = require, token[2:]
+        elif token[0] == "-":
+            target, token = exclude, token[1:]
+        elif token[0] == "+":
+            target, token = good, token[1:]
+        else:
+            target = good
+        normalized = normalize_tag_value(token)
+        if normalized:
+            target.add(normalized)
+    return require, good, exclude
+
+
+def author_filter_token(author: str | None) -> str | None:
+    """The pseudo-tag a tag_filter rule matches an entry's author under —
+    'Steven Parker' → 'by-steven-parker'. Lets '-by-steven-parker' drop an
+    author's posts through the same rule/chips machinery as real feed tags."""
+    if not author or not str(author).strip():
+        return None
+    return normalize_tag_value("by " + str(author))
+
+
+def _run_tag_filter(
+    conn: sqlite3.Connection,
+    scope: str,
+    scope_id: str,
+    spec: str,
+    *,
+    apply: bool = True,
+) -> dict:
+    """Execute (or dry-run) a tag_filter rule over entry_feed_tags with three
+    tag strengths: ``-drop`` blocks; ``+good`` rescues from blocks without
+    cutting anything by its absence ('+android, -iphone' keeps a post tagged
+    with both, and Samsung posts still flow); ``++require`` cuts tagged
+    entries lacking any required tag (opt-in whitelist). Untagged entries are
+    always kept — a feed that stops tagging must not have its whole firehose
+    suppressed.
+
+    ``apply=False`` previews like _dry_run_pattern — read + unread entries,
+    newest first — and returns the dry-run shape the Test panel renders
+    (matches / total_scanned / total_matches / truncated)."""
+    global _unread_counts_generation
+    _DRY_MAX_ENTRIES = 1000
+    _DRY_RESULT_LIMIT = 20
+
+    require, good, exclude = parse_tag_filter_spec(spec)
+    if not require and not good and not exclude:
+        return {"error": "at least one tag is required (e.g. +python, -rust)"}
+    saving = require | good  # either strength rescues from excludes
+
+    if scope == "folder":
+        try:
+            int(scope_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid scope_id"}
+    feed_urls: set[str] | None = resolve_rule_feed_urls(conn, scope, scope_id)
+
+    to_mark: list[tuple[str, str]] = []
+    matched_entries: list[dict] = []
+    _ENTRY_DETAIL_CAP = 50
+
+    with get_reader() as reader:
+        feed_title_cache: dict[str, str] = {}
+        # Normalized tag lookup per feed, loaded lazily one feed at a time.
+        feed_tag_cache: dict[str, dict[str, set[str]]] = {}
+
+        def entry_tags(feed_url: str, entry_id: str) -> set[str]:
+            per_feed = feed_tag_cache.get(feed_url)
+            if per_feed is None:
+                per_feed = {}
+                rows = conn.execute(
+                    "SELECT entry_id, tag FROM entry_feed_tags WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchall()
+                for row in rows:
+                    normalized = normalize_tag_value(row["tag"])
+                    if normalized:
+                        per_feed.setdefault(str(row["entry_id"]), set()).add(normalized)
+                feed_tag_cache[feed_url] = per_feed
+            return per_feed.get(entry_id, set())
+
+        def iter_entries():
+            # Apply acts on unread only; dry-run previews read + unread so the
+            # Test panel is useful even after the rule has already run.
+            read_arg = False if apply else None
+            if feed_urls is None:
+                yield from reader.get_entries(read=read_arg)
+            else:
+                for furl in feed_urls:
+                    yield from reader.get_entries(feed=furl, read=read_arg)
+
+        def feed_title(fu: str) -> str:
+            if fu not in feed_title_cache:
+                try:
+                    f = reader.get_feed(fu)
+                    feed_title_cache[fu] = str(getattr(f, "title", None) or fu)
+                except Exception:
+                    feed_title_cache[fu] = fu
+            return feed_title_cache[fu]
+
+        total_scanned = 0
+        for entry in iter_entries():
+            if not apply and total_scanned >= _DRY_MAX_ENTRIES:
+                break
+            total_scanned += 1
+            fu = str(entry.feed_url or "")
+            eid = str(entry.id)
+            tags = entry_tags(fu, eid)
+            # The author rides along as a pseudo-tag (by-<name>), so author
+            # tokens work in every position: -by-x drops, +by-x rescues,
+            # ++by-x requires. An authored-but-untagged entry is filterable.
+            author_tok = author_filter_token(getattr(entry, "authors_str", None))
+            if author_tok:
+                tags = tags | {author_tok}
+            if not tags:
+                continue  # untagged (and authorless) entries are always kept
+            if require and not (tags & require):
+                pass  # whitelist mode: tagged entry lacks every required tag
+            elif (tags & exclude) and not (tags & saving):
+                pass  # blocked and nothing rescues it
+            else:
+                continue  # kept
+            to_mark.append((fu, eid))
+            if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
+                matched_entries.append({
+                    "feed_url": fu,
+                    "entry_id": eid,
+                    "title": str(entry.title or ""),
+                    "link": str(entry.link or ""),
+                    "feed_title": feed_title(fu),
+                })
+            elif not apply and len(matched_entries) < _DRY_RESULT_LIMIT:
+                published = entry_effective_date(entry)
+                matched_entries.append({
+                    "feed_url": fu,
+                    "entry_id": eid,
+                    "title": str(entry.title or ""),
+                    "link": str(entry.link or ""),
+                    "feed_title": feed_title(fu),
+                    "published": published.isoformat() if published else None,
+                    "read": bool(entry.read),
+                })
+
+        if apply:
+            for feed_url, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_url, entry_id))
+
+    if apply and to_mark:
+        when = datetime.now().isoformat()
+        conn.executemany(
+            "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+            [(fu, eid, when) for fu, eid in to_mark],
+        )
+        _unread_counts_generation += 1
+
+    if not apply:
+        return {
+            "matches": matched_entries,
+            "total_scanned": total_scanned,
+            "total_matches": len(to_mark),
+            "truncated": len(to_mark) > _DRY_RESULT_LIMIT,
+            "count": len(to_mark),
+        }
+    return {"count": len(to_mark), "entries": matched_entries}
+
+
+def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | None:
+    """The feed-scoped tag_filter rule for feed_url (the one the post-header
+    chips manage), or None. Folder/global tag_filter rules are left alone."""
+    row = conn.execute(
+        "SELECT rowid, keyword, enabled FROM highlight_keywords"
+        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?",
+        (feed_url,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, sign: str) -> dict:
+    """Toggle a signed tag on the feed's tag_filter rule from the post-header
+    chips. Same sign already present → remove it; opposite sign → flip it;
+    otherwise append. Creates the rule DISABLED on first use — the chips are a
+    tuning surface; the user arms the rule in Automation when it's ready — and
+    deletes it when the spec empties. The new spec is applied to unread
+    entries immediately only when the rule is already enabled.
+    Returns {spec, active, enabled, applied_count}."""
+    normalized = normalize_tag_value(tag)
+    if not normalized or sign not in ("+", "-"):
+        return {"error": "invalid tag"}
+
+    rule = get_feed_tag_filter_rule(conn, feed_url)
+    # (sign, normalized) in spec order; sign is '-', '+', or '++' — hand-written
+    # require tokens survive chip edits, and the ▲ chip treats them as its own
+    # (clicking ▲ on a ++tag removes it rather than downgrading it).
+    tokens: list[tuple[str, str]] = []
+    if rule:
+        for token in str(rule["keyword"] or "").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if token.startswith("++"):
+                token_sign = "++"
+            elif token[0] == "-":
+                token_sign = "-"
+            else:
+                token_sign = "+"
+            value = normalize_tag_value(token.lstrip("+-"))
+            if value and all(v != value for _s, v in tokens):
+                tokens.append((token_sign, value))
+
+    existing_sign = next((s for s, v in tokens if v == normalized), None)
+    same = existing_sign == sign or (sign == "+" and existing_sign == "++")
+    if existing_sign is not None and same:
+        tokens.remove((existing_sign, normalized))  # toggle off
+    else:
+        if existing_sign is not None:
+            tokens.remove((existing_sign, normalized))  # flip
+        tokens.append((sign, normalized))
+
+    spec = ", ".join(f"{s}{v}" for s, v in tokens)
+    enabled = bool(rule and rule["enabled"])
+    if rule and not tokens:
+        conn.execute("DELETE FROM highlight_keywords WHERE rowid = ?", (rule["rowid"],))
+    elif rule:
+        conn.execute(
+            "UPDATE highlight_keywords SET keyword = ? WHERE rowid = ?",
+            (spec, rule["rowid"]),
+        )
+    elif tokens:
+        add_highlight_keyword(conn, "feed", feed_url, spec, "yellow",
+                              rule_type="tag_filter", enabled=0)
+
+    applied = 0
+    if tokens and enabled:
+        result = _run_tag_filter(conn, "feed", feed_url, spec)
+        if "error" not in result:
+            applied = int(result.get("count", 0))
+            if applied > 0:
+                _log_auto_run(conn, datetime.now().isoformat(), "tag_filter",
+                              "feed", feed_url, spec, result, trigger="manual")
+
+    return {"spec": spec, "active": {v: ("+" if s == "++" else s) for s, v in tokens},
+            "enabled": enabled, "applied_count": applied}
+
+
 def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str,
-                  scope_id: str, keyword: str, result: dict) -> None:
+                  scope_id: str, keyword: str, result: dict,
+                  trigger: str = "auto") -> None:
     """Write a rule_run_log row (+ matched entries) in the caller's transaction."""
     cur = conn.execute(
         "INSERT INTO rule_run_log"
         " (run_at, rule_type, scope, scope_id, keyword, entries_affected, trigger)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'auto')",
-        (now, rule_type, scope, scope_id, keyword, result["count"]),
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (now, rule_type, scope, scope_id, keyword, result["count"], trigger),
     )
     rows = [(e, "marked") for e in (result.get("entries") or [])]
     rows += [(e, "kept") for e in (result.get("kept") or [])]
@@ -5560,7 +5837,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
         enabled_rules = [
             r for r in all_rules
-            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article")
+            if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
         ]
         if not enabled_rules:
             return
@@ -5588,6 +5865,17 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
                         with get_meta_connection() as conn:
                             result = _run_now_pattern(conn, "feed", feed_url, keyword, is_regex, search_in)
+                            if "error" not in result and result.get("count", 0) > 0:
+                                _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
+
+                elif rule_type == "tag_filter":
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+
+                        with get_meta_connection() as conn:
+                            result = _run_tag_filter(conn, "feed", feed_url, keyword)
                             if "error" not in result and result.get("count", 0) > 0:
                                 _log_auto_run(conn, now, rule_type, scope, scope_id, keyword, result)
 
@@ -6537,6 +6825,7 @@ _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 quire_service.set_usage_sink(record_quire_call)
 
 from services import reader_sanitize
+from services import feed_tags as feed_tags_service_mod
 from services.feed_tags import FeedTagService
 
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
@@ -6550,6 +6839,19 @@ lead_image_service = LeadImageService(
     user_agent=READABILITY_USER_AGENT,
     extract_video_id=youtube_duration_service.extract_video_id,
 )
+
+
+def _persist_page_tags(feed_url: str, entry_id: str, page_html: str) -> None:
+    """Background source-HTML fetch sink: persist article-page tags for
+    entries the feed never tagged (feed-provided tags stay authoritative)."""
+    if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
+        return
+    tags = feed_tags_service_mod.extract_page_tags(page_html)
+    if tags:
+        feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)])
+
+
+lead_image_service.set_page_tag_sink(_persist_page_tags)
 
 # Lambda-wrapped so `sanitize_readability_html` resolves at call time (it's
 # defined further down in this module).
@@ -6574,6 +6876,12 @@ def normalize_tag_value(value: str | None) -> str | None:
     # "games to play") survive as a single tag instead of being split or
     # rejected by TAG_VALUE_PATTERN, which does not allow spaces.
     normalized = re.sub(r"\s+", "-", normalized).strip("-")
+    # Strip characters outside the tag alphabet instead of rejecting the whole
+    # value — feed/page-provided tags like "AI & Machine Learning" or
+    # "Tips/Tricks" must survive as ai-machine-learning / tipstricks rather
+    # than silently vanishing. Collapse any hyphen runs that stripping leaves.
+    normalized = re.sub(r"[^a-z0-9_.#+-]", "", normalized)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
     if not normalized:
         return None
     if not TAG_VALUE_PATTERN.fullmatch(normalized):
@@ -6951,6 +7259,7 @@ _AUTOMATION_TYPE_LABELS = {
     "youtube_playlist": "Add to YT playlist",
     "instapaper": "Save to Instapaper",
     "quire": "Add to Quire",
+    "tag_filter": "Tag filter",
 }
 _AUTOMATION_SCOPE_LABELS = {"global": "All feeds", "folder": "Folder", "feed": "This feed", "feeds": "Selected feeds"}
 
@@ -6963,6 +7272,8 @@ def _automation_rule_detail(rule: dict) -> str:
         return f"{rule.get('color') or 'yellow'} · matches {search_in}"
     if rule_type == "mark_as_read":
         return f"matches {search_in}"
+    if rule_type == "tag_filter":
+        return str(rule.get("keyword") or "").strip() or "feed tags"
     if rule_type == "deduplicate":
         method = str(rule.get("keyword") or "slug")
         window = int(rule.get("dedup_window_hours") or 24)
@@ -9685,6 +9996,8 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "manual_tags": [],
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
+        "feed_tag_filter_signs": {},
+        "author_filter_token": None,
         "feed_icon_url": None,
         "is_orphan_archive": True,
     }
@@ -10990,17 +11303,51 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         raw_feed_tags = get_feed_tag_suggestions(entry.feed_url, entry.id)
-        # Tags are stored raw; normalize to Lectio tag format for display and
-        # compare normalized-to-normalized so an applied "machine-learning"
-        # suppresses a raw "Machine Learning" suggestion.
-        manual_tag_set = {normalize_tag_value(tag) for tag in manual_tags}
+        # Source-page fallback: entries whose feed never delivered <category>
+        # data (aged out of the feed window, or a tag-stripping publisher) can
+        # usually be tagged from the article page's article:tag/keywords metas.
+        # Uses the lead-image service's source-HTML cache when primed (zero
+        # extra requests); otherwise queues its background fetch so the tags
+        # appear on the next open of this entry — same deferral as captions.
+        if not raw_feed_tags and entry.link and url_guard.is_safe_outbound_url(str(entry.link)):
+            try:
+                _cached_page = lead_image_service.get_cached_source_html(str(entry.link))
+                if _cached_page is not None:
+                    _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1])
+                    if _page_tags:
+                        feed_tag_service.record_entry_tags(
+                            str(entry.feed_url), [(str(entry.id), _page_tags)]
+                        )
+                        raw_feed_tags = _page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+                else:
+                    # feed_url/entry_id let the fetch worker persist harvested
+                    # tags immediately (survives restarts/cache eviction);
+                    # chips then appear on the next open of this entry.
+                    lead_image_service.queue_source_html_fetch(
+                        str(entry.link),
+                        feed_url=str(entry.feed_url),
+                        entry_id=str(entry.id),
+                    )
+            except Exception:
+                LOGGER.debug("page-tag fallback failed for %s", entry.link, exc_info=True)
+        # Tags are stored raw; normalize to Lectio tag format for display. The
+        # chips are feed-filter controls ([- tag +] toggling the feed's
+        # tag_filter rule), so all of the entry's feed tags show — including
+        # ones already applied as manual tags.
         feed_tag_suggestions = []
         for raw_tag in raw_feed_tags:
             normalized = normalize_tag_value(raw_tag)
-            if not normalized or normalized in manual_tag_set:
-                continue
-            if normalized not in feed_tag_suggestions:
+            if normalized and normalized not in feed_tag_suggestions:
                 feed_tag_suggestions.append(normalized)
+        # Current +/- state of the feed's tag_filter rule, so active signs render lit.
+        feed_tag_filter_signs: dict[str, str] = {}
+        _author_token = author_filter_token(getattr(entry, "authors_str", None))
+        if feed_tag_suggestions or _author_token:
+            with get_meta_connection() as _rule_conn:
+                _rule = get_feed_tag_filter_rule(_rule_conn, str(entry.feed_url))
+            if _rule:
+                _req, _good, _exc = parse_tag_filter_spec(str(_rule["keyword"] or ""))
+                feed_tag_filter_signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
 
         # Check if entry is saved
         is_saved = False
@@ -11313,6 +11660,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags": manual_tags,
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
+            "feed_tag_filter_signs": feed_tag_filter_signs,
+            "author_filter_token": _author_token,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,
             "audio_feed_suggestion": _audio_feed_suggestion,
@@ -15615,6 +15964,11 @@ def add_highlight_route(
             return JSONResponse({"error": "connect Quire first"}, status_code=400)
         if not quire_project_oid():
             return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
+    elif type == "tag_filter":
+        # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
+        _req, _good, _exc = parse_tag_filter_spec(keyword)
+        if not _req and not _good and not _exc:
+            return JSONResponse({"error": "at least one tag is required (e.g. +python, -rust)"}, status_code=400)
     else:
         if not keyword:
             return JSONResponse({"error": "keyword is required"}, status_code=400)
@@ -15722,7 +16076,9 @@ def rules_dry_run_route(
     yt_max_minutes: int = Query(0),
 ):
     with get_meta_connection() as conn:
-        if type == "deduplicate":
+        if type == "tag_filter":
+            result = _run_tag_filter(conn, scope, scope_id, keyword, apply=False)
+        elif type == "deduplicate":
             match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
             custom: set[str] | None = None
             if feed_urls:
@@ -15749,6 +16105,77 @@ def rules_dry_run_route(
     return JSONResponse(result)
 
 
+@app.get("/entries/feed-tags")
+def entry_feed_tags_route(
+    feed_url: str = Query(...),
+    entry_id: str = Query(...),
+):
+    """Late chip delivery: the entry pane calls this after render when it has
+    no feed-tag chips. Waits briefly for the background source-page fetch the
+    entry-open queued (whose sink persists harvested tags), then returns the
+    normalized suggestions + filter-rule signs so the client can inject the
+    [ + tag ▲ ▼ ] chips into the already-open pane."""
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None:
+            return JSONResponse({"error": "unknown entry"}, status_code=404)
+        entry_link = str(entry.link or "")
+        manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
+
+    raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+    if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
+        # Wait for the fetch queued by the entry-open handler (returns
+        # immediately when it already finished or none is in flight).
+        lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+        if not raw_tags:
+            # Fetch finished before the sink existed or raced it — harvest
+            # directly from the cached page as a last resort.
+            cached = lead_image_service.get_cached_source_html(entry_link)
+            if cached is not None:
+                page_tags = feed_tags_service_mod.extract_page_tags(cached[1])
+                if page_tags:
+                    feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
+                    raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+
+    tags: list[str] = []
+    for raw_tag in raw_tags:
+        normalized = normalize_tag_value(raw_tag)
+        if normalized and normalized not in tags:
+            tags.append(normalized)
+
+    signs: dict[str, str] = {}
+    if tags:
+        with get_meta_connection() as conn:
+            rule = get_feed_tag_filter_rule(conn, feed_url)
+        if rule:
+            _req, _good, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
+            signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
+
+    return JSONResponse({
+        "ok": True,
+        "tags": tags,
+        "signs": signs,
+        "manual_tags": [normalize_tag_value(t) for t in manual_tags],
+    })
+
+
+@app.post("/rules/tag-filter/toggle")
+def tag_filter_toggle_route(
+    feed_url: str = Form(...),
+    tag: str = Form(...),
+    sign: str = Form(...),
+):
+    """Post-header chip action: toggle +tag/-tag on the feed's tag_filter rule
+    and apply it to unread entries immediately."""
+    with get_meta_connection() as conn:
+        result = toggle_feed_tag_filter(conn, feed_url, tag, sign)
+    if "error" in result:
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    result["ok"] = True
+    return JSONResponse(result)
+
+
 @app.post("/rules/run-now")
 def rules_run_now_route(
     type: str = Form(...),
@@ -15767,6 +16194,8 @@ def rules_run_now_route(
                                     exclude_scope_ids=exclude_scope_ids)
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
+        elif type == "tag_filter":
+            result = _run_tag_filter(conn, scope, scope_id, keyword)
         else:
             return JSONResponse({"error": f"Run Now not supported for type '{type}'"}, status_code=400)
     if "error" in result:

@@ -45,6 +45,29 @@
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
         <span class="entry-author-inline">by {{ selected_entry.author }}</span>
+        {% if selected_entry.author_filter_token %}
+        {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
+        <span class="author-filter-signs">
+          <button
+            type="button"
+            class="feed-tag-filter-sign include{% if author_sign == '+' %} active{% endif %}"
+            data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
+            data-tag-filter-sign="+"
+            title="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
+            aria-label="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
+            aria-pressed="{{ 'true' if author_sign == '+' else 'false' }}"
+          >▲</button>
+          <button
+            type="button"
+            class="feed-tag-filter-sign exclude{% if author_sign == '-' %} active{% endif %}"
+            data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
+            data-tag-filter-sign="-"
+            title="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
+            aria-label="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
+            aria-pressed="{{ 'true' if author_sign == '-' else 'false' }}"
+          >▼</button>
+        </span>
+        {% endif %}
         {% endif %}
         </span>
         {% if selected_entry.post_timestamp %}
@@ -206,18 +229,40 @@
       </span>
       {% endfor %} {% endif %}
       {% if selected_entry.feed_tag_suggestions %}
-      <span class="entry-tag-suggestions" aria-label="Feed tag suggestions">
+      <span class="entry-tag-suggestions" aria-label="Feed tags — filter this feed">
         {% for tag in selected_entry.feed_tag_suggestions %}
-        <button
-          type="button"
-          class="entry-tag-chip suggestion"
-          data-tag-suggestion="{{ tag }}"
-          data-tag-input="entry-tags-input"
-          title="Add #{{ tag }} to this post"
-          aria-label="Add #{{ tag }} to this post"
-        >
-          <span aria-hidden="true">+</span>{{ tag }}
-        </button>
+        {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
+        <span class="entry-tag-chip suggestion feed-tag-filter-chip">
+          {% if tag not in selected_entry.manual_tags %}
+          <button
+            type="button"
+            class="feed-tag-filter-sign add-tag"
+            data-tag-suggestion="{{ tag }}"
+            data-tag-input="entry-tags-input"
+            title="Add #{{ tag }} to this post"
+            aria-label="Add #{{ tag }} to this post"
+          >+</button>
+          {% endif %}
+          <span class="feed-tag-filter-name">{{ tag }}</span>
+          <button
+            type="button"
+            class="feed-tag-filter-sign include{% if active_sign == '+' %} active{% endif %}"
+            data-tag-filter-tag="{{ tag }}"
+            data-tag-filter-sign="+"
+            title="Feed filter: good tag — rescues #{{ tag }} posts from drops"
+            aria-label="Feed filter: good tag — rescues #{{ tag }} posts from drops"
+            aria-pressed="{{ 'true' if active_sign == '+' else 'false' }}"
+          >▲</button>
+          <button
+            type="button"
+            class="feed-tag-filter-sign exclude{% if active_sign == '-' %} active{% endif %}"
+            data-tag-filter-tag="{{ tag }}"
+            data-tag-filter-sign="-"
+            title="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
+            aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
+            aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
+          >▼</button>
+        </span>
         {% endfor %}
       </span>
       {% endif %}

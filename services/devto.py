@@ -304,7 +304,8 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
     ).fetchall()
     entries = [
         {"id": r["article_id"], "title": r["title"], "entry_url": r["entry_url"],
-         "content": r["content"], "published_at": r["published_at"]}
+         "content": r["content"], "published_at": r["published_at"],
+         "tags": [t for t in str(r["tags"] or "").split(",") if t]}
         for r in rows
     ]
     xml = _generate_rss_xml(str(row["feed_title"]), _page_url(row["tag"]), entries)
@@ -323,13 +324,22 @@ def _upsert_entries(conn: sqlite3.Connection, feed_id: str, articles: list[dict]
         e = _article_to_entry(a)
         if not e:
             continue
+        tags_csv = ",".join(e.get("tags") or [])
         cur = conn.execute(
             "INSERT OR IGNORE INTO devto_entries"
-            " (id, devto_feed_id, article_id, title, entry_url, content, published_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"], e["content"], e["published_at"]),
+            " (id, devto_feed_id, article_id, title, entry_url, content, published_at, tags)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), feed_id, e["id"], e["title"], e["entry_url"], e["content"], e["published_at"], tags_csv),
         )
         added += cur.rowcount
+        if cur.rowcount == 0 and tags_csv:
+            # Re-seen article (rows persisted before the tags column existed, or
+            # publisher tag edits): refresh the stored tags so the regenerated
+            # XML carries them.
+            conn.execute(
+                "UPDATE devto_entries SET tags = ? WHERE devto_feed_id = ? AND article_id = ? AND tags != ?",
+                (tags_csv, feed_id, e["id"], tags_csv),
+            )
         # entry_id in the lead-image service is the reader entry id = our <guid>.
         if e["image_src"] and _lead_image_sink is not None:
             try:

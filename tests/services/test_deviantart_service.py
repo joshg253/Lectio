@@ -242,7 +242,7 @@ def _da_conn_with_feeds(feed_ids):
     )
     conn.execute(
         "CREATE TABLE deviantart_entries (id TEXT PRIMARY KEY, deviantart_feed_id TEXT,"
-        " deviationid TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT,"
+        " deviationid TEXT, title TEXT, entry_url TEXT, content TEXT, published_at TEXT, tags TEXT NOT NULL DEFAULT '',"
         " UNIQUE(deviantart_feed_id, deviationid))"
     )
     for fid in feed_ids:
