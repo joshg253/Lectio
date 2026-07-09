@@ -262,3 +262,10 @@ def test_page_tags_tag_classed_anchors_title_or_slug():
         '<a href="/tag/unrelated-nav-link/">Nav</a>'
     )
     assert extract_page_tags(html) == ["Windows", "windows tips"]
+
+
+def test_junk_tags_dropped_at_capture():
+    raw = _Obj(tags=[{"term": "Uncategorized"}, {"term": "Wildfire"}], category=None)
+    assert extract_feed_entry_tags(raw) == ["Wildfire"]
+    html = '<meta name="keywords" content="uncategorized, General, linux">'
+    assert extract_page_tags(html) == ["linux"]

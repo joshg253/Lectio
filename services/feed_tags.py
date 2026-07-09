@@ -19,6 +19,35 @@ from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
+# Placeholder/junk taxonomy values that carry no signal (WordPress's default
+# "Uncategorized" and friends) — dropped at capture so they never become
+# suggestion chips or filter-rule bait. Compared lowercase.
+JUNK_TAGS = {
+    "uncategorized", "uncategorised", "untagged", "no category",
+    "general", "misc", "miscellaneous", "other", "others",
+    "blog", "blogs", "post", "posts", "article", "articles",
+    "all", "default", "unsorted", "rss", "feed", "home",
+}
+
+
+def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
+    """Whitespace-compact, drop junk placeholders, dedupe case-insensitively
+    (order preserved), optionally cap."""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        compact = " ".join(value.strip().split())
+        if not compact or len(compact) > 60:
+            continue
+        lowered = compact.lower()
+        if lowered in seen or lowered in JUNK_TAGS:
+            continue
+        seen.add(lowered)
+        cleaned.append(compact)
+        if cap is not None and len(cleaned) >= cap:
+            break
+    return cleaned
+
 
 def extract_feed_entry_tags(raw_entry: object) -> list[str]:
     """Pull tag strings out of a raw feedparser entry (.tags + .category),
@@ -43,18 +72,7 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
     if category:
         values.append(str(category))
 
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        compact = " ".join(value.strip().split())
-        if not compact:
-            continue
-        lowered = compact.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        cleaned.append(compact)
-    return cleaned
+    return _clean_tag_values(values)
 
 
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
@@ -124,20 +142,7 @@ def extract_page_tags(html: str | None) -> list[str]:
         if value:
             values.append(value)
 
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        compact = " ".join(value.strip().split())
-        if not compact or len(compact) > 60:
-            continue
-        lowered = compact.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        cleaned.append(compact)
-        if len(cleaned) >= _MAX_PAGE_TAGS:
-            break
-    return cleaned
+    return _clean_tag_values(values, cap=_MAX_PAGE_TAGS)
 
 
 class FeedTagService:

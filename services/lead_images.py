@@ -358,6 +358,10 @@ class LeadImageService:
         self._fetched_at_cache = fetched_at_cache if fetched_at_cache is not None else {}
         self._alt_cache: dict[tuple[str, str], str | None] = {}
         self._title_cache: dict[tuple[str, str], str | None] = {}
+        # Optional fn(feed_url, entry_id, page_html) invoked by the background
+        # source-HTML fetch — lets main persist article-page tags (feed_tags)
+        # the moment the page arrives instead of waiting for a re-open.
+        self._page_tag_sink: Callable[[str, str, str], None] | None = None
         self._entry_crop_cache: dict[tuple[str, str], str] = {}
         self._webcomic_feeds: set[str] | None = None
         self._plugins = plugins if plugins is not None else DEFAULT_LEAD_IMAGE_PLUGINS
@@ -3056,6 +3060,9 @@ class LeadImageService:
             return True
         return event.wait(timeout=timeout)
 
+    def set_page_tag_sink(self, sink: Callable[[str, str, str], None] | None) -> None:
+        self._page_tag_sink = sink
+
     def queue_source_html_fetch(
         self,
         entry_link: str,
@@ -3102,6 +3109,11 @@ class LeadImageService:
                                 is_webcomic=self._is_feed_webcomic(feed_url),
                             )
                             self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
+                        if feed_url and entry_id and self._page_tag_sink is not None:
+                            try:
+                                self._page_tag_sink(feed_url, entry_id, source_html)
+                            except Exception:
+                                LOGGER.warning("page-tag sink failed for %s", entry_link, exc_info=True)
             except Exception:
                 pass
             finally:

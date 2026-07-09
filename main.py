@@ -6802,6 +6802,19 @@ lead_image_service = LeadImageService(
     extract_video_id=youtube_duration_service.extract_video_id,
 )
 
+
+def _persist_page_tags(feed_url: str, entry_id: str, page_html: str) -> None:
+    """Background source-HTML fetch sink: persist article-page tags for
+    entries the feed never tagged (feed-provided tags stay authoritative)."""
+    if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
+        return
+    tags = feed_tags_service_mod.extract_page_tags(page_html)
+    if tags:
+        feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)])
+
+
+lead_image_service.set_page_tag_sink(_persist_page_tags)
+
 # Lambda-wrapped so `sanitize_readability_html` resolves at call time (it's
 # defined further down in this module).
 starred_archive_service = StarredArchiveService(
@@ -11262,7 +11275,14 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         )
                         raw_feed_tags = _page_tags[:MAX_FEED_TAG_SUGGESTIONS]
                 else:
-                    lead_image_service.queue_source_html_fetch(str(entry.link))
+                    # feed_url/entry_id let the fetch worker persist harvested
+                    # tags immediately (survives restarts/cache eviction);
+                    # chips then appear on the next open of this entry.
+                    lead_image_service.queue_source_html_fetch(
+                        str(entry.link),
+                        feed_url=str(entry.feed_url),
+                        entry_id=str(entry.id),
+                    )
             except Exception:
                 LOGGER.debug("page-tag fallback failed for %s", entry.link, exc_info=True)
         # Tags are stored raw; normalize to Lectio tag format for display. The
