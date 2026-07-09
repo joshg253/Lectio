@@ -12,6 +12,7 @@ foundation for future tag-filtered feed adapters.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -53,6 +54,51 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
             continue
         seen.add(lowered)
         cleaned.append(compact)
+    return cleaned
+
+
+_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
+_META_ATTR_RE = re.compile(
+    r'\b(property|name|content)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE
+)
+_PAGE_TAG_KEYS = {"article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
+_MAX_PAGE_TAGS = 15
+
+
+def extract_page_tags(html: str | None) -> list[str]:
+    """Harvest article tags from a source page's meta tags — the fallback for
+    entries whose feed never delivered <category> data (aged out of the feed
+    window, or a publisher that strips tags from RSS). Reads article:tag
+    (one per meta), plus comma-joined keyword variants."""
+    if not html:
+        return []
+    values: list[str] = []
+    for meta in _META_TAG_RE.findall(html[:300_000]):
+        attrs: dict[str, str] = {}
+        for m in _META_ATTR_RE.finditer(meta):
+            attrs[m.group(1).lower()] = m.group(3) if m.group(3) is not None else m.group(4)
+        key = (attrs.get("property") or attrs.get("name") or "").strip().lower()
+        content = (attrs.get("content") or "").strip()
+        if key not in _PAGE_TAG_KEYS or not content:
+            continue
+        if key == "article:tag":
+            values.append(content)
+        else:
+            values.extend(part.strip() for part in content.split(","))
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        compact = " ".join(value.strip().split())
+        if not compact or len(compact) > 60:
+            continue
+        lowered = compact.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        cleaned.append(compact)
+        if len(cleaned) >= _MAX_PAGE_TAGS:
+            break
     return cleaned
 
 

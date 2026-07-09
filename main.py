@@ -6787,6 +6787,7 @@ _youtube_sync_mod.set_quota_sink(record_yt_quota_spend)
 quire_service.set_usage_sink(record_quire_call)
 
 from services import reader_sanitize
+from services import feed_tags as feed_tags_service_mod
 from services.feed_tags import FeedTagService
 
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
@@ -11244,6 +11245,26 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
         raw_feed_tags = get_feed_tag_suggestions(entry.feed_url, entry.id)
+        # Source-page fallback: entries whose feed never delivered <category>
+        # data (aged out of the feed window, or a tag-stripping publisher) can
+        # usually be tagged from the article page's article:tag/keywords metas.
+        # Uses the lead-image service's source-HTML cache when primed (zero
+        # extra requests); otherwise queues its background fetch so the tags
+        # appear on the next open of this entry — same deferral as captions.
+        if not raw_feed_tags and entry.link and url_guard.is_safe_outbound_url(str(entry.link)):
+            try:
+                _cached_page = lead_image_service.get_cached_source_html(str(entry.link))
+                if _cached_page is not None:
+                    _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1])
+                    if _page_tags:
+                        feed_tag_service.record_entry_tags(
+                            str(entry.feed_url), [(str(entry.id), _page_tags)]
+                        )
+                        raw_feed_tags = _page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+                else:
+                    lead_image_service.queue_source_html_fetch(str(entry.link))
+            except Exception:
+                LOGGER.debug("page-tag fallback failed for %s", entry.link, exc_info=True)
         # Tags are stored raw; normalize to Lectio tag format for display. The
         # chips are feed-filter controls ([- tag +] toggling the feed's
         # tag_filter rule), so all of the entry's feed tags show — including

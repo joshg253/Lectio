@@ -50,7 +50,8 @@ The short version:
   tag chip in an article's header opens that tag scoped to the article's own feed.
   Feeds that publish per-entry tags (RSS/Atom `<category>`, e.g. dev.to or
   WordPress blogs) show them as **[ + tag ▲ ▼ ]** chips in the post header —
-  captured at ingest so they render instantly. **+** adds the tag as one of
+  captured at ingest so they render instantly (with an article-page fallback
+  for entries the feed never tagged). **+** adds the tag as one of
   your own tags on that post; **▲**/**▼** build the feed's Tag Filter rule
   (keep-only / drop). The rule starts **off** so you can tune it while
   browsing, then arm it in the Automation rules list; once on, chip edits
