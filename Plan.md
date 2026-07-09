@@ -104,12 +104,11 @@ duplicate display titles (e.g. suffix from the feed URL path) — the tooltip
 already shows the URL, but identical titles still invite unsubscribing the
 wrong feed.
 
-### Small lead image + article-nav full refresh (noirlab, DeviantArt)
+### Article-nav full refresh (binder follow-up)
 
-Two reader-view issues to investigate:
-- Some image feeds render a tiny lead image (e.g. noirlab.edu images feed,
-  entry IMG_4611-CC): likely the feed offers a small thumb and the strategy
-  never upgrades to the full-size `content.src` / og:image.
+- Small lead image: RESOLVED 2026-07-08 — noirlab.edu was fixed by switching
+  the feed's image strategy to Artwork in feed properties (no code change
+  needed; the default strategy just wasn't upgrading past the feed's thumb).
 - Article-nav full refresh: MITIGATED 2026-07-08 — the pane-swap catch-all
   was hard-reloading on any exception in the post-swap binder pipeline even
   though the pane had already rendered (server logs showed /entries/pane
