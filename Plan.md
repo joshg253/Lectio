@@ -66,15 +66,6 @@ Remaining follow-ups:
 - Multi-word tag entry in rule lists is hyphenated (`windows-11`); consider a
   tag autocomplete in the rule form fed from entry_feed_tags.
 
-### Edit post metadata (dates)
-
-Some entries arrive with garbage dates (rendered as Jan 1 1969, i.e. epoch 0)
-and sort to the bottom forever. Add an edit-metadata affordance on a post —
-at minimum the published date via a date picker. reader stores
-published/updated on the entry; changing it likely means a meta-DB override
-consulted by the sort/display layer (reader's EntryData is ingest-owned), or
-re-synthesizing the entry.
-
 ### New subscription missing from feed tree (but posts show)
 
 Investigated 2026-07-08. Ruled out: snapshot-cache staleness (single uvicorn

@@ -498,6 +498,9 @@ class FeedRefreshService:
         # publisher's feed still carries them), before enhancement wastes work
         # on entries that are about to disappear.
         self.purge_tombstoned_entries(feed_url_list)
+        # Re-pin user-corrected published dates a refresh may have reverted to
+        # the feed's original (garbage) value.
+        self.reapply_entry_date_overrides(feed_url_list)
 
         if enhance:
             self.enhance_feeds(feed_url_list)
@@ -546,6 +549,40 @@ class FeedRefreshService:
         if purged:
             self._logger.info("[refresh] purged %d tombstoned entr%s", purged, "y" if purged == 1 else "ies")
         return purged
+
+    def reapply_entry_date_overrides(self, feed_urls: Iterable[str]) -> int:
+        """Re-pin user-corrected published dates (meta ``entry_date_overrides``)
+        onto reader's ``entries.published`` column after a refresh — the feed may
+        still carry the original garbage date and re-ingest it. Returns the number
+        of entries whose date was re-pinned."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(
+                    f"SELECT feed_url, entry_id, published FROM entry_date_overrides WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if not rows:
+            return 0
+        applied = 0
+        with self._get_reader() as reader:
+            db = reader._storage.get_db()
+            for row in rows:
+                cur = db.execute(
+                    "UPDATE entries SET published = ? WHERE feed = ? AND id = ?"
+                    " AND (published IS NULL OR published != ?)",
+                    (row["published"], row["feed_url"], row["entry_id"], row["published"]),
+                )
+                applied += cur.rowcount
+            db.commit()
+        if applied:
+            self._logger.info("[refresh] re-pinned %d overridden entry date(s)", applied)
+        return applied
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:
         """Fetch & store YouTube durations and lead images for the given feeds.

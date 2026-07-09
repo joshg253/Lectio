@@ -170,7 +170,10 @@ The short version:
   **Delete post…** (also in the entry context menu) permanently removes a
   single garbage entry (spam, corrupted post) after a confirm; a tombstone
   stops the next refresh from re-adding it while it's still in the
-  publisher's feed window.
+  publisher's feed window. **Edit date…** fixes a post with a garbage
+  published date (e.g. entries rendered as Jan 1 1970 that sort to the bottom
+  forever) via a date picker; the correction is pinned so a refresh can't
+  revert it.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets
