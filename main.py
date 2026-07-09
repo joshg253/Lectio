@@ -1160,7 +1160,16 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
 
     folder_name = _deviantart_folder_name()
     with get_meta_connection() as conn:
-        existing = {str(r["username"]).lower() for r in conn.execute("SELECT username FROM deviantart_feeds").fetchall()}
+        # Exclude the combined "deviantsyouwatch" Watch feed (source='watch'): its
+        # username is a synthetic browse endpoint, not a real artist, so it must
+        # not count as a subscribed gallery for add-dedup or the unwatched reconcile
+        # (otherwise it's perpetually reported as "subscribed but no longer watched").
+        existing = {
+            str(r["username"]).lower()
+            for r in conn.execute(
+                "SELECT username FROM deviantart_feeds WHERE COALESCE(source, 'gallery') != 'watch'"
+            ).fetchall()
+        }
         folder_id = _get_or_create_folder_by_name(conn, folder_name)
 
     to_add = [a for a in watching if a.lower() not in existing]
