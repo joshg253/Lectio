@@ -100,7 +100,11 @@ def extract_page_tags(html: str | None) -> list[str]:
     """
     if not html:
         return []
-    html = html[:300_000]
+    # Generous cap: tag blocks often sit at the BOTTOM of article pages
+    # (Valnet's footer tag links live past 300KB on ad-heavy pages), and a
+    # regex scan of a few MB is milliseconds. The cap only guards degenerate
+    # multi-MB pages (live blogs).
+    html = html[:5_000_000]
     values: list[str] = []
     for meta in _META_TAG_RE.findall(html):
         attrs: dict[str, str] = {}
