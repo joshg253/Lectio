@@ -1098,15 +1098,57 @@ def _apply_deviantart_image_strategy(conn: sqlite3.Connection, file_url: str) ->
         LOGGER.exception("[deviantart] failed to set inline thumb_strategy for %s", file_url)
 
 
-def sync_deviantart_watchlist() -> dict:
+# One watch-list sync per user at a time: the Settings button, the daily
+# maintenance run, and a scheduled auto-resume can otherwise overlap and burn
+# the same DeviantArt quota adding the same artists.
+_da_sync_lock = threading.Lock()
+_da_sync_active: set[str] = set()
+_DA_SYNC_MAX_AUTO_RESUMES = 12
+_DA_SYNC_RESUME_FALLBACK_S = 900.0  # no Retry-After header → conservative delay
+
+
+def _schedule_da_sync_resume(uid: str, delay_s: float, next_round: int) -> None:
+    def _resume() -> None:
+        try:
+            result = sync_deviantart_watchlist(auto_resume_round=next_round)
+            if result.get("error"):
+                with get_meta_connection() as conn:
+                    set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
+        except Exception:
+            LOGGER.exception("[deviantart] watchlist auto-resume failed")
+            with get_meta_connection() as conn:
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Sync failed — see logs.")
+
+    timer = threading.Timer(delay_s, _run_in_user_context, args=(uid, _resume))
+    timer.daemon = True  # lost on restart; the daily maintenance sync catches up
+    timer.start()
+
+
+def sync_deviantart_watchlist(auto_resume_round: int = 0) -> dict:
     """Add a gallery feed for every artist the user Watches (add-only).
 
     Skips artists already subscribed (anywhere) so it won't duplicate existing
-    DeviantArt feeds. Returns a result summary dict.
+    DeviantArt feeds. When DeviantArt's rate cap interrupts the run, schedules a
+    background continuation (honoring Retry-After) instead of waiting for a
+    manual re-click. Returns a result summary dict.
     """
     token = get_deviantart_user_token()
     if not token:
         return {"added": 0, "total": 0, "error": "DeviantArt account not connected."}
+    uid = tenancy.current_user_id()
+    with _da_sync_lock:
+        if uid in _da_sync_active:
+            LOGGER.info("[deviantart] watchlist sync already running for %s — skipped", uid)
+            return {"added": 0, "total": 0, "skipped": True}
+        _da_sync_active.add(uid)
+    try:
+        return _sync_deviantart_watchlist_locked(token, uid, auto_resume_round)
+    finally:
+        with _da_sync_lock:
+            _da_sync_active.discard(uid)
+
+
+def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: int) -> dict:
     cid, secret = get_deviantart_credentials()
     try:
         username = get_runtime_setting(SETTING_DEVIANTART_USERNAME) or deviantart_service.whoami(token)
@@ -1126,6 +1168,7 @@ def sync_deviantart_watchlist() -> dict:
     added = 0
     failed = 0
     rate_limited = False
+    retry_after_s: float | None = None
     for i, artist in enumerate(to_add, 1):
         if i > 1:
             time.sleep(0.4)  # pace requests to stay under DeviantArt's rate limit
@@ -1138,10 +1181,11 @@ def sync_deviantart_watchlist() -> dict:
                     (folder_id, file_url),
                 )
             added += 1
-        except deviantart_service.DeviantArtRateLimited:
+        except deviantart_service.DeviantArtRateLimited as exc:
             # Quota exhausted — stop now (the rest are re-runnable; sync is add-only
-            # and dedupes, so clicking Sync again later resumes where this left off).
+            # and dedupes, so the auto-resume continuation picks up where this left off).
             rate_limited = True
+            retry_after_s = exc.retry_after
             LOGGER.info("[deviantart] watchlist sync paused at %d/%d (added=%d) — rate limited", i, len(to_add), added)
             break
         except Exception as exc:  # noqa: BLE001
@@ -1155,10 +1199,27 @@ def sync_deviantart_watchlist() -> dict:
             invalidate_unread_counts_cache()
     invalidate_meta_structure_cache()
     invalidate_unread_counts_cache()
+
+    # Reconcile: surface subscribed DA artists no longer on the watch list. Add-only
+    # on purpose — unsubscribing is a manual decision (curated feeds may outlive a
+    # Watch), so they're reported, not removed.
+    watching_lower = {a.lower() for a in watching}
+    unwatched = sorted(u for u in existing if u not in watching_lower) if watching else []
+    if unwatched:
+        LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s",
+                    len(unwatched), ", ".join(unwatched))
+
     remaining = len(to_add) - added - failed
     if rate_limited:
-        final = (f"Rate limited — added {added} so far, ~{remaining} left. "
-                 "DeviantArt caps requests; click Sync again later to continue.")
+        if auto_resume_round < _DA_SYNC_MAX_AUTO_RESUMES:
+            delay_s = max(60.0, retry_after_s or _DA_SYNC_RESUME_FALLBACK_S)
+            _schedule_da_sync_resume(uid, delay_s, auto_resume_round + 1)
+            final = (f"Rate limited — added {added} so far, ~{remaining} left. "
+                     f"Auto-resuming in ~{int(delay_s // 60) or 1} min "
+                     f"(round {auto_resume_round + 1}/{_DA_SYNC_MAX_AUTO_RESUMES}).")
+        else:
+            final = (f"Rate limited — added {added} so far, ~{remaining} left. "
+                     "Auto-resume limit reached; click Sync to continue.")
     else:
         already = len(watching) - len(to_add)
         parts = [f"Added {added} of {len(watching)} watched"]
@@ -1166,11 +1227,13 @@ def sync_deviantart_watchlist() -> dict:
             parts.append(f"{already} already subscribed")
         if failed:
             parts.append(f"{failed} failed")
+        if unwatched:
+            parts.append(f"{len(unwatched)} subscribed but no longer watched (see logs)")
         final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
     return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
-            "rate_limited": rate_limited}
+            "rate_limited": rate_limited, "unwatched": unwatched}
 
 
 def push_galleries_to_deviantart_watchlist() -> dict:
@@ -18141,7 +18204,11 @@ def deviantart_sync_watchlist_route():
                 set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Starting…")
             # sync_deviantart_watchlist sets its own final status (done / rate-limited).
             result = sync_deviantart_watchlist()
-            if result.get("error"):
+            if result.get("skipped"):
+                with get_meta_connection() as conn:
+                    set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
+                                "A watch-list sync is already running — hang tight.")
+            elif result.get("error"):
                 with get_meta_connection() as conn:
                     set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
         except Exception:
