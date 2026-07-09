@@ -4768,22 +4768,31 @@
 
         currentPane.replaceWith(nextPane);
         paneSwapped = true;
-        applyLocalTimestamps(nextPane);
-        applyRelativeTimestamps(nextPane);
-        applyAbsoluteTimestamps(nextPane);
-        measureAndSetTileHeight();
-        refreshEntryPaneRefs();
-        bindEntryPaneInteractions();
-        bindEntryTagInteractions();
-        bindPostListInteractions();
-        if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane);
-        if (typeof window.bindSwipeGestures === 'function') {
-          window.bindSwipeGestures();
+        // Each post-swap step runs isolated: one throwing binder must not
+        // skip the rest (an unbound post list makes the NEXT click a raw
+        // link navigation — the "random full refresh while browsing" bug).
+        for (const step of [
+          () => applyLocalTimestamps(nextPane),
+          () => applyRelativeTimestamps(nextPane),
+          () => applyAbsoluteTimestamps(nextPane),
+          () => measureAndSetTileHeight(),
+          () => refreshEntryPaneRefs(),
+          () => bindEntryPaneInteractions(),
+          () => bindEntryTagInteractions(),
+          () => bindPostListInteractions(),
+          () => { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane); },
+          () => { if (typeof window.bindSwipeGestures === 'function') window.bindSwipeGestures(); },
+          () => { if (typeof applyHighlights === 'function') applyHighlights(); },
+          () => markActivePostByUrl(url),
+          () => syncActivePostThumbnailFromEntryPane(),
+          () => centerActivePostInView(),
+        ]) {
+          try {
+            step();
+          } catch (stepError) {
+            console.error('[lectio] entry-pane post-swap step failed (continuing):', stepError);
+          }
         }
-        if (typeof applyHighlights === 'function') applyHighlights();
-        markActivePostByUrl(url);
-        syncActivePostThumbnailFromEntryPane();
-        centerActivePostInView();
         // If running in single-pane mode, ensure we switch to the entry pane
         try {
           if (window.isSingleMode && window.isSingleMode()) {
