@@ -1144,10 +1144,11 @@ def _schedule_da_sync_resume(uid: str, delay_s: float, next_round: int) -> None:
             if result.get("error"):
                 with get_meta_connection() as conn:
                     set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
-        except Exception:
+        except Exception as exc:
             LOGGER.exception("[deviantart] watchlist auto-resume failed")
             with get_meta_connection() as conn:
-                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Sync failed — see logs.")
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
+                            f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
 
     timer = threading.Timer(delay_s, _run_in_user_context, args=(uid, _resume))
     timer.daemon = True  # lost on restart; the daily maintenance sync catches up
@@ -18293,10 +18294,11 @@ def deviantart_sync_watchlist_route():
             elif result.get("error"):
                 with get_meta_connection() as conn:
                     set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, f"Sync error: {result['error']}")
-        except Exception:
+        except Exception as exc:
             LOGGER.exception("[deviantart] background watchlist sync failed")
             with get_meta_connection() as conn:
-                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, "Sync failed — see logs.")
+                set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS,
+                            f"Sync failed: {_humanize_da_add_error(exc)}. Click Sync to retry.")
 
     threading.Thread(target=_run_in_user_context, args=(uid, _job), daemon=True).start()
     return JSONResponse({"started": True})
