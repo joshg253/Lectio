@@ -5224,6 +5224,15 @@ def parse_tag_filter_spec(raw: str | None) -> tuple[set[str], set[str], set[str]
     return require, good, exclude
 
 
+def author_filter_token(author: str | None) -> str | None:
+    """The pseudo-tag a tag_filter rule matches an entry's author under —
+    'Steven Parker' → 'by-steven-parker'. Lets '-by-steven-parker' drop an
+    author's posts through the same rule/chips machinery as real feed tags."""
+    if not author or not str(author).strip():
+        return None
+    return normalize_tag_value("by " + str(author))
+
+
 def _run_tag_filter(
     conn: sqlite3.Connection,
     scope: str,
@@ -5310,8 +5319,14 @@ def _run_tag_filter(
             fu = str(entry.feed_url or "")
             eid = str(entry.id)
             tags = entry_tags(fu, eid)
+            # The author rides along as a pseudo-tag (by-<name>), so author
+            # tokens work in every position: -by-x drops, +by-x rescues,
+            # ++by-x requires. An authored-but-untagged entry is filterable.
+            author_tok = author_filter_token(getattr(entry, "authors_str", None))
+            if author_tok:
+                tags = tags | {author_tok}
             if not tags:
-                continue  # untagged entries are always kept
+                continue  # untagged (and authorless) entries are always kept
             if require and not (tags & require):
                 pass  # whitelist mode: tagged entry lacks every required tag
             elif (tags & exclude) and not (tags & saving):
@@ -9982,6 +9997,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
         "feed_tag_filter_signs": {},
+        "author_filter_token": None,
         "feed_icon_url": None,
         "is_orphan_archive": True,
     }
@@ -11325,7 +11341,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 feed_tag_suggestions.append(normalized)
         # Current +/- state of the feed's tag_filter rule, so active signs render lit.
         feed_tag_filter_signs: dict[str, str] = {}
-        if feed_tag_suggestions:
+        _author_token = author_filter_token(getattr(entry, "authors_str", None))
+        if feed_tag_suggestions or _author_token:
             with get_meta_connection() as _rule_conn:
                 _rule = get_feed_tag_filter_rule(_rule_conn, str(entry.feed_url))
             if _rule:
@@ -11644,6 +11661,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
             "feed_tag_filter_signs": feed_tag_filter_signs,
+            "author_filter_token": _author_token,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,
             "audio_feed_suggestion": _audio_feed_suggestion,

@@ -102,7 +102,9 @@ The short version:
   feeds like MakeUseOf/Lifehacker/How-To-Geek by their own per-entry tags:
   one comma-separated spec — `-rust` drops rust posts, `+python` marks python
   a *good* tag that rescues posts from drops, `++python` *requires* it
-  (whitelist); suppressed entries are auto-marked read at refresh; untagged
+  (whitelist); the post's **author** works the same way as a pseudo-tag
+  (`-by-some-author` drops their posts, with ▲/▼ right on the author name);
+  suppressed entries are auto-marked read at refresh; untagged
   entries are always kept), deduplicate, email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per

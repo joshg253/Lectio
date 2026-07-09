@@ -282,3 +282,36 @@ def test_toggle_preserves_handwritten_require(env):
         # …and ▲ on the required tag removes it (treated as its own).
         result = main.toggle_feed_tag_filter(conn, FEED, "linux", "+")
         assert result["spec"] == "-deals"
+
+
+# --- author pseudo-tag ---
+
+def test_author_filter_token():
+    assert main.author_filter_token("Steven Parker") == "by-steven-parker"
+    assert main.author_filter_token("  ") is None
+    assert main.author_filter_token(None) is None
+
+
+def test_author_pseudo_tag_drops_and_rescues(env):
+    reader = main.get_reader()
+    from reader.types import Author
+    reader.add_entry({"feed_url": FEED, "id": "e-dealguy", "title": "Deal post",
+                      "link": "https://example.test/e-dealguy", "summary": "x",
+                      "authors": [Author(name="Deal Guy")],
+                      "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc)})
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "-by-deal-guy")
+    # Authored-but-untagged entry is filterable via its author pseudo-tag;
+    # everything else (untagged, other tags) flows.
+    assert result["count"] == 1
+    assert "e-dealguy" not in _unread_ids()
+
+    # ...and a good tag rescues from an author drop.
+    main.feed_tag_service.record_entry_tags(FEED, [("e-linux2", ["Linux"])])
+    reader.add_entry({"feed_url": FEED, "id": "e-linux2", "title": "Linux by Deal Guy",
+                      "link": "https://example.test/e-linux2", "summary": "x",
+                      "authors": [Author(name="Deal Guy")],
+                      "published": dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc)})
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "+linux, -by-deal-guy")
+    assert result["count"] == 0  # rescued by +linux

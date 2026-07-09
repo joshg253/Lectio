@@ -2764,6 +2764,13 @@ button:hover, .button-link:hover {
   font-weight: 700;
 }
 
+/* ▲▼ next to the author name in the entry meta row */
+.author-filter-signs {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.1em;
+}
+
 .feed-tag-filter-sign[disabled] {
   opacity: 0.3;
   cursor: default;

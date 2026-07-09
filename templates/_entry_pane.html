@@ -45,6 +45,29 @@
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
         <span class="entry-author-inline">by {{ selected_entry.author }}</span>
+        {% if selected_entry.author_filter_token %}
+        {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
+        <span class="author-filter-signs">
+          <button
+            type="button"
+            class="feed-tag-filter-sign include{% if author_sign == '+' %} active{% endif %}"
+            data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
+            data-tag-filter-sign="+"
+            title="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
+            aria-label="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
+            aria-pressed="{{ 'true' if author_sign == '+' else 'false' }}"
+          >▲</button>
+          <button
+            type="button"
+            class="feed-tag-filter-sign exclude{% if author_sign == '-' %} active{% endif %}"
+            data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
+            data-tag-filter-sign="-"
+            title="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
+            aria-label="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
+            aria-pressed="{{ 'true' if author_sign == '-' else 'false' }}"
+          >▼</button>
+        </span>
+        {% endif %}
         {% endif %}
         </span>
         {% if selected_entry.post_timestamp %}
