@@ -124,6 +124,30 @@ def test_push_ignored_when_no_subscribers(fanout):
     assert refreshed == []
 
 
+def test_push_runs_automation_per_subscriber(fanout, monkeypatch):
+    """A WebSub push must run the automation rules on the pushed feed — every
+    other refresh path does, and prolific WebSub publishers deliver almost
+    entirely via push, so skipping it meant their mark-read/tag-filter rules
+    never fired."""
+    refreshed, wconn = fanout
+    _seed_subscription(wconn, secret="shared-secret")
+    _add_subscriber(wconn, "alice")
+    _add_subscriber(wconn, "bob")
+
+    automated: list[tuple[str, frozenset]] = []
+    monkeypatch.setattr(
+        main, "_run_automation_after_refresh",
+        lambda feeds: automated.append((tenancy.current_user_id(), frozenset(feeds))),
+    )
+
+    main._process_websub_push(FEED, BODY, _sig("shared-secret"))
+
+    # Automation ran once per subscriber, scoped to the pushed feed, under that
+    # subscriber's tenancy context.
+    assert {uid for uid, _ in automated} == {"alice", "bob"}
+    assert all(feeds == frozenset({FEED}) for _, feeds in automated)
+
+
 def test_verification_confirms_pending_subscription(fanout):
     refreshed, wconn = fanout
     _seed_subscription(wconn, secret="sec", verified=0)
