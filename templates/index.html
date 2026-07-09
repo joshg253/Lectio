@@ -13499,6 +13499,76 @@
           }
         });
       }
+
+      maybeInjectFeedTagChips();
+    }
+
+    // Late chip delivery: when a pane renders without feed-tag chips (backlog
+    // entry — the open queued a background page fetch), ask the server for the
+    // harvested tags and inject the [ + tag ▲ ▼ ] chips into the open pane.
+    async function maybeInjectFeedTagChips() {
+      const row = document.querySelector('.entry-tags-row');
+      const form = document.getElementById('entry-tags-form');
+      if (!row || !(form instanceof HTMLFormElement)) return;
+      if (row.querySelector('.entry-tag-suggestions')) return;  // already has chips
+      if (form.dataset.feedTagsRequested) return;
+      const feedUrl = form.querySelector('input[name="feed_url"]')?.value || '';
+      const entryId = form.querySelector('input[name="entry_id"]')?.value || '';
+      if (!feedUrl || !entryId) return;
+      form.dataset.feedTagsRequested = '1';
+      try {
+        const qs = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const resp = await fetch('/entries/feed-tags?' + qs.toString(), { credentials: 'same-origin' });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok || !(data.tags || []).length) return;
+        // The user may have navigated on while we waited — only inject if the
+        // pane still shows the same entry and still has no chips.
+        const nowForm = document.getElementById('entry-tags-form');
+        const nowRow = document.querySelector('.entry-tags-row');
+        if (!nowForm || !nowRow || nowRow.querySelector('.entry-tag-suggestions')) return;
+        if ((nowForm.querySelector('input[name="entry_id"]')?.value || '') !== entryId) return;
+        const manual = new Set(data.manual_tags || []);
+        const signs = data.signs || {};
+        const wrap = document.createElement('span');
+        wrap.className = 'entry-tag-suggestions';
+        wrap.setAttribute('aria-label', 'Feed tags — filter this feed');
+        for (const tag of data.tags) {
+          const chip = document.createElement('span');
+          chip.className = 'entry-tag-chip suggestion feed-tag-filter-chip';
+          if (!manual.has(tag)) {
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'feed-tag-filter-sign add-tag';
+            add.setAttribute('data-tag-suggestion', tag);
+            add.setAttribute('data-tag-input', 'entry-tags-input');
+            add.title = `Add #${tag} to this post`;
+            add.setAttribute('aria-label', add.title);
+            add.textContent = '+';
+            chip.appendChild(add);
+          }
+          const name = document.createElement('span');
+          name.className = 'feed-tag-filter-name';
+          name.textContent = tag;
+          chip.appendChild(name);
+          for (const [sign, cls, glyph, verb] of [['+', 'include', '▲', 'keep only'], ['-', 'exclude', '▼', 'drop']]) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : '');
+            btn.setAttribute('data-tag-filter-tag', tag);
+            btn.setAttribute('data-tag-filter-sign', sign);
+            btn.title = `Feed filter: ${verb} #${tag} posts`;
+            btn.setAttribute('aria-label', btn.title);
+            btn.setAttribute('aria-pressed', signs[tag] === sign ? 'true' : 'false');
+            btn.textContent = glyph;
+            chip.appendChild(btn);
+          }
+          wrap.appendChild(chip);
+        }
+        nowForm.insertAdjacentElement('beforebegin', wrap);
+        bindEntryTagInteractions();  // boundClick markers keep this idempotent
+      } catch {
+        // chips are progressive enhancement — never disturb the pane
+      }
     }
 
     function isTypingTarget(target) {

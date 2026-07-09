@@ -16058,6 +16058,61 @@ def rules_dry_run_route(
     return JSONResponse(result)
 
 
+@app.get("/entries/feed-tags")
+def entry_feed_tags_route(
+    feed_url: str = Query(...),
+    entry_id: str = Query(...),
+):
+    """Late chip delivery: the entry pane calls this after render when it has
+    no feed-tag chips. Waits briefly for the background source-page fetch the
+    entry-open queued (whose sink persists harvested tags), then returns the
+    normalized suggestions + filter-rule signs so the client can inject the
+    [ + tag ▲ ▼ ] chips into the already-open pane."""
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None:
+            return JSONResponse({"error": "unknown entry"}, status_code=404)
+        entry_link = str(entry.link or "")
+        manual_tags = get_manual_tags_for_resource(reader, entry.resource_id)
+
+    raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+    if not raw_tags and entry_link and url_guard.is_safe_outbound_url(entry_link):
+        # Wait for the fetch queued by the entry-open handler (returns
+        # immediately when it already finished or none is in flight).
+        lead_image_service.wait_for_source_html_fetch(entry_link, timeout=8.0)
+        raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
+        if not raw_tags:
+            # Fetch finished before the sink existed or raced it — harvest
+            # directly from the cached page as a last resort.
+            cached = lead_image_service.get_cached_source_html(entry_link)
+            if cached is not None:
+                page_tags = feed_tags_service_mod.extract_page_tags(cached[1])
+                if page_tags:
+                    feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
+                    raw_tags = page_tags[:MAX_FEED_TAG_SUGGESTIONS]
+
+    tags: list[str] = []
+    for raw_tag in raw_tags:
+        normalized = normalize_tag_value(raw_tag)
+        if normalized and normalized not in tags:
+            tags.append(normalized)
+
+    signs: dict[str, str] = {}
+    if tags:
+        with get_meta_connection() as conn:
+            rule = get_feed_tag_filter_rule(conn, feed_url)
+        if rule:
+            _inc, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
+            signs = {t: "+" for t in _inc} | {t: "-" for t in _exc}
+
+    return JSONResponse({
+        "ok": True,
+        "tags": tags,
+        "signs": signs,
+        "manual_tags": [normalize_tag_value(t) for t in manual_tags],
+    })
+
+
 @app.post("/rules/tag-filter/toggle")
 def tag_filter_toggle_route(
     feed_url: str = Form(...),
