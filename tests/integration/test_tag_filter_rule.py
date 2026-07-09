@@ -241,3 +241,12 @@ def test_toggle_invalid_input(env):
     with main.get_meta_connection() as conn:
         assert "error" in main.toggle_feed_tag_filter(conn, FEED, "  ", "-")
         assert "error" in main.toggle_feed_tag_filter(conn, FEED, "x", "!")
+
+
+def test_normalize_strips_disallowed_chars():
+    # Feed/page tags with punctuation outside the tag alphabet survive
+    # normalized rather than vanishing (was: '&' rejected the whole tag).
+    assert main.normalize_tag_value("AI & Machine Learning") == "ai-machine-learning"
+    assert main.normalize_tag_value("Paramount+") == "paramount+"
+    assert main.normalize_tag_value("C#") == "c#"
+    assert main.normalize_tag_value("&&&") is None

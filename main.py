@@ -6838,6 +6838,12 @@ def normalize_tag_value(value: str | None) -> str | None:
     # "games to play") survive as a single tag instead of being split or
     # rejected by TAG_VALUE_PATTERN, which does not allow spaces.
     normalized = re.sub(r"\s+", "-", normalized).strip("-")
+    # Strip characters outside the tag alphabet instead of rejecting the whole
+    # value — feed/page-provided tags like "AI & Machine Learning" or
+    # "Tips/Tricks" must survive as ai-machine-learning / tipstricks rather
+    # than silently vanishing. Collapse any hyphen runs that stripping leaves.
+    normalized = re.sub(r"[^a-z0-9_.#+-]", "", normalized)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
     if not normalized:
         return None
     if not TAG_VALUE_PATTERN.fullmatch(normalized):
