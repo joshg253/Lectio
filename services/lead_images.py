@@ -1009,6 +1009,14 @@ class LeadImageService:
         except Exception:
             pass
 
+        # A plugin may offer a deterministic, network-free cover URL from the entry
+        # link (e.g. Standard Ebooks). Consult it before giving up on the fast path,
+        # so the posts list shows the cover immediately instead of waiting for the
+        # background backfill / source scrape.
+        cheap = self._plugin_cheap_thumbnail_url(entry_link)
+        if cheap and self._is_image_url_acceptable(cheap, None, None):
+            return cheap
+
         if fast_only:
             return None
 
@@ -2189,6 +2197,25 @@ class LeadImageService:
             except Exception:
                 continue
         return False
+
+    def _plugin_cheap_thumbnail_url(self, entry_link: str) -> str | None:
+        """A deterministic, network-free preferred thumbnail from any plugin that
+        offers one (only plugins that build a URL from the link — e.g. Standard
+        Ebooks covers — implement ``cheap_preferred_thumbnail_url``). Safe to call
+        on the posts-list fast path; plugins doing network I/O don't participate."""
+        if not entry_link:
+            return None
+        for plugin in self._plugins:
+            fn = getattr(plugin, "cheap_preferred_thumbnail_url", None)
+            if fn is None:
+                continue
+            try:
+                url = fn(entry_link=entry_link)
+            except Exception:
+                continue
+            if url:
+                return url
+        return None
 
     def _plugin_extra_candidate_attrs(self, source_url: str | None) -> tuple[str, ...]:
         if not source_url:

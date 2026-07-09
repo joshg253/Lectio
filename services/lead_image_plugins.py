@@ -55,6 +55,12 @@ class LeadImagePlugin(Protocol):
 
     def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None: ...
 
+    # Optional: a deterministic, network-free preferred thumbnail URL derived from
+    # the entry link alone. Implemented only by plugins that can build one cheaply
+    # (e.g. Standard Ebooks covers); consulted on the posts-list fast path. Plugins
+    # that need to fetch a page must NOT implement this (leave it to fallback_lead_image_url).
+    def cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None: ...
+
 
 @dataclass(frozen=True)
 class FutureSiteLeadImagePlugin:
@@ -143,6 +149,13 @@ class StandardEbooksLeadImagePlugin:
         if not preferred:
             return False
         return cached_url.rstrip("/") != preferred.rstrip("/")
+
+    def cheap_preferred_thumbnail_url(self, *, entry_link: str) -> str | None:
+        # Deterministic cover URL from the entry link — no network — so the posts
+        # list gets the SE cover on the fast path instead of waiting for a source
+        # scrape or the background backfill. (The feed's media:thumbnail is
+        # bypassed in favor of this full-size cover; /thumb downscales it.)
+        return self._cover_url(entry_link)
 
     def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
         return ()
