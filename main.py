@@ -21347,6 +21347,14 @@ def _process_websub_push(feed: str, body: bytes, sig: str) -> None:
         with tenancy.user_context(uid):
             try:
                 feed_refresh_service.update_feeds([feed])
+                # Run automation (mark-read, tag-filter, dedup, …) on the pushed
+                # entries — every other refresh path does this, but a WebSub push
+                # would otherwise deliver entries that bypass all rules. Feeds
+                # from prolific WebSub publishers (e.g. realpython.com) arrive
+                # almost entirely via push, so skipping this meant their rules
+                # effectively never fired.
+                _run_automation_after_refresh({feed})
+                invalidate_unread_counts_cache()
             except Exception:
                 LOGGER.exception("[websub] push refresh failed for user %r", uid)
 
