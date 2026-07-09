@@ -123,3 +123,23 @@ def test_reconcile_reports_unwatched_artists(configured):
     assert result["added"] == 1
     assert result["unwatched"] == ["zoe"]
     assert "no longer watched" in _status()
+
+
+def test_reconcile_ignores_combined_watch_feed(configured):
+    # The synthetic combined Watch feed (source='watch', username='deviantsyouwatch')
+    # is not a real artist and must never be reported as "no longer watched".
+    with main.get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO deviantart_feeds (id, username, feed_title, source, created_at)"
+            " VALUES ('w', 'deviantsyouwatch', 'DeviantArt — Watching', 'watch', 'now')"
+        )
+    configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
+    fake, _ = _fake_create(fail_from=99, retry_after=None)
+    configured.setattr(deviantart_service, "create_deviantart_feed", fake)
+
+    result = main.sync_deviantart_watchlist()
+
+    assert result["rate_limited"] is False
+    assert result["added"] == 1  # alice added; watch feed not counted as existing
+    assert result["unwatched"] == []
+    assert "no longer watched" not in _status()
