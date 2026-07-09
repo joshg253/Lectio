@@ -102,10 +102,48 @@ class _ReaderNonFatalParseWarningFilter(logging.Filter):
         return not any(marker in message for marker in suppressed_markers)
 
 
+class _ReaderUpdateFetchErrorFilter(logging.Filter):
+    """Demote reader's per-feed fetch/parse failures from ERROR+traceback to a
+    one-line WARNING.
+
+    reader logs every failed ``update_feed`` at ERROR with a full stack trace via
+    the ``reader.update`` logger — but Lectio already catches each one, applies
+    backoff, records ``feed_failure_state.last_error``, and surfaces it in the
+    problematic-feeds panel. So a routine 429/403/timeout/dead-feed produced a
+    scary red traceback in the log (and the new Admin → Logs tab) for a condition
+    that's fully handled. Keep the one-line summary as a WARNING but drop the
+    redundant traceback; genuinely unexpected reader errors stay loud (ERROR)."""
+
+    # Signatures of expected, Lectio-handled fetch/parse failures.
+    _EXPECTED = (
+        "bad http status code",          # any HTTP error status (429/403/404/410/5xx)
+        "too many requests", "forbidden", "not found", "gone", "service unavailable",
+        "timed out", "timeout", "connecttimeout", "readtimeout",
+        "connectionerror", "connection reset", "connection aborted",
+        "name or service not known", "temporary failure in name resolution",
+        "certificate", "ssl", "tlsv1",
+        "nonxmlcontenttype", "no parser", "document declared as", "not well-formed",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR:
+            return True
+        message = record.getMessage().lower()
+        if "status=error" not in message and "updating feed" not in message:
+            return True
+        if any(marker in message for marker in self._EXPECTED):
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
 def _configure_reader_logging() -> None:
     if os.getenv("LECTIO_SUPPRESS_READER_PARSE_WARNINGS", "1") != "1":
         return
     logging.getLogger("reader").addFilter(_ReaderNonFatalParseWarningFilter())
+    logging.getLogger("reader.update").addFilter(_ReaderUpdateFetchErrorFilter())
 
 
 def _configure_persistent_logging() -> None:
