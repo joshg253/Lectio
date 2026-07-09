@@ -132,6 +132,22 @@ def test_comiccontrol_thumb_promoted_to_full_res(tmp_path: Path):
     assert thumb == "https://www.atomic-robo.com/comics/1781025836-ARV1701_01.jpg"
 
 
+def test_standard_ebooks_cover_on_fast_path(tmp_path: Path):
+    # SE feed entries carry only a small media:thumbnail (which reader drops) and
+    # no inline image, so the posts-list fast path returned nothing. The plugin's
+    # deterministic cover URL (network-free) must fill it in.
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    entry = _FakeEntry(
+        feed_url="https://standardebooks.org/rss/new-releases",
+        entry_id="https://standardebooks.org/ebooks/walter-white/flight",
+        link="https://standardebooks.org/ebooks/walter-white/flight",
+    )
+
+    thumb = service.extract_entry_thumbnail_url(entry, fast_only=True)
+
+    assert thumb == "https://standardebooks.org/ebooks/walter-white/flight/downloads/cover.jpg"
+
+
 def test_promote_known_thumbnail_is_noop_for_other_urls(tmp_path: Path):
     service = _build_service(tmp_path / "meta.sqlite", [])
     # Substring-but-not-segment must not be rewritten.
