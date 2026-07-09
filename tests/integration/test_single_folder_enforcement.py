@@ -111,3 +111,18 @@ def test_move_feed_to_uncategorized_sentinel_clears_membership(configured):
     main.add_feed_to_folder(FEED, folder_a)
     main.move_feed_to_folder(FEED, folder_a, main.UNCATEGORIZED_FOLDER_ID)
     assert _folders_for(FEED) == set()
+
+
+def test_readd_of_disabled_feed_reenables_it(configured):
+    folder_a, folder_b = configured
+    main.add_feed_to_folder(FEED, folder_a)
+    main.disable_feed(FEED)
+    with main.get_meta_connection() as conn:
+        assert FEED in main.get_disabled_feed_urls(conn)
+    # Re-adding a disabled feed must clear the disabled state, or it stays
+    # hidden from the sidebar tree while its entries still show in the list.
+    main.add_feed_to_folder(FEED, folder_b)
+    with main.get_meta_connection() as conn:
+        assert FEED not in main.get_disabled_feed_urls(conn)
+    with main.get_reader() as reader:
+        assert reader.get_feed(FEED).updates_enabled
