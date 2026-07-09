@@ -100,9 +100,10 @@ The short version:
   reader/web view routes hotlink-protected images through the proxy too.
 - **Automation** — highlight, mark-as-read, **tag-filter** (tame firehose
   feeds like MakeUseOf/Lifehacker/How-To-Geek by their own per-entry tags:
-  one comma-separated spec — `+python, -rust` keeps only python posts and
-  drops rust ones; non-matching entries are auto-marked read at refresh;
-  untagged entries are always kept), deduplicate, email-article,
+  one comma-separated spec — `-rust` drops rust posts, `+python` marks python
+  a *good* tag that rescues posts from drops, `++python` *requires* it
+  (whitelist); suppressed entries are auto-marked read at refresh; untagged
+  entries are always kept), deduplicate, email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per
   entry), **save-to-Instapaper**, **add-to-YouTube-playlist**, and

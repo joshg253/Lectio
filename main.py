@@ -5190,30 +5190,38 @@ def _run_now_pattern(
     return {"count": len(to_mark), "entries": matched_entries}
 
 
-def parse_tag_filter_spec(raw: str | None) -> tuple[set[str], set[str]]:
-    """Parse a tag-filter spec into (include, exclude) normalized tag sets.
+def parse_tag_filter_spec(raw: str | None) -> tuple[set[str], set[str], set[str]]:
+    """Parse a tag-filter spec into (require, good, exclude) normalized sets.
 
-    Comma-separated tokens; a leading ``-`` marks an exclude tag, a leading
-    ``+`` (or no sign) an include tag. Commas (not spaces) separate, so
-    multi-word tags can be typed as-is — ``+windows 11, -rust`` — and
-    normalize_tag_value hyphenates them to match the stored form.
+    Comma-separated tokens with three strengths:
+      ``-tag``  exclude — blocks the entry;
+      ``+tag``  (or bare) good — rescues an entry from excludes, but its
+                absence never cuts anything;
+      ``++tag`` require — tagged entries WITHOUT any required tag are cut
+                (whitelist mode, opt-in).
+    Commas (not spaces) separate, so multi-word tags can be typed as-is —
+    ``+windows 11, -rust`` — and normalize_tag_value hyphenates them to
+    match the stored form.
     """
-    include: set[str] = set()
+    require: set[str] = set()
+    good: set[str] = set()
     exclude: set[str] = set()
     for token in (raw or "").split(","):
         token = token.strip()
         if not token:
             continue
-        target = include
-        if token[0] == "-":
-            target = exclude
-            token = token[1:]
+        if token.startswith("++"):
+            target, token = require, token[2:]
+        elif token[0] == "-":
+            target, token = exclude, token[1:]
         elif token[0] == "+":
-            token = token[1:]
+            target, token = good, token[1:]
+        else:
+            target = good
         normalized = normalize_tag_value(token)
         if normalized:
             target.add(normalized)
-    return include, exclude
+    return require, good, exclude
 
 
 def _run_tag_filter(
@@ -5224,13 +5232,13 @@ def _run_tag_filter(
     *,
     apply: bool = True,
 ) -> dict:
-    """Execute (or dry-run) a tag_filter rule: mark unread entries read when
-    their feed-provided tags (entry_feed_tags) hit the exclude list, or when
-    an include list is set and the entry is tagged but matches none of it.
-    An include match saves the entry outright — '+android, -iphone' keeps a
-    post tagged with both (a wanted topic shouldn't be cut for also touching
-    an unwanted one). Untagged entries are always kept — a feed that stops
-    tagging must not have its whole firehose suppressed.
+    """Execute (or dry-run) a tag_filter rule over entry_feed_tags with three
+    tag strengths: ``-drop`` blocks; ``+good`` rescues from blocks without
+    cutting anything by its absence ('+android, -iphone' keeps a post tagged
+    with both, and Samsung posts still flow); ``++require`` cuts tagged
+    entries lacking any required tag (opt-in whitelist). Untagged entries are
+    always kept — a feed that stops tagging must not have its whole firehose
+    suppressed.
 
     ``apply=False`` previews like _dry_run_pattern — read + unread entries,
     newest first — and returns the dry-run shape the Test panel renders
@@ -5239,9 +5247,10 @@ def _run_tag_filter(
     _DRY_MAX_ENTRIES = 1000
     _DRY_RESULT_LIMIT = 20
 
-    include, exclude = parse_tag_filter_spec(spec)
-    if not include and not exclude:
+    require, good, exclude = parse_tag_filter_spec(spec)
+    if not require and not good and not exclude:
         return {"error": "at least one tag is required (e.g. +python, -rust)"}
+    saving = require | good  # either strength rescues from excludes
 
     if scope == "folder":
         try:
@@ -5303,11 +5312,12 @@ def _run_tag_filter(
             tags = entry_tags(fu, eid)
             if not tags:
                 continue  # untagged entries are always kept
-            if include and (tags & include):
-                continue  # include wins: a wanted tag saves the entry outright
-            suppress = bool(tags & exclude) or bool(include)
-            if not suppress:
-                continue
+            if require and not (tags & require):
+                pass  # whitelist mode: tagged entry lacks every required tag
+            elif (tags & exclude) and not (tags & saving):
+                pass  # blocked and nothing rescues it
+            else:
+                continue  # kept
             to_mark.append((fu, eid))
             if apply and len(matched_entries) < _ENTRY_DETAIL_CAP:
                 matched_entries.append({
@@ -5377,23 +5387,32 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
         return {"error": "invalid tag"}
 
     rule = get_feed_tag_filter_rule(conn, feed_url)
-    tokens: list[tuple[str, str]] = []  # (sign, normalized) in spec order
+    # (sign, normalized) in spec order; sign is '-', '+', or '++' — hand-written
+    # require tokens survive chip edits, and the ▲ chip treats them as its own
+    # (clicking ▲ on a ++tag removes it rather than downgrading it).
+    tokens: list[tuple[str, str]] = []
     if rule:
         for token in str(rule["keyword"] or "").split(","):
             token = token.strip()
             if not token:
                 continue
-            token_sign = "-" if token[0] == "-" else "+"
+            if token.startswith("++"):
+                token_sign = "++"
+            elif token[0] == "-":
+                token_sign = "-"
+            else:
+                token_sign = "+"
             value = normalize_tag_value(token.lstrip("+-"))
-            if value and (token_sign, value) not in tokens:
+            if value and all(v != value for _s, v in tokens):
                 tokens.append((token_sign, value))
 
-    if (sign, normalized) in tokens:
-        tokens.remove((sign, normalized))  # toggle off
+    existing_sign = next((s for s, v in tokens if v == normalized), None)
+    same = existing_sign == sign or (sign == "+" and existing_sign == "++")
+    if existing_sign is not None and same:
+        tokens.remove((existing_sign, normalized))  # toggle off
     else:
-        opposite = "-" if sign == "+" else "+"
-        if (opposite, normalized) in tokens:
-            tokens.remove((opposite, normalized))
+        if existing_sign is not None:
+            tokens.remove((existing_sign, normalized))  # flip
         tokens.append((sign, normalized))
 
     spec = ", ".join(f"{s}{v}" for s, v in tokens)
@@ -5418,7 +5437,7 @@ def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, si
                 _log_auto_run(conn, datetime.now().isoformat(), "tag_filter",
                               "feed", feed_url, spec, result, trigger="manual")
 
-    return {"spec": spec, "active": {v: s for s, v in tokens},
+    return {"spec": spec, "active": {v: ("+" if s == "++" else s) for s, v in tokens},
             "enabled": enabled, "applied_count": applied}
 
 
@@ -11310,8 +11329,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             with get_meta_connection() as _rule_conn:
                 _rule = get_feed_tag_filter_rule(_rule_conn, str(entry.feed_url))
             if _rule:
-                _inc, _exc = parse_tag_filter_spec(str(_rule["keyword"] or ""))
-                feed_tag_filter_signs = {t: "+" for t in _inc} | {t: "-" for t in _exc}
+                _req, _good, _exc = parse_tag_filter_spec(str(_rule["keyword"] or ""))
+                feed_tag_filter_signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
 
         # Check if entry is saved
         is_saved = False
@@ -15929,8 +15948,8 @@ def add_highlight_route(
             return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
     elif type == "tag_filter":
         # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
-        _inc, _exc = parse_tag_filter_spec(keyword)
-        if not _inc and not _exc:
+        _req, _good, _exc = parse_tag_filter_spec(keyword)
+        if not _req and not _good and not _exc:
             return JSONResponse({"error": "at least one tag is required (e.g. +python, -rust)"}, status_code=400)
     else:
         if not keyword:
@@ -16112,8 +16131,8 @@ def entry_feed_tags_route(
         with get_meta_connection() as conn:
             rule = get_feed_tag_filter_rule(conn, feed_url)
         if rule:
-            _inc, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
-            signs = {t: "+" for t in _inc} | {t: "-" for t in _exc}
+            _req, _good, _exc = parse_tag_filter_spec(str(rule["keyword"] or ""))
+            signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
 
     return JSONResponse({
         "ok": True,

@@ -1,8 +1,8 @@
 """tag_filter rule: suppress (mark read) unread entries by their feed-provided
 tags in entry_feed_tags. The rule spec lives in `keyword` as one comma-separated
-field — `+tag` (or bare) keeps only matching tagged entries, `-tag` drops
-matches; an include match saves the entry outright; untagged entries are
-always kept."""
+field with three strengths — `-tag` drops, `+tag` (or bare) is a good tag that
+rescues from drops without cutting anything by its absence, `++tag` requires
+(whitelist). Untagged entries are always kept."""
 from __future__ import annotations
 
 import datetime as dt
@@ -61,14 +61,14 @@ def _unread_ids() -> set[str]:
 
 
 def test_parse_tag_filter_spec():
-    # Comma-separated; leading - = exclude, leading + (or bare) = include;
+    # Comma-separated, three strengths: ++require, +good (or bare), -exclude;
     # tokens are normalized, so multi-word tags can be typed with spaces.
-    assert main.parse_tag_filter_spec("+python, -rust") == ({"python"}, {"rust"})
-    assert main.parse_tag_filter_spec("Linux, #AI, -Windows 11") == (
-        {"linux", "ai"}, {"windows-11"}
+    assert main.parse_tag_filter_spec("+python, -rust") == (set(), {"python"}, {"rust"})
+    assert main.parse_tag_filter_spec("++android, Linux, #AI, -Windows 11") == (
+        {"android"}, {"linux", "ai"}, {"windows-11"}
     )
-    assert main.parse_tag_filter_spec("  , #, -") == (set(), set())
-    assert main.parse_tag_filter_spec(None) == (set(), set())
+    assert main.parse_tag_filter_spec("  , #, -, ++") == (set(), set(), set())
+    assert main.parse_tag_filter_spec(None) == (set(), set(), set())
 
 
 def test_rule_persists_spec(env):
@@ -87,21 +87,39 @@ def test_exclude_only_rule(env):
     assert _unread_ids() == {"e-linux", "e-win", "e-untagged"}
 
 
-def test_include_list_keeps_untagged(env):
+def test_require_list_keeps_untagged(env):
     with main.get_meta_connection() as conn:
-        result = main._run_tag_filter(conn, "feed", FEED, "+linux")
-    # e-win and e-deal are tagged but match no include tag → suppressed;
-    # e-untagged has no tags → kept; e-linux and e-mixed match → kept.
+        result = main._run_tag_filter(conn, "feed", FEED, "++linux")
+    # Whitelist mode: e-win and e-deal are tagged but lack the required tag →
+    # suppressed; e-untagged has no tags → kept; e-linux and e-mixed → kept.
     assert result["count"] == 2
     assert _unread_ids() == {"e-linux", "e-mixed", "e-untagged"}
 
 
-def test_include_wins_over_exclude(env):
+def test_good_only_rule_is_noop(env):
+    # A good tag rescues from drops but its absence cuts nothing — with no
+    # excludes and no requires, everything flows.
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "+linux")
+    assert result["count"] == 0
+    assert len(_unread_ids()) == 5
+
+
+def test_good_tag_rescues_from_exclude(env):
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "linux, -deals")
-    # e-mixed matches include (linux) AND exclude (deals) → the include match
-    # saves it; e-deal (deals only) and e-win (no include match) are cut.
-    assert result["count"] == 2  # e-win, e-deal
+    # e-mixed hits the exclude (deals) but the good tag (linux) rescues it;
+    # e-deal is cut; e-win flows freely (good tags don't whitelist).
+    assert result["count"] == 1  # e-deal only
+    assert _unread_ids() == {"e-linux", "e-win", "e-mixed", "e-untagged"}
+
+
+def test_require_and_exclude_combined(env):
+    with main.get_meta_connection() as conn:
+        result = main._run_tag_filter(conn, "feed", FEED, "++linux, -deals")
+    # Whitelist linux AND rescue from -deals: e-mixed (linux+deals) is kept
+    # (require satisfied, require also rescues); e-win and e-deal are cut.
+    assert result["count"] == 2
     assert _unread_ids() == {"e-linux", "e-mixed", "e-untagged"}
 
 
@@ -252,3 +270,15 @@ def test_normalize_strips_disallowed_chars():
     assert main.normalize_tag_value("Paramount+") == "paramount+"
     assert main.normalize_tag_value("C#") == "c#"
     assert main.normalize_tag_value("&&&") is None
+
+
+def test_toggle_preserves_handwritten_require(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "++linux", "yellow",
+                                   rule_type="tag_filter", enabled=0)
+        # ▼ on another tag must not downgrade the ++require token…
+        result = main.toggle_feed_tag_filter(conn, FEED, "deals", "-")
+        assert result["spec"] == "++linux, -deals"
+        # …and ▲ on the required tag removes it (treated as its own).
+        result = main.toggle_feed_tag_filter(conn, FEED, "linux", "+")
+        assert result["spec"] == "-deals"

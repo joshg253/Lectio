@@ -10638,7 +10638,7 @@
           // new videos in scope); reflect that in the placeholder.
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)'
             : (t === 'instapaper' ? 'optional keyword filter (blank = save all)'
-            : (isTagFilter ? 'comma-separated feed tags: +python, -rust (+ keeps only, - drops)' : 'keyword or pattern'));
+            : (isTagFilter ? 'comma-separated feed tags: -drops, +good (rescues from drops), ++required' : 'keyword or pattern'));
           // The feed picker shows for every type, including deduplicate — dedup can
           // run across an explicit set of selected feeds (>=2). Selection is decoupled
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
@@ -13437,13 +13437,13 @@
             const data = await resp.json();
             if (!resp.ok || data.error) throw new Error(data.error || 'failed');
             const nowActive = (data.active || {})[tag] === sign;
-            const verb = sign === '-' ? 'Dropping' : 'Keeping only';
+            const verb = sign === '-' ? 'dropping' : 'good tag';
             const n = data.applied_count || 0;
             const armed = data.enabled
               ? (n ? ` — ${n} marked read` : '')
               : ' (rule off — enable it in Automation)';
             showToastMessage(nowActive
-              ? `Filter: ${verb.toLowerCase()} #${tag} on this feed${armed}`
+              ? `Filter: ${verb} #${tag} on this feed${armed}`
               : `Removed ${sign}${tag} from this feed's filter`);
             // Re-render so chip states and the unread list reflect the rule.
             loadEntryPaneWithoutFullRefresh(window.location.href, false);
@@ -13550,7 +13550,7 @@
           name.className = 'feed-tag-filter-name';
           name.textContent = tag;
           chip.appendChild(name);
-          for (const [sign, cls, glyph, verb] of [['+', 'include', '▲', 'keep only'], ['-', 'exclude', '▼', 'drop']]) {
+          for (const [sign, cls, glyph, verb] of [['+', 'include', '▲', 'good tag — rescues'], ['-', 'exclude', '▼', 'drops']]) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : '');

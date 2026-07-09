@@ -226,8 +226,8 @@
             class="feed-tag-filter-sign include{% if active_sign == '+' %} active{% endif %}"
             data-tag-filter-tag="{{ tag }}"
             data-tag-filter-sign="+"
-            title="Feed filter: keep only #{{ tag }} posts"
-            aria-label="Feed filter: keep only #{{ tag }} posts"
+            title="Feed filter: good tag — rescues #{{ tag }} posts from drops"
+            aria-label="Feed filter: good tag — rescues #{{ tag }} posts from drops"
             aria-pressed="{{ 'true' if active_sign == '+' else 'false' }}"
           >▲</button>
           <button
@@ -235,8 +235,8 @@
             class="feed-tag-filter-sign exclude{% if active_sign == '-' %} active{% endif %}"
             data-tag-filter-tag="{{ tag }}"
             data-tag-filter-sign="-"
-            title="Feed filter: drop #{{ tag }} posts"
-            aria-label="Feed filter: drop #{{ tag }} posts"
+            title="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
+            aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
             aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
           >▼</button>
         </span>
