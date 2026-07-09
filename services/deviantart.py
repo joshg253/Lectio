@@ -56,7 +56,14 @@ _RETRY_BASE_DELAY = 4.0  # seconds; doubles each retry on HTTP 429
 
 
 class DeviantArtRateLimited(RuntimeError):
-    """Raised when DeviantArt's per-user request quota is exhausted (HTTP 429)."""
+    """Raised when DeviantArt's per-user request quota is exhausted (HTTP 429).
+
+    ``retry_after`` carries the last 429 response's Retry-After header (seconds)
+    when present, so bulk callers can schedule a resume instead of guessing."""
+
+    def __init__(self, msg: str, retry_after: float | None = None) -> None:
+        super().__init__(msg)
+        self.retry_after = retry_after
 
 
 def _request(method: str, url: str, *, headers: dict, params: dict | None = None,
@@ -83,9 +90,14 @@ def _request(method: str, url: str, *, headers: dict, params: dict | None = None
                 delay *= 2
     retry_after = last_resp.headers.get("Retry-After") if last_resp is not None else None
     msg = "DeviantArt per-user request limit reached"
+    retry_after_s: float | None = None
     if retry_after:
         msg += f" (retry after {retry_after}s)"
-    raise DeviantArtRateLimited(msg)
+        try:
+            retry_after_s = float(retry_after)
+        except ValueError:
+            pass
+    raise DeviantArtRateLimited(msg, retry_after=retry_after_s)
 
 # Cache of client_id -> (access_token, expires_at_epoch). Tokens are app-scoped,
 # so one per client_id is correct even across users sharing creds.
