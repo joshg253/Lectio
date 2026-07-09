@@ -90,14 +90,19 @@ re-synthesizing the entry.
 
 ### New subscription missing from feed tree (but posts show)
 
-Right after Add Feed, the new feed's posts appeared in the posts list but the
-feed itself was absent from the sidebar feed tree (observed 2026-07-08 with a
-Lifehacker section feed). Suspect the sidebar tree/unread-count cache isn't
-invalidated on subscribe. Compounding UX: two subscriptions with identical
-titles (Lifehacker main + section feed both titled "Lifehacker") are
-indistinguishable in the tree — led to unsubscribing the wrong one; consider
-auto-disambiguating duplicate display titles (e.g. suffix from the feed URL
-path) or showing the URL in the tree tooltip.
+Investigated 2026-07-08. Ruled out: snapshot-cache staleness (single uvicorn
+process; `add_feed_to_folder` invalidates), zero-unread hiding (CSS only dims),
+missing URL tooltip (already present on tree feed links). One concrete code
+path DID reproduce the symptom and is now FIXED: re-adding a feed that existed
+in reader as disabled (`reader.add_feed(exist_ok=True)` keeps its state, and
+nothing cleared `disabled_feeds`) left it excluded from the sidebar while its
+old entries showed in the posts list — `add_feed_to_folder` now calls
+`enable_feed()`. The original Lifehacker repro data is gone (both feeds
+unsubscribed), so if the symptom recurs on a genuinely brand-new feed, capture
+the sidebar state before navigating away. Remaining UX idea: auto-disambiguate
+duplicate display titles (e.g. suffix from the feed URL path) — the tooltip
+already shows the URL, but identical titles still invite unsubscribing the
+wrong feed.
 
 ### Small lead image + article-nav full refresh (noirlab, DeviantArt)
 
@@ -114,34 +119,20 @@ Two reader-view issues to investigate:
   grab the '[lectio] entry-pane post-swap enhancement failed' console error
   to identify and fix the actual binder.
 
-### Dev.to feed migration (manual, after adapter deploy)
-
-The dev.to filtered-feed adapter is SHIPPED (`services/devto.py` — see
-ARCHITECTURE.md "dev.to filtered feeds"), along with the migration tooling
-(per-entry "Move to feed…", batch "Move visible to feed…", and chunked moves
-in the unsubscribe dialog — all merged via PRs #115/#117/#118). Remaining user
-step: replace the four existing raw dev.to subscriptions (front page +
-C++/C#/Python tag feeds) with filtered adapter feeds via the Add Feed dialog.
-
 ### Global audio player — deferred v2 ideas
 
 Shipped in PR #111 (see git history). Still deferred: queue/playlist of audio
 across a folder, remember position per episode, Media Session API (lock-screen /
 hardware-key controls), speed presets.
 
-### Uncategorized orphan-feed cleanup (script built — needs a live run)
+### Uncategorized orphan-feed cleanup — 9 stragglers left (manual)
 
-The virtual "Uncategorized" folder (negative sentinel id, derived per-render as
-`all reader feeds − foldered feeds`) is shipped and pins migration orphans to the
-bottom of the sidebar. The cleanup tool `scripts/categorize_uncategorized.py` now
-has all three stages: `--propose` (high-precision keyword heuristics → dry-run
-CSV), `--review` (sends still-blank rows to Claude via structured outputs — folder
-constrained to an enum of real folders, or blank when ambiguous/dead), and
-`--apply` (writes approved assignments to `folder_feeds`). Genuinely-ambiguous and
-dead feeds are left in Uncategorized for manual sorting. Remaining: run it against
-the live data (needs `ANTHROPIC_API_KEY`/`ant` creds and `uv run --with anthropic`
-for the review pass), eyeball the reviewed CSV, `--apply`, and restart the
-container so the sidebar reflects the new folders.
+Live run DONE 2026-07-08: `scripts/categorize_uncategorized.py --propose` +
+in-session review + `--apply` foldered 11 of 20 orphans; container restarted.
+The 9 still in Uncategorized are dead/one-shot/ambiguous (an Instagram post
+URL, a single Vice article, cochaser.com (no entries), WebServicesDir,
+whiskypaint/nolanfa tumblrs, norfolkwinters, crispian-jago, owenyoung
+myfeed) — sort or unsubscribe manually.
 
 
 ### Send-to-destination — remaining candidates
