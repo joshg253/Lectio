@@ -494,6 +494,11 @@ class FeedRefreshService:
                             )
                         continue
 
+        # Re-delete tombstoned entries the refresh may have resurrected (the
+        # publisher's feed still carries them), before enhancement wastes work
+        # on entries that are about to disappear.
+        self.purge_tombstoned_entries(feed_url_list)
+
         if enhance:
             self.enhance_feeds(feed_url_list)
 
@@ -507,6 +512,40 @@ class FeedRefreshService:
                 skipped_count,
                 total_ms,
             )
+
+    def purge_tombstoned_entries(self, feed_urls: Iterable[str]) -> int:
+        """Delete entries the user hard-removed (meta ``deleted_entries``) that a
+        refresh re-ingested from the publisher's feed. Feed-provided entries can't
+        be deleted through reader's public API, so this uses the storage-level
+        delete (same as reader's entry_dedupe plugin). Returns the purge count."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(
+                    f"SELECT feed_url, entry_id FROM deleted_entries WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            # Table not migrated yet (fresh meta DB mid-upgrade); nothing to purge.
+            return 0
+        if not rows:
+            return 0
+        purged = 0
+        with self._get_reader() as reader:
+            for row in rows:
+                key = (str(row["feed_url"]), str(row["entry_id"]))
+                try:
+                    if reader.get_entry(key, None) is not None:
+                        reader._storage.delete_entries([key])
+                        purged += 1
+                except Exception:  # noqa: BLE001
+                    self._logger.exception("[refresh] tombstone purge failed for %s", key)
+        if purged:
+            self._logger.info("[refresh] purged %d tombstoned entr%s", purged, "y" if purged == 1 else "ies")
+        return purged
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:
         """Fetch & store YouTube durations and lead images for the given feeds.

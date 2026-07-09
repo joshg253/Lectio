@@ -66,13 +66,6 @@ Remaining follow-ups:
 - Multi-word tag entry in rule lists is hyphenated (`windows-11`); consider a
   tag autocomplete in the rule form fed from entry_feed_tags.
 
-### Remove article from feed (not just move)
-
-Hard-delete a single garbage post from a feed (spam, corrupted entry) —
-`reader.delete_entry` exists; needs a context-menu action + confirm, plus a
-tombstone (guid) so the next refresh doesn't resurrect it while it's still in
-the publisher's feed window.
-
 ### Edit post metadata (dates)
 
 Some entries arrive with garbage dates (rendered as Jan 1 1969, i.e. epoch 0)

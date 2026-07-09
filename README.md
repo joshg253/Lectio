@@ -167,6 +167,10 @@ The short version:
   the post list — filter first (tag, search, unread, starred), then move the
   survivors in one go (useful when swapping a firehose feed for a filtered
   variant); posts already in the target feed are skipped.
+  **Delete post…** (also in the entry context menu) permanently removes a
+  single garbage entry (spam, corrupted post) after a confirm; a tombstone
+  stops the next refresh from re-adding it while it's still in the
+  publisher's feed window.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets

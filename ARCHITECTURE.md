@@ -603,6 +603,10 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
+## Hard-deleting a single entry (tombstones)
+
+The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
+
 ## Entry sort window (Pub Old / Pub New)
 
 `reader` only sorts newest-first, so for large folders (`> PER_FEED_QUERY_THRESHOLD`

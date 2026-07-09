@@ -2817,6 +2817,16 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS deleted_entries (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS entry_read_state (
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
@@ -18933,6 +18943,41 @@ def feed_curation_count_route(feed_url: str = Query(...)):
         return JSONResponse({"error": "Could not read this feed's curation."}, status_code=500)
     counts["candidates"] = candidates
     return JSONResponse(counts)
+
+
+@app.post("/entries/delete")
+def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
+    """Hard-delete a single entry (spam, corrupted post) and tombstone it.
+
+    reader.delete_entry only covers user-added entries; feed-provided ones go
+    through the storage-level delete (the same API reader's own entry_dedupe
+    plugin uses). The tombstone keeps the next refresh from resurrecting the
+    entry while it's still in the publisher's feed window — the refresh service
+    purges tombstoned entries after each update.
+    """
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
+                (feed_url, entry_id),
+            )
+            conn.execute(
+                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        try:
+            if getattr(entry, "added_by", "") == "user":
+                reader.delete_entry((feed_url, entry_id), missing_ok=True)
+            else:
+                reader._storage.delete_entries([(feed_url, entry_id)])
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("[delete-entry] failed for %s in %s", entry_id, feed_url)
+            return JSONResponse({"ok": False, "error": f"Delete failed: {exc}"}, status_code=500)
+    invalidate_unread_counts_cache()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/entries/move-to-feed")
