@@ -3386,6 +3386,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE deviantart_entries ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # When the /deviation/metadata lookup ran for this entry (tags aren't in
+        # browse/gallery responses). Set even when the result is zero tags, so
+        # untagged deviations aren't re-looked-up on every refresh.
+        try:
+            conn.execute("ALTER TABLE deviantart_entries ADD COLUMN tags_fetched_at TEXT")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE deviantart_feeds ADD COLUMN source TEXT NOT NULL DEFAULT 'gallery'")
         except Exception:

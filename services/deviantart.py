@@ -271,6 +271,78 @@ def fetch_watch_feed(access_token: str, limit: int = _MAX_ENTRIES_PER_FEED) -> l
     return out[:limit]
 
 
+_METADATA_BATCH = 50  # /deviation/metadata accepts up to 50 ids per call
+
+
+def fetch_deviation_tags(client_id: str, client_secret: str, deviation_ids: list[str],
+                         access_token: str = "") -> dict[str, list[str]]:
+    """Batch /deviation/metadata lookups → {deviationid: [tag_name, ...]}.
+
+    Browse/gallery responses don't include deviation tags; metadata does, at one
+    API call per 50 ids — callers should pass only ids that still need tags."""
+    if not deviation_ids:
+        return {}
+    token = access_token or _get_token(client_id, client_secret)
+    headers = {"User-Agent": _USER_AGENT, "Authorization": f"Bearer {token}"}
+    out: dict[str, list[str]] = {}
+    for i in range(0, len(deviation_ids), _METADATA_BATCH):
+        batch = deviation_ids[i:i + _METADATA_BATCH]
+        resp = _request("GET", f"{_API_BASE}/deviation/metadata", headers=headers,
+                        params={"deviationids[]": batch, "mature_content": "true"})
+        if resp.status_code != 200:
+            raise RuntimeError(f"metadata fetch failed: HTTP {resp.status_code}: {resp.text[:200]}")
+        for m in resp.json().get("metadata") or []:
+            devid = m.get("deviationid")
+            if devid:
+                out[str(devid)] = [
+                    str(t.get("tag_name"))
+                    for t in (m.get("tags") or [])
+                    if isinstance(t, dict) and t.get("tag_name")
+                ]
+    return out
+
+
+def fetch_and_store_missing_tags(conn: sqlite3.Connection, feed_id: str, client_id: str,
+                                 client_secret: str, access_token: str = "",
+                                 max_lookups: int = _METADATA_BATCH) -> int:
+    """Fill in tags for this feed's entries that were never metadata-checked.
+
+    Best-effort and quota-polite: at most one metadata call per refresh
+    (``max_lookups`` ids), newest entries first, and a rate-limit just skips the
+    lookup — the entries are already stored, tags fill in on a later cycle.
+    ``tags_fetched_at`` is set even for zero-tag results so genuinely-untagged
+    deviations aren't re-looked-up forever. Returns how many entries got tags.
+    """
+    rows = conn.execute(
+        "SELECT deviationid FROM deviantart_entries"
+        " WHERE deviantart_feed_id = ? AND (tags IS NULL OR tags = '') AND tags_fetched_at IS NULL"
+        " ORDER BY published_at DESC LIMIT ?",
+        (feed_id, max_lookups),
+    ).fetchall()
+    ids = [str(r["deviationid"]) for r in rows]
+    if not ids:
+        return 0
+    try:
+        tag_map = fetch_deviation_tags(client_id, client_secret, ids, access_token=access_token)
+    except DeviantArtRateLimited:
+        LOGGER.info("[deviantart] metadata tags rate-limited for feed %s; will retry next cycle", feed_id)
+        return 0
+    except Exception:
+        LOGGER.exception("[deviantart] metadata tags fetch failed for feed %s", feed_id)
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    tagged = 0
+    for devid in ids:
+        tags = tag_map.get(devid) or []
+        conn.execute(
+            "UPDATE deviantart_entries SET tags = ?, tags_fetched_at = ?"
+            " WHERE deviantart_feed_id = ? AND deviationid = ?",
+            (",".join(tags), now, feed_id, devid),
+        )
+        tagged += 1 if tags else 0
+    return tagged
+
+
 def _deviation_to_entry(d: dict) -> dict | None:
     """Normalize a DA deviation object to our entry shape, or None to skip."""
     devid = d.get("deviationid")
@@ -508,6 +580,10 @@ def refresh_deviantart_feed_by_id(conn: sqlite3.Connection, feed_id: str, client
     else:
         deviations = fetch_gallery(client_id, client_secret, str(row["username"]), access_token=access_token)
     added = _upsert_entries(conn, feed_id, deviations)
+    # Tag suggestion chips: fill tags for never-checked entries (one metadata
+    # call max). Deliberately refresh-only — the bulk watchlist sync's
+    # create_deviantart_feed path skips it so adding N artists stays N calls.
+    fetch_and_store_missing_tags(conn, feed_id, client_id, client_secret, access_token=access_token)
     conn.execute(
         "UPDATE deviantart_feeds SET last_synced_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).isoformat(), feed_id),

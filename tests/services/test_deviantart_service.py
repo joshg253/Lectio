@@ -393,3 +393,67 @@ def test_item_xml_emits_category_per_tag():
     e = {"id": "d1", "title": "T", "entry_url": "https://da/x", "content": "",
          "published_at": "2026-07-01T00:00:00+00:00", "tags": ["fantasy"]}
     assert "<category>fantasy</category>" in da._item_xml(e)
+
+
+# --- deviation tags via /deviation/metadata ---
+
+def test_fetch_deviation_tags_batches_and_maps():
+    # 60 ids → two metadata calls of ≤50 (plus the initial token call).
+    ids = [f"d{i}" for i in range(60)]
+    meta = lambda batch: {"metadata": [
+        {"deviationid": d, "tags": [{"tag_name": f"tag-{d}"}]} for d in batch
+    ]}
+    responses = [
+        (200, {"access_token": "T", "expires_in": 3600}),
+        (200, meta(ids[:50])),
+        (200, meta(ids[50:])),
+    ]
+    client = _mock_client(responses)
+    with patch("httpx.Client", return_value=client):
+        out = da.fetch_deviation_tags("cid", "sec", ids)
+    assert len(out) == 60
+    assert out["d0"] == ["tag-d0"]
+    # token (post) + 2 metadata requests
+    assert client.request.call_count == 2
+
+
+def _tags_conn():
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE deviantart_entries (
+        id TEXT PRIMARY KEY, deviantart_feed_id TEXT, deviationid TEXT,
+        title TEXT, entry_url TEXT, content TEXT, published_at TEXT,
+        tags TEXT NOT NULL DEFAULT '', tags_fetched_at TEXT,
+        UNIQUE(deviantart_feed_id, deviationid))""")
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO deviantart_entries (id, deviantart_feed_id, deviationid, title, published_at)"
+            " VALUES (?, 'f1', ?, 't', ?)", (f"row{i}", f"d{i}", f"2026-07-0{i+1}"))
+    return conn
+
+
+def test_fetch_and_store_missing_tags_updates_rows_and_marks_checked():
+    conn = _tags_conn()
+    with patch.object(da, "fetch_deviation_tags",
+                      return_value={"d2": ["fantasy", "dragon"], "d1": []}) as fetched:
+        tagged = da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec")
+    assert tagged == 1
+    rows = {r["deviationid"]: r for r in conn.execute("SELECT * FROM deviantart_entries")}
+    assert rows["d2"]["tags"] == "fantasy,dragon"
+    # Zero-tag result still marked checked, so it isn't re-looked-up forever.
+    assert rows["d1"]["tags"] == "" and rows["d1"]["tags_fetched_at"]
+    assert rows["d0"]["tags_fetched_at"]
+    # Second pass: nothing left to look up.
+    with patch.object(da, "fetch_deviation_tags", return_value={}) as second:
+        assert da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec") == 0
+    second.assert_not_called()
+
+
+def test_fetch_and_store_missing_tags_survives_rate_limit():
+    conn = _tags_conn()
+    with patch.object(da, "fetch_deviation_tags", side_effect=da.DeviantArtRateLimited("quota")):
+        assert da.fetch_and_store_missing_tags(conn, "f1", "cid", "sec") == 0
+    # Nothing marked checked — the lookup retries on a later cycle.
+    row = conn.execute("SELECT COUNT(*) FROM deviantart_entries WHERE tags_fetched_at IS NOT NULL").fetchone()
+    assert row[0] == 0
