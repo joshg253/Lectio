@@ -13952,7 +13952,7 @@ def _admin_user_rows() -> list[dict]:
 
 
 @app.get("/administration")
-def account_page(request: Request, msg: str | None = None, error: str | None = None):
+def administration_page(request: Request, msg: str | None = None, error: str | None = None):
     """Admin page: user management + instance configuration. Admin-only."""
     if user_store is None:
         return Response(status_code=404)
@@ -13975,7 +13975,7 @@ def account_page(request: Request, msg: str | None = None, error: str | None = N
         maint_last = get_setting(conn, "maintenance_last_ran_at") or ""
     return templates.TemplateResponse(
         request,
-        "account.html",
+        "administration.html",
         {
             "user_id": uid,
             "username": row["username"],
@@ -14194,6 +14194,53 @@ async def admin_rename_user(request: Request):
     except ValueError:
         return _account_redirect(error="Invalid username — use 1–64 letters, digits, _ or -.")
     return _account_redirect(msg=f"Renamed {old_username!r} to {new_username!r} (data and tokens unchanged).")
+
+
+# Log levels ranked so the Logs tab's filter can select a minimum severity.
+_LOG_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+_LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ (\w+) ")
+
+
+def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
+    """Return (lines, available). Reads the current lectio.log, keeps records at
+    or above ``min_level`` (continuation lines like tracebacks stay attached to
+    their record), and returns the last ``max_lines``. available=False when file
+    logging isn't configured (no LECTIO_LOG_DIR)."""
+    log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
+    if not log_dir_str:
+        return [], False
+    path = Path(log_dir_str) / "lectio.log"
+    if not path.exists():
+        return [], True
+    threshold = _LOG_LEVEL_RANK.get(min_level.upper(), 0)
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return [], True
+    if threshold <= 0:
+        return raw[-max_lines:], True
+    kept: list[str] = []
+    include_current = False
+    for line in raw:
+        m = _LOG_LINE_RE.match(line)
+        if m:
+            include_current = _LOG_LEVEL_RANK.get(m.group(1), 0) >= threshold
+            if include_current:
+                kept.append(line)
+        elif include_current:
+            kept.append(line)  # continuation (traceback etc.) of an included record
+    return kept[-max_lines:], True
+
+
+@app.get("/admin/logs")
+def admin_logs(request: Request, lines: int = 200, level: str = "all"):
+    """Tail the instance log for the Admin → Logs tab. Admin-only."""
+    if not _is_web_admin(_current_web_user(request)):
+        return Response(status_code=403)
+    max_lines = max(1, min(int(lines), 2000))
+    min_level = "" if level.lower() == "all" else level
+    log_lines, available = _read_log_tail(max_lines, min_level)
+    return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines)})
 
 
 @app.get("/")
