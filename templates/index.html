@@ -1645,6 +1645,16 @@
             <button type="button" id="sett-da-disconnect" class="settings-inline-btn" hidden>Disconnect</button>
             <span id="sett-da-action-status" class="settings-inline-status"></span>
           </div>
+          <div id="sett-da-sync-detail" class="settings-da-sync-detail" hidden style="margin-top:0.6rem">
+            <div id="sett-da-failed-wrap" hidden>
+              <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Failed to add</strong> — click to view the artist on DeviantArt:</p>
+              <ul id="sett-da-failed-list" class="settings-da-artist-list"></ul>
+            </div>
+            <div id="sett-da-unwatched-wrap" hidden>
+              <p class="settings-hint" style="margin-bottom:0.2rem"><strong>Subscribed but no longer watched</strong> — kept on purpose; unsubscribe manually if you want:</p>
+              <ul id="sett-da-unwatched-list" class="settings-da-artist-list"></ul>
+            </div>
+          </div>
         </div>
         </div>
         <div class="feeds-tab-panel" data-int-panel="instapaper" hidden>
@@ -10920,6 +10930,44 @@
         dl.appendChild(frag);
       })();
 
+      // Render the DeviantArt watch-list sync detail (failed / no-longer-watched
+      // artists) as links to their DeviantArt profiles, so the user never has to
+      // dig through server logs to see which adds failed.
+      function renderDaSyncDetail(detail, connected) {
+        const wrap = document.getElementById('sett-da-sync-detail');
+        if (!wrap) return;
+        const failed = (detail && detail.failed) || [];
+        const unwatched = (detail && detail.unwatched) || [];
+        const fill = (listId, wrapId, items, withError) => {
+          const ul = document.getElementById(listId);
+          const box = document.getElementById(wrapId);
+          if (!ul || !box) return;
+          ul.textContent = '';
+          items.forEach(it => {
+            const user = (it && it.username) || '';
+            if (!user) return;
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = 'https://www.deviantart.com/' + encodeURIComponent(user);
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = user;
+            li.appendChild(a);
+            if (withError && it.error) {
+              const span = document.createElement('span');
+              span.className = 'settings-da-artist-error';
+              span.textContent = ' — ' + it.error;
+              li.appendChild(span);
+            }
+            ul.appendChild(li);
+          });
+          box.hidden = items.length === 0;
+        };
+        fill('sett-da-failed-list', 'sett-da-failed-wrap', failed, true);
+        fill('sett-da-unwatched-list', 'sett-da-unwatched-wrap', unwatched, false);
+        wrap.hidden = !connected || (failed.length === 0 && unwatched.length === 0);
+      }
+
       async function loadSettingsData() {
         try {
           const resp = await fetch('/settings/all', { credentials: 'same-origin' });
@@ -11155,6 +11203,7 @@
         });
         const daActionStatus = document.getElementById('sett-da-action-status');
         if (daActionStatus && d.deviantart_sync_status) daActionStatus.textContent = d.deviantart_sync_status;
+        renderDaSyncDetail(d.deviantart_sync_detail, daConnected);
         // Quire integration: creds, connection status, project picker, usage meter.
         v('sett-quire-id', d.quire_client_id);
         secretField('sett-quire-secret', d.quire_client_secret_set, d.quire_client_secret_masked);

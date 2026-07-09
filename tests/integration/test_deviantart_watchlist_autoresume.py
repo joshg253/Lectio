@@ -54,6 +54,31 @@ def _status() -> str:
         return main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_STATUS) or ""
 
 
+def test_failed_adds_are_recorded_as_profile_link_detail(configured):
+    configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice", "bob", "carol"])
+
+    def fake(conn, reader, artist, cid, secret, access_token=None, limit=24):
+        if artist == "bob":
+            raise RuntimeError("gallery fetch failed for bob: HTTP 404: not found")
+        return f"fid-{artist}", f"file:///da/{artist}.xml"
+
+    configured.setattr(deviantart_service, "create_deviantart_feed", fake)
+
+    result = main.sync_deviantart_watchlist()
+
+    assert result["added"] == 2 and result["failed"] == 1
+    assert result["failed_artists"] == [{"username": "bob", "error": "not found"}]
+    # The structured detail is persisted for the Settings UI to render as links.
+    # (Read the DB directly — the fixture stubs get_runtime_setting to "me".)
+    import json
+    with main.get_meta_connection() as conn:
+        detail = json.loads(main.get_setting(conn, main.SETTING_DEVIANTART_SYNC_DETAIL))
+    assert detail["failed"] == [{"username": "bob", "error": "not found"}]
+    # Status no longer punts the user to "logs".
+    assert "see logs" not in _status()
+    assert "1 failed" in _status()
+
+
 def test_rate_limit_schedules_resume_with_retry_after(configured):
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice", "bob", "carol"])
     fake, calls = _fake_create(fail_from=2, retry_after=120.0)

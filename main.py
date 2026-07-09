@@ -319,6 +319,10 @@ SETTING_DEVIANTART_OAUTH_STATE = "deviantart_oauth_state"
 SETTING_DEVIANTART_OAUTH_VERIFIER = "deviantart_oauth_verifier"
 SETTING_DEVIANTART_FOLDER_NAME = "deviantart_folder_name"
 SETTING_DEVIANTART_SYNC_STATUS = "deviantart_sync_status"
+# Structured companion to the status string: JSON {failed:[{username,error}], unwatched:[username]}
+# so the Settings UI can list the failed/unwatched artists as profile links instead
+# of telling the user to "see logs" (which they have no access to).
+SETTING_DEVIANTART_SYNC_DETAIL = "deviantart_sync_detail"
 SETTING_YT_OAUTH_CLIENT_ID = "yt_oauth_client_id"
 SETTING_YT_OAUTH_CLIENT_SECRET = "yt_oauth_client_secret"
 SETTING_YT_OAUTH_ACCESS_TOKEN = "yt_oauth_access_token"
@@ -1098,6 +1102,32 @@ def _apply_deviantart_image_strategy(conn: sqlite3.Connection, file_url: str) ->
         LOGGER.exception("[deviantart] failed to set inline thumb_strategy for %s", file_url)
 
 
+def _humanize_da_add_error(exc: Exception) -> str:
+    """Short, user-facing reason a watch-list add failed, for the Settings list.
+
+    DeviantArt gallery fetches raise ``RuntimeError('gallery fetch failed for X:
+    HTTP 404: ...')``; surface the status where we can, else a trimmed message."""
+    detail = " ".join(str(exc).split())
+    for code, label in (("404", "not found"), ("403", "access denied"),
+                        ("500", "DeviantArt error"), ("deactivated", "deactivated")):
+        if code in detail:
+            return label
+    return detail[:120] or "unknown error"
+
+
+def _load_da_sync_detail() -> dict:
+    """Parse the structured sync-detail setting, or an empty shell on miss/garbage."""
+    raw = get_runtime_setting(SETTING_DEVIANTART_SYNC_DETAIL)
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (ValueError, TypeError):
+            pass
+    return {"failed": [], "unwatched": []}
+
+
 # One watch-list sync per user at a time: the Settings button, the daily
 # maintenance run, and a scheduled auto-resume can otherwise overlap and burn
 # the same DeviantArt quota adding the same artists.
@@ -1176,6 +1206,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
     LOGGER.info("[deviantart] watchlist sync: %d watched, %d to add into %r", len(watching), len(to_add), folder_name)
     added = 0
     failed = 0
+    failed_artists: list[dict[str, str]] = []
     rate_limited = False
     retry_after_s: float | None = None
     for i, artist in enumerate(to_add, 1):
@@ -1199,6 +1230,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
             break
         except Exception as exc:  # noqa: BLE001
             failed += 1
+            failed_artists.append({"username": artist, "error": _humanize_da_add_error(exc)})
             LOGGER.warning("[deviantart] watchlist add failed for %s: %s", artist, exc)
         if i % 25 == 0:
             LOGGER.info("[deviantart] watchlist sync progress: %d/%d (added=%d failed=%d)", i, len(to_add), added, failed)
@@ -1218,6 +1250,20 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         LOGGER.info("[deviantart] %d subscribed artist(s) no longer watched: %s",
                     len(unwatched), ", ".join(unwatched))
 
+    # Persist the failed/unwatched artists (structured) so the Settings UI can
+    # list them as profile links. A fresh sync (round 0) starts clean; auto-resume
+    # continuation rounds accumulate failures from earlier rounds (each round
+    # processes a different slice of to_add). unwatched is recomputed from full
+    # data every round, so it's overwritten rather than merged.
+    prior_failed: list[dict[str, str]] = []
+    if auto_resume_round > 0:
+        prior_failed = _load_da_sync_detail().get("failed", [])
+    all_failed = prior_failed + failed_artists
+    with get_meta_connection() as conn:
+        set_setting(conn, SETTING_DEVIANTART_SYNC_DETAIL,
+                    json.dumps({"failed": all_failed,
+                                "unwatched": [{"username": u} for u in unwatched]}))
+
     remaining = len(to_add) - added - failed
     if rate_limited:
         if auto_resume_round < _DA_SYNC_MAX_AUTO_RESUMES:
@@ -1234,15 +1280,15 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
         parts = [f"Added {added} of {len(watching)} watched"]
         if already:
             parts.append(f"{already} already subscribed")
-        if failed:
-            parts.append(f"{failed} failed")
+        if all_failed:
+            parts.append(f"{len(all_failed)} failed")
         if unwatched:
-            parts.append(f"{len(unwatched)} subscribed but no longer watched (see logs)")
+            parts.append(f"{len(unwatched)} subscribed but no longer watched")
         final = ", ".join(parts)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_STATUS, final)
     return {"added": added, "failed": failed, "total": len(watching), "folder": folder_name,
-            "rate_limited": rate_limited, "unwatched": unwatched}
+            "rate_limited": rate_limited, "unwatched": unwatched, "failed_artists": all_failed}
 
 
 def push_galleries_to_deviantart_watchlist() -> dict:
@@ -18401,6 +18447,7 @@ def get_all_settings():
         "deviantart_connected": bool(get_runtime_setting(SETTING_DEVIANTART_ACCESS_TOKEN)),
         "deviantart_username": get_runtime_setting(SETTING_DEVIANTART_USERNAME),
         "deviantart_sync_status": get_runtime_setting(SETTING_DEVIANTART_SYNC_STATUS),
+        "deviantart_sync_detail": _load_da_sync_detail(),
         "deviantart_folder_name": _deviantart_folder_name(),
         "quire_client_id": quire_cid,
         "quire_client_secret_set": bool(quire_secret),

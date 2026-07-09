@@ -6275,6 +6275,9 @@ textarea.hl-draft-pattern {
 }
 .settings-inline-btn:hover { background: var(--hover-bg); }
 .settings-inline-status { font-size: 0.72rem; color: var(--muted); margin-left: 0.3rem; }
+.settings-da-artist-list { margin: 0.1rem 0 0.4rem; padding-left: 1.1rem; font-size: 0.78rem; }
+.settings-da-artist-list li { margin: 0.1rem 0; }
+.settings-da-artist-error { color: var(--muted); }
 .settings-da-account {
   grid-column: 1 / -1;
   display: flex;
