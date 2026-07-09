@@ -1,7 +1,8 @@
 """tag_filter rule: suppress (mark read) unread entries by their feed-provided
 tags in entry_feed_tags. The rule spec lives in `keyword` as one comma-separated
 field — `+tag` (or bare) keeps only matching tagged entries, `-tag` drops
-matches; exclude wins; untagged entries are always kept."""
+matches; an include match saves the entry outright; untagged entries are
+always kept."""
 from __future__ import annotations
 
 import datetime as dt
@@ -95,12 +96,13 @@ def test_include_list_keeps_untagged(env):
     assert _unread_ids() == {"e-linux", "e-mixed", "e-untagged"}
 
 
-def test_exclude_wins_over_include(env):
+def test_include_wins_over_exclude(env):
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "linux, -deals")
-    # e-mixed matches include (linux) but also exclude (deals) → suppressed.
-    assert result["count"] == 3  # e-win, e-deal, e-mixed
-    assert _unread_ids() == {"e-linux", "e-untagged"}
+    # e-mixed matches include (linux) AND exclude (deals) → the include match
+    # saves it; e-deal (deals only) and e-win (no include match) are cut.
+    assert result["count"] == 2  # e-win, e-deal
+    assert _unread_ids() == {"e-linux", "e-mixed", "e-untagged"}
 
 
 def test_tags_normalized_both_sides(env):

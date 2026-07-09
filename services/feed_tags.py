@@ -131,14 +131,16 @@ def extract_page_tags(html: str | None) -> list[str]:
             values.append(text)
 
     # Tag-classed anchors (open tag only — the anchor body may wrap an image):
-    # tag name from the title attribute, else the /tag//category/ URL slug.
+    # tag name from the title attribute (any linked path — How-To-Geek's tag
+    # block links bare section slugs like /gpu/), else the /tag//category/
+    # URL slug when there's no title.
     for open_tag in re.findall(r"<a\b[^>]*>", html, re.IGNORECASE):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(open_tag):
             attrs[am.group(1).lower()] = am.group(3) if am.group(3) is not None else am.group(4)
         classes = (attrs.get("class") or "").lower()
         href = attrs.get("href") or ""
-        if "tag" not in classes or not ("/tag/" in href or "/category/" in href):
+        if "tag" not in classes or not href:
             continue
         value = (attrs.get("title") or "").strip()
         if not value and (slug_m := re.search(r"/(?:tag|category)/([^/?#]+)", href)):

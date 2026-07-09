@@ -5227,8 +5227,10 @@ def _run_tag_filter(
     """Execute (or dry-run) a tag_filter rule: mark unread entries read when
     their feed-provided tags (entry_feed_tags) hit the exclude list, or when
     an include list is set and the entry is tagged but matches none of it.
-    Untagged entries are always kept — a feed that stops tagging must not
-    have its whole firehose suppressed.
+    An include match saves the entry outright — '+android, -iphone' keeps a
+    post tagged with both (a wanted topic shouldn't be cut for also touching
+    an unwanted one). Untagged entries are always kept — a feed that stops
+    tagging must not have its whole firehose suppressed.
 
     ``apply=False`` previews like _dry_run_pattern — read + unread entries,
     newest first — and returns the dry-run shape the Test panel renders
@@ -5301,7 +5303,9 @@ def _run_tag_filter(
             tags = entry_tags(fu, eid)
             if not tags:
                 continue  # untagged entries are always kept
-            suppress = bool(tags & exclude) or bool(include and not (tags & include))
+            if include and (tags & include):
+                continue  # include wins: a wanted tag saves the entry outright
+            suppress = bool(tags & exclude) or bool(include)
             if not suppress:
                 continue
             to_mark.append((fu, eid))
