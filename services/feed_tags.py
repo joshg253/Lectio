@@ -63,17 +63,28 @@ _META_ATTR_RE = re.compile(
 )
 _PAGE_TAG_KEYS = {"article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
 _MAX_PAGE_TAGS = 15
+_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,120}?)</a>", re.IGNORECASE | re.DOTALL)
+_ANCHOR_ATTR_RE = re.compile(
+    r'\b(rel|class|href|title)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE
+)
+_INNER_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def extract_page_tags(html: str | None) -> list[str]:
-    """Harvest article tags from a source page's meta tags — the fallback for
-    entries whose feed never delivered <category> data (aged out of the feed
-    window, or a publisher that strips tags from RSS). Reads article:tag
-    (one per meta), plus comma-joined keyword variants."""
+    """Harvest article tags from a source page — the fallback for entries
+    whose feed never delivered <category> data (aged out of the feed window,
+    or a publisher that strips tags from RSS). Two tiers:
+
+    - meta tags: article:tag (one per meta) + comma-joined keyword variants;
+    - tag anchors: the rel="tag" microformat, plus tag-classed anchors
+      (class contains "tag") linking to /tag/ or /category/ paths — how
+      Valnet sites (MakeUseOf, How-To-Geek) mark their article tag block.
+    """
     if not html:
         return []
+    html = html[:300_000]
     values: list[str] = []
-    for meta in _META_TAG_RE.findall(html[:300_000]):
+    for meta in _META_TAG_RE.findall(html):
         attrs: dict[str, str] = {}
         for m in _META_ATTR_RE.finditer(meta):
             attrs[m.group(1).lower()] = m.group(3) if m.group(3) is not None else m.group(4)
@@ -85,6 +96,33 @@ def extract_page_tags(html: str | None) -> list[str]:
             values.append(content)
         else:
             values.extend(part.strip() for part in content.split(","))
+
+    # rel="tag" microformat anchors: tag name is the (short) link text.
+    for m in _ANCHOR_RE.finditer(html):
+        attrs = {}
+        for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
+            attrs[am.group(1).lower()] = am.group(3) if am.group(3) is not None else am.group(4)
+        if "tag" not in (attrs.get("rel") or "").lower().split():
+            continue
+        text = _INNER_TAG_RE.sub(" ", m.group(2)).strip()
+        if text:
+            values.append(text)
+
+    # Tag-classed anchors (open tag only — the anchor body may wrap an image):
+    # tag name from the title attribute, else the /tag//category/ URL slug.
+    for open_tag in re.findall(r"<a\b[^>]*>", html, re.IGNORECASE):
+        attrs = {}
+        for am in _ANCHOR_ATTR_RE.finditer(open_tag):
+            attrs[am.group(1).lower()] = am.group(3) if am.group(3) is not None else am.group(4)
+        classes = (attrs.get("class") or "").lower()
+        href = attrs.get("href") or ""
+        if "tag" not in classes or not ("/tag/" in href or "/category/" in href):
+            continue
+        value = (attrs.get("title") or "").strip()
+        if not value and (slug_m := re.search(r"/(?:tag|category)/([^/?#]+)", href)):
+            value = slug_m.group(1).replace("-", " ")
+        if value:
+            values.append(value)
 
     cleaned: list[str] = []
     seen: set[str] = set()

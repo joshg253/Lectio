@@ -246,3 +246,19 @@ def test_page_tags_empty_input_and_cap():
     assert extract_page_tags("") == []
     many = "".join(f'<meta property="article:tag" content="t{i}">' for i in range(40))
     assert len(extract_page_tags(many)) == 15
+
+
+def test_page_tags_rel_tag_anchors():
+    html = '<a href="/tag/linux/" rel="tag">Linux</a> <a rel="nofollow tag" href="/x">Self-Hosting</a>'
+    assert extract_page_tags(html) == ["Linux", "Self-Hosting"]
+
+
+def test_page_tags_tag_classed_anchors_title_or_slug():
+    # Valnet style: tags-link anchors, some wrapping images (title attr wins);
+    # plain /tag/ links without a tag class are ignored (nav/related noise).
+    html = (
+        '<a class="tags-link image" href="/category/windows/" title="Windows"><img src="x"></a>'
+        '<a class="tags-link" href="/tag/windows-tips/"><span>x</span></a>'
+        '<a href="/tag/unrelated-nav-link/">Nav</a>'
+    )
+    assert extract_page_tags(html) == ["Windows", "windows tips"]
