@@ -53,7 +53,7 @@ The short version:
   captured at ingest so they render instantly (with an article-page fallback
   for entries the feed never tagged). **+** adds the tag as one of
   your own tags on that post; **▲**/**▼** build the feed's Tag Filter rule
-  (keep-only / drop). The rule starts **off** so you can tune it while
+  (good tag / drop). The rule starts **off** so you can tune it while
   browsing, then arm it in the Automation rules list; once on, chip edits
   apply to unread posts immediately.
 - **Persistent audio player** — podcast/audio posts show a **Play** button that
