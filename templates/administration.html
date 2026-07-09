@@ -39,6 +39,11 @@
     .adm-panel { display: none; }
     .adm-panel.active { display: block; }
     .tuning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem; }
+    .adm-logs-controls { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .5rem; }
+    .adm-log-output { max-height: 60vh; overflow: auto; background: rgba(127,127,127,.08);
+                      border: 1px solid var(--line, #ccc); border-radius: 6px; padding: .6rem .75rem;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem;
+                      line-height: 1.35; white-space: pre-wrap; word-break: break-word; margin: 0; }
   </style>
 </head>
 <body class="account-page">
@@ -53,53 +58,17 @@
     <p id="admin-toast" class="account-msg" role="status" hidden></p>
 
     <div class="adm-tabs">
-      <button class="adm-tab active" data-panel="panel-config">Instance config</button>
+      <button class="adm-tab active" data-panel="panel-settings">Settings</button>
+      <button class="adm-tab" data-panel="panel-keys">Shared keys</button>
       <button class="adm-tab" data-panel="panel-users">Users</button>
+      <button class="adm-tab" data-panel="panel-logs">Logs</button>
     </div>
 
-    <!-- ── Instance configuration ────────────────────────────── -->
-    <div id="panel-config" class="adm-panel active">
-
+    <!-- ── Settings (instance behavior) ──────────────────────── -->
+    <div id="panel-settings" class="adm-panel active">
       <section class="account-section">
-        <h2>Instance configuration</h2>
+        <h2>Instance settings</h2>
         <p class="account-hint">Shared across the whole instance. Changes apply immediately after Save.</p>
-
-        <h3>Email (Resend)</h3>
-        <label class="fld">API key
-          <input type="password" id="adm-resend-key" autocomplete="new-password"
-                 placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
-        </label>
-        <label class="fld">From address
-          <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
-        </label>
-        <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
-
-        <h3>Shared OAuth apps (optional)</h3>
-        <p class="account-hint">Users can enter their own OAuth credentials in Settings. Set these here to provide a shared app for users who haven't — their own settings always take priority.</p>
-        <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
-        <label class="fld">YouTube OAuth Client ID
-          <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
-        </label>
-        <label class="fld">YouTube OAuth Client Secret
-          <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
-        </label>
-        <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
-        <label class="fld">Pinterest OAuth Client ID
-          <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
-        </label>
-        <label class="fld">Pinterest OAuth Client Secret
-          <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
-        </label>
-        <p class="account-hint"><strong>Reddit:</strong> Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a>. Add <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
-        <label class="fld">Reddit OAuth Client ID
-          <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
-        </label>
-        <label class="fld">Reddit OAuth Client Secret
-          <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
-        </label>
 
         <h3>Maintenance</h3>
         <label class="fld">Hour (0–23, server local time)
@@ -137,8 +106,56 @@
         <p class="account-hint">Login lockout and feed history are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
 
         <div style="display:flex; gap:.5rem; margin-top:.75rem">
-          <button type="button" id="adm-save">Save configuration</button>
+          <button type="button" class="adm-save">Save configuration</button>
           <button type="button" id="adm-run-maint">Run maintenance now</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- ── Shared keys (instance-wide credentials) ───────────── -->
+    <div id="panel-keys" class="adm-panel">
+      <section class="account-section">
+        <h2>Shared keys</h2>
+        <p class="account-hint">Instance-wide credentials. The email key sends on behalf of the whole instance; the OAuth apps are a shared fallback for users who haven't set their own (a user's own credentials always take priority).</p>
+
+        <h3>Email (Resend)</h3>
+        <label class="fld">API key
+          <input type="password" id="adm-resend-key" autocomplete="new-password"
+                 placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
+        </label>
+        <label class="fld">From address
+          <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
+        </label>
+        <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
+
+        <h3>Shared OAuth apps (optional)</h3>
+        <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
+        <label class="fld">YouTube OAuth Client ID
+          <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
+        </label>
+        <label class="fld">YouTube OAuth Client Secret
+          <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
+        </label>
+        <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
+        <label class="fld">Pinterest OAuth Client ID
+          <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
+        </label>
+        <label class="fld">Pinterest OAuth Client Secret
+          <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
+        </label>
+        <p class="account-hint"><strong>Reddit:</strong> Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a>. Add <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
+        <label class="fld">Reddit OAuth Client ID
+          <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
+        </label>
+        <label class="fld">Reddit OAuth Client Secret
+          <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
+                 placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
+        </label>
+
+        <div style="margin-top:.75rem">
+          <button type="button" class="adm-save">Save configuration</button>
         </div>
       </section>
     </div>
@@ -237,6 +254,35 @@
         </form>
       </section>
     </div>
+
+    <!-- ── Logs ──────────────────────────────────────────────── -->
+    <div id="panel-logs" class="adm-panel">
+      <section class="account-section">
+        <h2>Logs</h2>
+        <div class="adm-logs-controls">
+          <label class="fld">Lines
+            <select id="adm-log-lines">
+              <option value="100">100</option>
+              <option value="200" selected>200</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+              <option value="2000">2000</option>
+            </select>
+          </label>
+          <label class="fld">Level
+            <select id="adm-log-level">
+              <option value="all" selected>All</option>
+              <option value="info">Info+</option>
+              <option value="warning">Warning+</option>
+              <option value="error">Error only</option>
+            </select>
+          </label>
+          <button type="button" id="adm-log-refresh">↻ Refresh</button>
+        </div>
+        <p id="adm-log-status" class="account-hint"></p>
+        <pre id="adm-log-output" class="adm-log-output" aria-live="polite"></pre>
+      </section>
+    </div>
   </div>
 
   <script>
@@ -265,7 +311,7 @@
         if (!r.ok) throw new Error('failed');
       }
 
-      $('adm-save')?.addEventListener('click', async () => {
+      async function saveConfig() {
         const payload = {
           email_from: $('adm-email-from')?.value.trim() || '',
           maintenance_hour: $('adm-maint-hour')?.value.trim() || '',
@@ -291,11 +337,44 @@
         if (rdSecret) payload.shared_reddit_client_secret = rdSecret;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
-      });
+      }
+      document.querySelectorAll('.adm-save').forEach(btn => btn.addEventListener('click', saveConfig));
 
       $('adm-run-maint')?.addEventListener('click', async () => {
         try { await post('/settings/maintenance/run-now'); toast('Maintenance started.'); }
         catch { toast('Failed to start maintenance.'); }
+      });
+
+      // ── Logs tab ──────────────────────────────────────────────
+      async function loadLogs() {
+        const out = $('adm-log-output');
+        const status = $('adm-log-status');
+        const lines = $('adm-log-lines')?.value || '200';
+        const level = $('adm-log-level')?.value || 'all';
+        if (status) status.textContent = 'Loading…';
+        try {
+          const r = await fetch(`/admin/logs?lines=${encodeURIComponent(lines)}&level=${encodeURIComponent(level)}`,
+                                { credentials: 'same-origin' });
+          const d = await r.json();
+          if (!d.available) {
+            out.textContent = '';
+            status.textContent = 'File logging is not enabled (set LECTIO_LOG_DIR).';
+            return;
+          }
+          out.textContent = (d.lines || []).join('\n');
+          status.textContent = `${d.count} line${d.count === 1 ? '' : 's'}.`;
+          out.scrollTop = out.scrollHeight;
+        } catch {
+          if (status) status.textContent = 'Failed to load logs.';
+        }
+      }
+      $('adm-log-refresh')?.addEventListener('click', loadLogs);
+      $('adm-log-lines')?.addEventListener('change', loadLogs);
+      $('adm-log-level')?.addEventListener('change', loadLogs);
+      // Lazy-load logs the first time the Logs tab is opened.
+      let _logsLoaded = false;
+      document.querySelector('.adm-tab[data-panel="panel-logs"]')?.addEventListener('click', () => {
+        if (!_logsLoaded) { _logsLoaded = true; loadLogs(); }
       });
     })();
   </script>
