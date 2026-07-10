@@ -36,7 +36,12 @@ Make Lectio usable as a read-it-later app.
 - **Reader-only browsing view** for saved/starred items — a clean, distraction-free
   reading surface (no triage chrome), keyboard-first navigation through the
   starred/saved backlog. Should prefer the archived readability copy when the
-  live entry content is a truncated feed summary.
+  live entry content is a truncated feed summary. **Design e-ink-first**: the
+  real driver is reading the Saved backlog on a Supernote Manta browser
+  (Instapaper is bad there; Readit was evaluated for the same reason) — high
+  contrast, large tap targets, no animations/transitions, paginated (tap
+  left/right) instead of scrolled, minimal JS, self-hosted so no third-party
+  app needed.
 - Save Article follow-up ideas (build on demand): folder placement for the
   Saved Articles feed (it currently lands in Uncategorized), an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
@@ -125,6 +130,15 @@ future read-later services (Pocket is shutting down; Readwise/Reader, Wallabag i
 someone runs one). Each is "manual action → rule type" reusing the existing engine
 (own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
 per destination.
+
+**Readit (wereadit.com)** — share-menu button SHIPPED 2026-07-09 as a
+*browser-side* destination (see ARCHITECTURE "Integrations"): their
+`/api/bookmarklet/save` is Cloudflare-challenged for server traffic, so no
+On-Star/rule destination yet. Unblock paths: ask the developer
+(github.com/mahmoudalwadia/readit-extension) to exempt the token-authenticated
+endpoint for server clients or publish an API; then it becomes a standard
+destination. **Import from Readit** also wanted — blocked until Readit exposes
+an export/RSS/API of saves (nothing found in the extension or site).
 
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted

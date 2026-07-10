@@ -349,6 +349,7 @@ SETTING_RESEND_API_KEY = "resend_api_key"
 SETTING_EMAIL_FROM = "email_from"
 SETTING_INSTAPAPER_USERNAME = "instapaper_username"
 SETTING_INSTAPAPER_PASSWORD = "instapaper_password"
+SETTING_READIT_TOKEN = "readit_token"  # wereadit.com bookmarklet token
 SETTING_DEVIANTART_CLIENT_ID = "deviantart_client_id"
 SETTING_DEVIANTART_CLIENT_SECRET = "deviantart_client_secret"
 SETTING_DEVIANTART_ACCESS_TOKEN = "deviantart_access_token"
@@ -556,6 +557,10 @@ def is_instapaper_configured() -> bool:
         get_runtime_setting(SETTING_INSTAPAPER_USERNAME)
         and get_runtime_setting(SETTING_INSTAPAPER_PASSWORD)
     )
+
+
+def is_readit_configured() -> bool:
+    return bool(get_runtime_setting(SETTING_READIT_TOKEN))
 
 
 # --- YouTube subscription sync config — env vars are fallbacks; DB settings take precedence ---
@@ -12115,6 +12120,7 @@ def entry_pane(
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
             "instapaper_configured": is_instapaper_configured(),
+            "readit_configured": is_readit_configured(),
             "pinterest_connected": pinterest_oauth_connected(),
             "quire_configured": is_quire_configured(),
             "reddit_connected": reddit_connected(),
@@ -14826,6 +14832,8 @@ def _home_inner(
         "pinterest_configured": bool(_ENV_PINTEREST_OAUTH_CLIENT_ID and _ENV_PINTEREST_OAUTH_CLIENT_SECRET),
         "email_to_default": email_to_default,
         "instapaper_configured": is_instapaper_configured(),
+        "readit_configured": is_readit_configured(),
+        "readit_token": get_runtime_setting(SETTING_READIT_TOKEN, ""),
         "quire_configured": is_quire_configured(),
         "quire_project_name": quire_project_name(),
         "reddit_connected": reddit_connected(),
@@ -18717,6 +18725,8 @@ def get_all_settings():
         "instapaper_username": get_runtime_setting(SETTING_INSTAPAPER_USERNAME),
         "instapaper_password_set": bool(instapaper_pw),
         "instapaper_password_masked": _masked(instapaper_pw),
+        "readit_token_set": bool(get_runtime_setting(SETTING_READIT_TOKEN)),
+        "readit_token_masked": _masked(get_runtime_setting(SETTING_READIT_TOKEN, "")),
         "deviantart_client_id": da_cid,
         "deviantart_client_secret_set": bool(da_secret),
         "deviantart_client_secret_masked": _masked(da_secret),
@@ -18764,6 +18774,7 @@ async def save_all_settings(request: Request):
     body = await request.json()
 
     _SENSITIVE = {SETTING_RESEND_API_KEY, SETTING_YT_API_KEY, SETTING_INSTAPAPER_PASSWORD,
+                  SETTING_READIT_TOKEN,
                   SETTING_DEVIANTART_CLIENT_SECRET, SETTING_QUIRE_CLIENT_SECRET,
                   SETTING_YT_OAUTH_CLIENT_SECRET, SETTING_PINTEREST_OAUTH_CLIENT_SECRET,
                   SETTING_SHARED_YT_OAUTH_CLIENT_SECRET, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
@@ -18782,6 +18793,7 @@ async def save_all_settings(request: Request):
         SETTING_STAR_SEND_YT_PLAYLIST_TITLE, SETTING_STAR_SEND_EMAIL,
         SETTING_RESEND_API_KEY, SETTING_EMAIL_FROM,
         SETTING_INSTAPAPER_USERNAME, SETTING_INSTAPAPER_PASSWORD,
+        SETTING_READIT_TOKEN,
         SETTING_DEVIANTART_CLIENT_ID, SETTING_DEVIANTART_CLIENT_SECRET,
         SETTING_DEVIANTART_FOLDER_NAME,
         SETTING_QUIRE_CLIENT_ID, SETTING_QUIRE_CLIENT_SECRET,

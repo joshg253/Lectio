@@ -156,6 +156,13 @@ The short version:
   backlog by your tags (e.g. `#toread` vs `#todo`) without leaving the view.
   Clicking **All Feeds** (or the active Starred filter) exits back to normal
   browsing.
+- **Save to Readit** — paste your [Readit](https://wereadit.com) bookmarklet
+  token in Settings → Integrations → Readit and a **Readit** button appears in
+  each article's share menu. The save is sent from your browser (mirroring
+  Readit's own bookmarklet: URL + title + the article HTML Lectio already
+  rendered); Readit's API sits behind a Cloudflare bot wall, so server-side
+  sends (On Star, automation rules) aren't possible until it exposes a
+  server-reachable endpoint.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

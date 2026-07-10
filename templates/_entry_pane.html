@@ -371,7 +371,7 @@
             >open_in_new</span
           ></a
         >
-        {% if email_configured or instapaper_configured or pinterest_connected or quire_configured %}
+        {% if email_configured or instapaper_configured or readit_configured or pinterest_connected or quire_configured %}
         <div class="entry-share-wrap">
           <button
             type="button"
@@ -399,6 +399,14 @@
               title="{% if instapaper_configured %}Save to Instapaper{% else %}Connect Instapaper in Settings{% endif %}"
               role="menuitem"
             ><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span> Instapaper</button>
+            <button
+              type="button"
+              id="entry-readit-button"
+              class="share-menu-item{% if not readit_configured %} share-menu-item--unavail{% endif %}"
+              {% if readit_configured %}data-readit-url="{{ selected_entry.link }}" data-readit-title="{{ selected_entry.title }}"{% else %}disabled{% endif %}
+              title="{% if readit_configured %}Save to Readit{% else %}Paste your Readit token in Settings → Integrations{% endif %}"
+              role="menuitem"
+            ><span class="material-symbols-rounded" aria-hidden="true">local_library</span> Readit</button>
             <button
               type="button"
               id="entry-pinterest-button"
