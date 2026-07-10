@@ -68,21 +68,29 @@ def strip_tracking_params(url: str) -> str:
 def resolve_wayback(url: str) -> str | None:
     """Recover a dead redirector's target from the Wayback Machine: the
     snapshot of the redirector URL 301s to the archived REAL URL, which is
-    embedded in the wayback path (/web/<ts>/<original>)."""
+    embedded in the wayback path (/web/<ts>/<original>). archive.org rate-
+    limits the /web/ endpoint aggressively — back off and retry on 429."""
     import httpx
-    try:
-        with httpx.Client(follow_redirects=True, timeout=25.0,
-                          headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
-            resp = client.get(f"https://web.archive.org/web/2/{url}")
-        m = _WAYBACK_SNAPSHOT_RE.search(str(resp.url))
-        if not m:
-            return None
-        orig = strip_tracking_params(m.group(1))
-        if is_redirector_link(orig) or "web.archive.org" in orig:
-            return None
-        return orig
-    except Exception:
-        return None
+    for attempt in range(3):
+        try:
+            with httpx.Client(follow_redirects=True, timeout=30.0,
+                              headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
+                resp = client.get(f"https://web.archive.org/web/2/{url}")
+            if resp.status_code == 429:
+                wait = float(resp.headers.get("Retry-After") or 30) + 5
+                print(f"    (wayback 429 — waiting {wait:.0f}s)")
+                time.sleep(wait)
+                continue
+            m = _WAYBACK_SNAPSHOT_RE.search(str(resp.url))
+            if not m:
+                return None
+            orig = strip_tracking_params(m.group(1))
+            if is_redirector_link(orig) or "web.archive.org" in orig:
+                return None
+            return orig
+        except Exception:
+            time.sleep(10)
+    return None
 
 
 def resolve_live(url: str) -> str | None:
@@ -153,7 +161,7 @@ def process_user(label: str, d: Path, *, apply: bool, live: bool, wayback: bool)
                 new_link = resolve_live(link)
             if new_link is None and wayback:
                 new_link = resolve_wayback(link)
-                time.sleep(1.5)  # polite pacing for archive.org
+                time.sleep(6)  # polite pacing for archive.org (~10/min)
             if new_link is None:
                 print(f"  [unrecoverable] {link}")
                 continue
