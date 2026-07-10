@@ -138,10 +138,17 @@ The short version:
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Save any article (read-it-later)** — capture pages that don't come from any
-  feed, Instapaper-style. Three ways in: **+ Save Article** in the app menu
-  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), or a
+  feed, Instapaper-style. Four ways in: **+ Save Article** in the app menu
+  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), a
   token-authenticated **`/api/save`** endpoint for phone share sheets / iOS
-  Shortcuts (`?username=…&token=…&url=…` with your existing API token). The
+  Shortcuts (`?username=…&token=…&url=…` with your existing API token), or —
+  the highest-fidelity path — a **browser extension**: Lectio speaks the
+  [Readit extension](https://github.com/mahmoudalwadia/readit-extension)'s
+  save protocol (`/api/bookmarklet/save`), so pointing that extension's
+  Backend at your Lectio instance (Save token = your API token) gives
+  one-click saves that ship the **rendered page from your authenticated
+  browser** — paywalled and bot-walled articles arrive with full text, no
+  server fetch involved. The
   page's readable text is extracted server-side into a local **Saved Articles**
   feed and the article is auto-starred, so it shows up in the Saved view, gets
   the starred archive's full offline capture (page + images), and supports
