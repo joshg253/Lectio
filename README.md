@@ -167,13 +167,6 @@ The short version:
   exits back to normal browsing with your previous Read/Unread filter
   restored. The internal Saved Articles feed no longer clutters
   Feeds → Uncategorized — the sidebar view supersedes it.
-- **Save to Readit** — paste your [Readit](https://wereadit.com) bookmarklet
-  token in Settings → Integrations → Readit and a **Readit** button appears in
-  each article's share menu. The save is sent from your browser (mirroring
-  Readit's own bookmarklet: URL + title + the article HTML Lectio already
-  rendered); Readit's API sits behind a Cloudflare bot wall, so server-side
-  sends (On Star, automation rules) aren't possible until it exposes a
-  server-reachable endpoint.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

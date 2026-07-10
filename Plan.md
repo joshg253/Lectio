@@ -131,17 +131,14 @@ someone runs one). Each is "manual action → rule type" reusing the existing en
 (own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
 per destination.
 
-**Readit (wereadit.com)** — share-menu button + token setting BUILT 2026-07-09
-but **BLOCKED UPSTREAM** (see ARCHITECTURE "Integrations"): Cloudflare
-challenges both server traffic AND the browser CORS preflight on
-`/api/bookmarklet/save`; a no-preflight simple-request fallback verifiably
-didn't deliver either (2026-07-10). Only Readit's own extension (CORS-exempt
-by host permissions) gets through. Issue to file with the developer
-(github.com/mahmoudalwadia/readit-extension): exempt/CORS-enable the
-token-authenticated endpoint — that instantly makes the shipped button work,
-and a server-side exemption would enable a standard On-Star/rule destination.
-**Import from Readit** also wanted — blocked until Readit exposes an
-export/RSS/API of saves (nothing found in the extension or site).
+**Readit (wereadit.com)** — send-to-Readit share button was built 2026-07-09
+and **REMOVED 2026-07-10**: their `/api/bookmarklet/save` is unreachable
+outside their own extension (Cloudflare challenges server traffic AND the
+browser CORS preflight; a no-preflight simple-request fallback verifiably
+didn't deliver). No dead controls — revisit as a standard destination only if
+Readit CORS-enables/exempts the endpoint (issue draft handed to Josh for
+github.com/mahmoudalwadia/readit-extension). **Import from Readit** likewise
+blocked until Readit exposes an export/RSS/API of saves.
 
 **Reverse integration SHIPPED 2026-07-10**: Lectio now speaks the Readit
 extension's save protocol (`/api/bookmarklet/save`, see ARCHITECTURE

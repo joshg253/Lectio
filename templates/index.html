@@ -15,7 +15,6 @@
     window.YT_OAUTH_CONNECTED = {{ yt_oauth_connected | tojson }};
     window.YT_EMBED_ACCOUNT_FEATURES = {{ yt_embed_account_features | tojson }};
     window.INSTAPAPER_CONFIGURED = {{ instapaper_configured | tojson }};
-    window.READIT_TOKEN = {{ readit_token | tojson }};
     window.QUIRE_CONFIGURED = {{ quire_configured | tojson }};
     window.QUIRE_PROJECT_NAME = {{ quire_project_name | tojson }};
     window.PROFILE_NAME = {{ profile_name | tojson }};
@@ -1657,7 +1656,6 @@
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-int-view="youtube" role="tab" aria-selected="true">YouTube</button>
           <button type="button" class="feeds-tab-btn" data-int-view="deviantart" role="tab" aria-selected="false">DeviantArt</button>
           <button type="button" class="feeds-tab-btn" data-int-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
-          <button type="button" class="feeds-tab-btn" data-int-view="readit" role="tab" aria-selected="false">Readit</button>
           <button type="button" class="feeds-tab-btn" data-int-view="pinterest" role="tab" aria-selected="false">Pinterest</button>
           <button type="button" class="feeds-tab-btn" data-int-view="quire" role="tab" aria-selected="false">Quire</button>
           <button type="button" class="feeds-tab-btn" data-int-view="reddit" role="tab" aria-selected="false">Reddit</button>
@@ -1753,15 +1751,6 @@
           <div class="settings-field">
             <label class="settings-label" for="sett-ip-pass">Password</label>
             <input type="password" id="sett-ip-pass" class="settings-input settings-input--secret" placeholder="your Instapaper password" autocomplete="new-password" />
-          </div>
-        </div>
-        </div>
-        <div class="feeds-tab-panel" data-int-panel="readit" hidden>
-        <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Adds a <strong>Readit</strong> button to each article's share menu that saves it to <a href="https://wereadit.com" target="_blank" rel="noopener">Readit</a>. Paste your <strong>bookmarklet token</strong> from <a href="https://wereadit.com/settings" target="_blank" rel="noopener">Readit Settings</a> (the long string after <code>TOKEN=</code> in the bookmarklet). <strong>Currently blocked upstream:</strong> Readit's bot protection rejects saves from other websites (browser and server alike) — only its own extension gets through. The button starts working the moment Readit unblocks its save endpoint; a fix has been requested.</p>
-          <div class="settings-field">
-            <label class="settings-label" for="sett-readit-token">Bookmarklet token</label>
-            <input type="password" id="sett-readit-token" class="settings-input settings-input--secret" placeholder="your Readit bookmarklet token" autocomplete="new-password" />
           </div>
         </div>
         </div>
@@ -3488,50 +3477,6 @@
           showToastMessage('Instapaper save failed');
         } finally {
           ipBtn.disabled = false;
-        }
-        return;
-      }
-      const readitBtn = event.target instanceof Element && event.target.closest('[data-readit-url]');
-      if (readitBtn) {
-        // Client-side save: Readit's API is Cloudflare-challenged for server
-        // traffic, but browser fetches pass (same reason its bookmarklet
-        // works), so the POST goes straight from this page. Payload mirrors
-        // the bookmarklet: token + url + title + the article HTML we already
-        // rendered (their server readability-parses whatever it gets).
-        readitBtn.disabled = true;
-        try {
-          const articleEl = document.querySelector('.pane-entry .entry-content');
-          const title = readitBtn.getAttribute('data-readit-title') || document.title;
-          let html = '<!DOCTYPE html><html><head><title>' + title.replace(/</g, '&lt;')
-            + '</title></head><body><article>' + (articleEl ? articleEl.innerHTML : '')
-            + '</article></body></html>';
-          if (html.length > 6500000) html = html.slice(0, 6500000);
-          const payload = JSON.stringify({
-            token: window.READIT_TOKEN || '',
-            url: readitBtn.getAttribute('data-readit-url') || '',
-            title,
-            html,
-          });
-          try {
-            const resp = await fetch('https://wereadit.com/api/bookmarklet/save', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: payload,
-            });
-            const data = await resp.json().catch(() => ({}));
-            showToastMessage(resp.ok ? 'Saved to Readit' : ('Readit save failed' + (data.detail ? ': ' + data.detail : '')));
-          } catch (_corsError) {
-            // Readit's Cloudflare config challenges the CORS preflight, so the
-            // fetch aborts before the POST is sent. A no-cors fallback was
-            // tried and verified NOT to deliver either (2026-07-10), so fail
-            // honestly until Readit exempts/CORS-enables the endpoint —
-            // the moment they do, the fetch above starts working as-is.
-            showToastMessage('Readit save failed — wereadit.com currently blocks saves from other websites (fix requested upstream)');
-          }
-        } catch (e) {
-          showToastMessage('Readit save failed: ' + (e && e.message ? e.message : 'network error'));
-        } finally {
-          readitBtn.disabled = false;
         }
         return;
       }
@@ -11391,7 +11336,6 @@
         }
         v('sett-ip-user', d.instapaper_username);
         secretField('sett-ip-pass', d.instapaper_password_set, d.instapaper_password_masked);
-        secretField('sett-readit-token', d.readit_token_set, d.readit_token_masked);
         v('sett-da-id', d.deviantart_client_id);
         secretField('sett-da-secret', d.deviantart_client_secret_set, d.deviantart_client_secret_masked);
         v('sett-da-folder', d.deviantart_folder_name);
@@ -11607,7 +11551,6 @@
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
-            readit_token: g('sett-readit-token'),
             yt_oauth_client_id: g('sett-yt-oauth-client-id'),
             yt_oauth_client_secret: g('sett-yt-oauth-client-secret'),
             pinterest_oauth_client_id: g('sett-pinterest-client-id'),
@@ -11646,11 +11589,6 @@
           }
           if (scope === 'contacts') {
             window.EMAIL_CONTACTS = [...settContacts];
-          }
-          // A freshly pasted Readit token must work without a page reload;
-          // ignore blank/masked re-saves (those leave the stored value).
-          if (typeof payload.readit_token === 'string' && payload.readit_token && !payload.readit_token.startsWith('••')) {
-            window.READIT_TOKEN = payload.readit_token;
           }
           showToastMessage('Settings saved.');
         } catch { showToastMessage('Failed to save settings.'); }

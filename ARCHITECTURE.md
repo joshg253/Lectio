@@ -248,33 +248,6 @@ default recipient, contacts, profile, and Instapaper credentials. The env values
 (`_seed_admin_integrations_from_env`) and are then ignored for per-user reads, so
 one user's sender/account never becomes another's default.
 
-**Readit (wereadit.com) — a browser-side destination.** The per-user
-`readit_token` (the token from Readit's own bookmarklet, pasted in Settings →
-Integrations → Readit) enables a share-menu **Readit** button, but unlike the
-other destinations the save request is made **from the user's browser**, not
-Lectio's server: Readit's `/api/bookmarklet/save` sits behind a Cloudflare
-managed challenge that passes real-browser fetches (which is why its
-bookmarklet and extension work from any page) and 403s server-side clients.
-The page JS POSTs `{token, url, title, html}` cross-origin, sending the
-article HTML Lectio already rendered in the entry pane (their server
-readability-parses whatever it receives; 6.5MB cap mirrors their bookmarklet).
-The challenge also fires on the CORS **preflight** (OPTIONS gets
-`cf-mitigated: challenge` with no CORS headers), which aborts a normal JSON
-fetch as "Failed to fetch" — their extension survives only because extension
-host-permissions bypass CORS. A no-cors simple-request fallback (`text/plain`,
-no preflight) was tried and verified NOT to deliver either (2026-07-10; the
-opaque response hid whether Cloudflare or a strict content-type check dropped
-it). Net: **Readit is currently integrable only via its own extension**; the
-share button fails with an honest toast, and starts working unchanged the
-moment Readit CORS-enables/exempts the endpoint (requested upstream — see
-Plan.md).
-Consequences: no On-Star fan-out or automation-rule destination for Readit
-until they exempt the endpoint (or publish an API) for server traffic — we do
-not spoof browser fingerprints to work around the wall (good-citizen policy).
-The token is injected as `window.READIT_TOKEN` for the user's own session
-(same trust level as the API token shown in Settings) and masked like other
-secrets in the settings GET.
-
 ### What stays global
 
 Content-addressed caches hold no per-user data and are shared across all users:
