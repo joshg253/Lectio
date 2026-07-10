@@ -131,14 +131,17 @@ someone runs one). Each is "manual action → rule type" reusing the existing en
 (own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
 per destination.
 
-**Readit (wereadit.com)** — share-menu button SHIPPED 2026-07-09 as a
-*browser-side* destination (see ARCHITECTURE "Integrations"): their
-`/api/bookmarklet/save` is Cloudflare-challenged for server traffic, so no
-On-Star/rule destination yet. Unblock paths: ask the developer
-(github.com/mahmoudalwadia/readit-extension) to exempt the token-authenticated
-endpoint for server clients or publish an API; then it becomes a standard
-destination. **Import from Readit** also wanted — blocked until Readit exposes
-an export/RSS/API of saves (nothing found in the extension or site).
+**Readit (wereadit.com)** — share-menu button + token setting BUILT 2026-07-09
+but **BLOCKED UPSTREAM** (see ARCHITECTURE "Integrations"): Cloudflare
+challenges both server traffic AND the browser CORS preflight on
+`/api/bookmarklet/save`; a no-preflight simple-request fallback verifiably
+didn't deliver either (2026-07-10). Only Readit's own extension (CORS-exempt
+by host permissions) gets through. Issue to file with the developer
+(github.com/mahmoudalwadia/readit-extension): exempt/CORS-enable the
+token-authenticated endpoint — that instantly makes the shipped button work,
+and a server-side exemption would enable a standard On-Star/rule destination.
+**Import from Readit** also wanted — blocked until Readit exposes an
+export/RSS/API of saves (nothing found in the extension or site).
 
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted

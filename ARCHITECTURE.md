@@ -261,10 +261,13 @@ readability-parses whatever it receives; 6.5MB cap mirrors their bookmarklet).
 The challenge also fires on the CORS **preflight** (OPTIONS gets
 `cf-mitigated: challenge` with no CORS headers), which aborts a normal JSON
 fetch as "Failed to fetch" — their extension survives only because extension
-host-permissions bypass CORS. So on fetch TypeError the handler retries as a
-CORS **simple request** (`mode: no-cors`, `text/plain` body — no preflight);
-the POST is delivered with the browser's fingerprint but the response is
-opaque, so the toast reports the save as sent-but-unconfirmed.
+host-permissions bypass CORS. A no-cors simple-request fallback (`text/plain`,
+no preflight) was tried and verified NOT to deliver either (2026-07-10; the
+opaque response hid whether Cloudflare or a strict content-type check dropped
+it). Net: **Readit is currently integrable only via its own extension**; the
+share button fails with an honest toast, and starts working unchanged the
+moment Readit CORS-enables/exempts the endpoint (requested upstream — see
+Plan.md).
 Consequences: no On-Star fan-out or automation-rule destination for Readit
 until they exempt the endpoint (or publish an API) for server traffic — we do
 not spoof browser fingerprints to work around the wall (good-citizen policy).

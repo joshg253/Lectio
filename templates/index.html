@@ -1728,7 +1728,7 @@
         </div>
         <div class="feeds-tab-panel" data-int-panel="readit" hidden>
         <div class="settings-section settings-section--inline">
-          <p class="settings-hint" style="grid-column:1 / -1">Adds a <strong>Readit</strong> button to each article's share menu that saves it to <a href="https://wereadit.com" target="_blank" rel="noopener">Readit</a>. Paste your <strong>bookmarklet token</strong> from <a href="https://wereadit.com/settings" target="_blank" rel="noopener">Readit Settings</a> (the long string after <code>TOKEN=</code> in the bookmarklet). Saves are sent from your browser — Readit's API sits behind a bot wall, so server-side sends (On Star, rules) aren't possible yet.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Adds a <strong>Readit</strong> button to each article's share menu that saves it to <a href="https://wereadit.com" target="_blank" rel="noopener">Readit</a>. Paste your <strong>bookmarklet token</strong> from <a href="https://wereadit.com/settings" target="_blank" rel="noopener">Readit Settings</a> (the long string after <code>TOKEN=</code> in the bookmarklet). <strong>Currently blocked upstream:</strong> Readit's bot protection rejects saves from other websites (browser and server alike) — only its own extension gets through. The button starts working the moment Readit unblocks its save endpoint; a fix has been requested.</p>
           <div class="settings-field">
             <label class="settings-label" for="sett-readit-token">Bookmarklet token</label>
             <input type="password" id="sett-readit-token" class="settings-input settings-input--secret" placeholder="your Readit bookmarklet token" autocomplete="new-password" />
@@ -3491,17 +3491,12 @@
             const data = await resp.json().catch(() => ({}));
             showToastMessage(resp.ok ? 'Saved to Readit' : ('Readit save failed' + (data.detail ? ': ' + data.detail : '')));
           } catch (_corsError) {
-            // Readit's Cloudflare config challenges the CORS preflight, which
-            // aborts the normal fetch ("Failed to fetch"). A no-cors simple
-            // request (text/plain body, no preflight) still delivers the POST;
-            // the response is opaque, so success can't be confirmed from here.
-            await fetch('https://wereadit.com/api/bookmarklet/save', {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'text/plain' },
-              body: payload,
-            });
-            showToastMessage('Sent to Readit — check your Readit library to confirm (its API blocks cross-site confirmation)');
+            // Readit's Cloudflare config challenges the CORS preflight, so the
+            // fetch aborts before the POST is sent. A no-cors fallback was
+            // tried and verified NOT to deliver either (2026-07-10), so fail
+            // honestly until Readit exempts/CORS-enables the endpoint —
+            // the moment they do, the fetch above starts working as-is.
+            showToastMessage('Readit save failed — wereadit.com currently blocks saves from other websites (fix requested upstream)');
           }
         } catch (e) {
           showToastMessage('Readit save failed: ' + (e && e.message ? e.message : 'network error'));
