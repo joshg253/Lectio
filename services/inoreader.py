@@ -14,6 +14,8 @@ within limits automatically.
 """
 from __future__ import annotations
 
+from services import link_canonical
+
 from urllib.parse import urlencode, quote
 
 import httpx
@@ -293,8 +295,15 @@ def parse_export_json(data) -> list[dict]:
     out = []
     for item in raw_items:
         cats = item.get("categories", [])
+        # Prefer a non-redirector URL: for FeedBurner-era feeds the canonical
+        # slot often carries the (now-dead) feedproxy link while alternate has
+        # the real article URL — or vice versa. Either way, pick whichever
+        # candidate isn't a redirector (services.link_canonical).
         canonical = item.get("canonical") or []
-        url = canonical[0].get("href", "") if canonical else ""
+        alternate = item.get("alternate") or []
+        url = link_canonical.pick_non_redirector([
+            c.get("href", "") for c in (list(canonical) + list(alternate)) if isinstance(c, dict)
+        ])
         origin = item.get("origin") or {}
         raw_stream = origin.get("streamId", "")
         feed_url = raw_stream[len("feed/"):] if raw_stream.startswith("feed/") else raw_stream

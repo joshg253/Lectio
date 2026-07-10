@@ -502,6 +502,7 @@ class FeedRefreshService:
         # reverted to the feed's original (garbage) value.
         self.reapply_entry_date_overrides(feed_url_list)
         self.reapply_entry_title_overrides(feed_url_list)
+        self.reapply_entry_link_overrides(feed_url_list)
 
         if enhance:
             self.enhance_feeds(feed_url_list)
@@ -617,6 +618,40 @@ class FeedRefreshService:
             db.commit()
         if applied:
             self._logger.info("[refresh] re-pinned %d overridden entry title(s)", applied)
+        return applied
+
+    def reapply_entry_link_overrides(self, feed_urls: Iterable[str]) -> int:
+        """Re-pin canonicalized entry links (meta ``entry_link_overrides``) onto
+        reader's ``entries.link`` column after a refresh — the feed still ships
+        the redirector URL (feedproxy/feedburner) and re-ingests it. Returns
+        the number of entries whose link was re-pinned."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(
+                    f"SELECT feed_url, entry_id, link FROM entry_link_overrides WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if not rows:
+            return 0
+        applied = 0
+        with self._get_reader() as reader:
+            db = reader._storage.get_db()
+            for row in rows:
+                cur = db.execute(
+                    "UPDATE entries SET link = ? WHERE feed = ? AND id = ?"
+                    " AND (link IS NULL OR link != ?)",
+                    (row["link"], row["feed_url"], row["entry_id"], row["link"]),
+                )
+                applied += cur.rowcount
+            db.commit()
+        if applied:
+            self._logger.info("[refresh] re-pinned %d canonicalized entry link(s)", applied)
         return applied
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:

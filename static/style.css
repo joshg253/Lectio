@@ -829,6 +829,12 @@ body[data-single-mode="1"] #folders-collapse-btn {
   position: relative;
 }
 
+/* Separator above All Feeds, matching the Tags block's divider — the Saved
+   sublist sits between the two header rows, so the boundary needs marking. */
+.root-item-row {
+  border-top: 1px solid var(--tree-line);
+}
+
 .saved-items-row .saved-item {
   border-bottom: 0;
   flex: 1;

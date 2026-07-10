@@ -63,6 +63,7 @@ from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
+from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import scraper_service
 from services import html_sanitize
@@ -3051,6 +3052,16 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 title TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_link_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                link TEXT NOT NULL,
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
@@ -7212,6 +7223,9 @@ starred_archive_service = StarredArchiveService(
     # Lazy: _background_user_ids is defined later in this module; the worker
     # only calls this at runtime, so the name resolves by then.
     background_user_ids=lambda: _background_user_ids(),
+    # Lazy for the same reason: rewrites redirector entry links (feedproxy/
+    # feedburner) to the canonical URL the capture's source fetch resolved to.
+    on_canonical_link=lambda f, e, old, new: _apply_canonical_entry_link(f, e, old, new),
 )
 
 
@@ -20477,11 +20491,28 @@ def toggle_entry_saved(
 # --- Save Article (read-later capture of arbitrary URLs) ---
 
 
+def _resolve_redirector_url(url: str) -> str:
+    """Follow a feed-redirector link (feedproxy/feedburner) to its real
+    destination before saving, so the stored article never depends on the
+    redirector staying alive. SSRF-guarded; returns the input on failure."""
+    try:
+        with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
+        final = str(resp.url)
+        if final and not link_canonical.is_redirector_link(final):
+            return final
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[canonical-link] redirector resolve failed for %s: %s", url, exc)
+    return url
+
+
 def _save_article_for_current_user(url: str, extract=None) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
     DB, wiring in readability extraction and the starred-archive enqueue.
     *extract* overrides the server-side fetch+extract — e.g. extraction from
     browser-captured HTML for the extension save protocol."""
+    if link_canonical.is_redirector_link(url):
+        url = _resolve_redirector_url(url)
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.save_article(
@@ -20623,6 +20654,38 @@ def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
     return {"ok": True, "error": None, "duplicate": not newly, "extracted": False,
             "feed_url": feed_url, "entry_id": entry_id,
             "title": entry.title or entry_id, "starred_existing": True}
+
+
+def _apply_canonical_entry_link(feed_url: str, entry_id: str, old_link: str, final_url: str) -> bool:
+    """Rewrite a redirector entry link (the title's href) to the canonical URL
+    the redirect resolved to. Called by the starred-archive worker right after
+    it fetched the source page (so canonicalization costs no extra request),
+    inside the capture's tenancy context. An override row lets the refresh
+    service re-pin the rewrite when the feed re-ingests the proxy link."""
+    if not link_canonical.is_redirector_link(old_link) or link_canonical.is_redirector_link(final_url):
+        return False
+    parsed = urlparse(final_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or final_url == old_link:
+        return False
+    try:
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_link_overrides (feed_url, entry_id, link) VALUES (?, ?, ?)",
+                (feed_url, entry_id, final_url),
+            )
+            conn.commit()
+        with get_reader() as reader:
+            db = reader._storage.get_db()
+            db.execute(
+                "UPDATE entries SET link = ? WHERE feed = ? AND id = ?",
+                (final_url, feed_url, entry_id),
+            )
+            db.commit()
+        LOGGER.info("[canonical-link] %s -> %s", old_link, final_url)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[canonical-link] rewrite failed for %s/%s: %s", feed_url, entry_id, exc)
+        return False
 
 
 _BOOKMARKLET_MAX_HTML_CHARS = 6_500_000  # mirrors the Readit extension's own cap
