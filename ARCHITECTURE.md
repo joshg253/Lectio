@@ -666,6 +666,22 @@ authenticated by `username` + the per-user API token, and bound to the user
 with an explicit `tenancy.user_context` before the threadpooled save runs (the
 blocking fetch must not stall the event loop).
 
+**Extension save protocol** (`POST /api/bookmarklet/save`): Lectio implements
+the wire format of the Readit browser extension / bookmarklet —
+`{token, url, html, title}` — so that extension, pointed at a Lectio Backend,
+becomes a Lectio save-extension. The value of the shape: `html` is the
+**rendered DOM captured from the user's authenticated browser**, so
+paywalled/bot-walled pages arrive with full text and the server performs *no
+fetch* (`extract_readability_article` runs the same readability pipeline on
+the provided HTML; absent `html` it falls back to the normal server-side
+fetch). Auth is token-only (`UserStore.user_for_api_token` — bare-token
+resolution, constant-ish comparison count across users) since the payload
+carries no username; the route is session/CSRF-exempt and answers CORS
+preflights with a wildcard origin (safe: auth lives in the JSON body, no
+cookies), which is required because the extension's `host_permissions` don't
+cover third-party backends, putting its fetch under normal CORS. Captured
+HTML is capped at 6.5M chars, mirroring the extension's own truncation.
+
 **Saved Articles sidebar view.** The tree's top row (`.saved-items-row`,
 restored from the pre-2026-04-20 sidebar with its surviving CSS/JS) opens the
 all-starred view (`star_only=1` at the root folder) with an unread-starred

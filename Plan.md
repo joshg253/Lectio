@@ -143,6 +143,13 @@ and a server-side exemption would enable a standard On-Star/rule destination.
 **Import from Readit** also wanted — blocked until Readit exposes an
 export/RSS/API of saves (nothing found in the extension or site).
 
+**Reverse integration SHIPPED 2026-07-10**: Lectio now speaks the Readit
+extension's save protocol (`/api/bookmarklet/save`, see ARCHITECTURE
+"Extension save protocol") — pointing the extension's Backend at Lectio gives
+one-click rendered-DOM capture into Saved Articles (paywalled pages arrive
+with full text). Follow-up idea: fork the MIT-ish extension as a Lectio-branded
+variant so one browser can run both (single-Backend limitation).
+
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
   (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/

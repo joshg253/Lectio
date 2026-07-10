@@ -1590,6 +1590,7 @@
           <label class="settings-label">Save Article</label>
           <div class="settings-token-col">
             <p class="settings-hint">Drag <a href="javascript:location.href='{{ request.base_url }}articles/save?url='+encodeURIComponent(location.href)" onclick="return false" title="Drag me to your bookmarks bar">Save to Lectio</a> to your bookmarks bar to save the page you're reading into <strong>Saved Articles</strong>. From a phone share sheet or shortcut, request <code>{{ request.base_url }}api/save?username={{ current_user }}&amp;token=&lt;API token&gt;&amp;url=&lt;article URL&gt;</code>.</p>
+            <p class="settings-hint"><strong>Best capture — browser extension:</strong> install the <a href="https://github.com/mahmoudalwadia/readit-extension" target="_blank" rel="noopener">Readit extension</a> and in its Options set <em>Backend</em> to <code>{{ (request.base_url | string).rstrip('/') }}</code> and <em>Save token</em> to your API token above. One-click saves then ship the <em>rendered</em> page from your browser, so paywalled and bot-walled articles arrive with full text.</p>
           </div>
         </div>
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
