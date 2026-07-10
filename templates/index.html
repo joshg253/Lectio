@@ -3476,18 +3476,33 @@
             + '</title></head><body><article>' + (articleEl ? articleEl.innerHTML : '')
             + '</article></body></html>';
           if (html.length > 6500000) html = html.slice(0, 6500000);
-          const resp = await fetch('https://wereadit.com/api/bookmarklet/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: window.READIT_TOKEN || '',
-              url: readitBtn.getAttribute('data-readit-url') || '',
-              title,
-              html,
-            }),
+          const payload = JSON.stringify({
+            token: window.READIT_TOKEN || '',
+            url: readitBtn.getAttribute('data-readit-url') || '',
+            title,
+            html,
           });
-          const data = await resp.json().catch(() => ({}));
-          showToastMessage(resp.ok ? 'Saved to Readit' : ('Readit save failed' + (data.detail ? ': ' + data.detail : '')));
+          try {
+            const resp = await fetch('https://wereadit.com/api/bookmarklet/save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: payload,
+            });
+            const data = await resp.json().catch(() => ({}));
+            showToastMessage(resp.ok ? 'Saved to Readit' : ('Readit save failed' + (data.detail ? ': ' + data.detail : '')));
+          } catch (_corsError) {
+            // Readit's Cloudflare config challenges the CORS preflight, which
+            // aborts the normal fetch ("Failed to fetch"). A no-cors simple
+            // request (text/plain body, no preflight) still delivers the POST;
+            // the response is opaque, so success can't be confirmed from here.
+            await fetch('https://wereadit.com/api/bookmarklet/save', {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain' },
+              body: payload,
+            });
+            showToastMessage('Sent to Readit — check your Readit library to confirm (its API blocks cross-site confirmation)');
+          }
         } catch (e) {
           showToastMessage('Readit save failed: ' + (e && e.message ? e.message : 'network error'));
         } finally {
@@ -11597,6 +11612,11 @@
           }
           if (scope === 'contacts') {
             window.EMAIL_CONTACTS = [...settContacts];
+          }
+          // A freshly pasted Readit token must work without a page reload;
+          // ignore blank/masked re-saves (those leave the stored value).
+          if (typeof payload.readit_token === 'string' && payload.readit_token && !payload.readit_token.startsWith('••')) {
+            window.READIT_TOKEN = payload.readit_token;
           }
           showToastMessage('Settings saved.');
         } catch { showToastMessage('Failed to save settings.'); }

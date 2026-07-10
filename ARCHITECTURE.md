@@ -258,6 +258,13 @@ bookmarklet and extension work from any page) and 403s server-side clients.
 The page JS POSTs `{token, url, title, html}` cross-origin, sending the
 article HTML Lectio already rendered in the entry pane (their server
 readability-parses whatever it receives; 6.5MB cap mirrors their bookmarklet).
+The challenge also fires on the CORS **preflight** (OPTIONS gets
+`cf-mitigated: challenge` with no CORS headers), which aborts a normal JSON
+fetch as "Failed to fetch" — their extension survives only because extension
+host-permissions bypass CORS. So on fetch TypeError the handler retries as a
+CORS **simple request** (`mode: no-cors`, `text/plain` body — no preflight);
+the POST is delivered with the browser's fingerprint but the response is
+opaque, so the toast reports the save as sent-but-unconfirmed.
 Consequences: no On-Star fan-out or automation-rule destination for Readit
 until they exempt the endpoint (or publish an API) for server traffic — we do
 not spoof browser fingerprints to work around the wall (good-citizen policy).
