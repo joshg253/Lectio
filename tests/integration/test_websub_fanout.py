@@ -47,7 +47,7 @@ def _add_subscriber(wconn: sqlite3.Connection, user_id: str) -> None:
 @pytest.fixture
 def fanout(tmp_path, monkeypatch):
     saved = tenancy._layout
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     main._websub_conn_local.pool = None
     tenancy.configure(
         data_dir=tmp_path,
@@ -78,7 +78,7 @@ def fanout(tmp_path, monkeypatch):
     try:
         yield refreshed, wconn
     finally:
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         main._websub_conn_local.pool = None
         tenancy._layout = saved
 

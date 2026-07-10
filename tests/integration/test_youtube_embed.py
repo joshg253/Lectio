@@ -40,7 +40,7 @@ def test_embed_escapes_video_id():
 
 
 def _reset_reader_pool():
-    main._reader_thread_local.pool = None
+    main.close_thread_db_pools()
 
 
 @pytest.fixture

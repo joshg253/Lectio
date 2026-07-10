@@ -7021,6 +7021,31 @@ _reader_thread_local = threading.local()
 _READER_POOL_MAX_PER_THREAD = 8
 
 
+def close_thread_db_pools() -> None:
+    """Close and clear the current thread's pooled reader/meta DB handles.
+
+    Used by test fixtures that swap the tenancy layout between temp dirs:
+    just nulling the pools leaks open SQLite handles until GC, and enough
+    leaked finalizers across a run make an unrelated later open fail with
+    'database is locked' (the flaky-CI signature)."""
+    pool = getattr(_reader_thread_local, "pool", None)
+    if pool:
+        for proxy in list(pool.values()):
+            try:
+                proxy._reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+    _reader_thread_local.pool = None
+    mpool = getattr(_meta_conn_local, "pool", None)
+    if mpool:
+        for conn in list(mpool.values()):
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    _meta_conn_local.pool = None
+
+
 class _PersistentReaderProxy:
     """Wraps a thread-persistent Reader so the existing
     ``with get_reader() as r:`` pattern works without actually closing the

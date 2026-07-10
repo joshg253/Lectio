@@ -43,8 +43,7 @@ def _no_network(monkeypatch):
 @pytest.fixture
 def env(tmp_path):
     saved = tenancy._layout
-    main._reader_thread_local.pool = None
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -77,8 +76,7 @@ def env(tmp_path):
     try:
         yield
     finally:
-        main._reader_thread_local.pool = None
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved
 
 
