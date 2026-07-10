@@ -137,6 +137,18 @@ The short version:
   at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
+- **Save any article (read-it-later)** — capture pages that don't come from any
+  feed, Instapaper-style. Three ways in: **+ Save Article** in the app menu
+  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), or a
+  token-authenticated **`/api/save`** endpoint for phone share sheets / iOS
+  Shortcuts (`?username=…&token=…&url=…` with your existing API token). The
+  page's readable text is extracted server-side into a local **Saved Articles**
+  feed and the article is auto-starred, so it shows up in the Saved view, gets
+  the starred archive's full offline capture (page + images), and supports
+  read/unread, tags, and keyboard navigation like any other entry. Saving the
+  same URL twice just re-stars the existing copy; a page that can't be
+  extracted (paywall, bot-wall) is still saved as a starred bookmark and the
+  archive worker retries the capture in the background.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

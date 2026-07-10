@@ -44,6 +44,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image as _PILImage
 from readability import Document
 from reader.exceptions import InvalidFeedURLError
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -62,6 +63,7 @@ from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
+from services import saved_articles as saved_articles_service
 from services import scraper_service
 from services import html_sanitize
 from services import takeout_service
@@ -1540,7 +1542,7 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/dev/feeds/", "/fever", "/greader/", "/websub/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
@@ -2166,7 +2168,7 @@ class _TenancyMiddleware:
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/fever", "/greader/", "/websub/")
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/fever", "/greader/", "/websub/")
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
@@ -9522,56 +9524,64 @@ _READER_VIEW_MEDIA_CSS = (
 )
 
 
+def fetch_readability_article(source_url: str) -> tuple[str, str]:
+    """Fetch *source_url* and return ``(title, article_html)``: the
+    readability-extracted, sanitized article body. Shared by the reader-view
+    route and save-article capture. Raises on fetch/extraction failure."""
+    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
+    response.raise_for_status()
+    raw_html = response.text
+    doc = Document(raw_html, url=source_url)
+    title = doc.short_title() or source_url
+    summary = doc.summary(html_partial=True)
+    summary = _reinject_readability_embeds(summary, raw_html)
+    article_html = sanitize_readability_html(summary).strip()
+    _bs4_fallback_used = False
+    if len(article_html) < 300:
+        # Readability found nothing meaningful (or just a short tagline/subtitle).
+        fallback = _bs4_content_fallback(raw_html)
+        if fallback:
+            fallback_clean = sanitize_readability_html(fallback).strip()
+            if fallback_clean and len(fallback_clean) > len(article_html):
+                article_html = fallback_clean
+                _bs4_fallback_used = True
+    if not _bs4_fallback_used and "<img" in raw_html:
+        raw_img_count = raw_html.lower().count("<img")
+        art_img_count = article_html.lower().count("<img")
+        # Fall back if readability stripped all images, or if the page is
+        # image-heavy (>4 imgs) and readability kept fewer than half of them.
+        needs_fallback = art_img_count == 0 or (
+            raw_img_count > 4 and art_img_count < raw_img_count // 2
+        )
+        if needs_fallback:
+            fallback = _bs4_content_fallback(raw_html)
+            if fallback and fallback.lower().count("<img") > art_img_count:
+                article_html = sanitize_readability_html(fallback).strip()
+    article_html = _dedupe_readability_images(article_html)
+    article_html = _strip_bandcamp_track_signature(article_html)
+    # Resolve any remaining relative src/href (esp. the BS4 fallback path,
+    # which returns its element verbatim) against the source page URL.
+    article_html = _absolutize_article_urls(article_html, source_url)
+    # Apply the same hotlink handling as the entry pane (runs after
+    # absolutization so host-matching sees absolute src): route known
+    # hotlink hosts through /api/img (e.g. fabiensanglard.net, whose .webp
+    # 403 a no-Referer browser load), and strip the Referer on the rest so
+    # foreign-Referer placeholder hosts serve the real image.
+    article_html = proxy_hotlink_images(article_html)
+    article_html = add_no_referrer_to_images(article_html)
+    if not article_html:
+        raise ValueError("No readable article content was found.")
+    return title, article_html
+
+
 def build_readability_response(source_url: str) -> HTMLResponse:
     parsed = urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
         return HTMLResponse("<h1>Unsupported URL scheme.</h1>", status_code=400)
 
     try:
-        with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-            response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
-        response.raise_for_status()
-        raw_html = response.text
-        doc = Document(raw_html, url=source_url)
-        title = doc.short_title() or source_url
-        summary = doc.summary(html_partial=True)
-        summary = _reinject_readability_embeds(summary, raw_html)
-        article_html = sanitize_readability_html(summary).strip()
-        _bs4_fallback_used = False
-        if len(article_html) < 300:
-            # Readability found nothing meaningful (or just a short tagline/subtitle).
-            fallback = _bs4_content_fallback(raw_html)
-            if fallback:
-                fallback_clean = sanitize_readability_html(fallback).strip()
-                if fallback_clean and len(fallback_clean) > len(article_html):
-                    article_html = fallback_clean
-                    _bs4_fallback_used = True
-        if not _bs4_fallback_used and "<img" in raw_html:
-            raw_img_count = raw_html.lower().count("<img")
-            art_img_count = article_html.lower().count("<img")
-            # Fall back if readability stripped all images, or if the page is
-            # image-heavy (>4 imgs) and readability kept fewer than half of them.
-            needs_fallback = art_img_count == 0 or (
-                raw_img_count > 4 and art_img_count < raw_img_count // 2
-            )
-            if needs_fallback:
-                fallback = _bs4_content_fallback(raw_html)
-                if fallback and fallback.lower().count("<img") > art_img_count:
-                    article_html = sanitize_readability_html(fallback).strip()
-        article_html = _dedupe_readability_images(article_html)
-        article_html = _strip_bandcamp_track_signature(article_html)
-        # Resolve any remaining relative src/href (esp. the BS4 fallback path,
-        # which returns its element verbatim) against the source page URL.
-        article_html = _absolutize_article_urls(article_html, source_url)
-        # Apply the same hotlink handling as the entry pane (runs after
-        # absolutization so host-matching sees absolute src): route known
-        # hotlink hosts through /api/img (e.g. fabiensanglard.net, whose .webp
-        # 403 a no-Referer browser load), and strip the Referer on the rest so
-        # foreign-Referer placeholder hosts serve the real image.
-        article_html = proxy_hotlink_images(article_html)
-        article_html = add_no_referrer_to_images(article_html)
-        if not article_html:
-            raise ValueError("No readable article content was found.")
+        title, article_html = fetch_readability_article(source_url)
     except Exception as exc:
         escaped_url = html.escape(source_url)
         escaped_error = html.escape(str(exc))
@@ -20299,6 +20309,103 @@ def toggle_entry_saved(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
         status_code=303,
     )
+
+
+# --- Save Article (read-later capture of arbitrary URLs) ---
+
+
+def _save_article_for_current_user(url: str) -> dict:
+    """Run the saved-articles service with the current tenancy's reader/meta
+    DB, wiring in readability extraction and the starred-archive enqueue."""
+    reader = get_reader()
+    with get_meta_connection() as conn:
+        result = saved_articles_service.save_article(
+            reader,
+            conn,
+            url,
+            extract=fetch_readability_article,
+            enqueue_archive=starred_archive_service.enqueue_archive,
+        )
+    if result.get("created_feed"):
+        # The Saved Articles feed just appeared — surface it in the sidebar tree.
+        invalidate_meta_structure_cache()
+        invalidate_problematic_feeds_cache()
+    if result.get("ok") and not result.get("duplicate"):
+        invalidate_unread_counts_cache()
+    return result
+
+
+@app.post("/articles/save")
+def save_article_route(request: Request, url: str = Form(...)):
+    """In-app save (Save Article modal). Session-authenticated."""
+    result = _save_article_for_current_user(url)
+    if is_async_action_request(request, "lectio-save-article"):
+        status = 200 if result["ok"] else 400
+        return JSONResponse(result, status_code=status)
+    if not result["ok"]:
+        return RedirectResponse(
+            url="/?message=" + quote_plus(result["error"] or "Could not save the article."),
+            status_code=303,
+        )
+    entry_query = _entry_query_suffix(result["feed_url"], result["entry_id"])
+    return RedirectResponse(
+        url=f"/?list_feed_url={quote_plus(result['feed_url'])}{entry_query}",
+        status_code=303,
+    )
+
+
+@app.get("/articles/save")
+def save_article_bookmarklet(request: Request, url: str = Query(...)):
+    """Bookmarklet save: a top-level GET navigation, so the session cookie
+    rides along (SameSite=Lax) and an unauthenticated hit lands on /login with
+    a ?next= that finishes the save after sign-in."""
+    result = _save_article_for_current_user(url)
+    if not result["ok"]:
+        return RedirectResponse(
+            url="/?message=" + quote_plus(result["error"] or "Could not save the article."),
+            status_code=303,
+        )
+    message = "Article already saved." if result["duplicate"] else "Article saved."
+    entry_query = _entry_query_suffix(result["feed_url"], result["entry_id"])
+    return RedirectResponse(
+        url=(
+            f"/?list_feed_url={quote_plus(result['feed_url'])}{entry_query}"
+            f"&message={quote_plus(message)}"
+        ),
+        status_code=303,
+    )
+
+
+@app.api_route("/api/save", methods=["GET", "POST"])
+async def api_save_article(request: Request):
+    """Token-authenticated save for mobile share sheets / iOS Shortcuts.
+
+    Auth mirrors the Fever/GReader model: ``username`` + the per-user API
+    token (query or form params), resolved to a user and bound to the tenancy
+    context explicitly — this path is session-exempt. The blocking fetch runs
+    in the threadpool so it can't stall the event loop."""
+    params = dict(request.query_params)
+    if request.method == "POST":
+        try:
+            params.update(dict(await request.form()))
+        except Exception:  # noqa: BLE001
+            pass
+    url = params.get("url", "")
+    if user_store is not None:
+        uid = user_store.verify_api_token(params.get("username", ""), params.get("token", ""))
+        if not uid:
+            return JSONResponse({"ok": False, "error": "Authentication failed — check your API token."}, status_code=401)
+    else:
+        uid = None  # no-auth single-user install: default tenancy
+
+    def _do_save() -> dict:
+        if uid:
+            with tenancy.user_context(uid):
+                return _save_article_for_current_user(url)
+        return _save_article_for_current_user(url)
+
+    result = await run_in_threadpool(_do_save)
+    return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
 
 @app.post("/entries/tags")
