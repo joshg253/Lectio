@@ -14409,6 +14409,7 @@ def home(
     sort_dir: str | None = None,
     read_filter: str | None = None,
     star_only: str | None = None,
+    saved_home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -14438,6 +14439,7 @@ def home(
             sort_dir=sort_dir,
             read_filter=read_filter,
             star_only=star_only,
+            saved_home=saved_home,
             resume_read_filter=resume_read_filter,
             feed_url=feed_url,
             entry_id=entry_id,
@@ -14461,6 +14463,7 @@ def _home_inner(
     sort_dir: str | None = None,
     read_filter: str | None = None,
     star_only: str | None = None,
+    saved_home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -14533,18 +14536,18 @@ def _home_inner(
         # every reader feed, not just foldered ones, so orphan feeds and their
         # unreads are reachable from the top of the tree.
         all_reader_feed_urls = get_all_reader_feed_urls()
-        # The local Saved Articles feed is surfaced by the dedicated sidebar
-        # view, not as a subscription — keep it out of the Uncategorized
-        # folder (tree, view, and counts) while the root view set below still
-        # includes it so the Saved/All Feeds streams see its entries.
-        uncategorized_feed_urls = (
-            all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
-        )
+        uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+        # The local Saved Articles feed is surfaced by the Saved sidebar view,
+        # not as a subscription: it stays in the Uncategorized VIEW set (the
+        # Saved sublist's Uncategorized folder must reach its entries) but out
+        # of the feeds-tree DISPLAY set (feed list, unread badge, row
+        # presence), so it never shows as a subscription in Feeds mode.
+        _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
         folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
-        direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(uncategorized_feed_urls)
+        direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
         _tick("structure_snapshot")
 
         unread_counts_by_feed = get_unread_counts_by_feed()
@@ -14563,7 +14566,7 @@ def _home_inner(
         # The virtual Uncategorized folder isn't in raw_folder_rows, so count it
         # here and fold it into the root ("All Feeds") total.
         uncategorized_unread = sum(
-            active_unread_counts_by_feed.get(url, 0) for url in uncategorized_feed_urls
+            active_unread_counts_by_feed.get(url, 0) for url in _uncat_display_urls
         )
         unread_counts_by_folder[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
         unread_counts_by_folder[root_id] = unread_counts_by_folder.get(root_id, 0) + uncategorized_unread
@@ -14583,9 +14586,12 @@ def _home_inner(
                 "cadence_minutes": None,
                 "depth": 1,
                 "path": UNCATEGORIZED_FOLDER_NAME,
-                "feed_count": len(uncategorized_feed_urls),
+                "feed_count": len(_uncat_display_urls),
                 "unread_count": uncategorized_unread,
                 "virtual": True,
+                # Saved-only membership (just lectio:saved unfoldered): the
+                # feeds tree hides the row; the Saved sublist still shows it.
+                "has_display_feeds": bool(_uncat_display_urls),
             })
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
@@ -14639,6 +14645,14 @@ def _home_inner(
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
     selected_star_only = normalize_star_only(star_only) or legacy_saved_mode
+    # Saved-mode landing state: the Saved Articles header expands its folder
+    # list without loading any posts (the whole backlog is expensive) — the
+    # user picks All / a folder / Uncategorized from the sublist.
+    selected_saved_home = bool(saved_home) and selected_star_only
+    if selected_saved_home:
+        selected_feed_url = None
+        selected_tag = None
+        filtered_feed_urls = set()
     selected_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
     # Respect an explicit resume_read_filter provided by the caller. Only
     # default to the current read selection when no explicit resume value was
@@ -14806,6 +14820,7 @@ def _home_inner(
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
     elif (
         selected_star_only
+        and not selected_saved_home
         and selected_folder_id == root_id
         and not selected_feed_url
         and not selected_tag
@@ -14902,6 +14917,7 @@ def _home_inner(
         "selected_sort_dir": selected_sort_dir,
         "selected_read_filter": selected_read_filter,
         "selected_star_only": selected_star_only,
+        "selected_saved_home": selected_saved_home,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
         "saved_counts_by_folder": saved_counts_by_folder,

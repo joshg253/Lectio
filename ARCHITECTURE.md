@@ -686,10 +686,17 @@ read filter **composes** instead of being ignored:
 (`list_entries_for_feeds` skips read entries regardless of star mode; only
 `history` stays exclusive with starred since it sorts by read time).
 Archive-only orphans are excluded from the unread narrowing — they are read
-by definition (no live entry). The `lectio:saved` feed itself is excluded
-from the Uncategorized folder (tree, view, and counts — the sidebar view
-supersedes it) while the root view set still includes it, so its entries
-appear in the Saved and All Feeds streams.
+by definition (no live entry). Clicking the Saved Articles header is an
+**expand-only landing** (`saved_home=1`: no posts load — the whole backlog is
+expensive); the sublist starts with an **All** row (the full-backlog view at
+the root folder) and ends with **Uncategorized** (saves in unfoldered feeds,
+including everything in `lectio:saved`). In saved mode the sublist is the
+scrollable region and the All Feeds row pins to the bottom above Tags
+(`.tree.saved-mode` flex layout). The `lectio:saved` feed itself is excluded
+from the Uncategorized *display* set (feed list, unread badge, and the row is
+hidden in Feeds mode when it's the only unfoldered feed) but stays in the
+Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
+its entries.
 
 ## Hard-deleting a single entry (tombstones)
 
