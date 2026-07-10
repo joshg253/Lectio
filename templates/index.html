@@ -174,10 +174,26 @@
         {# Compact query fragments for tree/folder/feed links — omit default values #}
         {% set _tree_sq = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
+        {# Read-filter carry without star mode: the Saved row forces star_only=1,
+           the All Feeds row drops it (they are the mode switches). #}
+        {% set _tree_rf_ns = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
         <div class="tree-block root-tree-block">
+          <div class="saved-items-row">
+            <a
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rf_ns }}&star_only=1"
+              class="tree-item saved-item {% if selected_star_only and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-saved-items="true"
+            >
+              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
+              <span class="name">Saved Articles</span>
+              {% if saved_unread_count %}<span class="count">{{ saved_unread_count }}</span>{% endif %}
+            </a>
+          </div>
+
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rf_ns }}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -329,7 +345,7 @@
         {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
         {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
-        {% set filter_label = 'Unread' if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
+        {% set filter_label = ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
         {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
@@ -343,9 +359,14 @@
                 <span class="material-symbols-rounded toolbar-dd-chevron" aria-hidden="true">expand_more</span>
               </summary>
               <div class="menu-popover anchor-left toolbar-dropdown-popover">
-                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
-                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
-                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'all' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
+                {# In star mode, All/Unread narrow the starred set (star_only rides
+                   along); clicking the active Starred item exits star mode. #}
+                {% set _fm_star = '&star_only=1' if selected_star_only else '' %}
+                {% set _fm_resume = ('&resume_read_filter=' ~ resume_filter) if (selected_star_only and resume_filter != 'all') else '' %}
+                {% set starred_href = (tb_base ~ tb_sort ~ '&read_filter=' ~ resume_filter) if selected_star_only else (tb_base ~ tb_sort ~ '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'all' else '')) %}
+                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star ~ _fm_resume }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
+                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star ~ _fm_resume }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ starred_href }}" {% if selected_star_only %}title="Exit Starred"{% endif %}><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
                 {% if tag_rows %}
@@ -4274,7 +4295,7 @@
             appUnreadCount = Math.max(0, current - 1);
             updateDynamicFavicon();
             const postFeedUrl = postItem.getAttribute('data-post-feed-url') || '';
-            if (postFeedUrl) adjustSidebarUnreadCount(postFeedUrl, -1);
+            if (postFeedUrl) adjustSidebarUnreadCount(postFeedUrl, -1, postItem.getAttribute('data-post-saved') === '1');
           }
         }
       }
@@ -7497,6 +7518,10 @@
           if (linkedPostItem instanceof HTMLElement) {
             applyPostItemSavedState(linkedPostItem, nextIsSaved);
           }
+          // (Un)starring an unread post moves it in/out of the Saved backlog.
+          const starredUnread = linkedPostItem instanceof HTMLElement
+            && linkedPostItem.getAttribute('data-post-read') === '0';
+          if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(entrySaveForm.action, {
@@ -7517,6 +7542,7 @@
             if (linkedPostItem instanceof HTMLElement) {
               applyPostItemSavedState(linkedPostItem, !nextIsSaved);
             }
+            if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
             entrySaveForm.submit();
           }
         });
@@ -7993,18 +8019,19 @@
                 applyEntryPaneReadState(nextIsRead);
               }
               const feedUrl = postItem.getAttribute('data-post-feed-url') || '';
+              const postIsSaved = postItem.getAttribute('data-post-saved') === '1';
               if (nextIsRead && wasUnread) {
                 const fallbackBase = getUnreadCountFallback();
                 const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
                 appUnreadCount = Math.max(0, current - 1);
                 updateDynamicFavicon();
-                if (feedUrl) adjustSidebarUnreadCount(feedUrl, -1);
+                if (feedUrl) adjustSidebarUnreadCount(feedUrl, -1, postIsSaved);
               } else if (!nextIsRead && !wasUnread) {
                 const fallbackBase = getUnreadCountFallback();
                 const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
                 appUnreadCount = Math.max(0, current + 1);
                 updateDynamicFavicon();
-                if (feedUrl) adjustSidebarUnreadCount(feedUrl, +1);
+                if (feedUrl) adjustSidebarUnreadCount(feedUrl, +1, postIsSaved);
               }
             }
           } catch (_error) {
@@ -8040,6 +8067,9 @@
           }
 
           applyPostItemSavedState(postItem, nextIsSaved);
+          // (Un)starring an unread post moves it in/out of the Saved backlog.
+          const starredUnread = postItem.getAttribute('data-post-read') === '0';
+          if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(saveForm.action, {
@@ -8057,6 +8087,7 @@
             }
           } catch (_error) {
             applyPostItemSavedState(postItem, !nextIsSaved);
+            if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
             saveForm.submit();
           }
         });
@@ -8117,18 +8148,21 @@
               applyPostItemReadState(matchingPostItem, nextIsRead);
             }
 
+            const paneIsSaved = matchingPostItem
+              ? matchingPostItem.getAttribute('data-post-saved') === '1'
+              : document.querySelector('.entry-save-indicator')?.textContent.trim() === 'star';
             if (nextIsRead && !wasRead) {
               const fallbackBase = getUnreadCountFallback();
               const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
               appUnreadCount = Math.max(0, current - 1);
               updateDynamicFavicon();
-              adjustSidebarUnreadCount(feedInput.value, -1);
+              adjustSidebarUnreadCount(feedInput.value, -1, paneIsSaved);
             } else if (!nextIsRead && wasRead) {
               const fallbackBase = getUnreadCountFallback();
               const current = Number.isFinite(appUnreadCount) ? appUnreadCount : fallbackBase;
               appUnreadCount = Math.max(0, current + 1);
               updateDynamicFavicon();
-              adjustSidebarUnreadCount(feedInput.value, +1);
+              adjustSidebarUnreadCount(feedInput.value, +1, paneIsSaved);
             }
           } catch (_error) {
             entryReadForm.submit();
@@ -8214,7 +8248,14 @@
       }
     }
 
-    function adjustSidebarUnreadCount(feedUrl, delta) {
+    // Adjust the Saved Articles row's unread badge (unread starred entries).
+    function adjustSavedUnreadBadge(delta) {
+      const savedItem = document.querySelector('.saved-item.tree-item');
+      if (savedItem) adjustCountBadge(savedItem, delta);
+    }
+
+    function adjustSidebarUnreadCount(feedUrl, delta, isSaved = false) {
+      if (isSaved) adjustSavedUnreadBadge(delta);
       const feedLink = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`);
       if (feedLink) {
         adjustCountBadge(feedLink, delta);

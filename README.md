@@ -149,6 +149,13 @@ The short version:
   same URL twice just re-stars the existing copy; a page that can't be
   extracted (paywall, bot-wall) is still saved as a starred bookmark and the
   archive worker retries the capture in the background.
+  A **Saved Articles** item at the top of the sidebar (with an unread-count
+  badge) opens the whole starred/saved backlog in the familiar three-pane
+  layout, and the toolbar filter narrows it: **All** shows everything kept,
+  **Unread** just the not-yet-read part, and the Tags submenu slices the
+  backlog by your tags (e.g. `#toread` vs `#todo`) without leaving the view.
+  Clicking **All Feeds** (or the active Starred filter) exits back to normal
+  browsing.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

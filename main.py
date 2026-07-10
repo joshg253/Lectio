@@ -9711,11 +9711,11 @@ def list_entries_for_feeds(
     search_terms = [token.lower() for token in normalized_search_query.split()] if normalized_search_query else []
 
     reader_read_filter: bool | None = None
-    if not normalized_star_only:
-        if normalized_read_filter == "unread":
-            reader_read_filter = False
-        elif normalized_read_filter == "history":
-            reader_read_filter = True
+    if normalized_read_filter == "unread":
+        # Composes with star_only: the Saved view can narrow to unread.
+        reader_read_filter = False
+    elif normalized_read_filter == "history" and not normalized_star_only:
+        reader_read_filter = True
 
     # Fetch app-managed entry metadata only for feeds in the active view.
     saved_entries_set: set[tuple[str, str]] = set()
@@ -9957,11 +9957,12 @@ def list_entries_for_feeds(
                     continue
             if normalized_star_only and not is_saved:
                 continue
-            if not normalized_star_only:
-                if normalized_read_filter == "unread" and is_read:
-                    continue
-                if normalized_read_filter == "history" and not is_read:
-                    continue
+            # Unread composes with star_only (Saved view narrowed to unread);
+            # history stays exclusive with starred (it sorts by read time).
+            if normalized_read_filter == "unread" and is_read:
+                continue
+            if not normalized_star_only and normalized_read_filter == "history" and not is_read:
+                continue
             published_dt = entry_effective_date(entry)
             read_dt = read_state_map.get((entry.feed_url, entry.id))
             if read_dt is None:
@@ -10140,6 +10141,29 @@ def list_entries_for_feeds(
     )
 
     return entries
+
+
+def get_saved_unread_count() -> int:
+    """Unread count across all starred/saved entries, for the sidebar's Saved
+    Articles badge. Starred sets are small (hundreds), so a per-feed IN query
+    against reader's entries table is cheap."""
+    saved_by_feed: dict[str, list[str]] = {}
+    with get_meta_connection() as conn:
+        for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
+            saved_by_feed.setdefault(row["feed_url"], []).append(row["entry_id"])
+    if not saved_by_feed:
+        return 0
+    count = 0
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        for feed_url, ids in saved_by_feed.items():
+            placeholders = ",".join("?" for _ in ids)
+            row = db.execute(
+                f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({placeholders})",
+                (feed_url, *ids),
+            ).fetchone()
+            count += int(row[0] or 0)
+    return count
 
 
 def merge_orphan_saved_entries(
@@ -14547,6 +14571,12 @@ def _home_inner(
     tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
+    try:
+        saved_unread_count = get_saved_unread_count()
+    except Exception as exc:  # noqa: BLE001 — badge only; never block the render
+        LOGGER.warning("saved unread count failed: %s", exc)
+        saved_unread_count = 0
+
     feed_title_map = get_feed_title_map()
     inactive_feeds = [
         {
@@ -14692,6 +14722,9 @@ def _home_inner(
         and not selected_feed_url
         and not selected_tag
         and not selected_query
+        # Orphans are read by definition (no live entry to be unread), so a
+        # Saved view narrowed to unread excludes them.
+        and selected_read_filter != "unread"
     ):
         try:
             posts = merge_orphan_saved_entries(
@@ -14782,6 +14815,7 @@ def _home_inner(
         "selected_read_filter": selected_read_filter,
         "selected_star_only": selected_star_only,
         "selected_resume_read_filter": selected_resume_read_filter,
+        "saved_unread_count": saved_unread_count,
         "global_note": global_note,
         "email_configured": is_email_configured(),
         "yt_oauth_connected": youtube_oauth_connected(),
@@ -14824,7 +14858,9 @@ def _home_inner(
         "current_api_token": (
             user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""
         ),
-        "no_feeds": len(all_feed_urls) == 0,
+        # Uncategorized-only feeds count (e.g. a fresh install whose first feed
+        # is a bookmarklet-created Saved Articles feed) — the toolbar must render.
+        "no_feeds": len(all_feed_urls) == 0 and len(all_reader_feed_urls) == 0,
     }
     _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
     _stream.enable_buffering(50)

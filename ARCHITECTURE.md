@@ -639,6 +639,22 @@ authenticated by `username` + the per-user API token, and bound to the user
 with an explicit `tenancy.user_context` before the threadpooled save runs (the
 blocking fetch must not stall the event loop).
 
+**Saved Articles sidebar view.** The tree's top row (`.saved-items-row`,
+restored from the pre-2026-04-20 sidebar with its surviving CSS/JS) opens the
+all-starred view (`star_only=1` at the root folder) with an unread-starred
+count badge (`get_saved_unread_count`; kept live client-side by
+`adjustSavedUnreadBadge` on single-post read toggles and star toggles — bulk
+operations let it drift until the next render). Mode semantics: the Saved row
+and the toolbar's Starred filter enter star mode; the **All Feeds** row and
+the *active* Starred menu item exit it (restoring `resume_read_filter`);
+folder/feed links preserve it (starred-within-folder browsing). Within star
+mode the read filter **composes** instead of being ignored:
+`read_filter=unread&star_only=1` narrows to unread starred
+(`list_entries_for_feeds` skips read entries regardless of star mode; only
+`history` stays exclusive with starred since it sorts by read time).
+Archive-only orphans are excluded from the unread narrowing — they are read
+by definition (no live entry).
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
