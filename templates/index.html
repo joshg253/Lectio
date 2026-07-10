@@ -127,6 +127,7 @@
             <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
             <hr class="menu-divider" />
             <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
+            <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
             <div class="flyout-item">
               <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
               <div class="flyout-panel">
@@ -1400,6 +1401,27 @@
     </div>
   </div>
 
+  <!-- Save Article dialog: read-later capture of an arbitrary page URL into
+       the local "Saved Articles" feed (starred, offline-archived). -->
+  <div id="save-article-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="sva-title">
+      <div class="modal-header-row">
+        <h3 id="sva-title" class="action-modal-title">Save Article</h3>
+        <button type="button" class="modal-close" data-close-modal="save-article-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="afd-url-row">
+        <input id="sva-url" type="url" placeholder="https://example.com/some-article" autocomplete="off" />
+        <span id="sva-spinner" class="afd-spinner" hidden aria-hidden="true"></span>
+      </div>
+      <div id="sva-msg" class="afd-msg" hidden></div>
+      <p class="action-modal-hint">Saves the page's readable text into <strong>Saved Articles</strong> and stars it, so it's kept offline even if the site goes away.</p>
+      <div class="action-modal-actions">
+        <button type="button" class="action-modal-cancel" data-close-modal="save-article-modal">Cancel</button>
+        <button type="button" id="sva-submit" disabled>Save Article</button>
+      </div>
+    </div>
+  </div>
+
   <div id="global-note-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="global-note-modal-title">
       <div class="modal-header-row">
@@ -1541,6 +1563,12 @@
             </div>
           </div>
         </form>
+        <div class="settings-section settings-section--row settings-section--spaced">
+          <label class="settings-label">Save Article</label>
+          <div class="settings-token-col">
+            <p class="settings-hint">Drag <a href="javascript:location.href='{{ request.base_url }}articles/save?url='+encodeURIComponent(location.href)" onclick="return false" title="Drag me to your bookmarks bar">Save to Lectio</a> to your bookmarks bar to save the page you're reading into <strong>Saved Articles</strong>. From a phone share sheet or shortcut, request <code>{{ request.base_url }}api/save?username={{ current_user }}&amp;token=&lt;API token&gt;&amp;url=&lt;article URL&gt;</code>.</p>
+          </div>
+        </div>
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
         <div class="settings-section">
           <label class="settings-label">Theme</label>
@@ -2940,7 +2968,7 @@
       });
     }
 
-    for (const modal of document.querySelectorAll('#add-feed-modal, #global-note-modal, #email-article-modal, #settings-modal')) {
+    for (const modal of document.querySelectorAll('#add-feed-modal, #save-article-modal, #global-note-modal, #email-article-modal, #settings-modal')) {
       // Use mousedown/mouseup pairing so that CSS-resize drag releases (where
       // mousedown was on the panel and mouseup lands on the backdrop) don't
       // accidentally dismiss the modal.  Only closes when BOTH events hit the
@@ -14240,6 +14268,62 @@
         window.openAddFeedDialog();
         document.getElementById('side-menu')?.removeAttribute('data-open');
       });
+
+      // Save Article dialog: read-later capture of an arbitrary page URL.
+      (function () {
+        const svaModal = document.getElementById('save-article-modal');
+        const svaUrl = document.getElementById('sva-url');
+        const svaMsg = document.getElementById('sva-msg');
+        const svaSpinner = document.getElementById('sva-spinner');
+        const svaSubmit = document.getElementById('sva-submit');
+        if (!svaModal || !svaUrl || !svaSubmit) return;
+
+        const validUrl = () => /^https?:\/\/\S+\.\S+/i.test(svaUrl.value.trim());
+        svaUrl.addEventListener('input', () => { svaSubmit.disabled = !validUrl(); });
+        svaUrl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !svaSubmit.disabled) svaSubmit.click();
+        });
+
+        document.getElementById('menu-save-article-btn')?.addEventListener('click', (e) => {
+          e.target.closest('.hamburger-menu')?.removeAttribute('open');
+          svaMsg.hidden = true;
+          svaMsg.textContent = '';
+          svaUrl.value = '';
+          svaSubmit.disabled = true;
+          svaSubmit.textContent = 'Save Article';
+          svaModal.removeAttribute('hidden');
+          svaUrl.focus();
+        });
+
+        svaSubmit.addEventListener('click', async () => {
+          const url = svaUrl.value.trim();
+          if (!url) return;
+          svaSubmit.disabled = true;
+          svaSpinner.hidden = false;
+          svaMsg.hidden = true;
+          try {
+            const response = await fetch('/articles/save', {
+              method: 'POST',
+              headers: { 'X-Requested-With': 'lectio-save-article' },
+              body: new URLSearchParams({ url }),
+            });
+            const result = await response.json();
+            if (!result.ok) throw new Error(result.error || 'Could not save the article.');
+            const message = result.duplicate ? 'Article already saved.' : 'Article saved.';
+            window.location.assign(
+              '/?list_feed_url=' + encodeURIComponent(result.feed_url)
+              + '&feed_url=' + encodeURIComponent(result.feed_url)
+              + '&entry_id=' + encodeURIComponent(result.entry_id)
+              + '&message=' + encodeURIComponent(message)
+            );
+          } catch (err) {
+            svaMsg.textContent = err.message || 'Could not save the article.';
+            svaMsg.hidden = false;
+            svaSubmit.disabled = !validUrl();
+            svaSpinner.hidden = true;
+          }
+        });
+      }());
       document.getElementById('no-feeds-add-btn')?.addEventListener('click', () => {
         window.openAddFeedDialog();
       });

@@ -18,16 +18,22 @@ rationale.)
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 
-Make Lectio usable as a read-it-later app. Two parts:
+Make Lectio usable as a read-it-later app.
 
+- SHIPPED 2026-07-09: **Save any article** (no feed needed) — modal, bookmarklet,
+  and token-authenticated `/api/save`; readability capture into the local
+  `lectio:saved` feed, auto-star + starred-archive offline capture (see
+  ARCHITECTURE "Saved articles"). Note: the starred archive already stores a
+  readability-extracted copy + images for every starred entry, so the earlier
+  "beef up Star to capture full content" item was largely already covered at the
+  archive level; what remains is surfacing it (below).
 - **Reader-only browsing view** for saved/starred items — a clean, distraction-free
   reading surface (no triage chrome), keyboard-first navigation through the
-  starred/saved backlog.
-- **Beef up Star to capture full article content.** Starring must guarantee the
-  complete article is persisted (readability-extracted full text into the starred
-  archive, not just the feed's summary/truncated body), so items remain readable
-  after the feed entry ages out or the source goes away. Audit what the starred
-  archive stores today and fill the gap.
+  starred/saved backlog. Should prefer the archived readability copy when the
+  live entry content is a truncated feed summary.
+- Save Article follow-up ideas (build on demand): folder placement for the
+  Saved Articles feed (it currently lands in Uncategorized), an "archive"
+  (unstar-on-read) flow to mimic Instapaper's read/archive split.
 
 ### DeviantArt watchlist sync — remaining follow-up
 

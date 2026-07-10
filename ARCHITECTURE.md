@@ -605,6 +605,40 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
+## Saved articles (read-it-later capture)
+
+`services/saved_articles.py` lets users save arbitrary page URLs that come from
+no feed. Rather than inventing a parallel store, a saved article is an ordinary
+reader entry in a per-user synthetic feed `lectio:saved` ("Saved Articles"),
+created lazily on first save with `add_feed(allow_invalid_url=True)` and
+`updates_enabled=False` — the scheduler and `update_feeds()` never touch it, and
+entries are user-added (`added_by='user'`), which reader guarantees never to
+delete during updates. Because it's a real feed in the per-user reader DB,
+tenancy, read state, tags, keyboard flows, unread counts, and feed-management
+surfaces all apply with zero special-casing (the same reason FakeFeedz uses
+`file://` feeds).
+
+Saving (entry id = link = the fragment-stripped URL, published = save time):
+the page is fetched and readability-extracted server-side via
+`fetch_readability_article` — the same core the reader-view route uses — then
+the entry is auto-starred (`saved_entries` row) and enqueued to the starred
+archive, whose worker independently captures the source page + images for
+offline reading. Extraction failure is deliberately non-fatal: the starred
+bookmark is still created (title falls back to the URL) and the archive worker
+retries the page later. A duplicate save re-stars the existing entry without
+re-fetching. The on-star destination fan-out is deliberately **not** fired —
+saving *into* Lectio shouldn't re-send the article to external read-later
+services.
+
+Entry points: the **+ Save Article** modal (session `POST /articles/save`), a
+bookmarklet (`GET /articles/save?url=…` — a top-level navigation, so the
+SameSite=Lax session cookie rides along and an unauthenticated hit round-trips
+through `/login?next=`), and `GET|POST /api/save` for share sheets/shortcuts.
+`/api/save` follows the Fever model: session/CSRF-exempt (both prefix lists),
+authenticated by `username` + the per-user API token, and bound to the user
+with an explicit `tenancy.user_context` before the threadpooled save runs (the
+blocking fetch must not stall the event loop).
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
