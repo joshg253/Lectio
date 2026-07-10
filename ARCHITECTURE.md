@@ -697,16 +697,26 @@ restored from the pre-2026-04-20 sidebar with its surviving CSS/JS) opens the
 all-starred view (`star_only=1` at the root folder) with an unread-starred
 count badge (`get_saved_unread_count`; kept live client-side by
 `adjustSavedUnreadBadge` on single-post read toggles and star toggles — bulk
-operations let it drift until the next render). Mode semantics: the Saved row
-and the toolbar's Starred filter enter star mode; the **All Feeds** row and
-the *active* Starred menu item exit it (restoring `resume_read_filter`);
-folder/feed links preserve it (starred-within-folder browsing). Within star
-mode the read filter **composes** instead of being ignored:
+operations let it drift until the next render). Saved mode and Feeds mode are
+**mutually exclusive tree blocks**: entering Saved expands its own folder
+sublist (`.saved-tree-children` — folders holding saved items, badges =
+*total* saved per folder via `get_saved_counts_by_folder`, since the view
+defaults to the whole backlog) and collapses the feeds tree
+(`.feeds-tree-children`), and vice versa; the pane-swap path toggles the two
+blocks in `updateScopeActiveState` since it never re-renders the tree.
+Entering Saved always opens on **All** and stashes the current read filter in
+`resume_read_filter`; the **All Feeds** row (and the *active* Starred menu
+item) exits star mode restoring that filter. Feeds-tree links never carry
+star mode (each block is only visible in its own mode). Within star mode the
+read filter **composes** instead of being ignored:
 `read_filter=unread&star_only=1` narrows to unread starred
 (`list_entries_for_feeds` skips read entries regardless of star mode; only
 `history` stays exclusive with starred since it sorts by read time).
 Archive-only orphans are excluded from the unread narrowing — they are read
-by definition (no live entry).
+by definition (no live entry). The `lectio:saved` feed itself is excluded
+from the Uncategorized folder (tree, view, and counts — the sidebar view
+supersedes it) while the root view set still includes it, so its entries
+appear in the Saved and All Feeds streams.
 
 ## Hard-deleting a single entry (tombstones)
 

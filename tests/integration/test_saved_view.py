@@ -68,6 +68,17 @@ def test_unread_without_star_only_unchanged(configured):
     assert _ids(posts) == ["e1", "e3"]
 
 
+def test_saved_counts_by_folder_totals(configured):
+    """Sublist badges are TOTAL saved per folder (the Saved view defaults to
+    All), keyed by the folder→feeds map; folders without saves are omitted."""
+    counts = main.get_saved_counts_by_folder({
+        1: {FEED, "https://other.test/feed"},   # root-ish: both starred entries
+        7: {FEED},                               # folder holding the feed: 2 saves
+        9: {"https://other.test/feed"},          # no saves here
+    })
+    assert counts == {1: 2, 7: 2}
+
+
 def test_saved_unread_count_counts_only_unread_starred(configured):
     assert main.get_saved_unread_count() == 1
     # Reading the starred entry drops the count to zero.
