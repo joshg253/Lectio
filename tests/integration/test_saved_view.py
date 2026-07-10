@@ -3,6 +3,8 @@
 only unread starred entries."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 import main
@@ -66,6 +68,24 @@ def test_star_only_composes_with_unread(configured):
 def test_unread_without_star_only_unchanged(configured):
     posts = main.list_entries_for_feeds({FEED}, read_filter="unread", star_only=False)
     assert _ids(posts) == ["e1", "e3"]
+
+
+def test_old_starred_entries_survive_the_fetch_window(configured):
+    """Imported stars are old — they must not be lost to the newest-N fetch
+    window (the star fast path point-looks-up saved keys instead of scanning)."""
+    with main.get_reader() as reader:
+        # e1/e2 are starred (from the fixture); bury them under newer noise.
+        for i in range(10):
+            reader.add_entry({
+                "feed_url": FEED,
+                "id": f"noise-{i}",
+                "title": f"noise {i}",
+                "link": f"https://example.test/noise-{i}",
+                "published": datetime(2026, 7, 1, i, tzinfo=timezone.utc),
+            })
+    # A tiny limit forces the old windowed fetch to see only the noise.
+    posts = main.list_entries_for_feeds({FEED}, limit=3, read_filter="all", star_only=True)
+    assert _ids(posts) == ["e1", "e2"]
 
 
 def test_saved_counts_by_folder_totals(configured):

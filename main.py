@@ -9819,6 +9819,16 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
+        elif normalized_star_only:
+            # Star fast path (same reasoning as the tag fix above): starred
+            # entries are sparse and often OLD — imported stars sit far past
+            # any newest-N fetch window, so windowed-scan-then-post-filter
+            # shows nothing. saved_entries_set is already restricted to the
+            # view's feeds; point-lookup exactly those keys instead.
+            for furl, eid in saved_entries_set:
+                e = reader.get_entry((furl, eid), None)
+                if e is not None:
+                    all_feed_entries.append(e)
         elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > PER_FEED_QUERY_THRESHOLD and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
