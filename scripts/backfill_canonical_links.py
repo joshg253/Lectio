@@ -24,6 +24,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import zlib
 from pathlib import Path
 
@@ -53,6 +54,37 @@ def canonical_from_html(page_html: str) -> str | None:
     return None
 
 
+_WAYBACK_SNAPSHOT_RE = re.compile(r"/web/\d+[a-z_]*/(https?://.+)$")
+
+
+def strip_tracking_params(url: str) -> str:
+    """Drop utm_* params (FeedBurner appended them to every redirect target)."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    parts = urlsplit(url)
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.lower().startswith("utm_")]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
+
+
+def resolve_wayback(url: str) -> str | None:
+    """Recover a dead redirector's target from the Wayback Machine: the
+    snapshot of the redirector URL 301s to the archived REAL URL, which is
+    embedded in the wayback path (/web/<ts>/<original>)."""
+    import httpx
+    try:
+        with httpx.Client(follow_redirects=True, timeout=25.0,
+                          headers={"User-Agent": "Lectio/1.0 (+https://github.com/joshg253/Lectio)"}) as client:
+            resp = client.get(f"https://web.archive.org/web/2/{url}")
+        m = _WAYBACK_SNAPSHOT_RE.search(str(resp.url))
+        if not m:
+            return None
+        orig = strip_tracking_params(m.group(1))
+        if is_redirector_link(orig) or "web.archive.org" in orig:
+            return None
+        return orig
+    except Exception:
+        return None
+
+
 def resolve_live(url: str) -> str | None:
     from services import url_guard  # deferred: needs httpx
     try:
@@ -76,7 +108,7 @@ def user_dirs(data_dir: Path) -> list[tuple[str, Path]]:
     return dirs
 
 
-def process_user(label: str, d: Path, *, apply: bool, live: bool) -> tuple[int, int]:
+def process_user(label: str, d: Path, *, apply: bool, live: bool, wayback: bool) -> tuple[int, int]:
     meta_path = d / "lectio_meta.sqlite3"
     reader_path = d / "lectio_reader.sqlite"
     archive_path = d / "lectio_starred_archive.sqlite"
@@ -119,6 +151,9 @@ def process_user(label: str, d: Path, *, apply: bool, live: bool) -> tuple[int, 
                         pass
             if new_link is None and live:
                 new_link = resolve_live(link)
+            if new_link is None and wayback:
+                new_link = resolve_wayback(link)
+                time.sleep(1.5)  # polite pacing for archive.org
             if new_link is None:
                 print(f"  [unrecoverable] {link}")
                 continue
@@ -157,6 +192,7 @@ def main() -> None:
     ap.add_argument("--user", help="only this user id (default: legacy + all users)")
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--live-resolve", action="store_true", help="follow still-alive redirectors over the network")
+    ap.add_argument("--wayback", action="store_true", help="recover dead redirectors via the Wayback Machine's archived redirects (rate-limited, ~2s/link)")
     args = ap.parse_args()
 
     data_dir = Path(os.environ.get("LECTIO_DATA_DIR", "data")).resolve()
@@ -168,7 +204,7 @@ def main() -> None:
         if args.user and label != args.user:
             continue
         print(f"== {label} ({d})")
-        found, fixed = process_user(label, d, apply=args.apply, live=args.live_resolve)
+        found, fixed = process_user(label, d, apply=args.apply, live=args.live_resolve, wayback=args.wayback)
         print(f"   redirector links: {found}, recoverable: {fixed}")
         total_found += found
         total_fixed += fixed
