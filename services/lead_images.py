@@ -111,8 +111,12 @@ class LeadImageService:
         if "<img" in text.lower():
             return text
         return cls._BARE_IMG_URL_RE.sub(r'<img src="\1">', text)
+    # The bare-"logo" lookahead permits letters only (compound words like
+    # "imdblogo" stay content) but NOT digits: sites version their wordmark as
+    # logo2.png / logo2026.png (questionablecontent's New-Year rename slipped
+    # through the old [a-zA-Z0-9] lookahead and became a lead image).
     _LOGO_URL_PATTERNS = re.compile(
-        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z0-9])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
+        r"(?:favicon|site[-_]logo|wordmark|site[-_]icon|app[-_]icon|social[-_]icon|apple-touch-icon|android-chrome|(?<![a-zA-Z0-9])logo(?![a-zA-Z])|sponsor|/flags/|/awards?/|btn_donate|donate[-_]btn|divider|separator|share[-_]image|[-_]icon\.(?:png|jpe?g|gif|svg|webp))",
         re.IGNORECASE,
     )
     # Catches pixel/spacer images encoded with tiny dimensions in the filename
@@ -135,6 +139,10 @@ class LeadImageService:
         r"|/social/(?:facebook|twitter|instagram|linkedin|youtube|pinterest|reddit|tiktok|discord|digg|tumblr|whatsapp|rss|email|telegram|snapchat|twitterx|bluesky)\."
         # "/social-media/social-*" — per-platform sharing cards (e.g. krita's social-youtube.png)
         r"|/social-media/social-"
+        # A social platform's logo as the whole basename is a header/footer link
+        # badge (e.g. meetingcpp.com/files/meetup.png — the topbar Meetup badge
+        # won the body scan on og:image-less blogroll pages).
+        r"|/(?:meetup|mastodon|bluesky|facebook|twitter|linkedin|instagram|discord|slack|telegram|rss)\.(?:png|svg|gif|webp)(?:$|[?#])"
         # Theme/static asset product directories (e.g. pythonguis /static/theme/images/products/)
         r"|/(?:static|assets?)/(?:themes?)/images?/products?/"
         # Sidebar widgets and OG/social-share card images are site chrome, not article content.
@@ -2252,6 +2260,13 @@ class LeadImageService:
             except Exception:
                 continue
             if candidate:
+                # Plugins fetch og:image themselves and trust what the page
+                # says — but an age-gated/redesigned page can serve the SITE
+                # LOGO as og:image (therockcocks logo.png, 2026-07-10).
+                # Validate like any other candidate; storing nothing lets the
+                # render-time gate retry later instead of caching a logo.
+                if not self._is_image_url_acceptable(candidate, None, None, allow_extensionless=True):
+                    continue
                 return candidate
         return None
 

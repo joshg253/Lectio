@@ -42,11 +42,18 @@ Make Lectio usable as a read-it-later app.
   contrast, large tap targets, no animations/transitions, paginated (tap
   left/right) instead of scrolled, minimal JS, self-hosted so no third-party
   app needed.
-- Save Article follow-up ideas (build on demand): folder placement for the
-  Saved Articles feed (it currently lands in Uncategorized), an "archive"
+- Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
   saved instead of unread (if unread proves the wrong default).
+
+### Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
+description/content element at all; older stored entries have bodies, so this
+is upstream). A per-feed "fetch full content from the source page at ingest"
+option (readability pipeline already exists) would fix such feeds generally —
+per-feed opt-in in Feed Properties, capped/throttled like enhancement.
 
 ### DeviantArt watchlist sync — remaining follow-up
 

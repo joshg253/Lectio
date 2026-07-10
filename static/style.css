@@ -2970,6 +2970,18 @@ button:hover, .button-link:hover {
   max-width: 100%;
 }
 
+/* devblogs.microsoft.com (Old New Thing) marks its assembly/code-diff tables
+   with cp1..cp4 classes whose monospace styling lives in the site's own CSS;
+   the class survives sanitization, so restore the intent in the reader. */
+.entry-content table.cp1 td, .entry-content table.cp1 th,
+.entry-content table.cp2 td, .entry-content table.cp2 th,
+.entry-content table.cp3 td, .entry-content table.cp3 th,
+.entry-content table.cp4 td, .entry-content table.cp4 th {
+  font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}
+
 .entry-content pre {
   max-width: 100%;
   overflow-x: auto;

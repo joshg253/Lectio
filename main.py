@@ -14470,12 +14470,18 @@ def _home_inner(
     if read_filter is None and resume_read_filter is not None:
         read_filter = resume_read_filter
 
-    # If still no explicit/read-resume value, fall back to cookie-based
-    # persisted preference for full navigations.
+    # If still no explicit/read-resume value, fall back to the cookie-based
+    # persisted preference for full navigations. Feeds browsing and the Saved
+    # Articles view keep SEPARATE remembered filters (mode-blind memory meant
+    # picking All inside Saved leaked back into Feeds and vice versa); the
+    # Saved view defaults to All when nothing is remembered yet.
     if read_filter is None:
-        cookie_rf = request.cookies.get("lectio_read_filter")
-        if cookie_rf:
-            read_filter = cookie_rf
+        if normalize_star_only(star_only):
+            read_filter = request.cookies.get("lectio_read_filter_saved") or "all"
+        else:
+            cookie_rf = request.cookies.get("lectio_read_filter")
+            if cookie_rf:
+                read_filter = cookie_rf
 
     start_req = time.perf_counter()
     _t = time.perf_counter()
