@@ -681,6 +681,16 @@ preflights with a wildcard origin (safe: auth lives in the JSON body, no
 cookies), which is required because the extension's `host_permissions` don't
 cover third-party backends, putting its fetch under normal CORS. Captured
 HTML is capped at 6.5M chars, mirroring the extension's own truncation.
+One special case: the extension captures whatever tab it's on, so a capture
+made *from inside Lectio* would bookmark Lectio's own UI page —
+`_unwrap_lectio_reading_url` detects a submitted URL on this instance
+(request host or `LECTIO_PUBLIC_URL`), extracts the wrapped
+`feed_url`/`entry_id`, and **stars that entry** instead (the native
+save-for-later; no on-star fan-out, matching direct saves). If the wrapped
+entry has aged out but its id is itself an http(s) URL (common — many feeds
+use the article URL as the guid), that URL is saved as a normal article via
+server fetch, since the captured DOM is Lectio chrome rather than the
+article.
 
 **Saved Articles sidebar view.** The tree's top row (`.saved-items-row`,
 restored from the pre-2026-04-20 sidebar with its surviving CSS/JS) opens the

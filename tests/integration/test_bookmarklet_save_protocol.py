@@ -121,6 +121,62 @@ def test_bad_token_rejected_in_multiuser_mode(configured, tmp_path):
     assert store.user_for_api_token("nope") is None
 
 
+def test_lectio_page_capture_stars_the_wrapped_entry(configured):
+    """Saving from a tab that IS Lectio must star the article being read, not
+    bookmark Lectio's own UI page."""
+    feed = "https://example.test/feed"
+    article = "https://example.test/koreader-on-kindle"
+    with main.get_reader() as reader:
+        reader.add_feed(feed, exist_ok=True)
+        reader.add_entry({"feed_url": feed, "id": article, "title": "KOReader", "link": article})
+
+    lectio_page = (
+        "http://testserver/?folder_id=1&read_filter=unread"
+        f"&feed_url={feed}&entry_id={article}"
+    )
+    with _client() as c:
+        r = c.post("/api/bookmarklet/save", json={
+            "token": "x", "url": lectio_page, "title": "Lectio", "html": PAGE_HTML,
+        })
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["starred_existing"] is True
+    assert data["feed_url"] == feed and data["entry_id"] == article
+    # The real entry is starred; no lectio:saved junk copy of the UI page.
+    with main.get_meta_connection() as conn:
+        rows = conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
+    assert [(r2["feed_url"], r2["entry_id"]) for r2 in rows] == [(feed, article)]
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED_FEED_URL, lectio_page), None) is None
+
+
+def test_lectio_capture_of_aged_out_entry_saves_its_url(configured, monkeypatch):
+    """Wrapped entry no longer exists, but its id is the article URL — save that."""
+    monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Recovered", "<p>body</p>"))
+    lectio_page = (
+        "http://testserver/?feed_url=https://gone.test/feed"
+        "&entry_id=https://gone.test/article"
+    )
+    with _client() as c:
+        r = c.post("/api/bookmarklet/save", json={"token": "x", "url": lectio_page})
+    assert r.status_code == 200, r.text
+    with main.get_reader() as reader:
+        entry = reader.get_entry((SAVED_FEED_URL, "https://gone.test/article"))
+    assert entry.title == "Recovered"
+
+
+def test_foreign_host_with_lectio_like_params_is_not_unwrapped(configured, monkeypatch):
+    """Only URLs on THIS instance unwrap — a random site whose query string
+    happens to carry feed_url/entry_id params is saved as itself."""
+    monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Foreign", "<p>x</p>"))
+    url = "https://other.example/?feed_url=a&entry_id=b"
+    with _client() as c:
+        r = c.post("/api/bookmarklet/save", json={"token": "x", "url": url})
+    assert r.status_code == 200
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED_FEED_URL, url), None) is not None
+
+
 def test_invalid_body_and_bad_url(configured):
     with _client() as c:
         assert c.post("/api/bookmarklet/save", content=b"not json",

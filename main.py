@@ -20516,6 +20516,58 @@ async def api_save_article(request: Request):
     return JSONResponse(result, status_code=200 if result["ok"] else 400)
 
 
+def _unwrap_lectio_reading_url(url: str, request: Request) -> tuple[str, str] | None:
+    """If *url* is a reading view on THIS Lectio instance, return the
+    (feed_url, entry_id) it wraps, else None.
+
+    The browser extension captures whatever tab it's on — used from inside
+    Lectio, that's Lectio's own UI page, and saving that verbatim is never
+    what the user means. Unwrapping turns "save this tab" into "save the
+    article I'm reading here."."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    own_hosts = {request.url.netloc.lower()}
+    if LECTIO_PUBLIC_URL:
+        own_hosts.add(urlparse(LECTIO_PUBLIC_URL).netloc.lower())
+    if parsed.netloc.lower() not in own_hosts:
+        return None
+    qs = parse_qs(parsed.query)
+    feed_url = (qs.get("feed_url") or [""])[0]
+    entry_id = (qs.get("entry_id") or [""])[0]
+    if feed_url and entry_id:
+        return feed_url, entry_id
+    return None
+
+
+def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
+    """Star an existing entry (the Lectio-native "save for later"), mirroring
+    the saved-articles result shape. Deliberately no on-star destination
+    fan-out, matching direct saves."""
+    reader = get_reader()
+    entry = reader.get_entry((feed_url, entry_id), None)
+    if entry is None:
+        return {"ok": False, "error": "Entry not found.", "duplicate": False,
+                "extracted": False, "feed_url": feed_url, "entry_id": entry_id, "title": None}
+    with get_meta_connection() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+            (feed_url, entry_id),
+        )
+        conn.commit()
+        newly = cur.rowcount > 0
+    try:
+        starred_archive_service.enqueue_archive(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("extension-save: archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    return {"ok": True, "error": None, "duplicate": not newly, "extracted": False,
+            "feed_url": feed_url, "entry_id": entry_id,
+            "title": entry.title or entry_id, "starred_existing": True}
+
+
 _BOOKMARKLET_MAX_HTML_CHARS = 6_500_000  # mirrors the Readit extension's own cap
 _BOOKMARKLET_CORS_HEADERS = {
     # Token auth lives in the JSON body (no cookies), so a wildcard origin is
@@ -20570,12 +20622,26 @@ async def api_bookmarklet_save(request: Request):
             title = page_title
         return title, article_html
 
-    def _do_save() -> dict:
+    # A capture from inside Lectio itself means "save the article I'm reading",
+    # not Lectio's UI page: star the wrapped entry (the native save-for-later).
+    wrapped = _unwrap_lectio_reading_url(url, request)
+
+    def _do_op() -> dict:
+        if wrapped is not None:
+            result = _star_entry_for_current_user(*wrapped)
+            if result["ok"] or not saved_articles_service.normalize_article_url(wrapped[1]):
+                return result
+            # Entry aged out of its feed but its id is an article URL — save
+            # that instead (server fetch; the captured DOM is Lectio chrome).
+            return _save_article_for_current_user(wrapped[1], None)
         extract = _extract_from_capture if page_html is not None else None
+        return _save_article_for_current_user(url, extract)
+
+    def _do_save() -> dict:
         if uid:
             with tenancy.user_context(uid):
-                return _save_article_for_current_user(url, extract)
-        return _save_article_for_current_user(url, extract)
+                return _do_op()
+        return _do_op()
 
     result = await run_in_threadpool(_do_save)
     if not result.get("ok") and result.get("error"):
