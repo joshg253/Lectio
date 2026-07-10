@@ -7589,6 +7589,10 @@
           const starredUnread = linkedPostItem instanceof HTMLElement
             && linkedPostItem.getAttribute('data-post-read') === '0';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
+          const paneStarFolderId = (linkedPostItem instanceof HTMLElement
+            ? linkedPostItem.getAttribute('data-post-folder-id')
+            : document.querySelector('.entry-pane-title')?.getAttribute('data-post-folder-id'));
+          adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(entrySaveForm.action, {
@@ -7610,6 +7614,7 @@
               applyPostItemSavedState(linkedPostItem, !nextIsSaved);
             }
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
+            adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? -1 : +1);
             entrySaveForm.submit();
           }
         });
@@ -8137,6 +8142,8 @@
           // (Un)starring an unread post moves it in/out of the Saved backlog.
           const starredUnread = postItem.getAttribute('data-post-read') === '0';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
+          const starFolderId = postItem.getAttribute('data-post-folder-id');
+          adjustSavedFolderBadge(starFolderId, nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(saveForm.action, {
@@ -8155,6 +8162,7 @@
           } catch (_error) {
             applyPostItemSavedState(postItem, !nextIsSaved);
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
+            adjustSavedFolderBadge(starFolderId, nextIsSaved ? -1 : +1);
             saveForm.submit();
           }
         });
@@ -8319,6 +8327,19 @@
     function adjustSavedUnreadBadge(delta) {
       const savedItem = document.querySelector('.saved-item.tree-item');
       if (savedItem) adjustCountBadge(savedItem, delta);
+    }
+
+    // Saved-sublist folder badges are TOTAL saved per folder — they move on
+    // star/unstar (any read state), never on read toggles. A folder emptied
+    // to zero hides its row (the sublist only shows folders holding saves);
+    // a folder's FIRST save has no row to update until the next full render.
+    function adjustSavedFolderBadge(folderId, delta) {
+      if (folderId === null || folderId === undefined || folderId === '') return;
+      const el = document.querySelector(`.saved-folder-item[data-folder-id="${CSS.escape(String(folderId))}"]`);
+      if (!el) return;
+      adjustCountBadge(el, delta);
+      const group = el.closest('.tree-folder-group');
+      if (group) group.hidden = !el.querySelector(':scope > .count');
     }
 
     function adjustSidebarUnreadCount(feedUrl, delta, isSaved = false) {

@@ -93,3 +93,15 @@ def test_install_swaps_default_parser():
     for plist in r._parser.parsers_by_mime_type.values():
         for _q, p in plist:
             assert isinstance(p, SanitizingFeedparserParser)
+
+
+def test_table_align_attribute_survives():
+    """Legacy align on table cells is presentational layout some feeds still
+    rely on (Old New Thing centers spanning before/after rows with
+    td align="center") — the sanitizer must keep it."""
+    from services.html_sanitize import sanitize_html
+    html = '<table><tr align="center"><td colspan="2" align="center">Before</td><th align="right">x</th></tr></table>'
+    out = sanitize_html(html)
+    assert 'align="center"' in out and 'colspan="2"' in out and 'align="right"' in out
+    # Not global: align on non-table elements stays stripped.
+    assert "align" not in sanitize_html('<p align="center">x</p>')

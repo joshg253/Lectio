@@ -1550,3 +1550,15 @@ def test_plugin_fallback_urls_are_validated(tmp_path: Path):
     assert service._plugin_fallback_lead_image_url(
         entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw",
         content_html=None, summary=None) == "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
+
+
+def test_support_platform_link_context_is_chrome(tmp_path: Path):
+    """An image wrapped in a link to a support/social platform is that
+    platform's badge (meetingcpp's topbar patreon.png/meetup.png), regardless
+    of the image filename."""
+    ctx = '<div class="gridcenteritem"> <a href="https://www.patreon.com/bePatron?u=3512102">'
+    assert LeadImageService._SITE_CHROME_CONTEXT_RE.search(ctx)
+    ctx2 = '<a href="https://www.meetup.com/Meeting-Cpp-online/">'
+    assert LeadImageService._SITE_CHROME_CONTEXT_RE.search(ctx2)
+    # A plain article link is not chrome context.
+    assert not LeadImageService._SITE_CHROME_CONTEXT_RE.search('<a href="https://example.com/story">')

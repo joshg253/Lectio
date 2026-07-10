@@ -269,7 +269,12 @@ class LeadImageService:
         r'class=["\'][^"\']*(?:\bbranding\b|\bsite-logo\b|\bsite-header\b|\bsite-name\b|\bsubscribe-dropdown\b|\brelated-content\b|\brelated-posts\b|\brecent-posts\b|\bmobile-banner\b|\bcomic-navigation\b|\bnav-links\b'
         # Nav menus and dropdowns (e.g. krita.org's language-picker icon) and
         # CMS sidebar/footer widgets (e.g. Blogger's "Powered By Blogger" button).
-        r'|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)',
+        r'|\bnavbar\b|\bnav-item\b|\bnav-link\b|\bdropdown-toggle\b|\bwidget\b)'
+        # An image inside a link to a support/social platform is that
+        # platform's badge, not article content (meetingcpp.com's topbar wraps
+        # meetup.png / patreon.png in such anchors) — matches the enclosing
+        # <a href> in the preceding-context window.
+        r'|href=["\']https?://(?:www\.)?(?:patreon\.com|meetup\.com|ko-fi\.com|paypal\.(?:com|me)|liberapay\.com|buymeacoffee\.com|github\.com/sponsors)[/"\']',
         re.IGNORECASE,
     )
     # Related/recent/more-posts containers whose thumbnails belong to OTHER posts.
