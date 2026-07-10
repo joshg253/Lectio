@@ -10177,6 +10177,24 @@ def get_saved_unread_count() -> int:
     return count
 
 
+def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> dict[int, int]:
+    """Total starred/saved entries per folder, for the Saved Articles sidebar
+    sublist (the Saved view defaults to All, so totals — the whole backlog —
+    are the meaningful number, unlike the unread badges on the feeds tree)."""
+    saved_by_feed: dict[str, int] = {}
+    with get_meta_connection() as conn:
+        for row in conn.execute("SELECT feed_url, COUNT(*) AS n FROM saved_entries GROUP BY feed_url"):
+            saved_by_feed[str(row["feed_url"])] = int(row["n"])
+    if not saved_by_feed:
+        return {}
+    counts: dict[int, int] = {}
+    for folder_id, urls in folder_feed_urls_by_id.items():
+        total = sum(n for feed, n in saved_by_feed.items() if feed in urls)
+        if total:
+            counts[folder_id] = total
+    return counts
+
+
 def merge_orphan_saved_entries(
     posts: list[dict],
     *,
@@ -14465,7 +14483,13 @@ def _home_inner(
         # every reader feed, not just foldered ones, so orphan feeds and their
         # unreads are reachable from the top of the tree.
         all_reader_feed_urls = get_all_reader_feed_urls()
-        uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+        # The local Saved Articles feed is surfaced by the dedicated sidebar
+        # view, not as a subscription — keep it out of the Uncategorized
+        # folder (tree, view, and counts) while the root view set below still
+        # includes it so the Saved/All Feeds streams see its entries.
+        uncategorized_feed_urls = (
+            all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+        )
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
         folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
@@ -14585,9 +14609,11 @@ def _home_inner(
 
     try:
         saved_unread_count = get_saved_unread_count()
-    except Exception as exc:  # noqa: BLE001 — badge only; never block the render
-        LOGGER.warning("saved unread count failed: %s", exc)
+        saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
+    except Exception as exc:  # noqa: BLE001 — badges only; never block the render
+        LOGGER.warning("saved counts failed: %s", exc)
         saved_unread_count = 0
+        saved_counts_by_folder = {}
 
     feed_title_map = get_feed_title_map()
     inactive_feeds = [
@@ -14828,6 +14854,7 @@ def _home_inner(
         "selected_star_only": selected_star_only,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
+        "saved_counts_by_folder": saved_counts_by_folder,
         "global_note": global_note,
         "email_configured": is_email_configured(),
         "yt_oauth_connected": youtube_oauth_connected(),

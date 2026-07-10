@@ -158,11 +158,15 @@ The short version:
   archive worker retries the capture in the background.
   A **Saved Articles** item at the top of the sidebar (with an unread-count
   badge) opens the whole starred/saved backlog in the familiar three-pane
-  layout, and the toolbar filter narrows it: **All** shows everything kept,
-  **Unread** just the not-yet-read part, and the Tags submenu slices the
-  backlog by your tags (e.g. `#toread` vs `#todo`) without leaving the view.
-  Clicking **All Feeds** (or the active Starred filter) exits back to normal
-  browsing.
+  layout — always starting on **All** — and expands its own folder list
+  (folders that hold saved items, with total-saved badges) while the feeds
+  tree collapses, and vice versa. The toolbar filter narrows the backlog:
+  **All** shows everything kept, **Unread** just the not-yet-read part, and
+  the Tags submenu slices it by your tags (e.g. `#toread` vs `#todo`) without
+  leaving the view. Clicking **All Feeds** (or the active Starred filter)
+  exits back to normal browsing with your previous Read/Unread filter
+  restored. The internal Saved Articles feed no longer clutters
+  Feeds → Uncategorized — the sidebar view supersedes it.
 - **Save to Readit** — paste your [Readit](https://wereadit.com) bookmarklet
   token in Settings → Integrations → Readit and a **Readit** button appears in
   each article's share menu. The save is sent from your browser (mirroring
