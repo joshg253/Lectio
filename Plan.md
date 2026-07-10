@@ -27,13 +27,21 @@ Make Lectio usable as a read-it-later app.
   readability-extracted copy + images for every starred entry, so the earlier
   "beef up Star to capture full content" item was largely already covered at the
   archive level; what remains is surfacing it (below).
+- SHIPPED 2026-07-09: **Saved Articles sidebar view** — first-class tree row
+  (unread-starred badge) opening the whole starred backlog in the familiar
+  three-pane layout; the read filter now composes with starred (All / Unread
+  narrowing), and the toolbar Tags submenu slices the backlog by tag within
+  the view (user pattern: `#toread` vs `#todo` — "read later" vs "deal with
+  later" are different buckets under one star).
 - **Reader-only browsing view** for saved/starred items — a clean, distraction-free
   reading surface (no triage chrome), keyboard-first navigation through the
   starred/saved backlog. Should prefer the archived readability copy when the
   live entry content is a truncated feed summary.
 - Save Article follow-up ideas (build on demand): folder placement for the
   Saved Articles feed (it currently lands in Uncategorized), an "archive"
-  (unstar-on-read) flow to mimic Instapaper's read/archive split.
+  (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
+  saved-tag shortcuts under the Saved Articles row, badge counting total
+  saved instead of unread (if unread proves the wrong default).
 
 ### DeviantArt watchlist sync — remaining follow-up
 
