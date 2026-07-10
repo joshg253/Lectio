@@ -558,6 +558,7 @@ def is_instapaper_configured() -> bool:
     )
 
 
+
 # --- YouTube subscription sync config — env vars are fallbacks; DB settings take precedence ---
 _ENV_YT_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 _ENV_YT_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
@@ -1542,7 +1543,7 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/dev/feeds/", "/fever", "/greader/", "/websub/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/")
 
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
@@ -2168,7 +2169,7 @@ class _TenancyMiddleware:
 # Paths exempt from CSRF validation. /login is the auth gate itself (rate-
 # limited separately). /static and /healthz are GET-only anyway, but listing
 # explicitly documents intent.
-_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/fever", "/greader/", "/websub/")
+_CSRF_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/fever", "/greader/", "/websub/")
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CSRF_SESSION_KEY = "csrf_token"
 _CSRF_HEADER_NAME = "x-csrf-token"
@@ -7020,6 +7021,31 @@ _reader_thread_local = threading.local()
 _READER_POOL_MAX_PER_THREAD = 8
 
 
+def close_thread_db_pools() -> None:
+    """Close and clear the current thread's pooled reader/meta DB handles.
+
+    Used by test fixtures that swap the tenancy layout between temp dirs:
+    just nulling the pools leaks open SQLite handles until GC, and enough
+    leaked finalizers across a run make an unrelated later open fail with
+    'database is locked' (the flaky-CI signature)."""
+    pool = getattr(_reader_thread_local, "pool", None)
+    if pool:
+        for proxy in list(pool.values()):
+            try:
+                proxy._reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+    _reader_thread_local.pool = None
+    mpool = getattr(_meta_conn_local, "pool", None)
+    if mpool:
+        for conn in list(mpool.values()):
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    _meta_conn_local.pool = None
+
+
 class _PersistentReaderProxy:
     """Wraps a thread-persistent Reader so the existing
     ``with get_reader() as r:`` pattern works without actually closing the
@@ -9541,7 +9567,13 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
     with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
         response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
     response.raise_for_status()
-    raw_html = response.text
+    return extract_readability_article(response.text, source_url)
+
+
+def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, str]:
+    """Readability-extract ``(title, article_html)`` from already-obtained page
+    HTML — e.g. a rendered DOM captured by the user's browser (extension save),
+    which sees past paywalls/bot-walls the server can't fetch through."""
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url
     summary = doc.summary(html_partial=True)
@@ -9805,6 +9837,16 @@ def list_entries_for_feeds(
             # Fast history path: fetch each entry by primary key (indexed lookup)
             # instead of scanning all read entries. N small lookups vs. one huge scan.
             for furl, eid in history_fast_keys:
+                e = reader.get_entry((furl, eid), None)
+                if e is not None:
+                    all_feed_entries.append(e)
+        elif normalized_star_only:
+            # Star fast path (same reasoning as the tag fix above): starred
+            # entries are sparse and often OLD — imported stars sit far past
+            # any newest-N fetch window, so windowed-scan-then-post-filter
+            # shows nothing. saved_entries_set is already restricted to the
+            # view's feeds; point-lookup exactly those keys instead.
+            for furl, eid in saved_entries_set:
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
@@ -10164,6 +10206,24 @@ def get_saved_unread_count() -> int:
             ).fetchone()
             count += int(row[0] or 0)
     return count
+
+
+def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> dict[int, int]:
+    """Total starred/saved entries per folder, for the Saved Articles sidebar
+    sublist (the Saved view defaults to All, so totals — the whole backlog —
+    are the meaningful number, unlike the unread badges on the feeds tree)."""
+    saved_by_feed: dict[str, int] = {}
+    with get_meta_connection() as conn:
+        for row in conn.execute("SELECT feed_url, COUNT(*) AS n FROM saved_entries GROUP BY feed_url"):
+            saved_by_feed[str(row["feed_url"])] = int(row["n"])
+    if not saved_by_feed:
+        return {}
+    counts: dict[int, int] = {}
+    for folder_id, urls in folder_feed_urls_by_id.items():
+        total = sum(n for feed, n in saved_by_feed.items() if feed in urls)
+        if total:
+            counts[folder_id] = total
+    return counts
 
 
 def merge_orphan_saved_entries(
@@ -14453,7 +14513,13 @@ def _home_inner(
         # every reader feed, not just foldered ones, so orphan feeds and their
         # unreads are reachable from the top of the tree.
         all_reader_feed_urls = get_all_reader_feed_urls()
-        uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+        # The local Saved Articles feed is surfaced by the dedicated sidebar
+        # view, not as a subscription — keep it out of the Uncategorized
+        # folder (tree, view, and counts) while the root view set below still
+        # includes it so the Saved/All Feeds streams see its entries.
+        uncategorized_feed_urls = (
+            all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+        )
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
         folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
@@ -14573,9 +14639,11 @@ def _home_inner(
 
     try:
         saved_unread_count = get_saved_unread_count()
-    except Exception as exc:  # noqa: BLE001 — badge only; never block the render
-        LOGGER.warning("saved unread count failed: %s", exc)
+        saved_counts_by_folder = get_saved_counts_by_folder(folder_feed_urls_by_id)
+    except Exception as exc:  # noqa: BLE001 — badges only; never block the render
+        LOGGER.warning("saved counts failed: %s", exc)
         saved_unread_count = 0
+        saved_counts_by_folder = {}
 
     feed_title_map = get_feed_title_map()
     inactive_feeds = [
@@ -14816,6 +14884,7 @@ def _home_inner(
         "selected_star_only": selected_star_only,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
+        "saved_counts_by_folder": saved_counts_by_folder,
         "global_note": global_note,
         "email_configured": is_email_configured(),
         "yt_oauth_connected": youtube_oauth_connected(),
@@ -20402,16 +20471,18 @@ def toggle_entry_saved(
 # --- Save Article (read-later capture of arbitrary URLs) ---
 
 
-def _save_article_for_current_user(url: str) -> dict:
+def _save_article_for_current_user(url: str, extract=None) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
-    DB, wiring in readability extraction and the starred-archive enqueue."""
+    DB, wiring in readability extraction and the starred-archive enqueue.
+    *extract* overrides the server-side fetch+extract — e.g. extraction from
+    browser-captured HTML for the extension save protocol."""
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.save_article(
             reader,
             conn,
             url,
-            extract=fetch_readability_article,
+            extract=extract or fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
     if result.get("created_feed"):
@@ -20494,6 +20565,140 @@ async def api_save_article(request: Request):
 
     result = await run_in_threadpool(_do_save)
     return JSONResponse(result, status_code=200 if result["ok"] else 400)
+
+
+def _unwrap_lectio_reading_url(url: str, request: Request) -> tuple[str, str] | None:
+    """If *url* is a reading view on THIS Lectio instance, return the
+    (feed_url, entry_id) it wraps, else None.
+
+    The browser extension captures whatever tab it's on — used from inside
+    Lectio, that's Lectio's own UI page, and saving that verbatim is never
+    what the user means. Unwrapping turns "save this tab" into "save the
+    article I'm reading here."."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    own_hosts = {request.url.netloc.lower()}
+    if LECTIO_PUBLIC_URL:
+        own_hosts.add(urlparse(LECTIO_PUBLIC_URL).netloc.lower())
+    if parsed.netloc.lower() not in own_hosts:
+        return None
+    qs = parse_qs(parsed.query)
+    feed_url = (qs.get("feed_url") or [""])[0]
+    entry_id = (qs.get("entry_id") or [""])[0]
+    if feed_url and entry_id:
+        return feed_url, entry_id
+    return None
+
+
+def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
+    """Star an existing entry (the Lectio-native "save for later"), mirroring
+    the saved-articles result shape. Deliberately no on-star destination
+    fan-out, matching direct saves."""
+    reader = get_reader()
+    entry = reader.get_entry((feed_url, entry_id), None)
+    if entry is None:
+        return {"ok": False, "error": "Entry not found.", "duplicate": False,
+                "extracted": False, "feed_url": feed_url, "entry_id": entry_id, "title": None}
+    with get_meta_connection() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+            (feed_url, entry_id),
+        )
+        conn.commit()
+        newly = cur.rowcount > 0
+    try:
+        starred_archive_service.enqueue_archive(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("extension-save: archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    return {"ok": True, "error": None, "duplicate": not newly, "extracted": False,
+            "feed_url": feed_url, "entry_id": entry_id,
+            "title": entry.title or entry_id, "starred_existing": True}
+
+
+_BOOKMARKLET_MAX_HTML_CHARS = 6_500_000  # mirrors the Readit extension's own cap
+_BOOKMARKLET_CORS_HEADERS = {
+    # Token auth lives in the JSON body (no cookies), so a wildcard origin is
+    # safe — this is what lets the Readit browser extension (whose
+    # host_permissions don't cover this instance) call us under normal CORS.
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+}
+
+
+@app.api_route("/api/bookmarklet/save", methods=["POST", "OPTIONS"])
+async def api_bookmarklet_save(request: Request):
+    """Readit-extension-compatible save protocol: Lectio as the Backend.
+
+    Accepts the same payload the wereadit.com bookmarklet/extension sends —
+    ``{token, url, html, title}`` — with ``token`` = the user's Lectio API
+    token. When ``html`` is present it's the rendered DOM captured by the
+    user's authenticated browser, so paywalled/bot-walled pages arrive with
+    full text and no server fetch happens; without it we fall back to the
+    normal server-side fetch+extract. Response mirrors the shapes the
+    extension reads (`ok` on success, `detail` on failure)."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_BOOKMARKLET_CORS_HEADERS)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "detail": "Invalid JSON body."},
+                            status_code=400, headers=_BOOKMARKLET_CORS_HEADERS)
+    token = str(body.get("token") or "")
+    url = str(body.get("url") or "")
+    page_html = body.get("html")
+    page_title = str(body.get("title") or "").strip()
+    if user_store is not None:
+        uid = user_store.user_for_api_token(token)
+        if not uid:
+            return JSONResponse({"ok": False, "detail": "Invalid token — paste your Lectio API token (Settings → Account)."},
+                                status_code=401, headers=_BOOKMARKLET_CORS_HEADERS)
+    else:
+        uid = None  # no-auth single-user install: default tenancy
+    if not (isinstance(page_html, str) and page_html.strip()):
+        page_html = None
+    elif len(page_html) > _BOOKMARKLET_MAX_HTML_CHARS:
+        page_html = page_html[:_BOOKMARKLET_MAX_HTML_CHARS]
+
+    def _extract_from_capture(u: str) -> tuple[str, str]:
+        title, article_html = extract_readability_article(page_html, u)
+        if page_title and (not title or title == u):
+            title = page_title
+        return title, article_html
+
+    # A capture from inside Lectio itself means "save the article I'm reading",
+    # not Lectio's UI page: star the wrapped entry (the native save-for-later).
+    wrapped = _unwrap_lectio_reading_url(url, request)
+
+    def _do_op() -> dict:
+        if wrapped is not None:
+            result = _star_entry_for_current_user(*wrapped)
+            if result["ok"] or not saved_articles_service.normalize_article_url(wrapped[1]):
+                return result
+            # Entry aged out of its feed but its id is an article URL — save
+            # that instead (server fetch; the captured DOM is Lectio chrome).
+            return _save_article_for_current_user(wrapped[1], None)
+        extract = _extract_from_capture if page_html is not None else None
+        return _save_article_for_current_user(url, extract)
+
+    def _do_save() -> dict:
+        if uid:
+            with tenancy.user_context(uid):
+                return _do_op()
+        return _do_op()
+
+    result = await run_in_threadpool(_do_save)
+    if not result.get("ok") and result.get("error"):
+        result["detail"] = result["error"]  # the extension surfaces `detail`
+    return JSONResponse(result, status_code=200 if result["ok"] else 400,
+                        headers=_BOOKMARKLET_CORS_HEADERS)
 
 
 @app.post("/entries/tags")

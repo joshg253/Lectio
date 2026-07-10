@@ -16,7 +16,7 @@ from services import tenancy
 @pytest.fixture
 def fresh_meta(tmp_path):
     saved = tenancy._layout
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -27,7 +27,7 @@ def fresh_meta(tmp_path):
     try:
         yield main.get_meta_connection()
     finally:
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved
 
 
@@ -56,7 +56,7 @@ def test_existing_db_missing_table_is_upgraded(tmp_path):
     "no such table: feed_fetch_history". This mirrors the per-user startup
     schema migration that re-runs ensure_meta_schema for every tenant."""
     saved = tenancy._layout
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -69,11 +69,11 @@ def test_existing_db_missing_table_is_upgraded(tmp_path):
         legacy.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)")
         legacy.commit()
         legacy.close()
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
 
         conn = main.get_meta_connection()
         assert "feed_fetch_history" not in _tables(conn)
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
 
         main.ensure_meta_schema()
 
@@ -82,7 +82,7 @@ def test_existing_db_missing_table_is_upgraded(tmp_path):
         # Query the History tab path to prove it no longer raises.
         assert main.get_feed_fetch_history(conn, "https://example.test/feed") == []
     finally:
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved
 
 
@@ -90,7 +90,7 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
     """An existing meta DB created before the columns existed must be upgraded
     by the idempotent ALTERs in ensure_meta_schema (not just fresh DBs)."""
     saved = tenancy._layout
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -117,7 +117,7 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
         )
         legacy.commit()
         legacy.close()
-        main._meta_conn_local.pool = None  # force reopen via get_meta_connection
+        main.close_thread_db_pools()  # force reopen via get_meta_connection
 
         main.ensure_meta_schema()
 
@@ -125,7 +125,7 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
         assert {"image_alt", "image_title"} <= _columns(conn, "feed_strategy_cache")
         assert {"caption_source", "thumb_crop", "fill_zoom"} <= _columns(conn, "feed_display_prefs")
     finally:
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved
 
 
@@ -140,7 +140,7 @@ def test_existing_db_gains_entry_feed_tags(tmp_path):
     """A meta DB provisioned before entry_feed_tags existed must gain the table
     when the per-user startup migration re-runs ensure_meta_schema."""
     saved = tenancy._layout
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -152,7 +152,7 @@ def test_existing_db_gains_entry_feed_tags(tmp_path):
         legacy.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)")
         legacy.commit()
         legacy.close()
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
 
         main.ensure_meta_schema()
 
@@ -161,5 +161,5 @@ def test_existing_db_gains_entry_feed_tags(tmp_path):
         # The DB-backed suggestion lookup must not raise on the upgraded DB.
         assert main.feed_tag_service.get_tags_for_entry("https://x.test/feed", "e1") == []
     finally:
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved

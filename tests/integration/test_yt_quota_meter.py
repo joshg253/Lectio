@@ -10,8 +10,7 @@ from services import youtube_oauth as yt
 
 
 def _reset_pools():
-    main._reader_thread_local.pool = None
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
 
 
 @pytest.fixture

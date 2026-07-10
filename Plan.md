@@ -36,7 +36,12 @@ Make Lectio usable as a read-it-later app.
 - **Reader-only browsing view** for saved/starred items — a clean, distraction-free
   reading surface (no triage chrome), keyboard-first navigation through the
   starred/saved backlog. Should prefer the archived readability copy when the
-  live entry content is a truncated feed summary.
+  live entry content is a truncated feed summary. **Design e-ink-first**: the
+  real driver is reading the Saved backlog on a Supernote Manta browser
+  (Instapaper is bad there; Readit was evaluated for the same reason) — high
+  contrast, large tap targets, no animations/transitions, paginated (tap
+  left/right) instead of scrolled, minimal JS, self-hosted so no third-party
+  app needed.
 - Save Article follow-up ideas (build on demand): folder placement for the
   Saved Articles feed (it currently lands in Uncategorized), an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
@@ -125,6 +130,22 @@ future read-later services (Pocket is shutting down; Readwise/Reader, Wallabag i
 someone runs one). Each is "manual action → rule type" reusing the existing engine
 (own per-run cap, "configured?" gate, run-log entry, not-idempotent guard). Small
 per destination.
+
+**Readit (wereadit.com)** — send-to-Readit share button was built 2026-07-09
+and **REMOVED 2026-07-10**: their `/api/bookmarklet/save` is unreachable
+outside their own extension (Cloudflare challenges server traffic AND the
+browser CORS preflight; a no-preflight simple-request fallback verifiably
+didn't deliver). No dead controls — revisit as a standard destination only if
+Readit CORS-enables/exempts the endpoint (issue draft handed to Josh for
+github.com/mahmoudalwadia/readit-extension). **Import from Readit** likewise
+blocked until Readit exposes an export/RSS/API of saves.
+
+**Reverse integration SHIPPED 2026-07-10**: Lectio now speaks the Readit
+extension's save protocol (`/api/bookmarklet/save`, see ARCHITECTURE
+"Extension save protocol") — pointing the extension's Backend at Lectio gives
+one-click rendered-DOM capture into Saved Articles (paywalled pages arrive
+with full text). Follow-up idea: fork the MIT-ish extension as a Lectio-branded
+variant so one browser can run both (single-Backend limitation).
 
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted

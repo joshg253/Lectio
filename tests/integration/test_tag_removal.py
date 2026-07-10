@@ -18,7 +18,7 @@ BASE = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
 
 
 def _reset_reader_pool():
-    main._reader_thread_local.pool = None
+    main.close_thread_db_pools()
 
 
 @pytest.fixture

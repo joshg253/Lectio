@@ -12,8 +12,7 @@ from services import tenancy
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
     saved = tenancy._layout
-    main._reader_thread_local.pool = None
-    main._meta_conn_local.pool = None
+    main.close_thread_db_pools()
     tenancy.configure(
         data_dir=tmp_path,
         legacy_reader=tmp_path / "reader.sqlite",
@@ -27,8 +26,7 @@ def configured(tmp_path, monkeypatch):
     try:
         yield monkeypatch
     finally:
-        main._reader_thread_local.pool = None
-        main._meta_conn_local.pool = None
+        main.close_thread_db_pools()
         tenancy._layout = saved
 
 

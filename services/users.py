@@ -305,6 +305,25 @@ class UserStore:
             return row["user_id"]
         return None
 
+    def user_for_api_token(self, token: str) -> str | None:
+        """Resolve a bare API token (no username) to a user_id.
+
+        Used by clients that only carry a token — e.g. the Readit-extension
+        save protocol, whose payload has a single ``token`` field. Tokens are
+        long random urlsafe strings, so bare-token lookup is sound; comparison
+        count stays ~constant across users (no early break)."""
+        if not token:
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, api_token FROM users WHERE disabled = 0 AND api_token IS NOT NULL"
+            ).fetchall()
+        match: str | None = None
+        for r in rows:
+            if hmac.compare_digest(token, r["api_token"]):
+                match = r["user_id"]
+        return match
+
     def fever_user_for_key(self, api_key: str) -> str | None:
         """Resolve a Fever ``api_key`` (md5(username:api_token)) to a user_id.
 

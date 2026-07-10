@@ -173,14 +173,18 @@
         {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
         {# Compact query fragments for tree/folder/feed links — omit default values #}
         {% set _tree_sq = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
-        {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
-        {# Read-filter carry without star mode: the Saved row forces star_only=1,
-           the All Feeds row drops it (they are the mode switches). #}
-        {% set _tree_rf_ns = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
+        {# Feeds-tree links never carry star mode: Saved Articles and All Feeds
+           are the mode switches, and each block is only visible in its own mode. #}
+        {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
+        {# Saved-mode fragments: entering Saved always opens on All, remembering
+           the current read filter in resume_read_filter; links inside Saved
+           carry the in-Saved filter choice instead. #}
+        {% set _saved_enter = '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') %}
+        {% set _saved_rfq = (('&read_filter=' ~ selected_read_filter) if (selected_star_only and selected_read_filter != 'all') else '') ~ '&star_only=1' ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if (selected_star_only and selected_resume_read_filter != selected_read_filter) else '') %}
         <div class="tree-block root-tree-block">
           <div class="saved-items-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rf_ns }}&star_only=1"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_enter if not selected_star_only else _saved_rfq }}"
               class="tree-item saved-item {% if selected_star_only and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"
@@ -191,9 +195,34 @@
             </a>
           </div>
 
+          {# Folders that hold saved articles — the Saved counterpart of the
+             feeds tree; visible only in Saved mode (badges = total saved). #}
+          <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
+            {% for row in child_folder_rows %}
+            {% set saved_in_folder = saved_counts_by_folder.get(row.id, 0) %}
+            {% if saved_in_folder %}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _saved_rfq }}"
+                  class="tree-item child-item saved-folder-item {% if row.virtual %}virtual-folder {% endif %}{% if selected_star_only and row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
+                  data-folder-id="{{ row.id }}"
+                  data-folder-name="{{ row.name }}"
+                  data-folder-depth="{{ row.depth }}"
+                >
+                  <span class="name">{{ row.name }}</span>
+                  <span class="count">{{ saved_in_folder }}</span>
+                </a>
+              </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rf_ns }}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if selected_star_only %}{{ ('&read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != 'all' else '' }}{% else %}{{ _tree_rfq }}{% endif %}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -204,7 +233,7 @@
             </a>
           </div>
 
-          <div class="tree-children">
+          <div class="tree-children feeds-tree-children"{% if selected_star_only %} hidden{% endif %}>
             {% for row in child_folder_rows %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
             <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
@@ -1589,6 +1618,7 @@
           <label class="settings-label">Save Article</label>
           <div class="settings-token-col">
             <p class="settings-hint">Drag <a href="javascript:location.href='{{ request.base_url }}articles/save?url='+encodeURIComponent(location.href)" onclick="return false" title="Drag me to your bookmarks bar">Save to Lectio</a> to your bookmarks bar to save the page you're reading into <strong>Saved Articles</strong>. From a phone share sheet or shortcut, request <code>{{ request.base_url }}api/save?username={{ current_user }}&amp;token=&lt;API token&gt;&amp;url=&lt;article URL&gt;</code>.</p>
+            <p class="settings-hint"><strong>Best capture — browser extension:</strong> install the <a href="https://github.com/mahmoudalwadia/readit-extension" target="_blank" rel="noopener">Readit extension</a> and in its Options set <em>Backend</em> to <code>{{ (request.base_url | string).rstrip('/') }}</code> and <em>Save token</em> to your API token above. One-click saves then ship the <em>rendered</em> page from your browser, so paywalled and bot-walled articles arrive with full text.</p>
           </div>
         </div>
         <h4 class="settings-section-title" style="margin-top:1rem">Appearance</h4>
@@ -4366,13 +4396,22 @@
           else if (folderLink.classList.contains('root-item')) {
             isMatch = !nextStarOnly;
           }
-          // For other folder items (like in the tree), active if folder_id matches
+          // Saved-mode folder rows vs feeds-tree folder rows: same folder ids,
+          // so activate only the copy that belongs to the current mode.
+          else if (folderLink.classList.contains('saved-folder-item')) {
+            isMatch = nextStarOnly;
+          }
           else {
-            isMatch = true;
+            isMatch = !nextStarOnly;
           }
         }
         folderLink.classList.toggle('active', isMatch);
       }
+
+      // Saved mode and Feeds mode are mutually exclusive tree blocks; the
+      // pane-swap path doesn't re-render the tree, so toggle them here.
+      document.querySelector('.saved-tree-children')?.toggleAttribute('hidden', !nextStarOnly);
+      document.querySelector('.feeds-tree-children')?.toggleAttribute('hidden', nextStarOnly);
 
       for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
         const isMatch = Boolean(nextFeedUrl) && feedLink.getAttribute('data-feed-url') === nextFeedUrl;

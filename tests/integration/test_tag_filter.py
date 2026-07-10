@@ -24,7 +24,7 @@ BASE = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
 def _reset_reader_pool():
     """get_reader() keeps a per-thread pool keyed by user; drop it so each test
     opens the reader at its own tmp DB instead of reusing a prior one."""
-    main._reader_thread_local.pool = None
+    main.close_thread_db_pools()
 
 
 @pytest.fixture

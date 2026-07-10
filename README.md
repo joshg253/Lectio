@@ -138,10 +138,17 @@ The short version:
   `https://<your-host>/quire/callback`; creds are per-user (or
   `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
 - **Save any article (read-it-later)** — capture pages that don't come from any
-  feed, Instapaper-style. Three ways in: **+ Save Article** in the app menu
-  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), or a
+  feed, Instapaper-style. Four ways in: **+ Save Article** in the app menu
+  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), a
   token-authenticated **`/api/save`** endpoint for phone share sheets / iOS
-  Shortcuts (`?username=…&token=…&url=…` with your existing API token). The
+  Shortcuts (`?username=…&token=…&url=…` with your existing API token), or —
+  the highest-fidelity path — a **browser extension**: Lectio speaks the
+  [Readit extension](https://github.com/mahmoudalwadia/readit-extension)'s
+  save protocol (`/api/bookmarklet/save`), so pointing that extension's
+  Backend at your Lectio instance (Save token = your API token) gives
+  one-click saves that ship the **rendered page from your authenticated
+  browser** — paywalled and bot-walled articles arrive with full text, no
+  server fetch involved. The
   page's readable text is extracted server-side into a local **Saved Articles**
   feed and the article is auto-starred, so it shows up in the Saved view, gets
   the starred archive's full offline capture (page + images), and supports
@@ -151,11 +158,15 @@ The short version:
   archive worker retries the capture in the background.
   A **Saved Articles** item at the top of the sidebar (with an unread-count
   badge) opens the whole starred/saved backlog in the familiar three-pane
-  layout, and the toolbar filter narrows it: **All** shows everything kept,
-  **Unread** just the not-yet-read part, and the Tags submenu slices the
-  backlog by your tags (e.g. `#toread` vs `#todo`) without leaving the view.
-  Clicking **All Feeds** (or the active Starred filter) exits back to normal
-  browsing.
+  layout — always starting on **All** — and expands its own folder list
+  (folders that hold saved items, with total-saved badges) while the feeds
+  tree collapses, and vice versa. The toolbar filter narrows the backlog:
+  **All** shows everything kept, **Unread** just the not-yet-read part, and
+  the Tags submenu slices it by your tags (e.g. `#toread` vs `#todo`) without
+  leaving the view. Clicking **All Feeds** (or the active Starred filter)
+  exits back to normal browsing with your previous Read/Unread filter
+  restored. The internal Saved Articles feed no longer clutters
+  Feeds → Uncategorized — the sidebar view supersedes it.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter
