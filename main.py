@@ -3046,6 +3046,16 @@ def ensure_meta_schema() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS entry_title_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS entry_read_state (
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
@@ -19325,6 +19335,48 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
         db.commit()
     invalidate_unread_counts_cache()
     return JSONResponse({"ok": True, "published": stored})
+
+
+_ENTRY_TITLE_MAX_LEN = 500
+
+
+@app.post("/entries/set-title")
+def set_entry_title_route(feed_url: str = Form(...), entry_id: str = Form(...), title: str = Form("")):
+    """Override a post's title (fixes "(untitled)" posts, garbage feed titles,
+    and lets saved articles be renamed).
+
+    Same mechanism as /entries/set-date: reader's EntryData is ingest-owned, so
+    the corrected title is written straight into reader's `entries.title`
+    column, and a meta override row lets the refresh service re-pin it if a
+    refresh re-ingests the feed's original value. An empty `title` clears the
+    override (the stored title is left as-is until the feed next updates the
+    entry).
+    """
+    title = title.strip()
+    with get_reader() as reader:
+        if reader.get_entry((feed_url, entry_id), None) is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not title:
+            with get_meta_connection() as conn:
+                conn.execute(
+                    "DELETE FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+            return JSONResponse({"ok": True, "cleared": True})
+        if len(title) > _ENTRY_TITLE_MAX_LEN:
+            return JSONResponse({"ok": False, "error": "Title is too long."}, status_code=400)
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_title_overrides (feed_url, entry_id, title) VALUES (?, ?, ?)",
+                (feed_url, entry_id, title),
+            )
+        db = reader._storage.get_db()
+        db.execute(
+            "UPDATE entries SET title = ? WHERE feed = ? AND id = ?",
+            (title, feed_url, entry_id),
+        )
+        db.commit()
+    return JSONResponse({"ok": True, "title": title})
 
 
 @app.post("/entries/move-to-feed")

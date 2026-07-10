@@ -498,9 +498,10 @@ class FeedRefreshService:
         # publisher's feed still carries them), before enhancement wastes work
         # on entries that are about to disappear.
         self.purge_tombstoned_entries(feed_url_list)
-        # Re-pin user-corrected published dates a refresh may have reverted to
-        # the feed's original (garbage) value.
+        # Re-pin user-corrected published dates / titles a refresh may have
+        # reverted to the feed's original (garbage) value.
         self.reapply_entry_date_overrides(feed_url_list)
+        self.reapply_entry_title_overrides(feed_url_list)
 
         if enhance:
             self.enhance_feeds(feed_url_list)
@@ -582,6 +583,40 @@ class FeedRefreshService:
             db.commit()
         if applied:
             self._logger.info("[refresh] re-pinned %d overridden entry date(s)", applied)
+        return applied
+
+    def reapply_entry_title_overrides(self, feed_urls: Iterable[str]) -> int:
+        """Re-pin user-corrected titles (meta ``entry_title_overrides``) onto
+        reader's ``entries.title`` column after a refresh — the feed may still
+        carry the original value and re-ingest it. Returns the number of
+        entries whose title was re-pinned."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(
+                    f"SELECT feed_url, entry_id, title FROM entry_title_overrides WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if not rows:
+            return 0
+        applied = 0
+        with self._get_reader() as reader:
+            db = reader._storage.get_db()
+            for row in rows:
+                cur = db.execute(
+                    "UPDATE entries SET title = ? WHERE feed = ? AND id = ?"
+                    " AND (title IS NULL OR title != ?)",
+                    (row["title"], row["feed_url"], row["entry_id"], row["title"]),
+                )
+                applied += cur.rowcount
+            db.commit()
+        if applied:
+            self._logger.info("[refresh] re-pinned %d overridden entry title(s)", applied)
         return applied
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:

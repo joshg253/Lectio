@@ -184,8 +184,9 @@ The short version:
   stops the next refresh from re-adding it while it's still in the
   publisher's feed window. **Edit date…** fixes a post with a garbage
   published date (e.g. entries rendered as Jan 1 1970 that sort to the bottom
-  forever) via a date picker; the correction is pinned so a refresh can't
-  revert it.
+  forever) via a date picker, and **Edit title…** renames a post (fixes
+  "(untitled)" posts, garbage feed titles, or a saved article whose extracted
+  title is off); both corrections are pinned so a refresh can't revert them.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets

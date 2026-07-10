@@ -1233,6 +1233,7 @@
     <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
+    <button type="button" id="ctx-post-edit-title" class="context-menu-item">Edit title…</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -4024,6 +4025,7 @@
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
     const postDeleteButton = document.getElementById('ctx-post-delete');
     const postEditDateButton = document.getElementById('ctx-post-edit-date');
+    const postEditTitleButton = document.getElementById('ctx-post-edit-title');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -7544,6 +7546,7 @@
           setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -7895,6 +7898,7 @@
             setMenuItemVisible(postMoveToFeedButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
@@ -8697,6 +8701,38 @@
             window.location.reload();
           } catch (_) {
             window.alert('Could not save the date.');
+          }
+        },
+      });
+    });
+
+    postEditTitleButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const currentTitle = contextPostTitle;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openActionInputModal({
+        title: 'Edit title',
+        label: 'Title',
+        initialValue: currentTitle,
+        submitLabel: 'Save',
+        onSubmit: async (value) => {
+          try {
+            const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, title: value });
+            const resp = await fetch('/entries/set-title', { method: 'POST', body });
+            const data = await resp.json();
+            if (!data.ok) {
+              window.alert(data.error || 'Could not save the title.');
+              return;
+            }
+            // The list row and pane header both render the stored title
+            // server-side; a reload is the simple way to reflect both.
+            window.location.reload();
+          } catch (_) {
+            window.alert('Could not save the title.');
           }
         },
       });
