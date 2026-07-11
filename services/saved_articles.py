@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import urldefrag, urlparse
@@ -94,11 +95,22 @@ def _replace_entry_content(reader, conn: sqlite3.Connection, entry_id: str, titl
             (title, SAVED_FEED_URL, entry_id),
         )
     db.commit()
-    conn.execute(
-        "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
-        (SAVED_FEED_URL, entry_id),
-    )
-    conn.commit()
+    # The saved_at bump is cosmetic ordering — never let a transient lock
+    # (e.g. the archive worker writing at the same instant) fail the save
+    # after the content is already committed.
+    for attempt in (1, 2):
+        try:
+            conn.execute(
+                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
+                (SAVED_FEED_URL, entry_id),
+            )
+            conn.commit()
+            break
+        except sqlite3.OperationalError as exc:
+            if attempt == 2:
+                LOGGER.warning("save-article: saved_at bump failed for %s: %s", entry_id, exc)
+            else:
+                time.sleep(0.5)
 
 
 def save_article(
@@ -151,10 +163,14 @@ def save_article(
                 LOGGER.warning("save-article: refresh extraction failed for %s: %s", clean_url, exc)
             else:
                 if article_html:
-                    _replace_entry_content(reader, conn, clean_url, new_title, article_html)
-                    result["extracted"] = True
-                    result["refreshed"] = True
-                    result["title"] = new_title or result["title"]
+                    try:
+                        _replace_entry_content(reader, conn, clean_url, new_title, article_html)
+                    except Exception as exc:  # noqa: BLE001 — refresh is best-effort on a duplicate
+                        LOGGER.warning("save-article: content refresh failed for %s: %s", clean_url, exc)
+                    else:
+                        result["extracted"] = True
+                        result["refreshed"] = True
+                        result["title"] = new_title or result["title"]
     else:
         title, article_html = clean_url, ""
         try:
