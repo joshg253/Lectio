@@ -13574,6 +13574,14 @@
         }
         targetUrl.searchParams.set(key, valueText);
       }
+      // Search always spans All; clearing it restores the pre-search filter
+      // (carried in the form's resume_read_filter).
+      if (targetUrl.searchParams.get('q')) {
+        targetUrl.searchParams.set('read_filter', 'all');
+      } else {
+        const resume = String(formData.get('resume_read_filter') || 'all');
+        targetUrl.searchParams.set('read_filter', resume);
+      }
 
       loadScopePanesWithoutFullRefresh(targetUrl.toString())
         .then(() => {

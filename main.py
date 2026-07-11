@@ -12204,6 +12204,7 @@ def entry_pane(
             "quire_configured": is_quire_configured(),
             "reddit_connected": reddit_connected(),
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -14656,6 +14657,13 @@ def _home_inner(
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
     selected_star_only = normalize_star_only(star_only) or legacy_saved_mode
+    # Search always spans All (searching only unread is never the intent);
+    # the pre-search filter is carried in resume_read_filter so clearing the
+    # search restores it. History keeps its own machinery.
+    if normalize_search_query(q) and selected_read_filter in {"all", "unread"}:
+        if resume_read_filter is None and selected_read_filter != "all":
+            selected_resume_read_filter = selected_read_filter
+        selected_read_filter = "all"
     # Saved-mode landing state: the Saved Articles header expands its folder
     # list without loading any posts (the whole backlog is expensive) — the
     # user picks All / a folder / Uncategorized from the sublist.
@@ -14980,7 +14988,10 @@ def _home_inner(
     }
     _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
     _stream.enable_buffering(50)
-    return StreamingResponse(_stream, media_type="text/html")
+    # Stateful, per-user HTML: never let a browser or CDN edge (Cloudflare
+    # fronts at least one deployment) cache it per-URL — a stale cached page
+    # ships stale inline JS and resurrects long-fixed bugs.
+    return StreamingResponse(_stream, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/dev/feeds/email-match.xml")
