@@ -145,3 +145,54 @@ def test_saved_entries_are_protected_from_updates(reader, meta_conn):
     save_article(reader, meta_conn, "https://example.com/post", extract=_extract_ok)
     reader.update_feeds()  # feed has updates disabled; must be a no-op
     assert reader.get_entry((SAVED_FEED_URL, "https://example.com/post")) is not None
+
+
+def test_resave_with_refresh_replaces_content_and_bumps(reader, meta_conn):
+    """A captured-DOM re-save (e.g. the page was cleaned up in-browser first)
+    replaces the stored content and bumps the entry to the top of the backlog;
+    URL-only re-saves stay light no-ops (covered above)."""
+    save_article(reader, meta_conn, "https://example.com/post", extract=_extract_ok)
+    old = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
+
+    def cleaned_extract(url):
+        return "Cleaned Title", "<p>Aardvark-cleaned body.</p>"
+
+    result = save_article(
+        reader, meta_conn, "https://example.com/post",
+        extract=cleaned_extract, refresh_content=True,
+    )
+    assert result["duplicate"] is True and result.get("refreshed") is True
+    fresh = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
+    assert fresh.content[0].value == "<p>Aardvark-cleaned body.</p>"
+    assert fresh.title == "Cleaned Title"
+    from datetime import timedelta
+    assert fresh.published >= old.published - timedelta(seconds=1)  # bumped to now (stored w/o microseconds)
+
+
+def test_resave_refresh_respects_pinned_title(reader, meta_conn):
+    """Edit title… pins the title (entry_title_overrides) — a content refresh
+    must not clobber it."""
+    save_article(reader, meta_conn, "https://example.com/post", extract=_extract_ok)
+    meta_conn.execute(
+        "CREATE TABLE IF NOT EXISTS entry_title_overrides ("
+        "feed_url TEXT NOT NULL, entry_id TEXT NOT NULL, title TEXT NOT NULL,"
+        "PRIMARY KEY(feed_url, entry_id))"
+    )
+    meta_conn.execute(
+        "INSERT INTO entry_title_overrides (feed_url, entry_id, title) VALUES (?, ?, ?)",
+        (SAVED_FEED_URL, "https://example.com/post", "My Pinned Title"),
+    )
+    # Simulate the pin having been applied to the entry too.
+    db = reader._storage.get_db()
+    db.execute("UPDATE entries SET title='My Pinned Title' WHERE feed=? AND id=?",
+               (SAVED_FEED_URL, "https://example.com/post"))
+    db.commit()
+
+    save_article(
+        reader, meta_conn, "https://example.com/post",
+        extract=lambda u: ("Clobber Attempt", "<p>new body</p>"),
+        refresh_content=True,
+    )
+    fresh = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
+    assert fresh.title == "My Pinned Title"
+    assert fresh.content[0].value == "<p>new body</p>"

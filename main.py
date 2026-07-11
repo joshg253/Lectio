@@ -20522,11 +20522,12 @@ def _resolve_redirector_url(url: str) -> str:
     return url
 
 
-def _save_article_for_current_user(url: str, extract=None) -> dict:
+def _save_article_for_current_user(url: str, extract=None, refresh_content: bool = False) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
     DB, wiring in readability extraction and the starred-archive enqueue.
     *extract* overrides the server-side fetch+extract — e.g. extraction from
-    browser-captured HTML for the extension save protocol."""
+    browser-captured HTML for the extension save protocol; those captured
+    saves also refresh_content on duplicates (a deliberate re-capture)."""
     if link_canonical.is_redirector_link(url):
         url = _resolve_redirector_url(url)
     reader = get_reader()
@@ -20537,6 +20538,7 @@ def _save_article_for_current_user(url: str, extract=None) -> dict:
             url,
             extract=extract or fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
+            refresh_content=refresh_content,
         )
     if result.get("created_feed"):
         # The Saved Articles feed just appeared — surface it in the sidebar tree.
@@ -20771,7 +20773,9 @@ async def api_bookmarklet_save(request: Request):
             # that instead (server fetch; the captured DOM is Lectio chrome).
             return _save_article_for_current_user(wrapped[1], None)
         extract = _extract_from_capture if page_html is not None else None
-        return _save_article_for_current_user(url, extract)
+        # A captured-DOM save of an existing article is a deliberate
+        # re-capture (e.g. cleaned up in-browser first): refresh the content.
+        return _save_article_for_current_user(url, extract, refresh_content=page_html is not None)
 
     def _do_save() -> dict:
         if uid:

@@ -654,8 +654,15 @@ preflights with a wildcard origin (safe: auth lives in the JSON body, no
 cookies), which is required because the extension's `host_permissions` don't
 cover third-party backends, putting its fetch under normal CORS. Captured
 HTML is capped at 6.5M chars, mirroring the extension's own truncation.
-One special case: the extension captures whatever tab it's on, so a capture
-made *from inside Lectio* would bookmark Lectio's own UI page —
+A captured-DOM save of an **already-saved URL** is treated as a deliberate
+re-capture (the user often cleaned the page in-browser first): extraction
+re-runs on the new DOM, the stored content is replaced (direct column write
+in reader's JSON shape — EntryData has no public setter), and the entry bumps
+to the top of the backlog (published/saved_at = now). A pinned title (Edit
+title…) is never clobbered; URL-only re-saves (bookmarklet, /api/save) stay
+light re-star no-ops. One special case: the extension captures whatever tab
+it's on, so a capture made *from inside Lectio* would bookmark Lectio's own
+UI page —
 `_unwrap_lectio_reading_url` detects a submitted URL on this instance
 (request host or `LECTIO_PUBLIC_URL`), extracts the wrapped
 `feed_url`/`entry_id`, and **stars that entry** instead (the native
