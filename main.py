@@ -9574,13 +9574,50 @@ _READER_VIEW_MEDIA_CSS = (
 )
 
 
+_MARKDOWN_URL_RE = re.compile(r"\.(?:md|markdown)(?:\.txt)?(?:$|[?#])", re.IGNORECASE)
+
+
+def _is_markdown_response(content_type: str, url: str) -> bool:
+    """True when a fetched document is Markdown, not HTML — either declared
+    (text/markdown) or a Markdown file served as text/plain (Google's dev
+    docs expose .md.txt variants of every page)."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct == "text/markdown":
+        return True
+    return ct in {"text/plain", ""} and bool(_MARKDOWN_URL_RE.search(urlparse(url).path))
+
+
+def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
+    """Convert Markdown to sanitized article HTML; title = first heading."""
+    import markdown as _markdown
+    html_out = _markdown.markdown(
+        md_text,
+        extensions=["fenced_code", "tables", "sane_lists"],
+    )
+    title = source_url
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html_out, re.IGNORECASE | re.DOTALL)
+    if not m:
+        m = re.search(r"<h2[^>]*>(.*?)</h2>", html_out, re.IGNORECASE | re.DOTALL)
+    if m:
+        title = re.sub(r"<[^>]+>", "", m.group(1)).strip() or source_url
+    article_html = sanitize_readability_html(html_out).strip()
+    article_html = _absolutize_article_urls(article_html, source_url)
+    if not article_html:
+        raise ValueError("No readable article content was found.")
+    return title, article_html
+
+
 def fetch_readability_article(source_url: str) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
-    route and save-article capture. Raises on fetch/extraction failure."""
+    route and save-article capture. Raises on fetch/extraction failure.
+    Markdown documents (text/markdown, or .md/.md.txt paths served as plain
+    text) are converted instead of readability-extracted."""
     with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
         response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
     response.raise_for_status()
+    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(response.text, source_url)
     return extract_readability_article(response.text, source_url)
 
 

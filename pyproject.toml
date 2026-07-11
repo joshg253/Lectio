@@ -20,6 +20,7 @@ dependencies = [
     "sqlalchemy",
     "resend",
     "uvicorn[standard]",
+    "markdown>=3.10.2",
 ]
 
 [project.optional-dependencies]

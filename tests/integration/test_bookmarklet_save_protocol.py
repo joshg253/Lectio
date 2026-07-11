@@ -200,3 +200,26 @@ def test_jwplayer_chrome_stripped_at_render():
     assert "Latest Videos From" not in cleaned
     assert "0 seconds of" not in cleaned
     assert "Article text." in cleaned and "More text." in cleaned
+
+
+def test_markdown_documents_convert_instead_of_readability():
+    """Markdown sources (text/markdown, or .md/.md.txt paths served as
+    text/plain — Google dev docs' 'View as Markdown') convert to article
+    HTML with the first heading as title."""
+    assert main._is_markdown_response("text/markdown; charset=utf-8", "https://x.test/page")
+    assert main._is_markdown_response("text/plain", "https://docs.cloud.google.com/python/docs/setup.md.txt")
+    assert main._is_markdown_response("text/plain", "https://x.test/README.md#install")
+    assert not main._is_markdown_response("text/html", "https://x.test/page.md.txt")
+    assert not main._is_markdown_response("text/plain", "https://x.test/notes.txt")
+
+    md = (
+        "# Setting up Python\n\n"
+        "Some *intro* text with a [link](/relative/path).\n\n"
+        "```bash\npip install foo\n```\n\n"
+        "| a | b |\n|---|---|\n| 1 | 2 |\n"
+    )
+    title, html = main.markdown_to_article_html(md, "https://docs.cloud.google.com/python/docs/setup.md.txt")
+    assert title == "Setting up Python"
+    assert "<em>intro</em>" in html
+    assert "<table" in html and "pip install foo" in html
+    assert 'href="https://docs.cloud.google.com/relative/path"' in html
