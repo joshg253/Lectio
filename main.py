@@ -11558,6 +11558,17 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
                 break
         content_html = _stripped or None
 
+    # Rendered video-player chrome captured from live pages (extension saves):
+    # JWPlayer serializes its entire control DOM (jw-* classes, jwp-carousel
+    # widgets, Future plc's vid-present wrapper on loudersound/guitarworld/…).
+    # Without the player scripts it renders as junk text ("0 seconds of …",
+    # "Latest Videos From …" carousels) that the live page's own CSS hides —
+    # strip the whole containers at render, which also cleans already-stored
+    # captures.
+    if isinstance(content_html, str) and ("jw-" in content_html or "jwp-" in content_html or "vid-present" in content_html):
+        for _cls in ("vid-present", "jwplayer", "jw-wrapper", "jwp-carousel"):
+            content_html = _strip_div_blocks_by_class(content_html, _cls)
+
     # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
     # after the first paragraph. It contains external article thumbnails that
     # confuse lead-image extraction and clutter the reading view.

@@ -182,3 +182,21 @@ def test_invalid_body_and_bad_url(configured):
         r = c.post("/api/bookmarklet/save", json={"token": "x", "url": "ftp://nope"})
     assert r.status_code == 400
     assert r.json()["detail"]
+
+
+def test_jwplayer_chrome_stripped_at_render():
+    """Captured pages serialize JWPlayer's whole control DOM (hidden on the
+    live page by its own CSS) — the render cleanup strips the containers."""
+    html = (
+        '<p>Article text.</p>'
+        '<div class="my-6 vid-present"><div><p><span class="jwp-carousel-title-desktop">'
+        'Latest Videos From Louder</span></p></div></div>'
+        '<div class="jwplayer jw-reset jw-state-idle"><div class="jw-wrapper jw-reset">'
+        '<p class="jw-title-primary jw-reset-text">10 obscure bands</p>'
+        '<span class="jw-time-update">0 seconds of 1 minute, 33 seconds</span></div></div>'
+        '<p>More text.</p>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "Latest Videos From" not in cleaned
+    assert "0 seconds of" not in cleaned
+    assert "Article text." in cleaned and "More text." in cleaned
