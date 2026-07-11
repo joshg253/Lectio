@@ -452,7 +452,13 @@ class FeedRefreshService:
 
                             # Update domain-level backoff: use the max consecutive_failures
                             # seen from any feed on this domain so far in this cycle.
-                            if domain:
+                            # Permanent per-feed statuses are excluded: a 404/410
+                            # says nothing about domain health, and one dead feed
+                            # retried first after each backoff expiry re-locks every
+                            # feed on the domain (692 youtube.com feeds went dark
+                            # for 4 days behind two dead channels' 404s).
+                            _http_status = self._http_status_of(exc)
+                            if domain and _http_status not in (404, 410, 451):
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
                                 domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)

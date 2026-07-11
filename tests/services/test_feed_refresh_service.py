@@ -318,3 +318,61 @@ def test_feed_level_backoff_still_applies_to_new_feed(tmp_path: Path):
 
     service.update_feeds([new_url])
     assert reader.updated == []
+
+
+class _NotFoundError(RuntimeError):
+    """Mimics a reader update exception carrying HTTP status via http_info."""
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status}")
+        class _Info:
+            pass
+        self.http_info = _Info()
+        self.http_info.status = status
+
+
+class _StatusFailReader(_FakeReader):
+    def __init__(self, fail_statuses: dict[str, int]):
+        super().__init__()
+        self.fail_statuses = fail_statuses
+
+    def update_feed(self, feed_url: str):
+        self.updated.append(feed_url)
+        status = self.fail_statuses.get(feed_url)
+        if status:
+            raise _NotFoundError(status)
+
+    def get_feed(self, feed_url: str, _default=None):
+        class _F:
+            update_after = None
+            last_updated = 1.0
+        return _F()
+
+
+def test_permanent_404_does_not_poison_domain_backoff(tmp_path: Path):
+    """A dead feed's 404 is a per-feed condition: it must earn feed-level
+    backoff but never lock the whole domain (two dead channels' 404s kept all
+    692 youtube.com feeds dark for days — each daily retry hit a dead feed
+    first and re-locked the domain)."""
+    db_path = tmp_path / "meta.sqlite"
+    dead = "https://www.youtube.com/feeds/videos.xml?channel_id=DEAD"
+    reader = _StatusFailReader({dead: 404})
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds([dead])
+    with _make_conn(db_path) as conn:
+        feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (dead,)).fetchone()
+        domain_row = conn.execute("SELECT * FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
+    assert feed_row and feed_row[0] == 1  # feed-level backoff applies
+    assert domain_row is None             # domain untouched
+
+
+def test_transient_failure_still_counts_toward_domain(tmp_path: Path):
+    db_path = tmp_path / "meta.sqlite"
+    flaky = "https://www.youtube.com/feeds/videos.xml?channel_id=FLAKY"
+    reader = _StatusFailReader({flaky: 503})
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds([flaky])
+    with _make_conn(db_path) as conn:
+        domain_row = conn.execute("SELECT consecutive_failures FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
+    assert domain_row and domain_row[0] >= 1
