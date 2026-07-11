@@ -1708,6 +1708,28 @@ async def lifespan(app: FastAPI):
         migrate_spaced_manual_tags()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
+    # Build reader's FTS search index off the startup path (the first build
+    # walks every entry — minutes on a large library; incremental afterwards).
+    # Searches fall back to the legacy scan until each user's index is ready.
+    def _build_search_indexes() -> None:
+        # reader's HTML-stripping emits spurious bs4 "looks like a URL/filename"
+        # warnings for short text fields — one per entry is log spam at 100k.
+        import warnings as _warnings
+        from bs4 import MarkupResemblesLocatorWarning as _MRLW
+        _warnings.filterwarnings("ignore", category=_MRLW)
+
+        def _one() -> None:
+            try:
+                with get_reader() as reader:
+                    reader.enable_search()
+                    reader.update_search()
+                mark_search_index_ready()
+                LOGGER.info("[search] FTS index ready for %s", tenancy.current_user_id())
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[search] FTS index build failed for %s", tenancy.current_user_id())
+        _for_each_background_user("search index build", _one)
+    threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
+
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
 
@@ -9771,6 +9793,43 @@ def _display_title(entry) -> str:
     return ""
 
 
+# Per-user "FTS index is built" flags: searches use reader's search index
+# once the startup builder (or a refresh update) has populated it; before
+# that they fall back to the legacy full-scan.
+_search_index_ready: dict[str, bool] = {}
+
+
+def mark_search_index_ready() -> None:
+    _search_index_ready[tenancy.current_user_id()] = True
+
+
+def _fts_query(normalized_query: str) -> str:
+    """AND-of-quoted-tokens FTS5 query (quotes escaped) — mirrors the legacy
+    scan's all-terms-must-match semantics without exposing FTS operators."""
+    tokens = [t.replace('"', '""') for t in normalized_query.split()]
+    return " ".join(f'"{t}"' for t in tokens)
+
+
+def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], reader_read_filter):
+    """Resolve a search via reader's FTS index; None → caller falls back to
+    the scan (index not built yet, or the query broke FTS5 parsing)."""
+    if not _search_index_ready.get(tenancy.current_user_id()):
+        return None
+    try:
+        out = []
+        for r in reader.search_entries(_fts_query(normalized_query), read=reader_read_filter,
+                                       sort="recent", limit=2000):
+            if r.feed_url not in feed_urls:
+                continue
+            e = reader.get_entry((r.feed_url, r.id), None)
+            if e is not None:
+                out.append(e)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[search] FTS query failed, falling back to scan: %s", exc)
+        return None
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -9901,6 +9960,20 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
+        elif search_terms:
+            # Search fast path: reader's FTS5 index instead of scanning the
+            # whole library and building a haystack per entry (which took
+            # tens of seconds at ~100k entries). Falls back to the scan while
+            # the index is still building.
+            fts_entries = _search_entries_fts(reader, normalized_search_query, feed_urls, reader_read_filter)
+            if fts_entries is not None:
+                all_feed_entries = fts_entries
+                search_terms = []  # already matched by the index
+            else:
+                for entry in reader.get_entries(read=reader_read_filter):
+                    if entry.feed_url not in feed_urls:
+                        continue
+                    all_feed_entries.append(entry)
         elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > PER_FEED_QUERY_THRESHOLD and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
@@ -20605,6 +20678,13 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
         invalidate_problematic_feeds_cache()
     if result.get("ok") and not result.get("duplicate"):
         invalidate_unread_counts_cache()
+    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
+        # Make the save searchable immediately (incremental; guarded by the
+        # ready flag so this can never trigger the expensive first build).
+        try:
+            reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[search] post-save index update failed: %s", exc)
     return result
 
 
@@ -20809,6 +20889,10 @@ async def api_bookmarklet_save(request: Request):
     else:
         uid = None  # no-auth single-user install: default tenancy
     if not (isinstance(page_html, str) and page_html.strip()):
+        page_html = None
+    elif _MARKDOWN_URL_RE.search(urlparse(url).path):
+        # A raw .md/.md.txt page captures as the browser's <pre> wrapper —
+        # drop the capture and let the server fetch + Markdown-convert.
         page_html = None
     elif len(page_html) > _BOOKMARKLET_MAX_HTML_CHARS:
         page_html = page_html[:_BOOKMARKLET_MAX_HTML_CHARS]

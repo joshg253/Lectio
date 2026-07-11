@@ -503,6 +503,13 @@ class FeedRefreshService:
         self.reapply_entry_date_overrides(feed_url_list)
         self.reapply_entry_title_overrides(feed_url_list)
         self.reapply_entry_link_overrides(feed_url_list)
+        # Keep reader's FTS index fresh (incremental — only changed entries).
+        try:
+            with self._get_reader() as reader:
+                if reader.is_search_enabled():
+                    reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("[refresh] search index update failed: %s", exc)
 
         if enhance:
             self.enhance_feeds(feed_url_list)
