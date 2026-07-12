@@ -16,6 +16,12 @@ if str(ROOT) not in sys.path:
 _TEST_DATA_DIR = ROOT / "tmp" / "test-data"
 _TEST_DATA_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
+# Tests exercise routes via TestClient(main.app), which triggers the app's
+# lifespan startup. Its background backfill/index daemons write per-user DBs
+# and would race a test's own DB ops on the same temp DB, surfacing as an
+# intermittent "database is locked" (flaky CI). This kill switch skips those
+# daemons; tests that need one invoke the service/function directly.
+os.environ.setdefault("LECTIO_DISABLE_STARTUP_BACKFILL", "1")
 
 import pytest  # noqa: E402
 

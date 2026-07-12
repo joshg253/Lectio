@@ -1708,6 +1708,16 @@ async def lifespan(app: FastAPI):
         migrate_spaced_manual_tags()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
+    # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
+    # to skip the scheduled-refresh loop, the FTS index build, and the
+    # lead-image / YouTube / archive / read-history backfills. Useful after an
+    # OPML import of hundreds of feeds (boot calm, let pages render, then unset
+    # and restart). The test suite also sets it so these background DB writers
+    # don't race a test's own DB ops on the same temp DB ("database is locked").
+    backfill_disabled = os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1"
+    if backfill_disabled:
+        LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping FTS build, scheduled refresh, and backfill threads")
+
     # Build reader's FTS search index off the startup path (the first build
     # walks every entry — minutes on a large library; incremental afterwards).
     # Searches fall back to the legacy scan until each user's index is ready.
@@ -1728,7 +1738,8 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 LOGGER.exception("[search] FTS index build failed for %s", tenancy.current_user_id())
         _for_each_background_user("search index build", _one)
-    threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
+    if not backfill_disabled:
+        threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
 
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
@@ -1813,11 +1824,12 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception:
             LOGGER.exception("[scraper] startup scraped-feed sync failed")
-    threading.Thread(
-        target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
-        daemon=True,
-        name="sync-scraped-feeds",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
+            daemon=True,
+            name="sync-scraped-feeds",
+        ).start()
 
     # Auto-taggers and the dedup cleanup write per-user tag/strategy state, so
     # run them once per background user (each under its own tenancy context).
@@ -1842,14 +1854,6 @@ async def lifespan(app: FastAPI):
             LOGGER.exception("[guid-churn-cleanup] startup cleanup failed")
 
     _for_each_background_user("auto-tag/dedup", _startup_auto_tag_and_dedup)
-
-    # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
-    # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
-    # Useful after an OPML import of hundreds of feeds: boot in a calm state,
-    # let pages render, then unset and restart once things settle.
-    backfill_disabled = os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1"
-    if backfill_disabled:
-        LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping scheduled refresh and backfill threads")
 
     stop_event = threading.Event()
     if not backfill_disabled:
@@ -1902,18 +1906,20 @@ async def lifespan(app: FastAPI):
     # initial rollout and any re-stars after maintenance pruning). Also
     # one-shot metadata backfill for archive rows that completed before
     # title/link/etc columns were added to the schema.
-    starred_archive_service.start_worker()
+    if not backfill_disabled:
+        starred_archive_service.start_worker()
 
     def _archive_backfill_task() -> None:
         starred_archive_service.backfill_saved_entries_from_archive()
         starred_archive_service.backfill_missing_archives()
         starred_archive_service.backfill_metadata_for_complete_rows()
 
-    threading.Thread(
-        target=lambda: _for_each_background_user("starred-archive backfill", _archive_backfill_task),
-        daemon=True,
-        name="starred-archive-backfill",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("starred-archive backfill", _archive_backfill_task),
+            daemon=True,
+            name="starred-archive-backfill",
+        ).start()
 
     # One-time backfill: populate read_history from entry_read_state if history is empty.
     def _backfill_read_history() -> None:
@@ -1958,11 +1964,12 @@ async def lifespan(app: FastAPI):
         except Exception:
             LOGGER.exception("[read_history] backfill error")
 
-    threading.Thread(
-        target=lambda: _for_each_background_user("read-history backfill", _backfill_read_history),
-        daemon=True,
-        name="read-history-backfill",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("read-history backfill", _backfill_read_history),
+            daemon=True,
+            name="read-history-backfill",
+        ).start()
 
     # Daily Maintenance loop — runs once per day at the configured maintenance hour.
     maint_stop_event = threading.Event()
