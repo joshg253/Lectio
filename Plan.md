@@ -168,7 +168,7 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
    server-side strip (`_apply_feed_content_cleanups`). A capture that walks
    the DOM and drops nodes with computed `display:none` /
    `visibility:hidden` / zero-size before POSTing makes "what you see is
-   exactly what saves" true — uBlock/Aardvark/anything-based cleanup all
+   exactly what saves" true — uBlock/Aardvark/anything-based cleanups all
    just work, and a whole class of server-side widget whack-a-mole
    disappears.
 2. **Dual-extension use**: the stock extension has a single Backend setting —

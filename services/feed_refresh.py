@@ -643,8 +643,10 @@ class FeedRefreshService:
             return 0
         try:
             with self._get_meta_connection() as conn:
+                # placeholders is only comma-joined "?" marks (one per feed);
+                # every value is a bound parameter, so this is not injectable.
                 placeholders = ",".join("?" for _ in feed_url_list)
-                rows = conn.execute(
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
                     f"SELECT feed_url, entry_id, link FROM entry_link_overrides WHERE feed_url IN ({placeholders})",
                     feed_url_list,
                 ).fetchall()
