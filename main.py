@@ -43,7 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image as _PILImage
 from readability import Document
-from reader.exceptions import InvalidFeedURLError
+from reader.exceptions import FeedExistsError, FeedNotFoundError, InvalidFeedURLError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -19364,6 +19364,23 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
     try:
         with get_reader() as reader:
             reader.change_feed_url(old_url, new_url)
+    except FeedNotFoundError:
+        # The submitted "current" URL isn't in reader — almost always a stale
+        # page whose feed was redirected out from under it (a FeedBurner-style
+        # redirector resolving to the publisher's own URL). Point the user at
+        # a reload rather than the raw reader exception.
+        return JSONResponse(
+            {"ok": False, "error": "This feed's current URL has changed (it may have been "
+             "redirected). Reload the page and try again — the Change URL field will show "
+             "the up-to-date URL."},
+            status_code=409,
+        )
+    except FeedExistsError:
+        return JSONResponse(
+            {"ok": False, "error": "A feed with that URL already exists. Consolidate the "
+             "duplicate instead (Settings → Feeds → Utilities)."},
+            status_code=409,
+        )
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
