@@ -8535,8 +8535,39 @@
             adjustSidebarUnreadCount(feedUrl, serverCount - currentCount);
           }
         }
+        // Re-evaluate the "Unread only" folder filter against the fresh counts:
+        // a folder emptied by mark-all-read then refilled by a background feed
+        // refresh must reappear (and a newly-emptied one hide) without a reload.
+        if (typeof applyUnreadFoldersOnly === 'function'
+            && window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1') {
+          applyUnreadFoldersOnly(true);
+        }
       } catch (_e) { }
     }
+
+    // Poll sidebar counts on a slow cadence so items arriving via the
+    // background scheduled refresh surface in the tree (and un-hide folders
+    // the "Unread only" filter had collapsed) without a manual reload. Gated
+    // on tab visibility so a backgrounded tab doesn't poll; also catches up
+    // immediately when the tab is refocused.
+    (function () {
+      const SIDEBAR_POLL_MS = 90000;
+      let _pollTimer = null;
+      function _start() {
+        if (_pollTimer !== null) return;
+        _pollTimer = window.setInterval(() => {
+          if (document.visibilityState === 'visible') _refreshSidebarCounts();
+        }, SIDEBAR_POLL_MS);
+      }
+      function _stop() {
+        if (_pollTimer !== null) { window.clearInterval(_pollTimer); _pollTimer = null; }
+      }
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') { _refreshSidebarCounts(); _start(); }
+        else { _stop(); }
+      });
+      if (document.visibilityState === 'visible') _start();
+    }());
 
     function applyPostItemSavedState(postItem, isSaved) {
       if (!postItem) {
