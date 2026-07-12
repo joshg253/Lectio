@@ -24,14 +24,17 @@
         </div>
 
         {% if tag_nodes %}
-        <div class="rm-tree-section rm-tree-tags">
+        <details class="rm-tree-section rm-tree-tags"{% if tags_open %} open{% endif %}>
+          <summary class="rm-node rm-tags-summary">
+            <span class="rm-label">Tags</span>
+            <span class="rm-count">{{ tag_nodes|length }}</span>
+          </summary>
           {% for n in tag_nodes %}
-          <a class="rm-node{% if n.active %} active{% endif %}" href="{{ n.href }}">
+          <a class="rm-node rm-tag-node{% if n.active %} active{% endif %}" href="{{ n.href }}">
             <span class="rm-label">{{ n.label }}</span>
-            {% if n.count %}<span class="rm-count">{{ n.count }}</span>{% endif %}
           </a>
           {% endfor %}
-        </div>
+        </details>
         {% endif %}
       </div>
 

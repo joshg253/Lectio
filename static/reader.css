@@ -201,7 +201,12 @@ body.rm-body {
 }
 .rm-tree-scroll { flex: 1 1 auto; overflow-y: auto; }
 .rm-tree-section { padding: 6px 0; }
-.rm-tree-tags { border-top: 1px solid #000; }
+.rm-tree-tags { border-top: 1px solid #000; padding: 0; }
+.rm-tags-summary { cursor: pointer; list-style: none; font-weight: 700; }
+.rm-tags-summary::-webkit-details-marker { display: none; }
+.rm-tags-summary::after { content: "▸"; margin-left: auto; }
+.rm-tree-tags[open] .rm-tags-summary::after { content: "▾"; }
+.rm-tag-node { padding-left: 30px; min-height: 40px; }
 .rm-tree-pinned { flex: 0 0 auto; border-top: 2px solid #000; }
 
 .rm-node {

@@ -499,7 +499,8 @@ def _static_asset_version() -> str:
         _static = Path(__file__).parent / "static"
         combined = b"".join(
             (_static / name).read_bytes()
-            for name in ("style.css", "themes/dark.css", "media-player.js")
+            for name in ("style.css", "themes/dark.css", "media-player.js",
+                         "reader.css", "reader.js")
         )
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
@@ -14336,12 +14337,15 @@ def _build_read_mode_context(
             "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
         })
 
-    # Manual-tag buckets (e.g. #toread / #todo) — the same source the Saved
-    # Tags submenu uses; clicking narrows the saved list to that tag.
+    # Manual-tag buckets — the same source the Saved Tags submenu uses; clicking
+    # narrows the saved list to that tag. Counts are suppressed here because
+    # get_tag_counts_for_feeds counts all entries, not just saved ones (would be
+    # misleading next to the saved-scoped folder counts). Tucked in a collapsed
+    # <details> since a heavy tagger can have dozens.
     tag_nodes = [{
         "label": "#" + str(tr["name"]), "glyph": "",
         "href": _read_browse_href(None, str(tr["name"]), False, None),
-        "count": int(tr["count"]),
+        "count": 0,
         "active": (not archived and tag == str(tr["name"])),
     } for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))]
 
@@ -14373,6 +14377,7 @@ def _build_read_mode_context(
         "list_items": list_items,
         "selected_label": selected_label,
         "search_query": q or "",
+        "tags_open": bool(tag),  # expand the tag list when a tag is selected
         "static_asset_version": STATIC_ASSET_VERSION,
     }
 
