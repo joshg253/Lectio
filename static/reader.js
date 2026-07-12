@@ -100,6 +100,65 @@
   if (plus) plus.addEventListener("click", function (e) { e.preventDefault(); changeFs(FS_STEP); });
   if (minus) minus.addEventListener("click", function (e) { e.preventDefault(); changeFs(-FS_STEP); });
 
+  // Swipe to turn pages (touch). Horizontal drag past a threshold pages the
+  // article; the tap zones and keys still work for non-touch.
+  var sx = 0, sy = 0, tracking = false;
+  viewport.addEventListener("touchstart", function (ev) {
+    var t = ev.changedTouches[0]; sx = t.clientX; sy = t.clientY; tracking = true;
+  }, { passive: true });
+  viewport.addEventListener("touchend", function (ev) {
+    if (!tracking) return;
+    tracking = false;
+    var t = ev.changedTouches[0];
+    var dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy)) return; // not a horizontal swipe
+    if (dx < 0) nextPage(); else prevPage();
+  }, { passive: true });
+
+  // Archive / Delete(unsave) — POST then advance to the next article (or back
+  // to the list when there is none). CSRF from the page meta.
+  function csrfToken() {
+    var m = document.querySelector('meta[name="csrf-token"]');
+    return m ? m.getAttribute("content") : "";
+  }
+  function afterAction() {
+    var next = cols.getAttribute("data-next");
+    go(next || cols.getAttribute("data-back") || "/read");
+  }
+  function postAction(url, params) {
+    var body = new URLSearchParams(params);
+    fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-CSRF-Token": csrfToken(),
+        // Ask save-toggle for a JSON reply instead of a redirect to the app.
+        "X-Requested-With": "lectio-entry-save-toggle",
+      },
+      body: body.toString(),
+      credentials: "same-origin",
+    }).then(afterAction, afterAction);
+  }
+  var archiveBtn = document.getElementById("reader-archive-btn");
+  if (archiveBtn) archiveBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    var archived = archiveBtn.getAttribute("aria-pressed") === "true" ? "0" : "1";
+    postAction("/entries/archive", {
+      feed_url: cols.getAttribute("data-feed"),
+      entry_id: cols.getAttribute("data-entry"),
+      archived: archived,
+    });
+  });
+  var deleteBtn = document.getElementById("reader-delete-btn");
+  if (deleteBtn) deleteBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    postAction("/entries/saved", {
+      folder_id: "0", saved: "0", select_entry: "0",
+      feed_url: cols.getAttribute("data-feed"),
+      entry_id: cols.getAttribute("data-entry"),
+    });
+  });
+
   var reflowTimer = null;
   window.addEventListener("resize", function () {
     if (reflowTimer) window.clearTimeout(reflowTimer);

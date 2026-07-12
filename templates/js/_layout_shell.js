@@ -253,6 +253,9 @@
       href = a.href;
       const u = new URL(href, window.location.origin);
       if (u.origin !== window.location.origin) return;
+      // Full-navigate any link that leaves the single-page app (e.g. /read
+      // Read Mode) rather than trying to SPA-load a standalone page fragment.
+      if (u.pathname !== '/') return;
     } catch (err) {
       return;
     }

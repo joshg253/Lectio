@@ -705,49 +705,56 @@ hidden in Feeds mode when it's the only unfoldered feed) but stays in the
 Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
 its entries.
 
-## E-ink reader view (`GET /read`)
+## Read Mode — e-ink reading app (`GET /read`)
 
-A standalone, distraction-free reading surface for the saved/starred backlog,
-built e-ink-first (the driver is reading the backlog on a Supernote Manta
-browser, where Instapaper renders badly). It is deliberately **not** the app
-shell: `build_reader_page` emits a self-contained HTML document loading only
-`static/reader.css` + `static/reader.js` — pure black-on-white, large adjustable
+A standalone, distraction-free reading *app* for the saved/starred backlog, built
+e-ink-first (the driver is reading the backlog on a Supernote Manta browser,
+where Instapaper renders badly). The **Saved Articles** sidebar row is hijacked to
+open it — a full navigation, since `_layout_shell.js` now bails on any link whose
+path isn't `/`. It is deliberately **not** the app shell: its own light-themed
+`static/reader.css` + `static/reader.js`, pure black-on-white, large adjustable
 type, no shadows/gradients, and (critically) `transition:none/animation:none`,
-which ghost on e-ink. This also sidesteps the app's localStorage-only theming,
-which a server-rendered page can't read.
+which ghost on e-ink. Being standalone also sidesteps the app's localStorage-only
+theming (a server-rendered page can't read it) and satisfies "auto light theme".
+
+**Two states, one route.** With no `entry_id`, `reader_view` renders the **2-pane
+browse** (`templates/read_mode.html`): a simplified saved tree (folders + manual-tag
+buckets via `get_tag_counts_for_feeds` + an **Archive** node pinned at the bottom,
+each a plain full-navigation `<a>`) on the left, and the item list for the selected
+node on the right. With an `entry_id`, it renders the **paginated reader**
+(`build_reader_page`). Read Mode ignores read/unread — it always lists starred
+items (`star_only=True, read_filter='all'`); the browse node scope is `folder_id` /
+`tag` / `archived` / `q`. A bare bookmarked `/read` lands on the browse **All
+(inbox)**.
 
 **Paginated, not scrolled.** `reader.js` lays the article out in screen-width CSS
 columns (`column-width:100vw`, stride = column-width + column-gap = 100vw) inside
 an `overflow:hidden` viewport and turns "pages" by translating the column
-container horizontally — no scrolling (which ghosts). Tap zones (left third =
-back, right two-thirds = forward) and arrow/page/space keys turn pages; turning
-past the first/last page navigates to the prev/next article via `data-prev` /
-`data-next` hrefs (a full page load — minimal JS, e-ink-friendly). `A−`/`A+`
-adjusts `--reader-fs` and re-paginates, persisting the size in `localStorage`
-(the page's own storage, independent of the app).
+container horizontally. Tap zones (left third = back, right two-thirds = forward),
+**horizontal swipe**, and arrow/page/space keys turn pages; past the first/last
+page it navigates to the prev/next article (`data-prev`/`data-next`, full loads).
+`A−`/`A+` adjusts `--reader-fs` and re-paginates, persisting size in `localStorage`.
+Prev/next follow the **selected node's** list.
 
-**One article per request; the backlog drives prev/next.** `resolve_reader_backlog`
-mirrors the main list view's feed-set selection (root widens to every reader
-feed, a folder/feed narrows) and calls the same `list_entries_for_feeds`, so the
-reader **follows the Saved view's current filter** (read-filter/tag/sort/scope);
-archive-only saved orphans are merged into the star_only root view for parity
-with the Saved list. The route finds the current entry in that ordered list to
-compute prev/next; an entry that's already dropped from the list (e.g. read under
-an Unread filter) still renders standalone with "next" pointing at the list head,
-keeping navigation stable while the backlog burns down. A bare bookmarked `/read`
-(no scope) defaults to the whole saved backlog, unread, oldest-first.
+**Archive vs Delete (the "done" axis).** Because saved items are usually already
+read, read/unread is meaningless for them; the axis that matters is Archive.
+`saved_entries.archived_at` (migrated via the `ensure_meta_schema` ALTER pattern,
+per-tenant at startup) is a per-saved-item flag that **keeps the star** but drops
+the item from the inbox (`resolve_reader_backlog(archived=…)` filters against
+`get_archived_saved_keys()`; `None` = no filter, used for Search which spans
+everything). The reader header's **Archive** button POSTs `/entries/archive`
+(`set_entry_archived`); **Delete** simply un-saves via the existing
+`POST /entries/saved` (`saved=0`); both are `fetch` calls carrying the page's
+CSRF token, then advance to `data-next`. This **Archive** is *not* the offline
+**starred archive** (`archived_entry` capture DB) — same word, different concept.
 
 **Content resolution** (`resolve_reader_article_html`): archived readability copy
-first (`_resolve_archived_readability_html`, shared with the `/entries/readability`
-route — offline HTML with `/starred-asset/` URLs, survives dead sources), then a
-live readability extraction of the link, then the stored feed content. Every
-source is already sanitized (archive at capture, live via `sanitize_readability_html`,
-stored via `reader_sanitize` at ingest), so the page embeds the result directly —
+first (`_resolve_archived_readability_html`, shared with `/entries/readability` —
+offline HTML with `/starred-asset/` URLs, survives dead sources), then a live
+readability extraction, then the stored feed content — all already sanitized, so
 no new sanitization surface. Opening an entry marks it read off the request path
-via `_mark_entry_read_background` (the same tenancy-rebinding daemon the entry
-pane uses). Entry points: the **book icon** in the posts toolbar (carries the
-current list scope), **Open in reader** in the entry pane (`reader_href`), and a
-directly bookmarkable `/read`.
+via `_mark_entry_read_background` (the tenancy-rebinding daemon the entry pane
+also uses).
 
 ## Hard-deleting a single entry (tombstones)
 

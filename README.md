@@ -167,20 +167,23 @@ The short version:
   exits back to normal browsing with your previous Read/Unread filter
   restored. The internal Saved Articles feed no longer clutters
   Feeds → Uncategorized — the sidebar view supersedes it.
-- **Reader mode (e-ink)** — a distraction-free, full-screen reading surface
-  built for slow grayscale e-ink browsers (the Supernote Manta in particular,
-  where Instapaper reads badly). It's a standalone page — high-contrast black on
-  white, large adjustable type, and **paginated, not scrolled**: tap the right
-  two-thirds of the screen (or the arrow / page / space keys) to turn the page,
-  the left third to go back. Turning past the last page moves to the next
-  article in your backlog and marks the current one read, so an Unread view
-  burns down as you read. It **follows the Saved view's current filter/scope**
-  (Starred/Unread/tag/sort) and prefers the starred archive's full offline copy
-  over a truncated feed summary. Open it from the **book icon** in the posts
-  toolbar, from **Open in reader** on any article, or bookmark **`/read`**
-  directly on the device for the whole saved backlog. `A−` / `A+` adjust text
-  size (remembered on the device); `✕` returns to Lectio and `↗` opens the
-  original page.
+- **Read Mode (e-ink)** — clicking **Saved Articles** opens a distraction-free,
+  light-themed reading app built for slow grayscale e-ink browsers (the
+  Supernote Manta in particular, where Instapaper reads badly). It's a
+  self-contained page at **`/read`** (bookmarkable on the device) with a
+  **2-pane browse**: a simplified tree of your saved items (folders, your tag
+  buckets like `#toread`/`#todo`, and an **Archive** at the bottom) on the left,
+  the item list on the right. Opening an item shows the article **paginated, not
+  scrolled** — tap the right two-thirds (or **swipe**, or arrow / page / space
+  keys) to turn the page, the left third to go back; past the last page it moves
+  to the next article. It prefers the starred archive's full offline copy over a
+  truncated feed summary. In the article header, **Archive** files a saved item
+  as done (it keeps its star but leaves the inbox — reach it later via the
+  Archive folder or Search) and **Delete** simply un-saves it; both advance to
+  the next article. `A−` / `A+` adjust text size (remembered on the device);
+  `✕` returns to the list and `↗` opens the original page. Because saved items
+  are usually already read, **Archive — not read/unread — is the "done" axis**
+  in Read Mode.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

@@ -33,20 +33,21 @@ Make Lectio usable as a read-it-later app.
   narrowing), and the toolbar Tags submenu slices the backlog by tag within
   the view (user pattern: `#toread` vs `#todo` — "read later" vs "deal with
   later" are different buckets under one star).
-- SHIPPED 2026-07-12: **Reader-only browsing view** (`GET /read`) — a standalone,
-  distraction-free e-ink reading surface for the saved/starred backlog (see
-  ARCHITECTURE "E-ink reader view"). High contrast, paginated (tap left/right +
-  arrow keys, no scroll) via CSS columns in `static/reader.{css,js}`, adjustable
-  type. Follows the Saved view's current filter/scope, prefers the archived
-  readability copy over truncated feed content, marks read as you go (backlog
-  burns down), and is bookmarkable at `/read`. Opened from the toolbar book icon,
-  the entry pane's "Open in reader", or a direct bookmark. Follow-ups (build on
-  demand): mark-read only after the last page (stricter burn-down) rather than on
-  open; prefetch the next article to cut e-ink full-page flashes at boundaries;
-  optional per-image `grayscale(1)` if photos read poorly on-device; a possible
-  env-gated higher-quality extraction backend (Instapaper's paid Instaparser API
-  was evaluated and rejected as third-party/paid — it would belong to the
-  "full-content fetch at ingest" item below, not here).
+- SHIPPED 2026-07-12: **Read Mode** (`GET /read`) — a standalone, light-themed
+  e-ink reading app for the saved backlog, opened by hijacking the **Saved
+  Articles** sidebar row (see ARCHITECTURE "Read Mode"). 2-pane browse (saved
+  tree = folders + tag buckets + Archive, pinned) → open an item in the
+  paginated reader (CSS columns; tap/swipe/keys, no scroll; `static/reader.{css,js}`)
+  → close back to the 2-pane. New **Archive** state on `saved_entries.archived_at`
+  (keeps the star, the "done" axis instead of read/unread; Archive node + Search
+  reach archived items); the reader header's Archive/Delete(unstar) advance to the
+  next item. Follow-ups (build on demand): excise the now-dormant in-app star-mode
+  tree/JS that the hijack bypasses; archived-aware node counts (tree counts are
+  currently total-saved); mark-read only after the last page; prefetch next
+  article to cut e-ink flashes; optional per-image `grayscale(1)`. A possible
+  env-gated higher-quality extraction backend (Instapaper's paid Instaparser API,
+  evaluated + rejected as third-party/paid) belongs to the "full-content fetch at
+  ingest" item below, not here.
 - Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
