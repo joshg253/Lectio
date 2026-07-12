@@ -452,7 +452,13 @@ class FeedRefreshService:
 
                             # Update domain-level backoff: use the max consecutive_failures
                             # seen from any feed on this domain so far in this cycle.
-                            if domain:
+                            # Permanent per-feed statuses are excluded: a 404/410
+                            # says nothing about domain health, and one dead feed
+                            # retried first after each backoff expiry re-locks every
+                            # feed on the domain (692 youtube.com feeds went dark
+                            # for 4 days behind two dead channels' 404s).
+                            _http_status = self._http_status_of(exc)
+                            if domain and _http_status not in (404, 410, 451):
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
                                 domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
@@ -502,6 +508,14 @@ class FeedRefreshService:
         # reverted to the feed's original (garbage) value.
         self.reapply_entry_date_overrides(feed_url_list)
         self.reapply_entry_title_overrides(feed_url_list)
+        self.reapply_entry_link_overrides(feed_url_list)
+        # Keep reader's FTS index fresh (incremental — only changed entries).
+        try:
+            with self._get_reader() as reader:
+                if reader.is_search_enabled():
+                    reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning("[refresh] search index update failed: %s", exc)
 
         if enhance:
             self.enhance_feeds(feed_url_list)
@@ -617,6 +631,42 @@ class FeedRefreshService:
             db.commit()
         if applied:
             self._logger.info("[refresh] re-pinned %d overridden entry title(s)", applied)
+        return applied
+
+    def reapply_entry_link_overrides(self, feed_urls: Iterable[str]) -> int:
+        """Re-pin canonicalized entry links (meta ``entry_link_overrides``) onto
+        reader's ``entries.link`` column after a refresh — the feed still ships
+        the redirector URL (feedproxy/feedburner) and re-ingests it. Returns
+        the number of entries whose link was re-pinned."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                # placeholders is only comma-joined "?" marks (one per feed);
+                # every value is a bound parameter, so this is not injectable.
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                    f"SELECT feed_url, entry_id, link FROM entry_link_overrides WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if not rows:
+            return 0
+        applied = 0
+        with self._get_reader() as reader:
+            db = reader._storage.get_db()
+            for row in rows:
+                cur = db.execute(
+                    "UPDATE entries SET link = ? WHERE feed = ? AND id = ?"
+                    " AND (link IS NULL OR link != ?)",
+                    (row["link"], row["feed_url"], row["entry_id"], row["link"]),
+                )
+                applied += cur.rowcount
+            db.commit()
+        if applied:
+            self._logger.info("[refresh] re-pinned %d canonicalized entry link(s)", applied)
         return applied
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:

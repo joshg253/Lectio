@@ -182,3 +182,44 @@ def test_invalid_body_and_bad_url(configured):
         r = c.post("/api/bookmarklet/save", json={"token": "x", "url": "ftp://nope"})
     assert r.status_code == 400
     assert r.json()["detail"]
+
+
+def test_jwplayer_chrome_stripped_at_render():
+    """Captured pages serialize JWPlayer's whole control DOM (hidden on the
+    live page by its own CSS) — the render cleanup strips the containers."""
+    html = (
+        '<p>Article text.</p>'
+        '<div class="my-6 vid-present"><div><p><span class="jwp-carousel-title-desktop">'
+        'Latest Videos From Louder</span></p></div></div>'
+        '<div class="jwplayer jw-reset jw-state-idle"><div class="jw-wrapper jw-reset">'
+        '<p class="jw-title-primary jw-reset-text">10 obscure bands</p>'
+        '<span class="jw-time-update">0 seconds of 1 minute, 33 seconds</span></div></div>'
+        '<p>More text.</p>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "Latest Videos From" not in cleaned
+    assert "0 seconds of" not in cleaned
+    assert "Article text." in cleaned and "More text." in cleaned
+
+
+def test_markdown_documents_convert_instead_of_readability():
+    """Markdown sources (text/markdown, or .md/.md.txt paths served as
+    text/plain — Google dev docs' 'View as Markdown') convert to article
+    HTML with the first heading as title."""
+    assert main._is_markdown_response("text/markdown; charset=utf-8", "https://x.test/page")
+    assert main._is_markdown_response("text/plain", "https://docs.cloud.google.com/python/docs/setup.md.txt")
+    assert main._is_markdown_response("text/plain", "https://x.test/README.md#install")
+    assert not main._is_markdown_response("text/html", "https://x.test/page.md.txt")
+    assert not main._is_markdown_response("text/plain", "https://x.test/notes.txt")
+
+    md = (
+        "# Setting up Python\n\n"
+        "Some *intro* text with a [link](/relative/path).\n\n"
+        "```bash\npip install foo\n```\n\n"
+        "| a | b |\n|---|---|\n| 1 | 2 |\n"
+    )
+    title, html = main.markdown_to_article_html(md, "https://docs.cloud.google.com/python/docs/setup.md.txt")
+    assert title == "Setting up Python"
+    assert "<em>intro</em>" in html
+    assert "<table" in html and "pip install foo" in html
+    assert 'href="https://docs.cloud.google.com/relative/path"' in html

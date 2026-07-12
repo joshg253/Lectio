@@ -205,6 +205,11 @@ The short version:
   forever) via a date picker, and **Edit title…** renames a post (fixes
   "(untitled)" posts, garbage feed titles, or a saved article whose extracted
   title is off); both corrections are pinned so a refresh can't revert them.
+  Starred articles whose links go through a feed redirector (FeedBurner's
+  feedproxy, FeedsPortal) are **canonicalized automatically** — the offline
+  archive capture resolves the redirect and rewrites the link so it outlives
+  the redirector service; imports prefer non-redirector URLs, and a backfill
+  script recovers real URLs for stars whose redirector already died.
   Each feed lives in a
   single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
   feeds that drifted into several folders (from older imports/migrations) and lets

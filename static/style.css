@@ -829,6 +829,33 @@ body[data-single-mode="1"] #folders-collapse-btn {
   position: relative;
 }
 
+/* Separator above All Feeds, matching the Tags block's divider — the Saved
+   sublist sits between the two header rows, so the boundary needs marking. */
+.root-item-row {
+  border-top: 1px solid var(--tree-line);
+}
+
+/* Saved mode: the (long) saved folder list is the scrollable region and the
+   All Feeds row pins to the bottom above Tags, mirroring how Tags itself is
+   pinned. Feeds mode keeps the whole root block scrolling as one. */
+.tree.saved-mode .root-tree-block {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tree.saved-mode .saved-items-row {
+  flex: 0 0 auto;
+}
+.tree.saved-mode .saved-tree-children {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.tree.saved-mode .root-item-row {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
 .saved-items-row .saved-item {
   border-bottom: 0;
   flex: 1;
@@ -2968,6 +2995,18 @@ button:hover, .button-link:hover {
 
 .entry-content table {
   max-width: 100%;
+}
+
+/* devblogs.microsoft.com (Old New Thing) marks its assembly/code-diff tables
+   with cp1..cp4 classes whose monospace styling lives in the site's own CSS;
+   the class survives sanitization, so restore the intent in the reader. */
+.entry-content table.cp1 td, .entry-content table.cp1 th,
+.entry-content table.cp2 td, .entry-content table.cp2 th,
+.entry-content table.cp3 td, .entry-content table.cp3 th,
+.entry-content table.cp4 td, .entry-content table.cp4 th {
+  font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
 }
 
 .entry-content pre {

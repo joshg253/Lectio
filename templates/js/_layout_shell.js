@@ -279,8 +279,10 @@
         const u2 = new URL(href, window.location.origin);
         const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
         if (rf) {
-          window.localStorage.setItem('lectio-read-filter', rf);
-          try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_) {}
+          // Feeds and Saved keep separate remembered filters (mode from the link).
+          const savedMode2 = u2.searchParams.get('star_only') === '1';
+          window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);
+          try { document.cookie = `${savedMode2 ? 'lectio_read_filter_saved' : 'lectio_read_filter'}=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_) {}
         }
       }
     } catch (err) {}
@@ -328,8 +330,10 @@
       const u = new URL(pill.href, window.location.origin);
       const rf = u.searchParams.get('read_filter') || u.searchParams.get('resume_read_filter');
       if (rf) {
-        window.localStorage.setItem('lectio-read-filter', rf);
-        try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_){}
+        // Feeds and Saved keep separate remembered filters (mode from the link).
+        const savedMode2 = u.searchParams.get('star_only') === '1';
+        window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);
+        try { document.cookie = `${savedMode2 ? 'lectio_read_filter_saved' : 'lectio_read_filter'}=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_){}
       }
     } catch (err) {
       // ignore

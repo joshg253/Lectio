@@ -44,6 +44,12 @@ class _LectioReaderStorage(_ReaderStorage):
         _reader_storage_setup_db(db)
         try:
             db.execute("PRAGMA wal_autocheckpoint=200")
+            # Wait (up to 10s) for a lock instead of failing instantly with
+            # "database is locked" — matches the meta connections. Concurrent
+            # writers (background refresh, FTS index build, startup backfills)
+            # briefly contend the reader DB; without this a losing opener errors
+            # out (a recurring flaky-CI signature) instead of retrying.
+            db.execute("PRAGMA busy_timeout=10000")
         except Exception:
             pass
 

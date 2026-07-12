@@ -54,8 +54,12 @@ _ALLOWED_ATTRS = {
         "src", "width", "height", "allow", "allowfullscreen", "frameborder",
         "loading", "title", "referrerpolicy", "scrolling",
     }),
-    "td": frozenset({"colspan", "rowspan"}),
-    "th": frozenset({"colspan", "rowspan", "scope"}),
+    # align is a legacy presentational attr some feeds still use for table
+    # layout (Old New Thing centers its spanning before/after rows with
+    # td align="center"); value-constrained, no scripting surface.
+    "td": frozenset({"colspan", "rowspan", "align"}),
+    "th": frozenset({"colspan", "rowspan", "scope", "align"}),
+    "tr": frozenset({"align"}),
     "col": frozenset({"span"}),
     "colgroup": frozenset({"span"}),
     "time": frozenset({"datetime"}),

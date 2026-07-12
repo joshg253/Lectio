@@ -654,8 +654,15 @@ preflights with a wildcard origin (safe: auth lives in the JSON body, no
 cookies), which is required because the extension's `host_permissions` don't
 cover third-party backends, putting its fetch under normal CORS. Captured
 HTML is capped at 6.5M chars, mirroring the extension's own truncation.
-One special case: the extension captures whatever tab it's on, so a capture
-made *from inside Lectio* would bookmark Lectio's own UI page —
+A captured-DOM save of an **already-saved URL** is treated as a deliberate
+re-capture (the user often cleaned the page in-browser first): extraction
+re-runs on the new DOM, the stored content is replaced (direct column write
+in reader's JSON shape — EntryData has no public setter), and the entry bumps
+to the top of the backlog (published/saved_at = now). A pinned title (Edit
+title…) is never clobbered; URL-only re-saves (bookmarklet, /api/save) stay
+light re-star no-ops. One special case: the extension captures whatever tab
+it's on, so a capture made *from inside Lectio* would bookmark Lectio's own
+UI page —
 `_unwrap_lectio_reading_url` detects a submitted URL on this instance
 (request host or `LECTIO_PUBLIC_URL`), extracts the wrapped
 `feed_url`/`entry_id`, and **stars that entry** instead (the native
@@ -686,10 +693,17 @@ read filter **composes** instead of being ignored:
 (`list_entries_for_feeds` skips read entries regardless of star mode; only
 `history` stays exclusive with starred since it sorts by read time).
 Archive-only orphans are excluded from the unread narrowing — they are read
-by definition (no live entry). The `lectio:saved` feed itself is excluded
-from the Uncategorized folder (tree, view, and counts — the sidebar view
-supersedes it) while the root view set still includes it, so its entries
-appear in the Saved and All Feeds streams.
+by definition (no live entry). Clicking the Saved Articles header is an
+**expand-only landing** (`saved_home=1`: no posts load — the whole backlog is
+expensive); the sublist starts with an **All** row (the full-backlog view at
+the root folder) and ends with **Uncategorized** (saves in unfoldered feeds,
+including everything in `lectio:saved`). In saved mode the sublist is the
+scrollable region and the All Feeds row pins to the bottom above Tags
+(`.tree.saved-mode` flex layout). The `lectio:saved` feed itself is excluded
+from the Uncategorized *display* set (feed list, unread badge, and the row is
+hidden in Feeds mode when it's the only unfoldered feed) but stays in the
+Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
+its entries.
 
 ## Hard-deleting a single entry (tombstones)
 
@@ -700,6 +714,8 @@ The entry context menu's **Delete post…** (`POST /entries/delete`) hard-remove
 **Edit date…** (`POST /entries/set-date`) fixes garbage publish dates (epoch-0 entries sink to the bottom of every date sort). reader's `EntryData` is ingest-owned with no public setter, and the entry list sorts in SQL on reader's `entries.published` column — so the corrected date is written directly into that column (via `reader._storage.get_db()`), in reader's naive-UTC `YYYY-MM-DD HH:MM:SS` format. A meta-DB override row (`entry_date_overrides`) records the correction, and the refresh service re-pins it after every update batch (`reapply_entry_date_overrides`) in case a refresh re-ingested the feed's original value. Clearing the date deletes the override row only — the stored value stays until the feed next updates the entry.
 
 **Edit title…** (`POST /entries/set-title`) is the same mechanism aimed at `entries.title` (`entry_title_overrides`, re-pinned by `reapply_entry_title_overrides`): it fixes "(untitled)" posts and garbage feed titles, and renames saved articles whose readability-extracted title is off (for `lectio:saved` entries the feed never refreshes, so the direct column write alone would already stick; the override row is kept anyway for uniformity).
+
+**Canonical entry links** (`entry_link_overrides`, re-pinned by `reapply_entry_link_overrides`) rewrite feed-redirector links — FeedBurner's feedproxy.google.com / feeds.feedburner.com and CNAMEd burner domains (the `/~r/` path signature), FeedsPortal — to the URL the redirect resolves to, so the title's href outlives the redirector service (feedproxy is already dead). Detection lives in `services/link_canonical.py`. Three write paths: (1) the **starred-archive capture** already fetches the source page on every star, so its `on_canonical_link` hook canonicalizes at zero extra requests (and the archive row + relative-URL resolution follow the final URL); (2) **Save Article** pre-resolves redirector URLs before storing; (3) the **Inoreader importer** picks whichever of an item's `canonical`/`alternate` hrefs isn't a redirector. For stars whose redirector died before any of this existed, `scripts/backfill_canonical_links.py` recovers the real URL from the starred archive's captured page HTML (`rel=canonical` / `og:url`) — dry-run by default, `--live-resolve` for still-alive redirectors. Ordinary redirects (http→https, trailing slash) are never rewritten: only known-redirector sources qualify.
 
 ## Entry sort window (Pub Old / Pub New)
 
@@ -805,7 +821,8 @@ The JS layer reads the CSRF token explicitly from `<meta name="csrf-token">` and
 - `GET /greader/reader/api/0/stream/contents/{stream_id:path}` — combined IDs + content
 - `POST /greader/reader/api/0/edit-tag` — mark read/unread/starred/unstarred
 - `POST /greader/reader/api/0/mark-all-as-read` — bulk mark read (background thread)
-- `POST /greader/reader/api/0/subscription/edit` and `/quickadd` — stub OK responses
+- `POST /greader/reader/api/0/subscription/edit` — folder move + rename (`ac=edit`): `a=user/-/label/<name>` moves the feed into folder `<name>` (created if absent) mapped onto Lectio's single-folder model, a lone `r=user/-/label/<name>` makes it folderless, `t=<title>` sets the feed's `user_title`. `ac=subscribe`/`unsubscribe` stay no-op-OK so a client can't unexpectedly unsubscribe feeds. (Was a bare stub — Capy's moves silently reverted on the next sync.)
+- `POST /greader/reader/api/0/subscription/quickadd` — stub OK response
 
 **Pagination:** `?n=<count>` (default 20, cap 10,000), `?c=<continuation>` (published-timestamp in microseconds of the last returned item). `?r=o` reverses order to oldest-first.
 

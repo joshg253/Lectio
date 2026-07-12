@@ -640,6 +640,9 @@ class TheRockCocksPlugin:
             self._THUMB_PATH in cached_url
             or "slipshine.net" in cached_url
             or "/templates/" in parsed_path
+            # Site assets (e.g. .../images/logo.png served as og:image on the
+            # age gate, cached 2026-07-10) — comics only ever live in /comics/.
+            or "/images/" in parsed_path
             or (self.host not in urlparse(cached_url).netloc.lower() and "patreon" in cached_url.lower())
         )
 

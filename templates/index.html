@@ -168,7 +168,7 @@
         </button>
       </header>
 
-      <nav class="tree"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
+      <nav class="tree{% if selected_star_only %} saved-mode{% endif %}"{% if root_folder_row %} data-root-folder-id="{{ root_folder_row.id }}" data-root-folder-name="{{ root_folder_row.name }}"{% endif %}>
         {% if root_folder_row %}
         {% set tree_read_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
         {# Compact query fragments for tree/folder/feed links — omit default values #}
@@ -176,16 +176,15 @@
         {# Feeds-tree links never carry star mode: Saved Articles and All Feeds
            are the mode switches, and each block is only visible in its own mode. #}
         {% set _tree_rfq = (('&read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != tree_read_filter else '') %}
-        {# Saved-mode fragments: entering Saved always opens on All, remembering
-           the current read filter in resume_read_filter; links inside Saved
-           carry the in-Saved filter choice instead. #}
-        {% set _saved_enter = '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ tree_read_filter) if tree_read_filter != 'all' else '') %}
-        {% set _saved_rfq = (('&read_filter=' ~ selected_read_filter) if (selected_star_only and selected_read_filter != 'all') else '') ~ '&star_only=1' ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if (selected_star_only and selected_resume_read_filter != selected_read_filter) else '') %}
+        {# Saved-mode links carry only the mode: each mode's read filter is
+           remembered separately (per-mode cookie/localStorage, resolved
+           server-side; the scope-link stamper is exempt on mode switches). #}
+        {% set _saved_rfq = '&star_only=1' ~ (('&read_filter=' ~ selected_read_filter) if (selected_star_only and selected_read_filter != 'all') else '') %}
         <div class="tree-block root-tree-block">
           <div class="saved-items-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_enter if not selected_star_only else _saved_rfq }}"
-              class="tree-item saved-item {% if selected_star_only and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1&saved_home=1"
+              class="tree-item saved-item {% if selected_saved_home %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"
             >
@@ -198,18 +197,35 @@
           {# Folders that hold saved articles — the Saved counterpart of the
              feeds tree; visible only in Saved mode (badges = total saved). #}
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
+            {# "All": the whole starred backlog — what the header itself used to
+               load. Sits at folder level so opening it is a deliberate click. #}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}"
+                  class="tree-item child-item saved-folder-item saved-all-item {% if selected_star_only and not selected_saved_home and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
+                  data-folder-id="{{ root_folder_row.id }}"
+                >
+                  <span class="name">All</span>
+                  {% set _saved_total = saved_counts_by_folder.get(root_folder_row.id, 0) %}
+                  {% if _saved_total %}<span class="count">{{ _saved_total }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {% for row in child_folder_rows %}
             {% set saved_in_folder = saved_counts_by_folder.get(row.id, 0) %}
             {% if saved_in_folder %}
             <div class="tree-folder-group">
               <div class="tree-folder-row">
                 <span class="tree-toggle-spacer"></span>
+                {# No data-folder-name: the folder pickers iterate
+                   [data-folder-id][data-folder-name] rows and would see
+                   these as duplicates of the feeds-tree folders. #}
                 <a
                   href="/?folder_id={{ row.id }}{{ _tree_sq }}{{ _saved_rfq }}"
                   class="tree-item child-item saved-folder-item {% if row.virtual %}virtual-folder {% endif %}{% if selected_star_only and row.id == selected_folder_id and not selected_feed_url %}active{% endif %}"
                   data-folder-id="{{ row.id }}"
-                  data-folder-name="{{ row.name }}"
-                  data-folder-depth="{{ row.depth }}"
                 >
                   <span class="name">{{ row.name }}</span>
                   <span class="count">{{ saved_in_folder }}</span>
@@ -222,7 +238,7 @@
 
           <div class="root-item-row">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if selected_star_only %}{{ ('&read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != 'all' else '' }}{% else %}{{ _tree_rfq }}{% endif %}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if not selected_star_only %}{{ _tree_rfq }}{% endif %}"
               class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -235,6 +251,7 @@
 
           <div class="tree-children feeds-tree-children"{% if selected_star_only %} hidden{% endif %}>
             {% for row in child_folder_rows %}
+            {% if not (row.virtual and not row.get('has_display_feeds', True)) %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
             <div class="tree-folder-group" data-unread-count="{{ row.unread_count }}">
               <div class="tree-folder-row">
@@ -288,6 +305,7 @@
               </ul>
               {% endif %}
             </div>
+            {% endif %}
             {% endfor %}
 
             {% set root_feeds = feeds_by_folder.get(root_folder_row.id, []) %}
@@ -373,7 +391,7 @@
         {% if selected_tag %}{% set tb_base = tb_base ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
         {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
-        {% set resume_filter = selected_resume_read_filter if (selected_read_filter == 'history' or selected_star_only) else selected_read_filter %}
+        {% set resume_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
         {% set filter_label = ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if selected_star_only else ('History' if selected_read_filter == 'history' else 'All')) %}
         {% set filter_icon = 'star' if selected_star_only else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
         {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only %}
@@ -390,11 +408,14 @@
               <div class="menu-popover anchor-left toolbar-dropdown-popover">
                 {# In star mode, All/Unread narrow the starred set (star_only rides
                    along); clicking the active Starred item exits star mode. #}
+                {# All/Unread narrow the CURRENT mode (star_only rides along) and
+                   the click persists to that mode's remembered filter (JS). The
+                   Starred item is a bare mode toggle — no read_filter, so the
+                   target mode's own remembered filter applies. #}
                 {% set _fm_star = '&star_only=1' if selected_star_only else '' %}
-                {% set _fm_resume = ('&resume_read_filter=' ~ resume_filter) if (selected_star_only and resume_filter != 'all') else '' %}
-                {% set starred_href = (tb_base ~ tb_sort ~ '&read_filter=' ~ resume_filter) if selected_star_only else (tb_base ~ tb_sort ~ '&read_filter=all&star_only=1' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'all' else '')) %}
-                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star ~ _fm_resume }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
-                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star ~ _fm_resume }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
+                {% set starred_href = (tb_base ~ tb_sort) if selected_star_only else (tb_base ~ tb_sort ~ '&star_only=1') %}
+                <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
+                <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
                 <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ starred_href }}" {% if selected_star_only %}title="Exit Starred"{% endif %}><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
@@ -871,8 +892,10 @@
           const u2 = new URL(href, window.location.origin);
           const rf = u2.searchParams.get('read_filter') || u2.searchParams.get('resume_read_filter');
           if (rf) {
-            window.localStorage.setItem('lectio-read-filter', rf);
-            try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_) {}
+            // Feeds and Saved keep separate remembered filters (mode from the link).
+            const savedMode2 = u2.searchParams.get('star_only') === '1';
+            window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);
+            try { document.cookie = `${savedMode2 ? 'lectio_read_filter_saved' : 'lectio_read_filter'}=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_) {}
           }
         }
       } catch (err) {}
@@ -915,8 +938,10 @@
         const u = new URL(pill.href, window.location.origin);
         const rf = u.searchParams.get('read_filter') || u.searchParams.get('resume_read_filter');
         if (rf) {
-          window.localStorage.setItem('lectio-read-filter', rf);
-          try { document.cookie = `lectio_read_filter=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_){}
+          // Feeds and Saved keep separate remembered filters (mode from the link).
+          const savedMode2 = u.searchParams.get('star_only') === '1';
+          window.localStorage.setItem(savedMode2 ? 'lectio-read-filter-saved' : 'lectio-read-filter', rf);
+          try { document.cookie = `${savedMode2 ? 'lectio_read_filter_saved' : 'lectio_read_filter'}=${encodeURIComponent(rf)}; path=/; max-age=${60*60*24*365}`; } catch(_){}
         }
       } catch (err) {
         // ignore
@@ -3801,11 +3826,13 @@
     const UNREAD_FOLDERS_ONLY_KEY = 'lectio-unread-folders-only';
 
     function applyUnreadFoldersOnly(onlyUnread) {
-      for (const group of document.querySelectorAll('.tree-folder-group')) {
+      // Feeds tree only: the Saved sublist has no unread counts (badges are
+      // total saved) and always shows exactly the folders that hold saves.
+      for (const group of document.querySelectorAll('.feeds-tree-children .tree-folder-group')) {
         const unreadCount = Number(group.getAttribute('data-unread-count') || '0');
         group.hidden = onlyUnread && unreadCount <= 0;
       }
-      for (const feed of document.querySelectorAll('.tree-feed-item')) {
+      for (const feed of document.querySelectorAll('.feeds-tree-children .tree-feed-item')) {
         const unreadCount = Number(feed.getAttribute('data-unread-count') || '0');
         feed.hidden = onlyUnread && unreadCount <= 0;
       }
@@ -4337,6 +4364,7 @@
       let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
+      const nextSavedHome = nextStarOnly && nextUrl.searchParams.get('saved_home') === '1';
       const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
       const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
       const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
@@ -4388,13 +4416,17 @@
       for (const folderLink of document.querySelectorAll('.tree-item[data-folder-id]')) {
         let isMatch = false;
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
-          // For .saved-item, active only if star_only=1
+          // Saved header: active only on its expand-only landing state.
           if (folderLink.classList.contains('saved-item')) {
-            isMatch = nextStarOnly;
+            isMatch = nextSavedHome;
           }
           // For .root-item, active only if star_only=0
           else if (folderLink.classList.contains('root-item')) {
             isMatch = !nextStarOnly;
+          }
+          // Saved "All" row: the whole-backlog view (root + star, not landing).
+          else if (folderLink.classList.contains('saved-all-item')) {
+            isMatch = nextStarOnly && !nextSavedHome;
           }
           // Saved-mode folder rows vs feeds-tree folder rows: same folder ids,
           // so activate only the copy that belongs to the current mode.
@@ -4412,6 +4444,9 @@
       // pane-swap path doesn't re-render the tree, so toggle them here.
       document.querySelector('.saved-tree-children')?.toggleAttribute('hidden', !nextStarOnly);
       document.querySelector('.feeds-tree-children')?.toggleAttribute('hidden', nextStarOnly);
+      // saved-mode drives the pinned layout (All Feeds stuck above Tags while
+      // the saved sublist scrolls).
+      document.querySelector('nav.tree')?.classList.toggle('saved-mode', nextStarOnly);
 
       for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
         const isMatch = Boolean(nextFeedUrl) && feedLink.getAttribute('data-feed-url') === nextFeedUrl;
@@ -4455,6 +4490,23 @@
         }
 
         const currentParams = new URL(window.location.href, window.location.origin).searchParams;
+
+        // Mode switches (Saved Articles row ↔ All Feeds row, or any link whose
+        // star_only differs from the current view) own their read/star state:
+        // each mode keeps a separate remembered filter, so stamping the
+        // CURRENT filter across the switch would leak one mode's choice into
+        // the other (the bug where entering Saved inherited Feeds' Unread).
+        // Only sort carries across.
+        const targetStar2 = targetUrl.searchParams.get('star_only') === '1';
+        const currentStar2 = currentParams.get('star_only') === '1';
+        if (linkEl.matches('.saved-item, .root-item') || targetStar2 !== currentStar2) {
+          for (const key of ['sort_by', 'sort_dir']) {
+            if (currentParams.has(key)) {
+              targetUrl.searchParams.set(key, currentParams.get(key) || '');
+            }
+          }
+          return;
+        }
 
         // Leaving a tag view: clicking a tag forces read_filter=all, so when the
         // user then picks a folder/feed, restore the filter that was active
@@ -4502,7 +4554,8 @@
       try {
         const u = new URL(url, window.location.origin);
         if (!u.searchParams.has('read_filter')) {
-          const pref = window.localStorage.getItem('lectio-read-filter');
+          const savedMode = u.searchParams.get('star_only') === '1';
+          const pref = window.localStorage.getItem(savedMode ? 'lectio-read-filter-saved' : 'lectio-read-filter');
           if (pref) {
             // don't rewrite the visible URL; instead send as header
             headerReadFilter = pref;
@@ -4847,7 +4900,8 @@
         requestUrl.pathname = '/entries/pane';
         try {
           if (!requestUrl.searchParams.has('read_filter')) {
-            const pref = window.localStorage.getItem('lectio-read-filter');
+            const savedMode = requestUrl.searchParams.get('star_only') === '1';
+            const pref = window.localStorage.getItem(savedMode ? 'lectio-read-filter-saved' : 'lectio-read-filter');
             if (pref) headers['X-Lectio-Read-Filter'] = pref;
           }
         } catch (e) {
@@ -6361,8 +6415,8 @@
       const srcLi = document.querySelector(`.tree-feed-item > .feed-link[data-feed-url="${fu}"][data-folder-id="${sfid}"]`)?.closest('.tree-feed-item');
       const unread = srcLi ? (parseInt(srcLi.querySelector('.count')?.textContent || '0', 10) || 0) : 0;
       const targetUl = document.getElementById(`folder-feeds-${toFolderId}`);
-      const srcFolderEl = document.querySelector(`.tree-item[data-folder-id="${sfid}"]:not(.root-item)`);
-      const tgtFolderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(String(toFolderId))}"]:not(.root-item)`);
+      const srcFolderEl = document.querySelector(`.tree-item[data-folder-id="${sfid}"]:not(.root-item):not(.saved-folder-item)`);
+      const tgtFolderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(String(toFolderId))}"]:not(.root-item):not(.saved-folder-item)`);
       if (srcLi) {
         const link = srcLi.querySelector('.feed-link');
         if (targetUl && link) {
@@ -7561,6 +7615,10 @@
           const starredUnread = linkedPostItem instanceof HTMLElement
             && linkedPostItem.getAttribute('data-post-read') === '0';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
+          const paneStarFolderId = (linkedPostItem instanceof HTMLElement
+            ? linkedPostItem.getAttribute('data-post-folder-id')
+            : document.querySelector('.entry-pane-title')?.getAttribute('data-post-folder-id'));
+          adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(entrySaveForm.action, {
@@ -7582,6 +7640,7 @@
               applyPostItemSavedState(linkedPostItem, !nextIsSaved);
             }
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
+            adjustSavedFolderBadge(paneStarFolderId, nextIsSaved ? -1 : +1);
             entrySaveForm.submit();
           }
         });
@@ -8109,6 +8168,8 @@
           // (Un)starring an unread post moves it in/out of the Saved backlog.
           const starredUnread = postItem.getAttribute('data-post-read') === '0';
           if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? +1 : -1);
+          const starFolderId = postItem.getAttribute('data-post-folder-id');
+          adjustSavedFolderBadge(starFolderId, nextIsSaved ? +1 : -1);
 
           try {
             const response = await fetch(saveForm.action, {
@@ -8127,6 +8188,7 @@
           } catch (_error) {
             applyPostItemSavedState(postItem, !nextIsSaved);
             if (starredUnread) adjustSavedUnreadBadge(nextIsSaved ? -1 : +1);
+            adjustSavedFolderBadge(starFolderId, nextIsSaved ? -1 : +1);
             saveForm.submit();
           }
         });
@@ -8293,6 +8355,19 @@
       if (savedItem) adjustCountBadge(savedItem, delta);
     }
 
+    // Saved-sublist folder badges are TOTAL saved per folder — they move on
+    // star/unstar (any read state), never on read toggles. A folder emptied
+    // to zero hides its row (the sublist only shows folders holding saves);
+    // a folder's FIRST save has no row to update until the next full render.
+    function adjustSavedFolderBadge(folderId, delta) {
+      if (folderId === null || folderId === undefined || folderId === '') return;
+      const el = document.querySelector(`.saved-folder-item[data-folder-id="${CSS.escape(String(folderId))}"]`);
+      if (!el) return;
+      adjustCountBadge(el, delta);
+      const group = el.closest('.tree-folder-group');
+      if (group) group.hidden = !el.querySelector(':scope > .count');
+    }
+
     function adjustSidebarUnreadCount(feedUrl, delta, isSaved = false) {
       if (isSaved) adjustSavedUnreadBadge(delta);
       const feedLink = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`);
@@ -8300,7 +8375,7 @@
         adjustCountBadge(feedLink, delta);
         const folderId = feedLink.getAttribute('data-folder-id');
         if (folderId) {
-          const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item)`);
+          const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item):not(.saved-folder-item)`);
           if (folderItem) {
             adjustCountBadge(folderItem, delta);
             const folderGroup = folderItem.closest('.tree-folder-group');
@@ -8331,12 +8406,13 @@
         feedLink.closest('.tree-feed-item')?.setAttribute('data-unread-count', '0');
       }
       if (isRoot) {
-        document.querySelectorAll('.tree-item:not(.root-item) > .count').forEach(b => b.remove());
+        // Saved-sublist badges are TOTAL saved (not unread) — mark-read must not clear them.
+        document.querySelectorAll('.tree-item:not(.root-item):not(.saved-folder-item) > .count').forEach(b => b.remove());
         document.querySelectorAll('.tree-folder-group').forEach(g => g.setAttribute('data-unread-count', '0'));
         const rootItem = document.querySelector('.root-item.tree-item');
         rootItem?.querySelector(':scope > .count')?.remove();
       } else {
-        const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item)`);
+        const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item):not(.saved-folder-item)`);
         if (folderItem) {
           folderItem.querySelector(':scope > .count')?.remove();
           folderItem.closest('.tree-folder-group')?.setAttribute('data-unread-count', '0');
@@ -8459,8 +8535,39 @@
             adjustSidebarUnreadCount(feedUrl, serverCount - currentCount);
           }
         }
+        // Re-evaluate the "Unread only" folder filter against the fresh counts:
+        // a folder emptied by mark-all-read then refilled by a background feed
+        // refresh must reappear (and a newly-emptied one hide) without a reload.
+        if (typeof applyUnreadFoldersOnly === 'function'
+            && window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1') {
+          applyUnreadFoldersOnly(true);
+        }
       } catch (_e) { }
     }
+
+    // Poll sidebar counts on a slow cadence so items arriving via the
+    // background scheduled refresh surface in the tree (and un-hide folders
+    // the "Unread only" filter had collapsed) without a manual reload. Gated
+    // on tab visibility so a backgrounded tab doesn't poll; also catches up
+    // immediately when the tab is refocused.
+    (function () {
+      const SIDEBAR_POLL_MS = 90000;
+      let _pollTimer = null;
+      function _start() {
+        if (_pollTimer !== null) return;
+        _pollTimer = window.setInterval(() => {
+          if (document.visibilityState === 'visible') _refreshSidebarCounts();
+        }, SIDEBAR_POLL_MS);
+      }
+      function _stop() {
+        if (_pollTimer !== null) { window.clearInterval(_pollTimer); _pollTimer = null; }
+      }
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') { _refreshSidebarCounts(); _start(); }
+        else { _stop(); }
+      });
+      if (document.visibilityState === 'visible') _start();
+    }());
 
     function applyPostItemSavedState(postItem, isSaved) {
       if (!postItem) {
@@ -8921,7 +9028,7 @@
           if (_feedRemaining > 0) {
             const _feedFolderId = _feedLink.getAttribute('data-folder-id');
             if (_feedFolderId) {
-              const _folderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(_feedFolderId)}"]:not(.root-item)`);
+              const _folderEl = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(_feedFolderId)}"]:not(.root-item):not(.saved-folder-item)`);
               if (_folderEl) {
                 adjustCountBadge(_folderEl, -_feedRemaining);
                 const _fg = _folderEl.closest('.tree-folder-group');
@@ -13497,6 +13604,14 @@
           continue;
         }
         targetUrl.searchParams.set(key, valueText);
+      }
+      // Search always spans All; clearing it restores the pre-search filter
+      // (carried in the form's resume_read_filter).
+      if (targetUrl.searchParams.get('q')) {
+        targetUrl.searchParams.set('read_filter', 'all');
+      } else {
+        const resume = String(formData.get('resume_read_filter') || 'all');
+        targetUrl.searchParams.set('read_filter', resume);
       }
 
       loadScopePanesWithoutFullRefresh(targetUrl.toString())

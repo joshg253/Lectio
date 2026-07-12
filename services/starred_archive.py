@@ -64,12 +64,17 @@ class StarredArchiveService:
         user_agent: str,
         sanitize_readability_html: Callable[[str], str],
         background_user_ids: Callable[[], list[str]] | None = None,
+        on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
         self._user_agent = user_agent
         self._sanitize_readability_html = sanitize_readability_html
+        # (feed_url, entry_id, old_link, final_url) — invoked after the source
+        # page fetch when the redirect chain landed on a different URL, so the
+        # app can canonicalize redirector entry links at zero extra requests.
+        self._on_canonical_link = on_canonical_link
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -701,7 +706,18 @@ class StarredArchiveService:
         source_html = ""
         readability_html = ""
         if entry_link:
-            source_html = self._fetch_text(entry_link) or ""
+            fetched_page = self._fetch_text_with_url(entry_link)
+            source_html = fetched_page[0] if fetched_page else ""
+            if fetched_page and self._on_canonical_link is not None:
+                final_url = fetched_page[1]
+                if final_url and final_url != entry_link:
+                    try:
+                        if self._on_canonical_link(feed_url, entry_id, entry_link, final_url):
+                            # The app canonicalized the entry link — archive
+                            # metadata and relative-URL resolution follow it.
+                            entry_link = final_url
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("starred archive: canonical-link hook failed for %s: %s", entry_id, exc)
             if source_html:
                 try:
                     summary_doc = Document(source_html).summary(html_partial=True)
@@ -820,8 +836,14 @@ class StarredArchiveService:
         return resp
 
     def _fetch_text(self, url: str) -> str | None:
+        fetched = self._fetch_text_with_url(url)
+        return fetched[0] if fetched else None
+
+    def _fetch_text_with_url(self, url: str) -> tuple[str, str] | None:
+        """Like _fetch_text but also returns the final URL after redirects."""
         try:
-            return self._fetch_guarded(url).text
+            resp = self._fetch_guarded(url)
+            return resp.text, str(resp.url)
         except Exception as exc:  # noqa: BLE001
             LOGGER.debug("starred archive: text fetch failed for %s: %s", url, exc)
             return None

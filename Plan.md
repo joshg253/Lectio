@@ -42,11 +42,18 @@ Make Lectio usable as a read-it-later app.
   contrast, large tap targets, no animations/transitions, paginated (tap
   left/right) instead of scrolled, minimal JS, self-hosted so no third-party
   app needed.
-- Save Article follow-up ideas (build on demand): folder placement for the
-  Saved Articles feed (it currently lands in Uncategorized), an "archive"
+- Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
   saved instead of unread (if unread proves the wrong default).
+
+### Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
+description/content element at all; older stored entries have bodies, so this
+is upstream). A per-feed "fetch full content from the source page at ingest"
+option (readability pipeline already exists) would fix such feeds generally —
+per-feed opt-in in Feed Properties, capped/throttled like enhancement.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
@@ -144,8 +151,36 @@ blocked until Readit exposes an export/RSS/API of saves.
 extension's save protocol (`/api/bookmarklet/save`, see ARCHITECTURE
 "Extension save protocol") — pointing the extension's Backend at Lectio gives
 one-click rendered-DOM capture into Saved Articles (paywalled pages arrive
-with full text). Follow-up idea: fork the MIT-ish extension as a Lectio-branded
-variant so one browser can run both (single-Backend limitation).
+with full text). Captured-DOM re-saves refresh the stored content and bump
+the entry (the clean-the-page-then-resave workflow).
+
+### Lectio browser extension (fork of readit-extension)
+
+Fork github.com/mahmoudalwadia/readit-extension (MIT-style; MV3, vanilla JS,
+no build step) into a Lectio-branded extension. Motivations, in value order:
+
+1. **Visibility-aware capture — the killer feature.** The stock extension
+   serializes `document.documentElement.outerHTML`, which includes every
+   element the live page merely HIDES: uBlock cosmetic filters, site CSS that
+   hides player chrome, cookie walls dismissed by stylesheet. Learned live
+   2026-07-11: uBlock-hidden junk resurfaced in a captured Melvins article
+   ("what I removed came back"), and JWPlayer control DOM needed a
+   server-side strip (`_apply_feed_content_cleanups`). A capture that walks
+   the DOM and drops nodes with computed `display:none` /
+   `visibility:hidden` / zero-size before POSTing makes "what you see is
+   exactly what saves" true — uBlock/Aardvark/anything-based cleanups all
+   just work, and a whole class of server-side widget whack-a-mole
+   disappears.
+2. **Dual-extension use**: the stock extension has a single Backend setting —
+   a fork lets one browser run save-to-Readit and save-to-Lectio side by
+   side.
+3. Nice-to-haves once forked: badge feedback distinguishing saved vs
+   duplicate vs refreshed (the stock ✓ hides duplicates — confused real use
+   2026-07-11); default Backend prefilled from the install instance;
+   auth by username+API-token instead of bare token.
+
+Keep the wire protocol unchanged (`/api/bookmarklet/save`) so the stock
+extension keeps working too.
 
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted

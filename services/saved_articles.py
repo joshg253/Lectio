@@ -19,8 +19,10 @@ to the URL) and starred, so the archive worker can capture the page later.
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import urldefrag, urlparse
@@ -63,6 +65,54 @@ def ensure_saved_feed(reader) -> bool:
     return True
 
 
+def _replace_entry_content(reader, conn: sqlite3.Connection, entry_id: str, title: str, article_html: str) -> None:
+    """Replace a saved article's stored content with a fresh extraction and
+    bump it to the top of the backlog (published/saved_at = now).
+
+    reader has no public setter for entry content (EntryData is ingest-owned),
+    so this writes the column directly in reader's own JSON shape. The title
+    is only updated when the user hasn't pinned one via Edit title
+    (entry_title_overrides)."""
+    now = datetime.now(timezone.utc)
+    stored_published = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
+    content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
+    db = reader._storage.get_db()
+    db.execute(
+        "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
+        (content_json, stored_published, SAVED_FEED_URL, entry_id),
+    )
+    title_pinned = False
+    try:
+        title_pinned = conn.execute(
+            "SELECT 1 FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
+            (SAVED_FEED_URL, entry_id),
+        ).fetchone() is not None
+    except sqlite3.OperationalError:
+        pass
+    if title and not title_pinned:
+        db.execute(
+            "UPDATE entries SET title = ? WHERE feed = ? AND id = ?",
+            (title, SAVED_FEED_URL, entry_id),
+        )
+    db.commit()
+    # The saved_at bump is cosmetic ordering — never let a transient lock
+    # (e.g. the archive worker writing at the same instant) fail the save
+    # after the content is already committed.
+    for attempt in (1, 2):
+        try:
+            conn.execute(
+                "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
+                (SAVED_FEED_URL, entry_id),
+            )
+            conn.commit()
+            break
+        except sqlite3.OperationalError as exc:
+            if attempt == 2:
+                LOGGER.warning("save-article: saved_at bump failed for %s: %s", entry_id, exc)
+            else:
+                time.sleep(0.5)
+
+
 def save_article(
     reader,
     conn: sqlite3.Connection,
@@ -70,6 +120,7 @@ def save_article(
     *,
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
+    refresh_content: bool = False,
 ) -> dict:
     """Save *url* as a starred entry in the Saved Articles feed.
 
@@ -77,6 +128,12 @@ def save_article(
     "entry_id", "title"}``. Deliberately does NOT fire the on-star
     destination fan-out: saving *into* Lectio shouldn't re-send the article
     to external read-later services.
+
+    *refresh_content*: a re-save of an existing article re-runs extraction
+    and REPLACES the stored content, bumping the entry to the top of the
+    backlog (published = now, saved_at = now). Set when the save carries a
+    browser-captured DOM — the user deliberately re-captured the page (e.g.
+    after cleaning it up in-browser); URL-only re-saves stay light no-ops.
     """
     result: dict = {
         "ok": False,
@@ -99,6 +156,21 @@ def save_article(
     if existing is not None:
         result["duplicate"] = True
         result["title"] = existing.title or clean_url
+        if refresh_content:
+            try:
+                new_title, article_html = extract(clean_url)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("save-article: refresh extraction failed for %s: %s", clean_url, exc)
+            else:
+                if article_html:
+                    try:
+                        _replace_entry_content(reader, conn, clean_url, new_title, article_html)
+                    except Exception as exc:  # noqa: BLE001 — refresh is best-effort on a duplicate
+                        LOGGER.warning("save-article: content refresh failed for %s: %s", clean_url, exc)
+                    else:
+                        result["extracted"] = True
+                        result["refreshed"] = True
+                        result["title"] = new_title or result["title"]
     else:
         title, article_html = clean_url, ""
         try:

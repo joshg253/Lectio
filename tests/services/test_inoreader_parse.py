@@ -36,3 +36,18 @@ def test_published_falls_back_to_timestamp_usec():
 def test_published_none_when_no_dates():
     [rec] = inoreader.parse_export_json([_item()])
     assert rec["published"] is None
+
+
+def test_prefers_non_redirector_link():
+    """FeedBurner-era items carry the dead feedproxy URL in one link slot and
+    the real article URL in the other — pick whichever isn't a redirector."""
+    from services.inoreader import parse_export_json
+    item = {
+        "canonical": [{"href": "http://feedproxy.google.com/~r/Blog/~3/abc/"}],
+        "alternate": [{"href": "https://blog.example/real-post", "type": "text/html"}],
+        "origin": {"streamId": "feed/https://feeds.feedburner.com/Blog", "title": "Blog"},
+        "title": "Post",
+        "categories": [],
+    }
+    parsed = parse_export_json({"items": [item]})
+    assert parsed[0]["url"] == "https://blog.example/real-post"

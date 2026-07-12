@@ -43,7 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image as _PILImage
 from readability import Document
-from reader.exceptions import InvalidFeedURLError
+from reader.exceptions import FeedExistsError, FeedNotFoundError, InvalidFeedURLError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -63,6 +63,7 @@ from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
+from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import scraper_service
 from services import html_sanitize
@@ -1707,6 +1708,39 @@ async def lifespan(app: FastAPI):
         migrate_spaced_manual_tags()
     _for_each_background_user("per-user schema migration", _ensure_user_schema)
 
+    # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
+    # to skip the scheduled-refresh loop, the FTS index build, and the
+    # lead-image / YouTube / archive / read-history backfills. Useful after an
+    # OPML import of hundreds of feeds (boot calm, let pages render, then unset
+    # and restart). The test suite also sets it so these background DB writers
+    # don't race a test's own DB ops on the same temp DB ("database is locked").
+    backfill_disabled = os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1"
+    if backfill_disabled:
+        LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping FTS build, scheduled refresh, and backfill threads")
+
+    # Build reader's FTS search index off the startup path (the first build
+    # walks every entry — minutes on a large library; incremental afterwards).
+    # Searches fall back to the legacy scan until each user's index is ready.
+    def _build_search_indexes() -> None:
+        # reader's HTML-stripping emits spurious bs4 "looks like a URL/filename"
+        # warnings for short text fields — one per entry is log spam at 100k.
+        import warnings as _warnings
+        from bs4 import MarkupResemblesLocatorWarning as _MRLW
+        _warnings.filterwarnings("ignore", category=_MRLW)
+
+        def _one() -> None:
+            try:
+                with get_reader() as reader:
+                    reader.enable_search()
+                    reader.update_search()
+                mark_search_index_ready()
+                LOGGER.info("[search] FTS index ready for %s", tenancy.current_user_id())
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[search] FTS index build failed for %s", tenancy.current_user_id())
+        _for_each_background_user("search index build", _one)
+    if not backfill_disabled:
+        threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
+
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
 
@@ -1790,11 +1824,12 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception:
             LOGGER.exception("[scraper] startup scraped-feed sync failed")
-    threading.Thread(
-        target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
-        daemon=True,
-        name="sync-scraped-feeds",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("scraped-feed sync", _sync_scraped_feeds),
+            daemon=True,
+            name="sync-scraped-feeds",
+        ).start()
 
     # Auto-taggers and the dedup cleanup write per-user tag/strategy state, so
     # run them once per background user (each under its own tenancy context).
@@ -1819,14 +1854,6 @@ async def lifespan(app: FastAPI):
             LOGGER.exception("[guid-churn-cleanup] startup cleanup failed")
 
     _for_each_background_user("auto-tag/dedup", _startup_auto_tag_and_dedup)
-
-    # Kill switch for heavy startup work. Set LECTIO_DISABLE_STARTUP_BACKFILL=1
-    # to skip the scheduled-refresh loop and the lead-image / YouTube backfills.
-    # Useful after an OPML import of hundreds of feeds: boot in a calm state,
-    # let pages render, then unset and restart once things settle.
-    backfill_disabled = os.getenv("LECTIO_DISABLE_STARTUP_BACKFILL", "0") == "1"
-    if backfill_disabled:
-        LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping scheduled refresh and backfill threads")
 
     stop_event = threading.Event()
     if not backfill_disabled:
@@ -1879,18 +1906,20 @@ async def lifespan(app: FastAPI):
     # initial rollout and any re-stars after maintenance pruning). Also
     # one-shot metadata backfill for archive rows that completed before
     # title/link/etc columns were added to the schema.
-    starred_archive_service.start_worker()
+    if not backfill_disabled:
+        starred_archive_service.start_worker()
 
     def _archive_backfill_task() -> None:
         starred_archive_service.backfill_saved_entries_from_archive()
         starred_archive_service.backfill_missing_archives()
         starred_archive_service.backfill_metadata_for_complete_rows()
 
-    threading.Thread(
-        target=lambda: _for_each_background_user("starred-archive backfill", _archive_backfill_task),
-        daemon=True,
-        name="starred-archive-backfill",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("starred-archive backfill", _archive_backfill_task),
+            daemon=True,
+            name="starred-archive-backfill",
+        ).start()
 
     # One-time backfill: populate read_history from entry_read_state if history is empty.
     def _backfill_read_history() -> None:
@@ -1935,11 +1964,12 @@ async def lifespan(app: FastAPI):
         except Exception:
             LOGGER.exception("[read_history] backfill error")
 
-    threading.Thread(
-        target=lambda: _for_each_background_user("read-history backfill", _backfill_read_history),
-        daemon=True,
-        name="read-history-backfill",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=lambda: _for_each_background_user("read-history backfill", _backfill_read_history),
+            daemon=True,
+            name="read-history-backfill",
+        ).start()
 
     # Daily Maintenance loop — runs once per day at the configured maintenance hour.
     maint_stop_event = threading.Event()
@@ -3051,6 +3081,16 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 title TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_link_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                link TEXT NOT NULL,
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
@@ -7212,6 +7252,9 @@ starred_archive_service = StarredArchiveService(
     # Lazy: _background_user_ids is defined later in this module; the worker
     # only calls this at runtime, so the name resolves by then.
     background_user_ids=lambda: _background_user_ids(),
+    # Lazy for the same reason: rewrites redirector entry links (feedproxy/
+    # feedburner) to the canonical URL the capture's source fetch resolved to.
+    on_canonical_link=lambda f, e, old, new: _apply_canonical_entry_link(f, e, old, new),
 )
 
 
@@ -9560,13 +9603,50 @@ _READER_VIEW_MEDIA_CSS = (
 )
 
 
+_MARKDOWN_URL_RE = re.compile(r"\.(?:md|markdown)(?:\.txt)?(?:$|[?#])", re.IGNORECASE)
+
+
+def _is_markdown_response(content_type: str, url: str) -> bool:
+    """True when a fetched document is Markdown, not HTML — either declared
+    (text/markdown) or a Markdown file served as text/plain (Google's dev
+    docs expose .md.txt variants of every page)."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct == "text/markdown":
+        return True
+    return ct in {"text/plain", ""} and bool(_MARKDOWN_URL_RE.search(urlparse(url).path))
+
+
+def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
+    """Convert Markdown to sanitized article HTML; title = first heading."""
+    import markdown as _markdown
+    html_out = _markdown.markdown(
+        md_text,
+        extensions=["fenced_code", "tables", "sane_lists"],
+    )
+    title = source_url
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html_out, re.IGNORECASE | re.DOTALL)
+    if not m:
+        m = re.search(r"<h2[^>]*>(.*?)</h2>", html_out, re.IGNORECASE | re.DOTALL)
+    if m:
+        title = re.sub(r"<[^>]+>", "", m.group(1)).strip() or source_url
+    article_html = sanitize_readability_html(html_out).strip()
+    article_html = _absolutize_article_urls(article_html, source_url)
+    if not article_html:
+        raise ValueError("No readable article content was found.")
+    return title, article_html
+
+
 def fetch_readability_article(source_url: str) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
-    route and save-article capture. Raises on fetch/extraction failure."""
+    route and save-article capture. Raises on fetch/extraction failure.
+    Markdown documents (text/markdown, or .md/.md.txt paths served as plain
+    text) are converted instead of readability-extracted."""
     with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
         response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
     response.raise_for_status()
+    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(response.text, source_url)
     return extract_readability_article(response.text, source_url)
 
 
@@ -9720,6 +9800,43 @@ def _display_title(entry) -> str:
     return ""
 
 
+# Per-user "FTS index is built" flags: searches use reader's search index
+# once the startup builder (or a refresh update) has populated it; before
+# that they fall back to the legacy full-scan.
+_search_index_ready: dict[str, bool] = {}
+
+
+def mark_search_index_ready() -> None:
+    _search_index_ready[tenancy.current_user_id()] = True
+
+
+def _fts_query(normalized_query: str) -> str:
+    """AND-of-quoted-tokens FTS5 query (quotes escaped) — mirrors the legacy
+    scan's all-terms-must-match semantics without exposing FTS operators."""
+    tokens = [t.replace('"', '""') for t in normalized_query.split()]
+    return " ".join(f'"{t}"' for t in tokens)
+
+
+def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], reader_read_filter):
+    """Resolve a search via reader's FTS index; None → caller falls back to
+    the scan (index not built yet, or the query broke FTS5 parsing)."""
+    if not _search_index_ready.get(tenancy.current_user_id()):
+        return None
+    try:
+        out = []
+        for r in reader.search_entries(_fts_query(normalized_query), read=reader_read_filter,
+                                       sort="recent", limit=2000):
+            if r.feed_url not in feed_urls:
+                continue
+            e = reader.get_entry((r.feed_url, r.id), None)
+            if e is not None:
+                out.append(e)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[search] FTS query failed, falling back to scan: %s", exc)
+        return None
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -9850,6 +9967,20 @@ def list_entries_for_feeds(
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
+        elif search_terms:
+            # Search fast path: reader's FTS5 index instead of scanning the
+            # whole library and building a haystack per entry (which took
+            # tens of seconds at ~100k entries). Falls back to the scan while
+            # the index is still building.
+            fts_entries = _search_entries_fts(reader, normalized_search_query, feed_urls, reader_read_filter)
+            if fts_entries is not None:
+                all_feed_entries = fts_entries
+                search_terms = []  # already matched by the index
+            else:
+                for entry in reader.get_entries(read=reader_read_filter):
+                    if entry.feed_url not in feed_urls:
+                        continue
+                    all_feed_entries.append(entry)
         elif normalized_sort_dir == "asc" and not search_terms and len(feed_urls) > PER_FEED_QUERY_THRESHOLD and not tag_filter:
             # ASC (oldest-first) with many feeds: reader only supports newest-first,
             # so normally we'd pull everything into Python and sort. Instead, use a
@@ -11544,6 +11675,17 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
                 break
         content_html = _stripped or None
 
+    # Rendered video-player chrome captured from live pages (extension saves):
+    # JWPlayer serializes its entire control DOM (jw-* classes, jwp-carousel
+    # widgets, Future plc's vid-present wrapper on loudersound/guitarworld/…).
+    # Without the player scripts it renders as junk text ("0 seconds of …",
+    # "Latest Videos From …" carousels) that the live page's own CSS hides —
+    # strip the whole containers at render, which also cleans already-stored
+    # captures.
+    if isinstance(content_html, str) and ("jw-" in content_html or "jwp-" in content_html or "vid-present" in content_html):
+        for _cls in ("vid-present", "jwplayer", "jw-wrapper", "jwp-carousel"):
+            content_html = _strip_div_blocks_by_class(content_html, _cls)
+
     # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
     # after the first paragraph. It contains external article thumbnails that
     # confuse lead-image extraction and clutter the reading view.
@@ -12179,6 +12321,7 @@ def entry_pane(
             "quire_configured": is_quire_configured(),
             "reddit_connected": reddit_connected(),
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -14395,6 +14538,7 @@ def home(
     sort_dir: str | None = None,
     read_filter: str | None = None,
     star_only: str | None = None,
+    saved_home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -14424,6 +14568,7 @@ def home(
             sort_dir=sort_dir,
             read_filter=read_filter,
             star_only=star_only,
+            saved_home=saved_home,
             resume_read_filter=resume_read_filter,
             feed_url=feed_url,
             entry_id=entry_id,
@@ -14447,6 +14592,7 @@ def _home_inner(
     sort_dir: str | None = None,
     read_filter: str | None = None,
     star_only: str | None = None,
+    saved_home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -14470,12 +14616,18 @@ def _home_inner(
     if read_filter is None and resume_read_filter is not None:
         read_filter = resume_read_filter
 
-    # If still no explicit/read-resume value, fall back to cookie-based
-    # persisted preference for full navigations.
+    # If still no explicit/read-resume value, fall back to the cookie-based
+    # persisted preference for full navigations. Feeds browsing and the Saved
+    # Articles view keep SEPARATE remembered filters (mode-blind memory meant
+    # picking All inside Saved leaked back into Feeds and vice versa); the
+    # Saved view defaults to All when nothing is remembered yet.
     if read_filter is None:
-        cookie_rf = request.cookies.get("lectio_read_filter")
-        if cookie_rf:
-            read_filter = cookie_rf
+        if normalize_star_only(star_only):
+            read_filter = request.cookies.get("lectio_read_filter_saved") or "all"
+        else:
+            cookie_rf = request.cookies.get("lectio_read_filter")
+            if cookie_rf:
+                read_filter = cookie_rf
 
     start_req = time.perf_counter()
     _t = time.perf_counter()
@@ -14513,18 +14665,18 @@ def _home_inner(
         # every reader feed, not just foldered ones, so orphan feeds and their
         # unreads are reachable from the top of the tree.
         all_reader_feed_urls = get_all_reader_feed_urls()
-        # The local Saved Articles feed is surfaced by the dedicated sidebar
-        # view, not as a subscription — keep it out of the Uncategorized
-        # folder (tree, view, and counts) while the root view set below still
-        # includes it so the Saved/All Feeds streams see its entries.
-        uncategorized_feed_urls = (
-            all_reader_feed_urls - all_feed_urls - {saved_articles_service.SAVED_FEED_URL}
-        )
+        uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+        # The local Saved Articles feed is surfaced by the Saved sidebar view,
+        # not as a subscription: it stays in the Uncategorized VIEW set (the
+        # Saved sublist's Uncategorized folder must reach its entries) but out
+        # of the feeds-tree DISPLAY set (feed list, unread badge, row
+        # presence), so it never shows as a subscription in Feeds mode.
+        _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
         folder_feed_urls_by_id = dict(folder_feed_urls_by_id)
         direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
         folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
         folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = uncategorized_feed_urls
-        direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(uncategorized_feed_urls)
+        direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
         _tick("structure_snapshot")
 
         unread_counts_by_feed = get_unread_counts_by_feed()
@@ -14543,7 +14695,7 @@ def _home_inner(
         # The virtual Uncategorized folder isn't in raw_folder_rows, so count it
         # here and fold it into the root ("All Feeds") total.
         uncategorized_unread = sum(
-            active_unread_counts_by_feed.get(url, 0) for url in uncategorized_feed_urls
+            active_unread_counts_by_feed.get(url, 0) for url in _uncat_display_urls
         )
         unread_counts_by_folder[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
         unread_counts_by_folder[root_id] = unread_counts_by_folder.get(root_id, 0) + uncategorized_unread
@@ -14563,9 +14715,12 @@ def _home_inner(
                 "cadence_minutes": None,
                 "depth": 1,
                 "path": UNCATEGORIZED_FOLDER_NAME,
-                "feed_count": len(uncategorized_feed_urls),
+                "feed_count": len(_uncat_display_urls),
                 "unread_count": uncategorized_unread,
                 "virtual": True,
+                # Saved-only membership (just lectio:saved unfoldered): the
+                # feeds tree hides the row; the Saved sublist still shows it.
+                "has_display_feeds": bool(_uncat_display_urls),
             })
         global_note = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
         email_to_default = get_setting(conn, EMAIL_TO_SETTING_KEY) or "" if is_email_configured() else ""
@@ -14619,6 +14774,21 @@ def _home_inner(
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
     selected_star_only = normalize_star_only(star_only) or legacy_saved_mode
+    # Search always spans All (searching only unread is never the intent);
+    # the pre-search filter is carried in resume_read_filter so clearing the
+    # search restores it. History keeps its own machinery.
+    if normalize_search_query(q) and selected_read_filter in {"all", "unread"}:
+        if resume_read_filter is None and selected_read_filter != "all":
+            selected_resume_read_filter = selected_read_filter
+        selected_read_filter = "all"
+    # Saved-mode landing state: the Saved Articles header expands its folder
+    # list without loading any posts (the whole backlog is expensive) — the
+    # user picks All / a folder / Uncategorized from the sublist.
+    selected_saved_home = bool(saved_home) and selected_star_only
+    if selected_saved_home:
+        selected_feed_url = None
+        selected_tag = None
+        filtered_feed_urls = set()
     selected_resume_read_filter = normalize_resume_read_filter(resume_read_filter)
     # Respect an explicit resume_read_filter provided by the caller. Only
     # default to the current read selection when no explicit resume value was
@@ -14786,6 +14956,7 @@ def _home_inner(
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
     elif (
         selected_star_only
+        and not selected_saved_home
         and selected_folder_id == root_id
         and not selected_feed_url
         and not selected_tag
@@ -14882,6 +15053,7 @@ def _home_inner(
         "selected_sort_dir": selected_sort_dir,
         "selected_read_filter": selected_read_filter,
         "selected_star_only": selected_star_only,
+        "selected_saved_home": selected_saved_home,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
         "saved_counts_by_folder": saved_counts_by_folder,
@@ -14933,7 +15105,10 @@ def _home_inner(
     }
     _stream = templates.env.get_template("index.html").stream(_tmpl_ctx)
     _stream.enable_buffering(50)
-    return StreamingResponse(_stream, media_type="text/html")
+    # Stateful, per-user HTML: never let a browser or CDN edge (Cloudflare
+    # fronts at least one deployment) cache it per-URL — a stale cached page
+    # ships stale inline JS and resurrects long-fixed bugs.
+    return StreamingResponse(_stream, media_type="text/html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/dev/feeds/email-match.xml")
@@ -19196,6 +19371,23 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
     try:
         with get_reader() as reader:
             reader.change_feed_url(old_url, new_url)
+    except FeedNotFoundError:
+        # The submitted "current" URL isn't in reader — almost always a stale
+        # page whose feed was redirected out from under it (a FeedBurner-style
+        # redirector resolving to the publisher's own URL). Point the user at
+        # a reload rather than the raw reader exception.
+        return JSONResponse(
+            {"ok": False, "error": "This feed's current URL has changed (it may have been "
+             "redirected). Reload the page and try again — the Change URL field will show "
+             "the up-to-date URL."},
+            status_code=409,
+        )
+    except FeedExistsError:
+        return JSONResponse(
+            {"ok": False, "error": "A feed with that URL already exists. Consolidate the "
+             "duplicate instead (Settings → Feeds → Utilities)."},
+            status_code=409,
+        )
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
@@ -20471,11 +20663,29 @@ def toggle_entry_saved(
 # --- Save Article (read-later capture of arbitrary URLs) ---
 
 
-def _save_article_for_current_user(url: str, extract=None) -> dict:
+def _resolve_redirector_url(url: str) -> str:
+    """Follow a feed-redirector link (feedproxy/feedburner) to its real
+    destination before saving, so the stored article never depends on the
+    redirector staying alive. SSRF-guarded; returns the input on failure."""
+    try:
+        with url_guard.build_client(timeout=8.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+            resp = url_guard.safe_get(client, url, headers={"User-Agent": READABILITY_USER_AGENT})
+        final = str(resp.url)
+        if final and not link_canonical.is_redirector_link(final):
+            return final
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[canonical-link] redirector resolve failed for %s: %s", url, exc)
+    return url
+
+
+def _save_article_for_current_user(url: str, extract=None, refresh_content: bool = False) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
     DB, wiring in readability extraction and the starred-archive enqueue.
     *extract* overrides the server-side fetch+extract — e.g. extraction from
-    browser-captured HTML for the extension save protocol."""
+    browser-captured HTML for the extension save protocol; those captured
+    saves also refresh_content on duplicates (a deliberate re-capture)."""
+    if link_canonical.is_redirector_link(url):
+        url = _resolve_redirector_url(url)
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.save_article(
@@ -20484,6 +20694,7 @@ def _save_article_for_current_user(url: str, extract=None) -> dict:
             url,
             extract=extract or fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
+            refresh_content=refresh_content,
         )
     if result.get("created_feed"):
         # The Saved Articles feed just appeared — surface it in the sidebar tree.
@@ -20491,6 +20702,13 @@ def _save_article_for_current_user(url: str, extract=None) -> dict:
         invalidate_problematic_feeds_cache()
     if result.get("ok") and not result.get("duplicate"):
         invalidate_unread_counts_cache()
+    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
+        # Make the save searchable immediately (incremental; guarded by the
+        # ready flag so this can never trigger the expensive first build).
+        try:
+            reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[search] post-save index update failed: %s", exc)
     return result
 
 
@@ -20619,6 +20837,38 @@ def _star_entry_for_current_user(feed_url: str, entry_id: str) -> dict:
             "title": entry.title or entry_id, "starred_existing": True}
 
 
+def _apply_canonical_entry_link(feed_url: str, entry_id: str, old_link: str, final_url: str) -> bool:
+    """Rewrite a redirector entry link (the title's href) to the canonical URL
+    the redirect resolved to. Called by the starred-archive worker right after
+    it fetched the source page (so canonicalization costs no extra request),
+    inside the capture's tenancy context. An override row lets the refresh
+    service re-pin the rewrite when the feed re-ingests the proxy link."""
+    if not link_canonical.is_redirector_link(old_link) or link_canonical.is_redirector_link(final_url):
+        return False
+    parsed = urlparse(final_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or final_url == old_link:
+        return False
+    try:
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_link_overrides (feed_url, entry_id, link) VALUES (?, ?, ?)",
+                (feed_url, entry_id, final_url),
+            )
+            conn.commit()
+        with get_reader() as reader:
+            db = reader._storage.get_db()
+            db.execute(
+                "UPDATE entries SET link = ? WHERE feed = ? AND id = ?",
+                (final_url, feed_url, entry_id),
+            )
+            db.commit()
+        LOGGER.info("[canonical-link] %s -> %s", old_link, final_url)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[canonical-link] rewrite failed for %s/%s: %s", feed_url, entry_id, exc)
+        return False
+
+
 _BOOKMARKLET_MAX_HTML_CHARS = 6_500_000  # mirrors the Readit extension's own cap
 _BOOKMARKLET_CORS_HEADERS = {
     # Token auth lives in the JSON body (no cookies), so a wildcard origin is
@@ -20664,6 +20914,10 @@ async def api_bookmarklet_save(request: Request):
         uid = None  # no-auth single-user install: default tenancy
     if not (isinstance(page_html, str) and page_html.strip()):
         page_html = None
+    elif _MARKDOWN_URL_RE.search(urlparse(url).path):
+        # A raw .md/.md.txt page captures as the browser's <pre> wrapper —
+        # drop the capture and let the server fetch + Markdown-convert.
+        page_html = None
     elif len(page_html) > _BOOKMARKLET_MAX_HTML_CHARS:
         page_html = page_html[:_BOOKMARKLET_MAX_HTML_CHARS]
 
@@ -20686,7 +20940,9 @@ async def api_bookmarklet_save(request: Request):
             # that instead (server fetch; the captured DOM is Lectio chrome).
             return _save_article_for_current_user(wrapped[1], None)
         extract = _extract_from_capture if page_html is not None else None
-        return _save_article_for_current_user(url, extract)
+        # A captured-DOM save of an existing article is a deliberate
+        # re-capture (e.g. cleaned up in-browser first): refresh the content.
+        return _save_article_for_current_user(url, extract, refresh_content=page_html is not None)
 
     def _do_save() -> dict:
         if uid:
@@ -22098,10 +22354,80 @@ def greader_subscription_list(request: Request) -> Response:
     return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
+def _greader_label_name(label: str) -> str | None:
+    """Extract the folder name from a GReader label id (user/-/label/<name>)."""
+    marker = "/label/"
+    i = label.find(marker)
+    return label[i + len(marker):].strip() if i >= 0 else None
+
+
+def _greader_edit_subscriptions(streams: list[str], add_labels: list[str],
+                                remove_labels: list[str], new_title: str | None) -> None:
+    """Apply a GReader subscription/edit to Lectio's single-folder model.
+
+    ``a=user/-/label/<name>`` moves the feed into folder <name> (created if
+    absent — GReader "add label" semantics); a lone ``r=user/-/label/<name>``
+    removes it from that folder (→ Uncategorized). ``t=<title>`` renames the
+    feed. Mirrors a web-UI move so synced clients (Capy, etc.) actually stick.
+    """
+    feed_urls = [s[len("feed/"):] for s in streams if s.startswith("feed/")]
+    if not feed_urls:
+        return
+    add_folder = next((n for lab in add_labels if (n := _greader_label_name(lab))), None)
+    remove_folders = [n for lab in remove_labels if (n := _greader_label_name(lab))]
+    changed = False
+    with get_reader() as reader:
+        with get_meta_connection() as conn:
+            root_id = get_root_folder_id(conn)
+            for feed_url in feed_urls:
+                if reader.get_feed(feed_url, None) is None:
+                    continue
+                if add_folder and add_folder != ROOT_FOLDER_NAME:
+                    # Move: single folder, so clear existing membership first.
+                    target_id = _get_or_create_folder_by_name(conn, add_folder)
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+                    conn.execute(
+                        "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                        (target_id, feed_url),
+                    )
+                    changed = True
+                elif remove_folders:
+                    for name in remove_folders:
+                        row = conn.execute(
+                            "SELECT id FROM folders WHERE name = ? AND parent_id = ?",
+                            (name, root_id),
+                        ).fetchone()
+                        if row:
+                            conn.execute(
+                                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                                (int(row["id"]), feed_url),
+                            )
+                            changed = True
+                if new_title:
+                    try:
+                        reader.set_feed_user_title(feed_url, new_title)
+                        changed = True
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("[greader] set_feed_user_title failed for %s", feed_url)
+    if changed:
+        invalidate_meta_structure_cache()
+
+
 @app.post("/greader/reader/api/0/subscription/edit")
 async def greader_subscription_edit(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
+    form = await request.form()
+    action = str(form.get("ac") or "edit")
+    # We implement label (folder) edits + rename. subscribe/unsubscribe stay
+    # no-op-OK (as before) so a client can't unsubscribe feeds unexpectedly.
+    if action == "edit":
+        _greader_edit_subscriptions(
+            [v for v in form.getlist("s") if isinstance(v, str)],
+            [v for v in form.getlist("a") if isinstance(v, str)],
+            [v for v in form.getlist("r") if isinstance(v, str)],
+            (lambda t: str(t) if isinstance(t, str) and t.strip() else None)(form.get("t")),
+        )
     return Response("OK")
 
 

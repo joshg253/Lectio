@@ -1500,3 +1500,65 @@ def test_preload_used_when_no_og_image(tmp_path: Path, monkeypatch):
     )
     service._fetch_page_html = lambda link, **kw: (html, "https://site.test/a", False)
     assert service._fetch_source_lead_image("https://site.test/a") == "https://cdn.example.com/hero.jpg"
+
+
+def test_logo_with_digit_suffix_rejected(tmp_path: Path):
+    """logo<digits> is a versioned wordmark (questionablecontent's logo2026.png
+    became a lead image via the old [a-zA-Z0-9] lookahead); letter compounds
+    like imdblogo stay content."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._is_image_url_acceptable(
+        "https://questionablecontent.net/images/logo2026.png", None, None) is False
+    assert service._is_image_url_acceptable(
+        "https://www.therockcocks.com/the-rock-cocks/images/logo.png", None, None) is False
+    # Compound words with letters keep passing (imdblogo precedent).
+    assert service._is_image_url_acceptable(
+        "https://example.com/media/imdblogo-poster.jpg", None, None) is True
+
+
+def test_social_badge_basename_rejected(tmp_path: Path):
+    """A bare social-platform basename is a header/footer link badge
+    (meetingcpp.com/files/meetup.png won the body scan on og:image-less pages)."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    assert service._is_image_url_acceptable(
+        "https://www.meetingcpp.com/files/meetup.png", None, None) is False
+    # A platform name inside a longer basename is not a badge.
+    assert service._is_image_url_acceptable(
+        "https://example.com/photos/meetup-group-photo.jpg", None, None) is True
+
+
+def test_plugin_fallback_urls_are_validated(tmp_path: Path):
+    """A plugin's own og:image fetch can return the SITE LOGO (age-gated
+    therockcocks page, 2026-07-10) — the wrapper must reject it like any
+    other candidate instead of caching it."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+
+    class _LogoPlugin:
+        def fallback_lead_image_url(self, *, entry_link, content_html, summary):
+            return "https://www.therockcocks.com/the-rock-cocks/images/logo.png"
+
+    class _ComicPlugin:
+        def fallback_lead_image_url(self, *, entry_link, content_html, summary):
+            return "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
+
+    service._plugins = [_LogoPlugin()]
+    assert service._plugin_fallback_lead_image_url(
+        entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw",
+        content_html=None, summary=None) is None
+
+    service._plugins = [_LogoPlugin(), _ComicPlugin()]
+    assert service._plugin_fallback_lead_image_url(
+        entry_link="https://www.therockcocks.com/the-rock-cocks/page-1256-nsfw",
+        content_html=None, summary=None) == "https://www.therockcocks.com/comics/1783297346-RockCocks_1256.png"
+
+
+def test_support_platform_link_context_is_chrome(tmp_path: Path):
+    """An image wrapped in a link to a support/social platform is that
+    platform's badge (meetingcpp's topbar patreon.png/meetup.png), regardless
+    of the image filename."""
+    ctx = '<div class="gridcenteritem"> <a href="https://www.patreon.com/bePatron?u=3512102">'
+    assert LeadImageService._SITE_CHROME_CONTEXT_RE.search(ctx)
+    ctx2 = '<a href="https://www.meetup.com/Meeting-Cpp-online/">'
+    assert LeadImageService._SITE_CHROME_CONTEXT_RE.search(ctx2)
+    # A plain article link is not chrome context.
+    assert not LeadImageService._SITE_CHROME_CONTEXT_RE.search('<a href="https://example.com/story">')
