@@ -27,6 +27,7 @@ import sys
 import time
 import zlib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -59,7 +60,7 @@ _WAYBACK_SNAPSHOT_RE = re.compile(r"/web/\d+[a-z_]*/(https?://.+)$")
 
 def strip_tracking_params(url: str) -> str:
     """Drop utm_* params (FeedBurner appended them to every redirect target)."""
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    from urllib.parse import parse_qsl, urlencode, urlunsplit
     parts = urlsplit(url)
     kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not k.lower().startswith("utm_")]
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
@@ -85,7 +86,12 @@ def resolve_wayback(url: str) -> str | None:
             if not m:
                 return None
             orig = strip_tracking_params(m.group(1))
-            if is_redirector_link(orig) or "web.archive.org" in orig:
+            # Reject if the recovered URL is still a redirector, or is itself a
+            # Wayback URL (nested snapshot). Match the HOST, not a substring:
+            # "web.archive.org" in orig would also match web.archive.org.evil
+            # or a query param that merely contains the string.
+            orig_host = (urlsplit(orig).hostname or "").lower()
+            if is_redirector_link(orig) or orig_host == "web.archive.org" or orig_host.endswith(".web.archive.org"):
                 return None
             return orig
         except Exception:
