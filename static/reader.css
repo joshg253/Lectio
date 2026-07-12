@@ -1,0 +1,169 @@
+/* Lectio e-ink reader view — high-contrast, paginated, motion-free.
+ *
+ * This is a STANDALONE page (not the app shell): it deliberately ships its own
+ * minimal styles instead of style.css/themes so it renders fast and predictably
+ * on a slow e-ink browser (e.g. Supernote Manta). Pure black on white, large
+ * type, big tap targets, and — critically — no transitions/animations, which
+ * ghost badly on e-ink. Content is paginated into screen-width CSS columns
+ * (see reader.js); there is no vertical scrolling. */
+
+:root {
+  --reader-fs: 1.2rem;   /* base body size; adjusted by A-/A+ (persisted) */
+  --reader-bar-h: 48px;
+  --reader-pad: 26px;
+}
+
+* { box-sizing: border-box; }
+
+/* Kill all motion — e-ink cannot animate cleanly. */
+* {
+  transition: none !important;
+  animation: none !important;
+  scroll-behavior: auto !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #fff;
+  color: #000;
+  overflow: hidden;
+}
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* --- Top bar ------------------------------------------------------------- */
+.reader-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--reader-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: #fff;
+  border-bottom: 2px solid #000;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  font-size: 15px;
+  z-index: 10;
+}
+
+.reader-bar .reader-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reader-bar .reader-pageinfo {
+  flex: 0 0 auto;
+  min-width: 54px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-ctl {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 34px;
+  padding: 0 10px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: 700 16px/1 -apple-system, "Segoe UI", Arial, sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* --- Paginated article --------------------------------------------------- */
+#reader-viewport {
+  position: fixed;
+  top: var(--reader-bar-h);
+  left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+}
+
+/* One screen-width column per "page"; overflow columns extend to the right and
+ * are revealed by translateX (reader.js). Column stride = column-width +
+ * column-gap = (100vw - 2*pad) + 2*pad = 100vw, so each page shifts by 100vw
+ * with a consistent `--reader-pad` gutter on both sides. */
+#reader-columns {
+  height: 100%;
+  padding: 18px var(--reader-pad);
+  column-width: calc(100vw - (2 * var(--reader-pad)));
+  column-gap: calc(2 * var(--reader-pad));
+  column-fill: auto;
+  transform: translateX(0);
+  font-size: var(--reader-fs);
+  line-height: 1.62;
+}
+
+/* Force high contrast; hue is meaningless on grayscale e-ink. */
+#reader-columns,
+#reader-columns * {
+  color: #000 !important;
+  background: transparent !important;
+}
+
+#reader-columns a { text-decoration: underline; }
+
+.reader-headline {
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.22;
+  margin: 0 0 .6em;
+}
+
+#reader-columns h1,
+#reader-columns h2,
+#reader-columns h3 { line-height: 1.25; }
+
+#reader-columns p { margin: 0 0 .9em; }
+
+#reader-columns img,
+#reader-columns svg,
+#reader-columns video,
+#reader-columns iframe {
+  max-width: 100%;
+  max-height: 86vh;
+  height: auto;
+  break-inside: avoid;
+}
+
+#reader-columns pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#reader-columns table { max-width: 100%; }
+
+#reader-columns blockquote {
+  margin: 0 0 .9em;
+  padding-left: 14px;
+  border-left: 3px solid #000;
+}
+
+/* --- Empty state --------------------------------------------------------- */
+.reader-empty {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+}
+.reader-empty h1 { margin: 0; font-size: 1.4rem; }
+.reader-empty a { color: #000; }

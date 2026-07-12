@@ -12259,36 +12259,13 @@ def entry_pane(
         LOGGER.info("[perf] entry_pane: get_entry_detail=%dms feed=%s", _detail_ms, feed_url)
     if selected_entry and not selected_entry["read"]:
         selected_entry["read"] = True
-        _fu, _eid = feed_url, entry_id
-        _title = str(selected_entry.get("title") or "")
-        _link = str(selected_entry.get("link") or "")
-        _feed_title = str(selected_entry.get("feed_title") or "")
-        # Capture the current user now: the daemon thread below does not inherit
-        # this request's contextvars, so without re-binding it would mark the
-        # entry read in the default (legacy) user's DB and the post would keep
-        # showing as unread for the actual user.
-        _uid = tenancy.current_user_id()
-
-        def _bg_mark_read() -> None:
-            try:
-                with get_reader() as reader:
-                    reader.mark_entry_as_read((_fu, _eid))
-            except Exception:
-                LOGGER.warning("background mark_entry_as_read failed for %s/%s", _fu, _eid, exc_info=True)
-            try:
-                upsert_entry_read_state(_fu, _eid)
-            except Exception:
-                LOGGER.warning("background upsert_entry_read_state failed for %s/%s", _fu, _eid, exc_info=True)
-            try:
-                append_read_history(_fu, _eid, _title, _link, _feed_title)
-            except Exception:
-                LOGGER.warning("background append_read_history failed for %s/%s", _fu, _eid, exc_info=True)
-            with unread_counts_cache_lock:
-                global _unread_counts_generation
-                _unread_counts_generation += 1
-                unread_counts_cache.clear()
-
-        threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
+        _mark_entry_read_background(
+            feed_url,
+            entry_id,
+            str(selected_entry.get("title") or ""),
+            str(selected_entry.get("link") or ""),
+            str(selected_entry.get("feed_title") or ""),
+        )
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
     # so it lands in the feed's actual containing folder.
@@ -12299,6 +12276,21 @@ def entry_pane(
     for fid, urls in direct.items():
         for url in urls:
             feed_to_folder[url] = fid
+
+    # Deep-link into the e-ink reader for this entry, carrying the current list
+    # scope so the reader's prev/next stays within the same filtered view.
+    reader_href = _reader_href(
+        feed_url,
+        entry_id,
+        folder_id=folder_id,
+        list_feed_url=list_feed_url,
+        tag=normalized_tag,
+        read_filter=normalized_read_filter,
+        star_only=normalized_star_only,
+        sort_by=normalized_sort_by,
+        sort_dir=normalized_sort_dir,
+        search_query=None,
+    )
 
     return templates.TemplateResponse(
         request,
@@ -12313,6 +12305,7 @@ def entry_pane(
             "selected_star_only": normalized_star_only,
             "selected_resume_read_filter": normalized_resume_read_filter,
             "selected_entry": selected_entry,
+            "reader_href": reader_href,
             "feed_to_folder": feed_to_folder,
             "email_configured": is_email_configured(),
             "email_to_default": _get_email_to_default(),
@@ -13955,6 +13948,24 @@ def set_entry_thumb_crop_route(
     return JSONResponse({"ok": True, "crop": effective})
 
 
+def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | None) -> str | None:
+    """Return the offline archived readability HTML for a starred entry with its
+    local image assets rewritten to /starred-asset/ URLs, or None when no
+    complete archive exists. Shared by the reader-view route and the e-ink
+    ``/read`` view so both prefer the archived copy over a live re-fetch."""
+    if not (feed_url and entry_id):
+        return None
+    archived_html = starred_archive_service.get_archived_readability_html(feed_url, entry_id)
+    if not archived_html:
+        return None
+    asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
+    if asset_map:
+        archived_html = starred_archive_service.rewrite_html_assets(
+            archived_html, asset_map, STARRED_ASSET_URL_PREFIX
+        )
+    return archived_html
+
+
 @app.get("/entries/readability")
 def entry_readability(
     url: str,
@@ -13964,15 +13975,9 @@ def entry_readability(
     # If this entry is starred and a complete archive exists, serve the
     # archived readability HTML so the view stays available even if the
     # source is gone. Otherwise fall through to the live extractor.
-    if feed_url and entry_id:
-        archived_html = starred_archive_service.get_archived_readability_html(feed_url, entry_id)
-        if archived_html:
-            asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
-            if asset_map:
-                archived_html = starred_archive_service.rewrite_html_assets(
-                    archived_html, asset_map, STARRED_ASSET_URL_PREFIX
-                )
-            return _wrap_readability_html(archived_html, url)
+    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
+    if archived_html:
+        return _wrap_readability_html(archived_html, url)
     return build_readability_response(url)
 
 
@@ -14009,6 +14014,332 @@ def entry_source(url: str):
 @app.get("/entries/frame-check")
 def entry_frame_check(url: str):
     return JSONResponse(probe_frameability(url))
+
+
+# ---------------------------------------------------------------------------
+# E-ink reader view (Supernote Manta) — standalone, paginated, distraction-free
+#
+# A self-contained reading surface for the saved/starred backlog: its own HTML +
+# static/reader.{css,js} (no app shell), high contrast, no scrolling (tap
+# left/right or arrow keys turn CSS-column "pages"). It follows the Saved view's
+# current filter and prefers the offline archived readability copy over a
+# truncated feed summary. See ARCHITECTURE "E-ink reader view".
+# ---------------------------------------------------------------------------
+
+
+def _mark_entry_read_background(
+    feed_url: str, entry_id: str, title: str, link: str, feed_title: str
+) -> None:
+    """Mark an entry read off the request path. The daemon thread does not
+    inherit the request's tenancy contextvars, so capture the current user now
+    and re-bind it via _run_in_user_context — otherwise the write lands in the
+    default user's DB and the post stays unread for the real user."""
+    _uid = tenancy.current_user_id()
+
+    def _bg_mark_read() -> None:
+        try:
+            with get_reader() as reader:
+                reader.mark_entry_as_read((feed_url, entry_id))
+        except Exception:
+            LOGGER.warning("background mark_entry_as_read failed for %s/%s", feed_url, entry_id, exc_info=True)
+        try:
+            upsert_entry_read_state(feed_url, entry_id)
+        except Exception:
+            LOGGER.warning("background upsert_entry_read_state failed for %s/%s", feed_url, entry_id, exc_info=True)
+        try:
+            append_read_history(feed_url, entry_id, title, link, feed_title)
+        except Exception:
+            LOGGER.warning("background append_read_history failed for %s/%s", feed_url, entry_id, exc_info=True)
+        invalidate_unread_counts_cache()
+
+    threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
+
+
+def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
+    """Return sanitized article HTML for the e-ink reader, preferring the offline
+    archived readability copy, then a live readability extraction of *link*, then
+    the stored feed content. Every source is already sanitized (archive at
+    capture, live via sanitize_readability_html, stored via reader_sanitize at
+    ingest), so the caller embeds the result directly."""
+    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
+    if archived_html:
+        return _strip_bandcamp_track_signature(archived_html)
+    if link:
+        try:
+            _title, article_html = fetch_readability_article(link)
+            if article_html:
+                return article_html
+        except Exception:
+            LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)
+    if feed_url and entry_id:
+        detail = get_entry_detail(feed_url, entry_id)
+        if detail and detail.get("content_html"):
+            return str(detail["content_html"])
+    esc = html.escape(link or "", quote=True)
+    tail = (
+        f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
+        if link else ""
+    )
+    return f"<p>Could not load this article.{tail}</p>"
+
+
+def resolve_reader_backlog(
+    *,
+    folder_id: int | None,
+    list_feed_url: str | None,
+    read_filter: str,
+    star_only: bool,
+    tag: str | None,
+    sort_by: str,
+    sort_dir: str,
+    search_query: str | None,
+    limit: int = 250,
+) -> list[dict]:
+    """Ordered entry backlog for the reader, mirroring the main list view's
+    feed-set selection so the reader can "follow the Saved view filter": the root
+    folder widens to every reader feed, a specific folder/feed narrows to it, and
+    archive-only saved orphans are merged into the star_only root view (matching
+    the Saved Articles list)."""
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+    all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+    root_id = cast(int, snapshot["root_id"])
+    folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
+    all_reader_feed_urls = get_all_reader_feed_urls()
+    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
+
+    selected_folder_id = folder_id or root_id
+    if list_feed_url:
+        entry_feed_urls = {list_feed_url}
+    else:
+        entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
+
+    posts = list_entries_for_feeds(
+        entry_feed_urls,
+        limit=limit,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        selected_tag=tag,
+        search_query=search_query,
+    )
+
+    # Parity with the Saved list: surface archive-only orphans (saves whose feed
+    # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    if (
+        star_only
+        and not list_feed_url
+        and not tag
+        and not search_query
+        and selected_folder_id == root_id
+    ):
+        try:
+            posts = merge_orphan_saved_entries(
+                posts,
+                live_feed_urls=all_feed_urls,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("reader backlog orphan merge failed: %s", exc)
+    return posts
+
+
+def _reader_href(
+    feed_url: str,
+    entry_id: str,
+    *,
+    folder_id: int | None,
+    list_feed_url: str | None,
+    tag: str | None,
+    read_filter: str,
+    star_only: bool,
+    sort_by: str,
+    sort_dir: str,
+    search_query: str | None,
+) -> str:
+    """Build a /read URL for *entry* that carries the current backlog scope so
+    prev/next navigation stays within the same filtered view."""
+    params: list[tuple[str, str]] = [("feed_url", feed_url), ("entry_id", entry_id)]
+    if folder_id is not None:
+        params.append(("folder_id", str(folder_id)))
+    if list_feed_url:
+        params.append(("list_feed_url", list_feed_url))
+    if tag:
+        params.append(("tag", tag))
+    params.append(("read_filter", read_filter))
+    if star_only:
+        params.append(("star_only", "1"))
+    params.append(("sort_by", sort_by))
+    params.append(("sort_dir", sort_dir))
+    if search_query:
+        params.append(("q", search_query))
+    return "/read?" + urlencode(params)
+
+
+def _reader_empty_response() -> HTMLResponse:
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        "<title>Reader</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
+        "</head><body><div class='reader-empty'>"
+        "<h1>Nothing to read</h1><p>There are no articles in this view.</p>"
+        "<p><a href='/'>Back to Lectio</a></p>"
+        "</div></body></html>"
+    )
+    return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
+
+
+def build_reader_page(
+    *,
+    title: str,
+    article_html: str,
+    source_link: str,
+    prev_href: str,
+    next_href: str,
+    back_href: str,
+) -> HTMLResponse:
+    esc_title = html.escape(title or "(untitled)")
+    esc_src = html.escape(source_link or "", quote=True)
+    esc_prev = html.escape(prev_href or "", quote=True)
+    esc_next = html.escape(next_href or "", quote=True)
+    esc_back = html.escape(back_href or "/", quote=True)
+    open_original = (
+        f"<a class='reader-ctl' href='{esc_src}' target='_blank' rel='noopener noreferrer'"
+        " title='Open original'>&#8599;</a>"
+        if source_link else ""
+    )
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        f"<title>{esc_title}</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
+        "<meta name='robots' content='noindex'>"
+        f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
+        "</head><body>"
+        "<header class='reader-bar'>"
+        f"<a class='reader-ctl' href='{esc_back}' title='Back to Lectio'>&#10005;</a>"
+        f"<span class='reader-title'>{esc_title}</span>"
+        "<span class='reader-pageinfo' id='reader-pageinfo'>1 / 1</span>"
+        "<button class='reader-ctl' id='reader-fs-minus' type='button' title='Smaller text'>A&#8722;</button>"
+        "<button class='reader-ctl' id='reader-fs-plus' type='button' title='Larger text'>A+</button>"
+        f"{open_original}"
+        "</header>"
+        "<main id='reader-viewport'>"
+        f"<div id='reader-columns' data-prev='{esc_prev}' data-next='{esc_next}'>"
+        f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
+        f"{article_html}</article>"
+        "</div></main>"
+        f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
+        "</body></html>"
+    )
+    return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/read", response_class=HTMLResponse)
+def reader_view(
+    request: Request,
+    feed_url: str | None = Query(default=None),
+    entry_id: str | None = Query(default=None),
+    folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str | None = Query(default=None),
+    read_filter: str | None = Query(default=None),
+    star_only: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+):
+    # A bare /read (the Manta bookmark) has no scope: default to the whole saved
+    # backlog, unread, oldest-first, so it burns down as you read.
+    scope_given = any(
+        v is not None and v != ""
+        for v in (folder_id, list_feed_url, tag, read_filter, star_only, q)
+    )
+    if entry_id is None and not scope_given:
+        star_only_val = True
+        read_filter_val = "unread"
+        sort_by_val = "post"
+        sort_dir_val = "asc"
+    else:
+        star_only_val = normalize_star_only(star_only)
+        read_filter_val = normalize_read_filter(read_filter)
+        sort_by_val = normalize_sort_by(sort_by)
+        sort_dir_val = normalize_sort_dir(sort_dir)
+    tag_val = normalize_tag_value(tag)
+    q_val = normalize_search_query(q)
+
+    backlog = resolve_reader_backlog(
+        folder_id=folder_id,
+        list_feed_url=list_feed_url,
+        read_filter=read_filter_val,
+        star_only=star_only_val,
+        tag=tag_val,
+        sort_by=sort_by_val,
+        sort_dir=sort_dir_val,
+        search_query=q_val,
+    )
+
+    def _href(rec: dict | None) -> str:
+        if not rec:
+            return ""
+        return _reader_href(
+            rec["feed_url"], rec["id"],
+            folder_id=folder_id, list_feed_url=list_feed_url, tag=tag_val,
+            read_filter=read_filter_val, star_only=star_only_val,
+            sort_by=sort_by_val, sort_dir=sort_dir_val, search_query=q_val,
+        )
+
+    current: dict | None = None
+    prev_rec: dict | None = None
+    next_rec: dict | None = None
+
+    if entry_id and feed_url:
+        for i, rec in enumerate(backlog):
+            if rec["feed_url"] == feed_url and rec["id"] == entry_id:
+                current = rec
+                prev_rec = backlog[i - 1] if i > 0 else None
+                next_rec = backlog[i + 1] if i + 1 < len(backlog) else None
+                break
+        if current is None:
+            # The entry isn't in the filtered list (e.g. already read under an
+            # unread filter, or a single-article open with no scope). Render it
+            # standalone; "next" points at the head of the remaining backlog.
+            detail = get_entry_detail(feed_url, entry_id)
+            if detail is None and not backlog:
+                return _reader_empty_response()
+            current = detail or {"feed_url": feed_url, "id": entry_id, "title": feed_url, "link": ""}
+            next_rec = backlog[0] if backlog else None
+    elif backlog:
+        current = backlog[0]
+        next_rec = backlog[1] if len(backlog) > 1 else None
+    else:
+        return _reader_empty_response()
+
+    cur_feed = str(current["feed_url"])
+    cur_id = str(current["id"])
+    cur_title = str(current.get("title") or current.get("link") or "(untitled)")
+    cur_link = str(current.get("link") or "")
+
+    if not current.get("read", False):
+        _mark_entry_read_background(
+            cur_feed, cur_id, cur_title, cur_link, str(current.get("feed_title") or "")
+        )
+
+    article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
+
+    return build_reader_page(
+        title=cur_title,
+        article_html=article_html,
+        source_link=cur_link,
+        prev_href=_href(prev_rec),
+        next_href=_href(next_rec),
+        back_href="/",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -705,6 +705,50 @@ hidden in Feeds mode when it's the only unfoldered feed) but stays in the
 Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
 its entries.
 
+## E-ink reader view (`GET /read`)
+
+A standalone, distraction-free reading surface for the saved/starred backlog,
+built e-ink-first (the driver is reading the backlog on a Supernote Manta
+browser, where Instapaper renders badly). It is deliberately **not** the app
+shell: `build_reader_page` emits a self-contained HTML document loading only
+`static/reader.css` + `static/reader.js` — pure black-on-white, large adjustable
+type, no shadows/gradients, and (critically) `transition:none/animation:none`,
+which ghost on e-ink. This also sidesteps the app's localStorage-only theming,
+which a server-rendered page can't read.
+
+**Paginated, not scrolled.** `reader.js` lays the article out in screen-width CSS
+columns (`column-width:100vw`, stride = column-width + column-gap = 100vw) inside
+an `overflow:hidden` viewport and turns "pages" by translating the column
+container horizontally — no scrolling (which ghosts). Tap zones (left third =
+back, right two-thirds = forward) and arrow/page/space keys turn pages; turning
+past the first/last page navigates to the prev/next article via `data-prev` /
+`data-next` hrefs (a full page load — minimal JS, e-ink-friendly). `A−`/`A+`
+adjusts `--reader-fs` and re-paginates, persisting the size in `localStorage`
+(the page's own storage, independent of the app).
+
+**One article per request; the backlog drives prev/next.** `resolve_reader_backlog`
+mirrors the main list view's feed-set selection (root widens to every reader
+feed, a folder/feed narrows) and calls the same `list_entries_for_feeds`, so the
+reader **follows the Saved view's current filter** (read-filter/tag/sort/scope);
+archive-only saved orphans are merged into the star_only root view for parity
+with the Saved list. The route finds the current entry in that ordered list to
+compute prev/next; an entry that's already dropped from the list (e.g. read under
+an Unread filter) still renders standalone with "next" pointing at the list head,
+keeping navigation stable while the backlog burns down. A bare bookmarked `/read`
+(no scope) defaults to the whole saved backlog, unread, oldest-first.
+
+**Content resolution** (`resolve_reader_article_html`): archived readability copy
+first (`_resolve_archived_readability_html`, shared with the `/entries/readability`
+route — offline HTML with `/starred-asset/` URLs, survives dead sources), then a
+live readability extraction of the link, then the stored feed content. Every
+source is already sanitized (archive at capture, live via `sanitize_readability_html`,
+stored via `reader_sanitize` at ingest), so the page embeds the result directly —
+no new sanitization surface. Opening an entry marks it read off the request path
+via `_mark_entry_read_background` (the same tenancy-rebinding daemon the entry
+pane uses). Entry points: the **book icon** in the posts toolbar (carries the
+current list scope), **Open in reader** in the entry pane (`reader_href`), and a
+directly bookmarkable `/read`.
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).

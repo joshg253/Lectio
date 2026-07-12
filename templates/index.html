@@ -398,6 +398,12 @@
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
         {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
+        {# Deep-link into the e-ink reader for the current list scope/filter. #}
+        {% set reader_href = '/read?folder_id=' ~ selected_folder_id %}
+        {% if selected_feed_url %}{% set reader_href = reader_href ~ '&list_feed_url=' ~ (selected_feed_url | urlencode) %}{% endif %}
+        {% if selected_tag %}{% set reader_href = reader_href ~ '&tag=' ~ (selected_tag | urlencode) %}{% endif %}
+        {% set reader_href = reader_href ~ '&read_filter=' ~ selected_read_filter ~ ('&star_only=1' if selected_star_only else '') ~ '&sort_by=' ~ selected_sort_by ~ '&sort_dir=' ~ selected_sort_dir %}
+        {% if selected_query %}{% set reader_href = reader_href ~ '&q=' ~ (selected_query | urlencode) %}{% endif %}
         <div class="toolbar-row-main">
           <div class="sort-group">
             <details class="toolbar-dropdown filter-menu">
@@ -451,6 +457,9 @@
             </details>
           </div>
           <div class="sort-group">
+            <a href="{{ reader_href }}" id="toolbar-reader-btn" class="sort-pill" title="Open in reader (e-ink)" aria-label="Open in reader">
+              <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">menu_book</span>
+            </a>
             <button type="button" id="toolbar-search-btn" class="sort-pill{% if selected_query %} active{% endif %}" title="Search posts" aria-label="Search posts" aria-expanded="{{ 'true' if selected_query else 'false' }}">
               <span class="material-symbols-rounded toolbar-dd-icon" aria-hidden="true">search</span>
             </button>

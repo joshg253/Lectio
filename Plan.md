@@ -33,15 +33,20 @@ Make Lectio usable as a read-it-later app.
   narrowing), and the toolbar Tags submenu slices the backlog by tag within
   the view (user pattern: `#toread` vs `#todo` — "read later" vs "deal with
   later" are different buckets under one star).
-- **Reader-only browsing view** for saved/starred items — a clean, distraction-free
-  reading surface (no triage chrome), keyboard-first navigation through the
-  starred/saved backlog. Should prefer the archived readability copy when the
-  live entry content is a truncated feed summary. **Design e-ink-first**: the
-  real driver is reading the Saved backlog on a Supernote Manta browser
-  (Instapaper is bad there; Readit was evaluated for the same reason) — high
-  contrast, large tap targets, no animations/transitions, paginated (tap
-  left/right) instead of scrolled, minimal JS, self-hosted so no third-party
-  app needed.
+- SHIPPED 2026-07-12: **Reader-only browsing view** (`GET /read`) — a standalone,
+  distraction-free e-ink reading surface for the saved/starred backlog (see
+  ARCHITECTURE "E-ink reader view"). High contrast, paginated (tap left/right +
+  arrow keys, no scroll) via CSS columns in `static/reader.{css,js}`, adjustable
+  type. Follows the Saved view's current filter/scope, prefers the archived
+  readability copy over truncated feed content, marks read as you go (backlog
+  burns down), and is bookmarkable at `/read`. Opened from the toolbar book icon,
+  the entry pane's "Open in reader", or a direct bookmark. Follow-ups (build on
+  demand): mark-read only after the last page (stricter burn-down) rather than on
+  open; prefetch the next article to cut e-ink full-page flashes at boundaries;
+  optional per-image `grayscale(1)` if photos read poorly on-device; a possible
+  env-gated higher-quality extraction backend (Instapaper's paid Instaparser API
+  was evaluated and rejected as third-party/paid — it would belong to the
+  "full-content fetch at ingest" item below, not here).
 - Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total

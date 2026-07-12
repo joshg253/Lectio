@@ -167,6 +167,20 @@ The short version:
   exits back to normal browsing with your previous Read/Unread filter
   restored. The internal Saved Articles feed no longer clutters
   Feeds → Uncategorized — the sidebar view supersedes it.
+- **Reader mode (e-ink)** — a distraction-free, full-screen reading surface
+  built for slow grayscale e-ink browsers (the Supernote Manta in particular,
+  where Instapaper reads badly). It's a standalone page — high-contrast black on
+  white, large adjustable type, and **paginated, not scrolled**: tap the right
+  two-thirds of the screen (or the arrow / page / space keys) to turn the page,
+  the left third to go back. Turning past the last page moves to the next
+  article in your backlog and marks the current one read, so an Unread view
+  burns down as you read. It **follows the Saved view's current filter/scope**
+  (Starred/Unread/tag/sort) and prefers the starred archive's full offline copy
+  over a truncated feed summary. Open it from the **book icon** in the posts
+  toolbar, from **Open in reader** on any article, or bookmark **`/read`**
+  directly on the device for the whole saved backlog. `A−` / `A+` adjust text
+  size (remembered on the device); `✕` returns to Lectio and `↗` opens the
+  original page.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter
