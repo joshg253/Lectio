@@ -821,7 +821,8 @@ The JS layer reads the CSRF token explicitly from `<meta name="csrf-token">` and
 - `GET /greader/reader/api/0/stream/contents/{stream_id:path}` — combined IDs + content
 - `POST /greader/reader/api/0/edit-tag` — mark read/unread/starred/unstarred
 - `POST /greader/reader/api/0/mark-all-as-read` — bulk mark read (background thread)
-- `POST /greader/reader/api/0/subscription/edit` and `/quickadd` — stub OK responses
+- `POST /greader/reader/api/0/subscription/edit` — folder move + rename (`ac=edit`): `a=user/-/label/<name>` moves the feed into folder `<name>` (created if absent) mapped onto Lectio's single-folder model, a lone `r=user/-/label/<name>` makes it folderless, `t=<title>` sets the feed's `user_title`. `ac=subscribe`/`unsubscribe` stay no-op-OK so a client can't unexpectedly unsubscribe feeds. (Was a bare stub — Capy's moves silently reverted on the next sync.)
+- `POST /greader/reader/api/0/subscription/quickadd` — stub OK response
 
 **Pagination:** `?n=<count>` (default 20, cap 10,000), `?c=<continuation>` (published-timestamp in microseconds of the last returned item). `?r=o` reverses order to oldest-first.
 

@@ -22347,10 +22347,80 @@ def greader_subscription_list(request: Request) -> Response:
     return JSONResponse(greader_service.get_subscription_list())  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 
+def _greader_label_name(label: str) -> str | None:
+    """Extract the folder name from a GReader label id (user/-/label/<name>)."""
+    marker = "/label/"
+    i = label.find(marker)
+    return label[i + len(marker):].strip() if i >= 0 else None
+
+
+def _greader_edit_subscriptions(streams: list[str], add_labels: list[str],
+                                remove_labels: list[str], new_title: str | None) -> None:
+    """Apply a GReader subscription/edit to Lectio's single-folder model.
+
+    ``a=user/-/label/<name>`` moves the feed into folder <name> (created if
+    absent — GReader "add label" semantics); a lone ``r=user/-/label/<name>``
+    removes it from that folder (→ Uncategorized). ``t=<title>`` renames the
+    feed. Mirrors a web-UI move so synced clients (Capy, etc.) actually stick.
+    """
+    feed_urls = [s[len("feed/"):] for s in streams if s.startswith("feed/")]
+    if not feed_urls:
+        return
+    add_folder = next((n for lab in add_labels if (n := _greader_label_name(lab))), None)
+    remove_folders = [n for lab in remove_labels if (n := _greader_label_name(lab))]
+    changed = False
+    with get_reader() as reader:
+        with get_meta_connection() as conn:
+            root_id = get_root_folder_id(conn)
+            for feed_url in feed_urls:
+                if reader.get_feed(feed_url, None) is None:
+                    continue
+                if add_folder and add_folder != ROOT_FOLDER_NAME:
+                    # Move: single folder, so clear existing membership first.
+                    target_id = _get_or_create_folder_by_name(conn, add_folder)
+                    conn.execute("DELETE FROM folder_feeds WHERE feed_url = ?", (feed_url,))
+                    conn.execute(
+                        "INSERT OR IGNORE INTO folder_feeds (folder_id, feed_url) VALUES (?, ?)",
+                        (target_id, feed_url),
+                    )
+                    changed = True
+                elif remove_folders:
+                    for name in remove_folders:
+                        row = conn.execute(
+                            "SELECT id FROM folders WHERE name = ? AND parent_id = ?",
+                            (name, root_id),
+                        ).fetchone()
+                        if row:
+                            conn.execute(
+                                "DELETE FROM folder_feeds WHERE folder_id = ? AND feed_url = ?",
+                                (int(row["id"]), feed_url),
+                            )
+                            changed = True
+                if new_title:
+                    try:
+                        reader.set_feed_user_title(feed_url, new_title)
+                        changed = True
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("[greader] set_feed_user_title failed for %s", feed_url)
+    if changed:
+        invalidate_meta_structure_cache()
+
+
 @app.post("/greader/reader/api/0/subscription/edit")
 async def greader_subscription_edit(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
+    form = await request.form()
+    action = str(form.get("ac") or "edit")
+    # We implement label (folder) edits + rename. subscribe/unsubscribe stay
+    # no-op-OK (as before) so a client can't unsubscribe feeds unexpectedly.
+    if action == "edit":
+        _greader_edit_subscriptions(
+            [v for v in form.getlist("s") if isinstance(v, str)],
+            [v for v in form.getlist("a") if isinstance(v, str)],
+            [v for v in form.getlist("r") if isinstance(v, str)],
+            (lambda t: str(t) if isinstance(t, str) and t.strip() else None)(form.get("t")),
+        )
     return Response("OK")
 
 
