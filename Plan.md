@@ -47,7 +47,13 @@ Make Lectio usable as a read-it-later app.
   article to cut e-ink flashes; optional per-image `grayscale(1)`. A possible
   env-gated higher-quality extraction backend (Instapaper's paid Instaparser API,
   evaluated + rejected as third-party/paid) belongs to the "full-content fetch at
-  ingest" item below, not here.
+  ingest" item below, not here. Two CodeQL alerts on the Read Mode PR (#144) were
+  dismissed as false positives: `py/reflective-xss` on `build_reader_page`
+  (`article_html` is allowlist-sanitized upstream via `html_sanitize.sanitize_html`
+  — the same trust model as the existing reader-view responses; our BeautifulSoup
+  sanitizer isn't a CodeQL-recognized sanitizer) and `js/xss-through-dom` on
+  `reader.js` `go()` (nav targets are exclusively app-generated same-origin `/read`
+  paths, and `go()` further validates same-origin via `new URL()`).
 - Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
