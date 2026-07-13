@@ -183,7 +183,11 @@ The short version:
   the next article. `A−` / `A+` adjust text size (remembered on the device);
   `✕` returns to the list and `↗` opens the original page. Because saved items
   are usually already read, **Archive — not read/unread — is the "done" axis**
-  in Read Mode.
+  in Read Mode. There's also a **Feeds** scope (`/read?scope=feeds`, or
+  **Read Mode (e-ink)** in the menu) for reading your ordinary unread feeds the
+  same way — a feeds tree (All Feeds + folders with unread counts) into the
+  paginated reader. A **Supernote** tablet is auto-detected and taken straight to
+  it; the exit link drops back into the full app on that device.
 - **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
   mappings for sites whose pages don't advertise their feeds — paste a
   pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter

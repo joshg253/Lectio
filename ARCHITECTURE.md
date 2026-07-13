@@ -775,6 +775,17 @@ no new sanitization surface. Opening an entry marks it read off the request path
 via `_mark_entry_read_background` (the tenancy-rebinding daemon the entry pane
 also uses).
 
+**Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
+with the Archive axis. `feeds` is ordinary **unread feed reading**:
+`_build_feeds_mode_context` renders a simplified feeds tree (All Feeds + folders
+with unread counts) → `list_entries_for_feeds(star_only=False, read_filter=
+'unread')` → the same paginated reader, minus the Archive/Delete controls (marked
+read on open). Entry points are additive (the feeds three-pane app is unchanged):
+an app-menu **Read Mode (e-ink)** link, and a **Supernote auto-detect** — a
+tablet whose UA contains `supernote` hitting `/` is redirected to
+`/read?scope=feeds`; the Read Mode exit link (`/?full=1`) opts back into the full
+app and sets a `lectio_full_app` cookie so in-app navigation isn't re-redirected.
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).
