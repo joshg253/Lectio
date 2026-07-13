@@ -43,10 +43,10 @@ def test_read_state_prev_next_and_controls(monkeypatch):
     body = r.text
     assert r.status_code == 200
     assert "reader-columns" in body and "Title 2" in body and "<p>BODY</p>" in body
-    assert "entry_id=e1" in body and "entry_id=e3" in body       # prev / next
+    assert "entry_id=e1" in body and "entry_id=e3" in body       # prev / next (nav object)
+    assert "__READER_NAV__" in body
     assert "name='csrf-token' content='tok'" in body
     assert "id='reader-archive-btn'" in body and "id='reader-delete-btn'" in body
-    assert "data-back=" in body
     assert marks == [("feed2", "e2")]                             # unread -> marked read
 
 
@@ -74,7 +74,7 @@ def test_read_entry_not_in_list_renders_standalone(monkeypatch):
     with TestClient(_app()) as client:
         r = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"})
     assert r.status_code == 200 and "Gone" in r.text
-    assert "data-prev=''" in r.text and "entry_id=e2" in r.text   # next = list head
+    assert '"prev": ""' in r.text and "entry_id=e2" in r.text     # no prev; next = list head
 
 
 # --- BROWSE state (no article selected) --------------------------------------

@@ -15,6 +15,10 @@
   var pageInfo = document.getElementById("reader-pageinfo");
   if (!cols || !viewport) return;
 
+  // Prev/next/back targets come from a server-rendered inline object, not DOM
+  // attributes, so no navigation URL is ever read from the DOM.
+  var NAV = window.__READER_NAV__ || {};
+
   var FS_KEY = "lectio-reader-fontsize";
   var FS_MIN = 0.9, FS_MAX = 1.9, FS_STEP = 0.1, FS_DEFAULT = 1.2;
 
@@ -52,7 +56,7 @@
 
   function go(href) {
     // Only follow app-generated same-origin paths; never a javascript:/data:/
-    // cross-origin URL (the hrefs come from DOM attributes).
+    // cross-origin URL.
     if (!href) return;
     try {
       var u = new URL(href, window.location.origin);
@@ -64,12 +68,12 @@
 
   function nextPage() {
     if (page < pages - 1) { page++; render(); }
-    else { go(cols.getAttribute("data-next")); }
+    else { go(NAV.next); }
   }
 
   function prevPage() {
     if (page > 0) { page--; render(); }
-    else { go(cols.getAttribute("data-prev")); }
+    else { go(NAV.prev); }
   }
 
   function changeFs(delta) {
@@ -132,8 +136,7 @@
     return m ? m.getAttribute("content") : "";
   }
   function afterAction() {
-    var next = cols.getAttribute("data-next");
-    go(next || cols.getAttribute("data-back") || "/read");
+    go(NAV.next || NAV.back || "/read");
   }
   function postAction(url, params) {
     var body = new URLSearchParams(params);

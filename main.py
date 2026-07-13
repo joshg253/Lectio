@@ -14244,8 +14244,6 @@ def build_reader_page(
 ) -> HTMLResponse:
     esc_title = html.escape(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
-    esc_prev = html.escape(prev_href or "", quote=True)
-    esc_next = html.escape(next_href or "", quote=True)
     esc_back = html.escape(back_href or "/read", quote=True)
     esc_feed = html.escape(feed_url or "", quote=True)
     esc_eid = html.escape(entry_id or "", quote=True)
@@ -14258,6 +14256,14 @@ def build_reader_page(
     # Archive shows a filled box when already archived (tap = un-archive).
     archive_glyph = "&#9635;" if is_archived else "&#9634;"
     archive_title = "Un-archive" if is_archived else "Archive"
+    # Prev/next/back navigation targets are passed as an inline JS object rather
+    # than data-* attributes so reader.js never reads them from the DOM (avoids a
+    # CodeQL js/xss-through-dom false positive on location.assign). Values are
+    # server-generated /read paths; JSON-encode + escape "<" against script
+    # breakout.
+    nav_json = json.dumps(
+        {"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}
+    ).replace("<", "\\u003c")
     # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
     # raw, and it is always allowlist-sanitized upstream (archived capture, live
     # readability, or stored feed content — all via html_sanitize.sanitize_html),
@@ -14284,11 +14290,11 @@ def build_reader_page(
         f"{open_original}"
         "</header>"
         "<main id='reader-viewport'>"
-        f"<div id='reader-columns' data-prev='{esc_prev}' data-next='{esc_next}'"
-        f" data-back='{esc_back}' data-feed='{esc_feed}' data-entry='{esc_eid}'>"
+        f"<div id='reader-columns' data-feed='{esc_feed}' data-entry='{esc_eid}'>"
         f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
         f"{article_html}</article>"
         "</div></main>"
+        f"<script>window.__READER_NAV__={nav_json};</script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
     )
