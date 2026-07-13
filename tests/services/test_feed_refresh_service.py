@@ -5,7 +5,17 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
+import services.feed_refresh as _feed_refresh_mod
 from services.feed_refresh import FeedRefreshService
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pace_sleep(monkeypatch):
+    """Neutralize the high-fanout pacing sleep so tests don't wait in real time.
+    The pacing-specific tests re-patch sleep with their own recorder."""
+    monkeypatch.setattr(_feed_refresh_mod.time, "sleep", lambda s: None)
 
 
 class _ReaderCtx:
@@ -440,3 +450,32 @@ def test_low_fanout_backs_off_after_threshold_capped(tmp_path: Path):
         ).fetchone()
     assert row and row[0] >= 3
     assert row[1] is not None and row[1] <= time.time() + 3600 + 5  # active, capped ~1h
+
+
+def test_high_fanout_requests_are_paced(tmp_path: Path, monkeypatch):
+    """Requests to a high-fanout host are spaced out so a big burst isn't
+    throttled — every request after the first on that host waits."""
+    import services.feed_refresh as fr
+    db_path = tmp_path / "meta.sqlite"
+    feeds = [_yt(i) for i in range(10)]  # 10 feeds on one host
+    reader = _FailReader({})  # all succeed instantly
+    service = _build_service(db_path, reader, [], [])
+    sleeps: list[float] = []
+    monkeypatch.setattr(fr.time, "sleep", lambda s: sleeps.append(s))
+
+    service.update_feeds(feeds)
+    assert len([s for s in sleeps if s > 0]) >= len(feeds) - 1  # all but the first paced
+
+
+def test_low_fanout_requests_are_not_paced(tmp_path: Path, monkeypatch):
+    """Small hosts are not paced — no needless delay on ordinary feeds."""
+    import services.feed_refresh as fr
+    db_path = tmp_path / "meta.sqlite"
+    feeds = ["https://a.example/f.xml", "https://b.example/f.xml"]
+    reader = _FailReader({})
+    service = _build_service(db_path, reader, [], [])
+    sleeps: list[float] = []
+    monkeypatch.setattr(fr.time, "sleep", lambda s: sleeps.append(s))
+
+    service.update_feeds(feeds)
+    assert not [s for s in sleeps if s > 0]

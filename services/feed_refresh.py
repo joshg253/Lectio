@@ -32,6 +32,11 @@ _DOMAIN_BACKOFF_MIN_FAILURES = 3
 # backoff already handles the dead ones; the domain guard is only useful for
 # small hosts where a burst to a down server is worth avoiding.
 _HIGH_FANOUT_DOMAIN_FEEDS = 8
+# A tight burst of hundreds of requests to one host gets throttled (YouTube RSS
+# returns spurious 404s to a ~700-feed burst even though each feed is fine
+# one-at-a-time). Pace requests to a high-fanout host so we stay a polite client
+# and don't trip its rate limit; feeds to other hosts run at full speed between.
+_HIGH_FANOUT_PACE_SECONDS = 0.7
 
 
 class FeedRefreshService:
@@ -216,8 +221,10 @@ class FeedRefreshService:
         feed_state_map: dict[str, dict[str, int | float | None]] = {}
         domain_state_map: dict[str, dict[str, int | float | None]] = {}
         # Feeds-per-host in this batch: high-fanout hosts are exempt from
-        # domain-level backoff (a few dead feeds must not stall the rest).
+        # domain-level backoff (a few dead feeds must not stall the rest) and are
+        # paced (below) so a big burst doesn't get rate-limited.
         domain_feed_counts = Counter(_feed_domain(u) for u in feed_url_list if _feed_domain(u))
+        domain_last_request: dict[str, float] = {}
         # Short read transaction: load backoff state, then release the lock
         # immediately so the per-feed HTTP fetches below don't hold it open.
         with self._get_meta_connection() as conn:
@@ -317,6 +324,18 @@ class FeedRefreshService:
                                 feed_url,
                             )
                         continue
+
+                    # Pace requests to a high-fanout host so a big burst (e.g. ~700
+                    # youtube.com subscriptions) doesn't get throttled into spurious
+                    # 404s. Only consecutive requests to the SAME host wait; other
+                    # hosts interleave at full speed.
+                    if domain_high_fanout:
+                        _last = domain_last_request.get(domain)
+                        if _last is not None:
+                            _wait = _HIGH_FANOUT_PACE_SECONDS - (time.monotonic() - _last)
+                            if _wait > 0:
+                                time.sleep(_wait)
+                        domain_last_request[domain] = time.monotonic()
 
                     try:
                         if self._refresh_debug_enabled:
