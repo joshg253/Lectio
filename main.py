@@ -14289,6 +14289,59 @@ def build_reader_page(
     return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
 
 
+def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]:
+    """One pass over saved_entries → (non-archived key set, per-feed non-archived
+    counts, archived total). Read Mode excludes Archived items from the inbox
+    lists AND their counts (but never strips a tag from an archived item)."""
+    with get_meta_connection() as conn:
+        rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
+    inbox: set[tuple[str, str]] = set()
+    feed_counts: dict[str, int] = {}
+    archived_total = 0
+    for r in rows:
+        if r["archived_at"] is None:
+            key = (str(r["feed_url"]), str(r["entry_id"]))
+            inbox.add(key)
+            feed_counts[key[0]] = feed_counts.get(key[0], 0) + 1
+        else:
+            archived_total += 1
+    return inbox, feed_counts, archived_total
+
+
+def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
+    """Manual-tag counts restricted to the non-archived saved set — only tags
+    that actually appear on inbox items, counted over inbox items."""
+    if not inbox:
+        return {}
+    prefix = MANUAL_TAG_KEY_PREFIX
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT key, feed, id FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        rows = []
+    counts: dict[str, int] = {}
+    for key, feed, eid in rows:
+        if (str(feed), str(eid)) in inbox:
+            name = str(key)[len(prefix):].strip().lower()
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _read_mode_subtitle(it: dict) -> str:
+    """List subtitle: the source domain for saved-article captures (whose feed is
+    the synthetic 'Saved Articles'), otherwise the originating feed's title."""
+    if str(it.get("feed_url")) == saved_articles_service.SAVED_FEED_URL:
+        host = urlparse(str(it.get("link") or "")).netloc
+        return host[4:] if host.startswith("www.") else host
+    return str(it.get("feed_title") or "")
+
+
 def _build_read_mode_context(
     request: Request,
     *,
@@ -14299,7 +14352,8 @@ def _build_read_mode_context(
     items: list[dict],
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
-    + tag buckets + Archive, pinned) and the item list for the selected node."""
+    + tag buckets + Archive, pinned) and the item list for the selected node.
+    All tree counts are the non-archived (inbox) totals."""
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
     root_id = cast(int, snapshot["root_id"])
@@ -14310,44 +14364,51 @@ def _build_read_mode_context(
     folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
     folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
     folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
-    saved_counts = get_saved_counts_by_folder(folder_feed_urls_by_id)
-    archived_count = len(get_archived_saved_keys())
+
+    inbox, feed_inbox_counts, archived_count = _read_mode_saved_index()
+
+    def _folder_inbox_count(fid: int) -> int:
+        feeds = folder_feed_urls_by_id.get(fid, set())
+        return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
 
     on_all = folder_id is None and not tag and not archived and not q
     folder_nodes: list[dict] = [{
         "label": "All", "glyph": "★",  # ★
         "href": _read_browse_href(None, None, False, None),
-        "count": saved_counts.get(root_id, 0), "active": on_all,
+        "count": len(inbox), "active": on_all,
     }]
     for row in raw_folder_rows:
         fid = int(row["id"])
-        if fid == root_id or not saved_counts.get(fid, 0):
+        if fid == root_id:
+            continue
+        c = _folder_inbox_count(fid)
+        if not c:
             continue
         folder_nodes.append({
             "label": str(row["name"]), "glyph": "▸",  # ▸
             "href": _read_browse_href(fid, None, False, None),
-            "count": saved_counts[fid],
+            "count": c,
             "active": (not archived and not tag and folder_id == fid),
         })
-    if saved_counts.get(UNCATEGORIZED_FOLDER_ID, 0):
+    uncat = _folder_inbox_count(UNCATEGORIZED_FOLDER_ID)
+    if uncat:
         folder_nodes.append({
             "label": "Uncategorized", "glyph": "▸",  # ▸
             "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None),
-            "count": saved_counts[UNCATEGORIZED_FOLDER_ID],
+            "count": uncat,
             "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
         })
 
-    # Manual-tag buckets — the same source the Saved Tags submenu uses; clicking
-    # narrows the saved list to that tag. Counts are suppressed here because
-    # get_tag_counts_for_feeds counts all entries, not just saved ones (would be
-    # misleading next to the saved-scoped folder counts). Tucked in a collapsed
-    # <details> since a heavy tagger can have dozens.
+    # Manual-tag buckets restricted to the inbox: only tags on non-archived saved
+    # items, counted over them. Tucked in a collapsed <details> (heavy taggers
+    # have dozens); clicking narrows the inbox to that tag.
+    inbox_tag_counts = _inbox_tag_counts(inbox)
     tag_nodes = [{
-        "label": "#" + str(tr["name"]), "glyph": "",
-        "href": _read_browse_href(None, str(tr["name"]), False, None),
-        "count": 0,
-        "active": (not archived and tag == str(tr["name"])),
-    } for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))]
+        "label": "#" + name, "glyph": "",
+        "href": _read_browse_href(None, name, False, None),
+        "count": inbox_tag_counts[name],
+        "active": (not archived and tag == name),
+    } for name in sorted(inbox_tag_counts)]
 
     if archived:
         selected_label = "Archive"
@@ -14360,7 +14421,7 @@ def _build_read_mode_context(
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
-        "feed_title": str(it.get("feed_title") or ""),
+        "subtitle": _read_mode_subtitle(it),
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
                              folder_id=folder_id, tag=tag, archived=archived, q=q),

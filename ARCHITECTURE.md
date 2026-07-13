@@ -719,13 +719,18 @@ theming (a server-rendered page can't read it) and satisfies "auto light theme".
 
 **Two states, one route.** With no `entry_id`, `reader_view` renders the **2-pane
 browse** (`templates/read_mode.html`): a simplified saved tree (folders + manual-tag
-buckets via `get_tag_counts_for_feeds` + an **Archive** node pinned at the bottom,
-each a plain full-navigation `<a>`) on the left, and the item list for the selected
-node on the right. With an `entry_id`, it renders the **paginated reader**
-(`build_reader_page`). Read Mode ignores read/unread — it always lists starred
-items (`star_only=True, read_filter='all'`); the browse node scope is `folder_id` /
-`tag` / `archived` / `q`. A bare bookmarked `/read` lands on the browse **All
-(inbox)**.
+buckets + an **Archive** node pinned at the bottom, each a plain full-navigation
+`<a>`) on the left, and the item list for the selected node on the right. With an
+`entry_id`, it renders the **paginated reader** (`build_reader_page`). Read Mode
+ignores read/unread — it always lists starred items (`star_only=True,
+read_filter='all'`); the browse node scope is `folder_id` / `tag` / `archived` / `q`.
+A bare bookmarked `/read` lands on the browse **All (inbox)**. All tree counts are
+**non-archived** totals (`_read_mode_saved_index`); tag buckets are restricted to
+tags on inbox items with inbox counts (`_inbox_tag_counts`) and collapsed in a
+`<details>` (heavy taggers have dozens). Archiving an item drops it from these
+counts/lists but never strips its tags. Saved-article captures show their source
+domain as the list subtitle (`_read_mode_subtitle`); feed-starred items show the
+feed title.
 
 **Paginated, not scrolled.** `reader.js` lays the article out in screen-width CSS
 columns (`column-width:100vw`, stride = column-width + column-gap = 100vw) inside

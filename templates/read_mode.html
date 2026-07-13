@@ -32,6 +32,7 @@
           {% for n in tag_nodes %}
           <a class="rm-node rm-tag-node{% if n.active %} active{% endif %}" href="{{ n.href }}">
             <span class="rm-label">{{ n.label }}</span>
+            {% if n.count %}<span class="rm-count">{{ n.count }}</span>{% endif %}
           </a>
           {% endfor %}
         </details>
@@ -62,7 +63,7 @@
         <li class="rm-item{% if it.read %} rm-read{% endif %}">
           <a class="rm-item-link" href="{{ it.href }}">
             <span class="rm-item-title">{{ it.title }}</span>
-            {% if it.feed_title %}<span class="rm-item-feed">{{ it.feed_title }}</span>{% endif %}
+            {% if it.subtitle %}<span class="rm-item-feed">{{ it.subtitle }}</span>{% endif %}
           </a>
         </li>
         {% endfor %}

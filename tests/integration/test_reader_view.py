@@ -86,8 +86,8 @@ _CANNED_CTX = {
     ],
     "tag_nodes": [{"label": "#toread", "glyph": "", "href": "/read?tag=toread", "count": 2, "active": False}],
     "archive_node": {"label": "Archive", "glyph": "▤", "href": "/read?archived=1", "count": 1, "active": False},
-    "list_items": [{"title": "Item One", "feed_title": "Feed", "read": False, "href": "/read?feed_url=f&entry_id=e"}],
-    "selected_label": "All", "search_query": "", "static_asset_version": "t",
+    "list_items": [{"title": "Item One", "subtitle": "example.com", "read": False, "href": "/read?feed_url=f&entry_id=e"}],
+    "selected_label": "All", "search_query": "", "tags_open": False, "static_asset_version": "t",
 }
 
 
