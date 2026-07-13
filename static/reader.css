@@ -148,6 +148,37 @@ body {
 #reader-columns .reader-lead { margin: 0 0 1em; }
 #reader-columns .reader-lead img { margin: 0 auto; }
 
+/* Respect WordPress alignment classes: these images were small floats with text
+ * wrapping on the source page, but readability strips the sizing CSS so they'd
+ * otherwise render full-column ("huge"). The id+element+class selectors beat the
+ * generic `#reader-columns img` block rule above. */
+#reader-columns img.alignleft {
+  float: left;
+  max-width: 48%;
+  margin: 0.2em 1em 0.6em 0;
+}
+#reader-columns img.alignright {
+  float: right;
+  max-width: 48%;
+  margin: 0.2em 0 0.6em 1em;
+}
+#reader-columns img.aligncenter {
+  display: block;
+  margin: 0.9em auto;
+}
+/* Contain floats so they don't bleed past the article. */
+#reader-article::after { content: ""; display: block; clear: both; }
+
+/* Narrow screens (phone / portrait): floats are too tight — stack full width. */
+@media (max-width: 620px) {
+  #reader-columns img.alignleft,
+  #reader-columns img.alignright {
+    float: none;
+    max-width: 100%;
+    margin: 0.9em auto;
+  }
+}
+
 #reader-columns pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
