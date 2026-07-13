@@ -14394,8 +14394,8 @@ def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
     """The Saved / Feeds switcher shown at the top of the Read Mode tree so you
     can flip between the two scopes without leaving Read Mode."""
     return [
-        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
         {"label": "Feeds", "glyph": "☰", "href": "/read?scope=feeds", "active": current_scope == "feeds"},
+        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
     ]
 
 

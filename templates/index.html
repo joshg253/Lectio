@@ -125,7 +125,11 @@
           <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="{{ profile_avatar_url }}" alt="" /></summary>
           <div class="menu-popover anchor-left">
             <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
-            <a class="menu-item" href="/read?scope=feeds"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span> Read Mode (e-ink)</a>
+            <div class="menu-item menu-theme-row" role="group" aria-label="Theme">
+              <button type="button" class="menu-theme-btn" data-menu-theme="dark" title="Dark theme" aria-label="Dark theme"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span><span class="menu-theme-label">Dark</span></button>
+              <button type="button" class="menu-theme-btn" data-menu-theme="light" title="Light theme" aria-label="Light theme"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span><span class="menu-theme-label">Light</span></button>
+              <a class="menu-theme-btn" href="/read?scope=feeds" title="e-ink Read Mode" aria-label="e-ink Read Mode"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span><span class="menu-theme-label">eInk</span></a>
+            </div>
             <hr class="menu-divider" />
             <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
             <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
@@ -2947,6 +2951,12 @@
       const btnLight = document.getElementById('theme-btn-light');
       if (btnDark) { btnDark.classList.toggle('sett-theme-btn--active', theme === 'dark'); btnDark.setAttribute('aria-pressed', String(theme === 'dark')); }
       if (btnLight) { btnLight.classList.toggle('sett-theme-btn--active', theme === 'light'); btnLight.setAttribute('aria-pressed', String(theme === 'light')); }
+      // Mirror onto the avatar-menu theme row (Dark / Light / eInk).
+      document.querySelectorAll('[data-menu-theme]').forEach((b) => {
+        const on = b.getAttribute('data-menu-theme') === theme;
+        b.classList.toggle('menu-theme-btn--active', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
 
       updateDynamicFavicon();
     }
@@ -2979,6 +2989,8 @@
     applyTheme(window.__lectioTheme || 'dark');
     document.getElementById('theme-btn-dark')?.addEventListener('click', () => applyTheme('dark'));
     document.getElementById('theme-btn-light')?.addEventListener('click', () => applyTheme('light'));
+    document.querySelectorAll('[data-menu-theme]').forEach((b) =>
+      b.addEventListener('click', () => applyTheme(b.getAttribute('data-menu-theme'))));
 
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
