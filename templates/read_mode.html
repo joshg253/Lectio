@@ -68,8 +68,10 @@
         </li>
         {% endfor %}
       </ul>
-      {% else %}
+      {% elif node_selected %}
       <p class="rm-empty">Nothing here.</p>
+      {% else %}
+      <p class="rm-empty">Pick a folder, tag, or Archive on the left to start reading.</p>
       {% endif %}
     </main>
   </div>

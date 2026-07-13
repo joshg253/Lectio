@@ -14362,10 +14362,13 @@ def _build_read_mode_context(
     archived: bool,
     q: str | None,
     items: list[dict],
+    node_selected: bool = True,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
-    All tree counts are the non-archived (inbox) totals."""
+    All tree counts are the non-archived (inbox) totals. When ``node_selected``
+    is false (a bare /read landing) the right pane stays empty — we don't load
+    the whole backlog just to open the app."""
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
     root_id = cast(int, snapshot["root_id"])
@@ -14383,10 +14386,10 @@ def _build_read_mode_context(
         feeds = folder_feed_urls_by_id.get(fid, set())
         return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
 
-    on_all = folder_id is None and not tag and not archived and not q
+    on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
         "label": "All", "glyph": "★",  # ★
-        "href": _read_browse_href(None, None, False, None),
+        "href": _read_browse_href(root_id, None, False, None),
         "count": len(inbox), "active": on_all,
     }]
     for row in raw_folder_rows:
@@ -14422,7 +14425,9 @@ def _build_read_mode_context(
         "active": (not archived and tag == name),
     } for name in sorted(inbox_tag_counts)]
 
-    if archived:
+    if not node_selected:
+        selected_label = "Saved Articles"
+    elif archived:
         selected_label = "Archive"
     elif q:
         selected_label = f'Search: “{q}”'
@@ -14449,6 +14454,7 @@ def _build_read_mode_context(
         },
         "list_items": list_items,
         "selected_label": selected_label,
+        "node_selected": node_selected,
         "search_query": q or "",
         "tags_open": bool(tag),  # expand the tag list when a tag is selected
         "static_asset_version": STATIC_ASSET_VERSION,
@@ -14473,24 +14479,31 @@ def reader_view(
     # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
     archived_view = str(archived) == "1"
     archived_filter = None if q_val else archived_view
+    # A node is "selected" once the user picks All (root folder), a folder, a tag,
+    # Archive, or a search. A bare /read has no node selected: it lands on the
+    # tree only, so we never auto-load the whole (huge) saved backlog.
+    node_selected = folder_id is not None or bool(tag_val) or archived_view or bool(q_val)
 
-    backlog = resolve_reader_backlog(
-        folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
-        tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
-        archived=archived_filter,
-    )
+    def _load_backlog(limit: int) -> list[dict]:
+        return resolve_reader_backlog(
+            folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
+            tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
+            archived=archived_filter, limit=limit,
+        )
 
     # --- BROWSE: no article selected -> 2-pane tree + list -------------------
     if not (entry_id and feed_url):
+        items = _load_backlog(150) if node_selected else []
         context = _build_read_mode_context(
             request, folder_id=folder_id, tag=tag_val, archived=archived_view,
-            q=q_val, items=backlog,
+            q=q_val, items=items, node_selected=node_selected,
         )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
         )
 
     # --- READ: an article is selected -> full-screen paginated reader --------
+    backlog = _load_backlog(250)
     def _href(rec: dict | None) -> str:
         if not rec:
             return ""
