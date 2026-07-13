@@ -320,6 +320,20 @@ feeds must be excluded from the global caches.
   `browser_ua_feeds` set. Per-user, manually resettable in Feed Properties. This is
   escalation on refusal, not IP-block evasion — consistent with the good-citizen
   policy (honest by default; don't spoof hosts happy to serve us).
+- **Refresh backoff & high-fanout pacing** (`FeedRefreshService.update_feeds`) —
+  failing feeds get exponential *per-feed* backoff. A coarse *per-domain* backoff
+  also exists for hosts that go down, but it is **exempt for high-fanout hosts**
+  (>= `_HIGH_FANOUT_DOMAIN_FEEDS` feeds in the batch, e.g. ~700 youtube.com subs):
+  reader doesn't reliably expose an HTTP status on its exceptions (real YouTube
+  404s arrive with status `None`), so a few dead channels would otherwise look
+  like transport failures and lock the whole domain — which starved every
+  subscription for days. Per-feed backoff handles the dead ones; the domain guard
+  is kept only for small hosts, and there it activates only after several
+  consecutive failures, caps at 1h, and clamps stale locks at read so they
+  self-heal. Requests to a high-fanout host are also **paced**
+  (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
+  spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
+  singly) — a polite-client measure, feeds to other hosts interleave at full speed.
 - **Outbound TLS cipher compatibility** — httpx/httpcore's default `SSLContext`
   advertises a narrower cipher list than curl/requests/browsers, and some WAF/CDN
   edges (e.g. Tumblr) drop the connection at the TLS layer before any HTTP response
