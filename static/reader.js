@@ -50,7 +50,17 @@
     render();
   }
 
-  function go(href) { if (href) window.location.assign(href); }
+  function go(href) {
+    // Only follow app-generated same-origin paths; never a javascript:/data:/
+    // cross-origin URL (the hrefs come from DOM attributes).
+    if (!href) return;
+    try {
+      var u = new URL(href, window.location.origin);
+      if (u.origin === window.location.origin) {
+        window.location.assign(u.pathname + u.search);
+      }
+    } catch (e) { /* malformed href — ignore */ }
+  }
 
   function nextPage() {
     if (page < pages - 1) { page++; render(); }

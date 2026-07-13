@@ -14258,6 +14258,12 @@ def build_reader_page(
     # Archive shows a filled box when already archived (tap = un-archive).
     archive_glyph = "&#9635;" if is_archived else "&#9634;"
     archive_title = "Un-archive" if is_archived else "Archive"
+    # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
+    # raw, and it is always allowlist-sanitized upstream (archived capture, live
+    # readability, or stored feed content — all via html_sanitize.sanitize_html),
+    # the same trust model as the existing reader-view responses. CodeQL flags
+    # this as reflective-xss because our BeautifulSoup allowlist sanitizer is not
+    # one of its recognized sanitizers (false positive).
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         f"<title>{esc_title}</title>"
