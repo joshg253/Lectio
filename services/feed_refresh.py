@@ -21,6 +21,10 @@ def _feed_domain(feed_url: str) -> str:
 # sooner than the per-feed backoff cap (~24h). A stuck domain backoff otherwise
 # starves every feed on a high-fanout host (e.g. 692 youtube.com subscriptions).
 _DOMAIN_BACKOFF_MAX_SECONDS = 3600  # 1h: re-probe an unreachable host hourly.
+# Require several consecutive transport failures before a domain is treated as
+# down. One blip must not skip the rest of a high-fanout host's batch — only a
+# host that's genuinely unreachable (repeated connect failures) should back off.
+_DOMAIN_BACKOFF_MIN_FAILURES = 3
 
 
 class FeedRefreshService:
@@ -477,14 +481,23 @@ class FeedRefreshService:
                             # within the hour.
                             _http_status = self._http_status_of(exc)
                             if domain and _http_status is None:
+                                # Count consecutive transport failures for the HOST
+                                # (independent of any single feed's history), and
+                                # only activate the skip-inducing backoff once the
+                                # host looks genuinely down (>= MIN_FAILURES).
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
-                                domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
-                                domain_backoff = min(
-                                    self.compute_failed_feed_backoff_seconds(domain_consecutive),
-                                    _DOMAIN_BACKOFF_MAX_SECONDS,
-                                )
-                                domain_next_retry_new = now_ts + domain_backoff
+                                domain_consecutive = prev_domain_failures + 1
+                                if domain_consecutive >= _DOMAIN_BACKOFF_MIN_FAILURES:
+                                    domain_backoff = min(
+                                        self.compute_failed_feed_backoff_seconds(
+                                            domain_consecutive - _DOMAIN_BACKOFF_MIN_FAILURES + 1
+                                        ),
+                                        _DOMAIN_BACKOFF_MAX_SECONDS,
+                                    )
+                                    domain_next_retry_new = now_ts + domain_backoff
+                                else:
+                                    domain_next_retry_new = None  # track, but don't skip yet
                                 conn.execute(
                                     """
                                     INSERT INTO domain_failure_state (domain, consecutive_failures, next_retry_at, last_failure_at)
@@ -499,6 +512,7 @@ class FeedRefreshService:
                                 domain_state_map[domain] = {
                                     "consecutive_failures": domain_consecutive,
                                     "next_retry_at": domain_next_retry_new,
+                                    "last_failure_at": now_ts,
                                 }
                             elif domain and _http_status is not None:
                                 # Host answered (reachable) → clear any domain backoff.

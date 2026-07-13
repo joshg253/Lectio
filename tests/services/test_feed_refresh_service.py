@@ -405,10 +405,10 @@ def test_http_error_clears_domain_backoff(tmp_path: Path):
     assert domain_row is None  # reachable host → domain backoff cleared, not escalated
 
 
-def test_transport_error_escalates_domain_backoff_capped(tmp_path: Path):
-    """A transport failure (no HTTP response — host unreachable) is what actually
-    escalates domain backoff, and it's capped so the host re-probes within ~1h
-    rather than starving all its feeds for a day."""
+def test_single_transport_error_does_not_activate_domain_skip(tmp_path: Path):
+    """One transport blip must NOT back off the whole host — otherwise a single
+    flaky feed skips the rest of a high-fanout host's batch. It's tracked
+    (consecutive_failures=1) but next_retry stays NULL (no skip)."""
     db_path = tmp_path / "meta.sqlite"
     url = "https://down.example/feed.xml"
     reader = _TransportFailReader({url})
@@ -419,5 +419,22 @@ def test_transport_error_escalates_domain_backoff_capped(tmp_path: Path):
         row = conn.execute(
             "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
         ).fetchone()
-    assert row and row[0] >= 1
-    assert row[1] <= time.time() + 3600 + 5  # capped at ~1h
+    assert row and row[0] == 1
+    assert row[1] is None  # tracked but no active backoff yet
+
+
+def test_repeated_transport_errors_back_off_domain_capped(tmp_path: Path):
+    """A host that's genuinely unreachable (>= MIN_FAILURES consecutive transport
+    failures) backs off, capped so it re-probes within ~1h."""
+    db_path = tmp_path / "meta.sqlite"
+    urls = ["https://down.example/a.xml", "https://down.example/b.xml", "https://down.example/c.xml"]
+    reader = _TransportFailReader(urls)
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(urls)  # 3 consecutive transport failures on down.example
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
+        ).fetchone()
+    assert row and row[0] >= 3
+    assert row[1] is not None and row[1] <= time.time() + 3600 + 5  # active, capped ~1h
