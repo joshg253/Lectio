@@ -33,15 +33,27 @@ Make Lectio usable as a read-it-later app.
   narrowing), and the toolbar Tags submenu slices the backlog by tag within
   the view (user pattern: `#toread` vs `#todo` — "read later" vs "deal with
   later" are different buckets under one star).
-- **Reader-only browsing view** for saved/starred items — a clean, distraction-free
-  reading surface (no triage chrome), keyboard-first navigation through the
-  starred/saved backlog. Should prefer the archived readability copy when the
-  live entry content is a truncated feed summary. **Design e-ink-first**: the
-  real driver is reading the Saved backlog on a Supernote Manta browser
-  (Instapaper is bad there; Readit was evaluated for the same reason) — high
-  contrast, large tap targets, no animations/transitions, paginated (tap
-  left/right) instead of scrolled, minimal JS, self-hosted so no third-party
-  app needed.
+- SHIPPED 2026-07-12: **Read Mode** (`GET /read`) — a standalone, light-themed
+  e-ink reading app for the saved backlog, opened by hijacking the **Saved
+  Articles** sidebar row (see ARCHITECTURE "Read Mode"). 2-pane browse (saved
+  tree = folders + tag buckets + Archive, pinned) → open an item in the
+  paginated reader (CSS columns; tap/swipe/keys, no scroll; `static/reader.{css,js}`)
+  → close back to the 2-pane. New **Archive** state on `saved_entries.archived_at`
+  (keeps the star, the "done" axis instead of read/unread; Archive node + Search
+  reach archived items); the reader header's Archive/Delete(unstar) advance to the
+  next item. Follow-ups (build on demand): excise the now-dormant in-app star-mode
+  tree/JS that the hijack bypasses; archived-aware node counts (tree counts are
+  currently total-saved); mark-read only after the last page; prefetch next
+  article to cut e-ink flashes; optional per-image `grayscale(1)`. A possible
+  env-gated higher-quality extraction backend (Instapaper's paid Instaparser API,
+  evaluated + rejected as third-party/paid) belongs to the "full-content fetch at
+  ingest" item below, not here. Two CodeQL alerts on the Read Mode PR (#144) were
+  dismissed as false positives: `py/reflective-xss` on `build_reader_page`
+  (`article_html` is allowlist-sanitized upstream via `html_sanitize.sanitize_html`
+  — the same trust model as the existing reader-view responses; our BeautifulSoup
+  sanitizer isn't a CodeQL-recognized sanitizer) and `js/xss-through-dom` on
+  `reader.js` `go()` (nav targets are exclusively app-generated same-origin `/read`
+  paths, and `go()` further validates same-origin via `new URL()`).
 - Save Article follow-up ideas (build on demand): an "archive"
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total

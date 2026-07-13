@@ -705,6 +705,62 @@ hidden in Feeds mode when it's the only unfoldered feed) but stays in the
 Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
 its entries.
 
+## Read Mode — e-ink reading app (`GET /read`)
+
+A standalone, distraction-free reading *app* for the saved/starred backlog, built
+e-ink-first (the driver is reading the backlog on a Supernote Manta browser,
+where Instapaper renders badly). The **Saved Articles** sidebar row is hijacked to
+open it — a full navigation, since `_layout_shell.js` now bails on any link whose
+path isn't `/`. It is deliberately **not** the app shell: its own light-themed
+`static/reader.css` + `static/reader.js`, pure black-on-white, large adjustable
+type, no shadows/gradients, and (critically) `transition:none/animation:none`,
+which ghost on e-ink. Being standalone also sidesteps the app's localStorage-only
+theming (a server-rendered page can't read it) and satisfies "auto light theme".
+
+**Two states, one route.** With no `entry_id`, `reader_view` renders the **2-pane
+browse** (`templates/read_mode.html`): a simplified saved tree (folders + manual-tag
+buckets + an **Archive** node pinned at the bottom, each a plain full-navigation
+`<a>`) on the left, and the item list for the selected node on the right. With an
+`entry_id`, it renders the **paginated reader** (`build_reader_page`). Read Mode
+ignores read/unread — it always lists starred items (`star_only=True,
+read_filter='all'`); the browse node scope is `folder_id` / `tag` / `archived` / `q`.
+A bare bookmarked `/read` lands on the browse **All (inbox)**. All tree counts are
+**non-archived** totals (`_read_mode_saved_index`); tag buckets are restricted to
+tags on inbox items with inbox counts (`_inbox_tag_counts`) and collapsed in a
+`<details>` (heavy taggers have dozens). Archiving an item drops it from these
+counts/lists but never strips its tags. Saved-article captures show their source
+domain as the list subtitle (`_read_mode_subtitle`); feed-starred items show the
+feed title.
+
+**Paginated, not scrolled.** `reader.js` lays the article out in screen-width CSS
+columns (`column-width:100vw`, stride = column-width + column-gap = 100vw) inside
+an `overflow:hidden` viewport and turns "pages" by translating the column
+container horizontally. Tap zones (left third = back, right two-thirds = forward),
+**horizontal swipe**, and arrow/page/space keys turn pages; past the first/last
+page it navigates to the prev/next article (`data-prev`/`data-next`, full loads).
+`A−`/`A+` adjusts `--reader-fs` and re-paginates, persisting size in `localStorage`.
+Prev/next follow the **selected node's** list.
+
+**Archive vs Delete (the "done" axis).** Because saved items are usually already
+read, read/unread is meaningless for them; the axis that matters is Archive.
+`saved_entries.archived_at` (migrated via the `ensure_meta_schema` ALTER pattern,
+per-tenant at startup) is a per-saved-item flag that **keeps the star** but drops
+the item from the inbox (`resolve_reader_backlog(archived=…)` filters against
+`get_archived_saved_keys()`; `None` = no filter, used for Search which spans
+everything). The reader header's **Archive** button POSTs `/entries/archive`
+(`set_entry_archived`); **Delete** simply un-saves via the existing
+`POST /entries/saved` (`saved=0`); both are `fetch` calls carrying the page's
+CSRF token, then advance to `data-next`. This **Archive** is *not* the offline
+**starred archive** (`archived_entry` capture DB) — same word, different concept.
+
+**Content resolution** (`resolve_reader_article_html`): archived readability copy
+first (`_resolve_archived_readability_html`, shared with `/entries/readability` —
+offline HTML with `/starred-asset/` URLs, survives dead sources), then a live
+readability extraction, then the stored feed content — all already sanitized, so
+no new sanitization surface. Opening an entry marks it read off the request path
+via `_mark_entry_read_background` (the tenancy-rebinding daemon the entry pane
+also uses).
+
 ## Hard-deleting a single entry (tombstones)
 
 The entry context menu's **Delete post…** (`POST /entries/delete`) hard-removes one garbage entry (spam, corrupted post). reader's public `delete_entry` only covers user-added entries, so feed-provided ones go through the storage-level delete — the same API reader's own `entry_dedupe` plugin uses. A tombstone row in the meta DB (`deleted_entries`, keyed feed_url + entry_id) records the deletion, and the refresh service purges any tombstoned entry a refresh re-ingested (`purge_tombstoned_entries`, runs after every update batch, before enhancement) — otherwise the entry would resurrect on every fetch while still inside the publisher's feed window. Tombstones are kept forever (tiny rows; the guid could reappear any time the publisher republishes).

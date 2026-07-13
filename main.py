@@ -499,7 +499,8 @@ def _static_asset_version() -> str:
         _static = Path(__file__).parent / "static"
         combined = b"".join(
             (_static / name).read_bytes()
-            for name in ("style.css", "themes/dark.css", "media-player.js")
+            for name in ("style.css", "themes/dark.css", "media-player.js",
+                         "reader.css", "reader.js")
         )
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
@@ -3150,6 +3151,13 @@ def ensure_meta_schema() -> None:
             pass
         try:
             conn.execute("ALTER TABLE folders ADD COLUMN cadence_minutes INTEGER DEFAULT NULL")
+        except Exception:
+            pass
+        # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
+        # separate from read/unread and from the star itself. NOT the offline
+        # "starred archive" (archived_entry) — this is a read-later done-state.
+        try:
+            conn.execute("ALTER TABLE saved_entries ADD COLUMN archived_at TIMESTAMP DEFAULT NULL")
         except Exception:
             pass
         conn.execute(
@@ -10316,6 +10324,29 @@ def list_entries_for_feeds(
     return entries
 
 
+def get_archived_saved_keys() -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of saved items the user has Archived in Read Mode
+    (archived_at set). Archived items keep their star but drop out of the Read
+    Mode inbox; they're reached via the Archive node or Search."""
+    with get_meta_connection() as conn:
+        return {
+            (str(row["feed_url"]), str(row["entry_id"]))
+            for row in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
+            )
+        }
+
+
+def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
+    """Set/clear the Read Mode Archive flag on a saved item (no-op if unsaved)."""
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE saved_entries SET archived_at = ? WHERE feed_url = ? AND entry_id = ?",
+            (datetime.now(timezone.utc).isoformat() if archived else None, feed_url, entry_id),
+        )
+        conn.commit()
+
+
 def get_saved_unread_count() -> int:
     """Unread count across all starred/saved entries, for the sidebar's Saved
     Articles badge. Starred sets are small (hundreds), so a per-feed IN query
@@ -12259,36 +12290,13 @@ def entry_pane(
         LOGGER.info("[perf] entry_pane: get_entry_detail=%dms feed=%s", _detail_ms, feed_url)
     if selected_entry and not selected_entry["read"]:
         selected_entry["read"] = True
-        _fu, _eid = feed_url, entry_id
-        _title = str(selected_entry.get("title") or "")
-        _link = str(selected_entry.get("link") or "")
-        _feed_title = str(selected_entry.get("feed_title") or "")
-        # Capture the current user now: the daemon thread below does not inherit
-        # this request's contextvars, so without re-binding it would mark the
-        # entry read in the default (legacy) user's DB and the post would keep
-        # showing as unread for the actual user.
-        _uid = tenancy.current_user_id()
-
-        def _bg_mark_read() -> None:
-            try:
-                with get_reader() as reader:
-                    reader.mark_entry_as_read((_fu, _eid))
-            except Exception:
-                LOGGER.warning("background mark_entry_as_read failed for %s/%s", _fu, _eid, exc_info=True)
-            try:
-                upsert_entry_read_state(_fu, _eid)
-            except Exception:
-                LOGGER.warning("background upsert_entry_read_state failed for %s/%s", _fu, _eid, exc_info=True)
-            try:
-                append_read_history(_fu, _eid, _title, _link, _feed_title)
-            except Exception:
-                LOGGER.warning("background append_read_history failed for %s/%s", _fu, _eid, exc_info=True)
-            with unread_counts_cache_lock:
-                global _unread_counts_generation
-                _unread_counts_generation += 1
-                unread_counts_cache.clear()
-
-        threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
+        _mark_entry_read_background(
+            feed_url,
+            entry_id,
+            str(selected_entry.get("title") or ""),
+            str(selected_entry.get("link") or ""),
+            str(selected_entry.get("feed_title") or ""),
+        )
 
     # Build a tiny feed_url→folder_id map for the entry pane's feed-name link
     # so it lands in the feed's actual containing folder.
@@ -13955,6 +13963,24 @@ def set_entry_thumb_crop_route(
     return JSONResponse({"ok": True, "crop": effective})
 
 
+def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | None) -> str | None:
+    """Return the offline archived readability HTML for a starred entry with its
+    local image assets rewritten to /starred-asset/ URLs, or None when no
+    complete archive exists. Shared by the reader-view route and the e-ink
+    ``/read`` view so both prefer the archived copy over a live re-fetch."""
+    if not (feed_url and entry_id):
+        return None
+    archived_html = starred_archive_service.get_archived_readability_html(feed_url, entry_id)
+    if not archived_html:
+        return None
+    asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
+    if asset_map:
+        archived_html = starred_archive_service.rewrite_html_assets(
+            archived_html, asset_map, STARRED_ASSET_URL_PREFIX
+        )
+    return archived_html
+
+
 @app.get("/entries/readability")
 def entry_readability(
     url: str,
@@ -13964,15 +13990,9 @@ def entry_readability(
     # If this entry is starred and a complete archive exists, serve the
     # archived readability HTML so the view stays available even if the
     # source is gone. Otherwise fall through to the live extractor.
-    if feed_url and entry_id:
-        archived_html = starred_archive_service.get_archived_readability_html(feed_url, entry_id)
-        if archived_html:
-            asset_map = starred_archive_service.get_entry_asset_map(feed_url, entry_id)
-            if asset_map:
-                archived_html = starred_archive_service.rewrite_html_assets(
-                    archived_html, asset_map, STARRED_ASSET_URL_PREFIX
-                )
-            return _wrap_readability_html(archived_html, url)
+    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
+    if archived_html:
+        return _wrap_readability_html(archived_html, url)
     return build_readability_response(url)
 
 
@@ -14009,6 +14029,532 @@ def entry_source(url: str):
 @app.get("/entries/frame-check")
 def entry_frame_check(url: str):
     return JSONResponse(probe_frameability(url))
+
+
+# ---------------------------------------------------------------------------
+# E-ink reader view (Supernote Manta) — standalone, paginated, distraction-free
+#
+# A self-contained reading surface for the saved/starred backlog: its own HTML +
+# static/reader.{css,js} (no app shell), high contrast, no scrolling (tap
+# left/right or arrow keys turn CSS-column "pages"). It follows the Saved view's
+# current filter and prefers the offline archived readability copy over a
+# truncated feed summary. See ARCHITECTURE "E-ink reader view".
+# ---------------------------------------------------------------------------
+
+
+def _mark_entry_read_background(
+    feed_url: str, entry_id: str, title: str, link: str, feed_title: str
+) -> None:
+    """Mark an entry read off the request path. The daemon thread does not
+    inherit the request's tenancy contextvars, so capture the current user now
+    and re-bind it via _run_in_user_context — otherwise the write lands in the
+    default user's DB and the post stays unread for the real user."""
+    _uid = tenancy.current_user_id()
+
+    def _bg_mark_read() -> None:
+        try:
+            with get_reader() as reader:
+                reader.mark_entry_as_read((feed_url, entry_id))
+        except Exception:
+            LOGGER.warning("background mark_entry_as_read failed for %s/%s", feed_url, entry_id, exc_info=True)
+        try:
+            upsert_entry_read_state(feed_url, entry_id)
+        except Exception:
+            LOGGER.warning("background upsert_entry_read_state failed for %s/%s", feed_url, entry_id, exc_info=True)
+        try:
+            append_read_history(feed_url, entry_id, title, link, feed_title)
+        except Exception:
+            LOGGER.warning("background append_read_history failed for %s/%s", feed_url, entry_id, exc_info=True)
+        invalidate_unread_counts_cache()
+
+    threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
+
+
+def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
+    """Return sanitized article HTML for the e-ink reader, preferring the offline
+    archived readability copy, then a live readability extraction of *link*, then
+    the stored feed content. Every source is already sanitized (archive at
+    capture, live via sanitize_readability_html, stored via reader_sanitize at
+    ingest), so the caller embeds the result directly."""
+    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
+    if archived_html:
+        return _strip_bandcamp_track_signature(archived_html)
+    if link:
+        try:
+            _title, article_html = fetch_readability_article(link)
+            if article_html:
+                return article_html
+        except Exception:
+            LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)
+    if feed_url and entry_id:
+        detail = get_entry_detail(feed_url, entry_id)
+        if detail and detail.get("content_html"):
+            return str(detail["content_html"])
+    esc = html.escape(link or "", quote=True)
+    tail = (
+        f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
+        if link else ""
+    )
+    return f"<p>Could not load this article.{tail}</p>"
+
+
+def resolve_reader_backlog(
+    *,
+    folder_id: int | None,
+    list_feed_url: str | None,
+    read_filter: str,
+    star_only: bool,
+    tag: str | None,
+    sort_by: str,
+    sort_dir: str,
+    search_query: str | None,
+    archived: bool | None = None,
+    limit: int = 250,
+) -> list[dict]:
+    """Ordered entry backlog for the reader, mirroring the main list view's
+    feed-set selection so the reader can "follow the Saved view filter": the root
+    folder widens to every reader feed, a specific folder/feed narrows to it, and
+    archive-only saved orphans are merged into the star_only root view (matching
+    the Saved Articles list).
+
+    ``archived`` is the Read Mode axis (independent of read/unread): ``False``
+    hides Archived items (the inbox), ``True`` keeps only Archived items, ``None``
+    applies no archive filter."""
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+    all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+    root_id = cast(int, snapshot["root_id"])
+    folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
+    all_reader_feed_urls = get_all_reader_feed_urls()
+    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
+
+    selected_folder_id = folder_id or root_id
+    if list_feed_url:
+        entry_feed_urls = {list_feed_url}
+    else:
+        entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
+
+    posts = list_entries_for_feeds(
+        entry_feed_urls,
+        limit=limit,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        read_filter=read_filter,
+        star_only=star_only,
+        selected_tag=tag,
+        search_query=search_query,
+    )
+
+    # Parity with the Saved list: surface archive-only orphans (saves whose feed
+    # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    if (
+        star_only
+        and not list_feed_url
+        and not tag
+        and not search_query
+        and selected_folder_id == root_id
+    ):
+        try:
+            posts = merge_orphan_saved_entries(
+                posts,
+                live_feed_urls=all_feed_urls,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+                limit=limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("reader backlog orphan merge failed: %s", exc)
+
+    if archived is not None:
+        archived_keys = get_archived_saved_keys()
+        posts = [
+            p for p in posts
+            if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived
+        ]
+    return posts
+
+
+def _read_scope_params(
+    folder_id: int | None, tag: str | None, archived: bool, q: str | None
+) -> list[tuple[str, str]]:
+    """Read Mode node scope shared by the browse URL and the reader prev/next
+    URLs (folder / tag / Archive / search)."""
+    params: list[tuple[str, str]] = []
+    if folder_id is not None:
+        params.append(("folder_id", str(folder_id)))
+    if tag:
+        params.append(("tag", tag))
+    if archived:
+        params.append(("archived", "1"))
+    if q:
+        params.append(("q", q))
+    return params
+
+
+def _read_browse_href(folder_id: int | None, tag: str | None, archived: bool, q: str | None) -> str:
+    """The 2-pane browse URL for a Read Mode node (no entry selected)."""
+    params = _read_scope_params(folder_id, tag, archived, q)
+    return "/read" + ("?" + urlencode(params) if params else "")
+
+
+def _reader_href(
+    feed_url: str,
+    entry_id: str,
+    *,
+    folder_id: int | None,
+    tag: str | None,
+    archived: bool,
+    q: str | None,
+) -> str:
+    """Build a /read URL that opens *entry* in the reader while carrying the
+    current Read Mode node scope, so prev/next stay within the same list."""
+    params = [("feed_url", feed_url), ("entry_id", entry_id)]
+    params += _read_scope_params(folder_id, tag, archived, q)
+    return "/read?" + urlencode(params)
+
+
+def _reader_empty_response() -> HTMLResponse:
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        "<title>Reader</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
+        "</head><body><div class='reader-empty'>"
+        "<h1>Nothing to read</h1><p>There are no articles in this view.</p>"
+        "<p><a href='/'>Back to Lectio</a></p>"
+        "</div></body></html>"
+    )
+    return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
+
+
+def build_reader_page(
+    *,
+    title: str,
+    article_html: str,
+    source_link: str,
+    prev_href: str,
+    next_href: str,
+    back_href: str,
+    feed_url: str,
+    entry_id: str,
+    is_archived: bool,
+    csrf_token: str,
+) -> HTMLResponse:
+    esc_title = html.escape(title or "(untitled)")
+    esc_src = html.escape(source_link or "", quote=True)
+    esc_back = html.escape(back_href or "/read", quote=True)
+    esc_feed = html.escape(feed_url or "", quote=True)
+    esc_eid = html.escape(entry_id or "", quote=True)
+    esc_csrf = html.escape(csrf_token or "", quote=True)
+    open_original = (
+        f"<a class='reader-ctl' href='{esc_src}' target='_blank' rel='noopener noreferrer'"
+        " title='Open original'>&#8599;</a>"
+        if source_link else ""
+    )
+    # Archive shows a filled box when already archived (tap = un-archive).
+    archive_glyph = "&#9635;" if is_archived else "&#9634;"
+    archive_title = "Un-archive" if is_archived else "Archive"
+    # Prev/next/back navigation targets are passed as an inline JS object rather
+    # than data-* attributes so reader.js never reads them from the DOM (avoids a
+    # CodeQL js/xss-through-dom false positive on location.assign). Values are
+    # server-generated /read paths; JSON-encode + escape "<" against script
+    # breakout.
+    nav_json = json.dumps(
+        {"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}
+    ).replace("<", "\\u003c")
+    # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
+    # raw, and it is always allowlist-sanitized upstream (archived capture, live
+    # readability, or stored feed content — all via html_sanitize.sanitize_html),
+    # the same trust model as the existing reader-view responses. CodeQL flags
+    # this as reflective-xss because our BeautifulSoup allowlist sanitizer is not
+    # one of its recognized sanitizers (false positive).
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        f"<title>{esc_title}</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'>"
+        "<meta name='robots' content='noindex'>"
+        f"<meta name='csrf-token' content='{esc_csrf}'>"
+        f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
+        "</head><body>"
+        "<header class='reader-bar'>"
+        f"<a class='reader-ctl' href='{esc_back}' title='Back to list'>&#10005;</a>"
+        f"<span class='reader-title'>{esc_title}</span>"
+        "<span class='reader-pageinfo' id='reader-pageinfo'>1 / 1</span>"
+        "<button class='reader-ctl' id='reader-fs-minus' type='button' title='Smaller text'>A&#8722;</button>"
+        "<button class='reader-ctl' id='reader-fs-plus' type='button' title='Larger text'>A+</button>"
+        f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
+        f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
+        "<button class='reader-ctl' id='reader-delete-btn' type='button' title='Delete (unsave)'>&#128465;</button>"
+        f"{open_original}"
+        "</header>"
+        "<main id='reader-viewport'>"
+        f"<div id='reader-columns' data-feed='{esc_feed}' data-entry='{esc_eid}'>"
+        f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
+        f"{article_html}</article>"
+        "</div></main>"
+        f"<script>window.__READER_NAV__={nav_json};</script>"
+        f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
+        "</body></html>"
+    )
+    return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
+
+
+def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]:
+    """One pass over saved_entries → (non-archived key set, per-feed non-archived
+    counts, archived total). Read Mode excludes Archived items from the inbox
+    lists AND their counts (but never strips a tag from an archived item)."""
+    with get_meta_connection() as conn:
+        rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
+    inbox: set[tuple[str, str]] = set()
+    feed_counts: dict[str, int] = {}
+    archived_total = 0
+    for r in rows:
+        if r["archived_at"] is None:
+            key = (str(r["feed_url"]), str(r["entry_id"]))
+            inbox.add(key)
+            feed_counts[key[0]] = feed_counts.get(key[0], 0) + 1
+        else:
+            archived_total += 1
+    return inbox, feed_counts, archived_total
+
+
+def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
+    """Manual-tag counts restricted to the non-archived saved set — only tags
+    that actually appear on inbox items, counted over inbox items."""
+    if not inbox:
+        return {}
+    prefix = MANUAL_TAG_KEY_PREFIX
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT key, feed, id FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        rows = []
+    counts: dict[str, int] = {}
+    for key, feed, eid in rows:
+        if (str(feed), str(eid)) in inbox:
+            name = str(key)[len(prefix):].strip().lower()
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _read_mode_subtitle(it: dict) -> str:
+    """List subtitle: the source domain for saved-article captures (whose feed is
+    the synthetic 'Saved Articles'), otherwise the originating feed's title."""
+    if str(it.get("feed_url")) == saved_articles_service.SAVED_FEED_URL:
+        host = urlparse(str(it.get("link") or "")).netloc
+        return host[4:] if host.startswith("www.") else host
+    return str(it.get("feed_title") or "")
+
+
+def _build_read_mode_context(
+    request: Request,
+    *,
+    folder_id: int | None,
+    tag: str | None,
+    archived: bool,
+    q: str | None,
+    items: list[dict],
+    node_selected: bool = True,
+) -> dict:
+    """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
+    + tag buckets + Archive, pinned) and the item list for the selected node.
+    All tree counts are the non-archived (inbox) totals. When ``node_selected``
+    is false (a bare /read landing) the right pane stays empty — we don't load
+    the whole backlog just to open the app."""
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+    root_id = cast(int, snapshot["root_id"])
+    all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+    raw_folder_rows = cast("list[dict]", snapshot["raw_folder_rows"])
+    all_reader_feed_urls = get_all_reader_feed_urls()
+
+    folder_feed_urls_by_id = dict(cast("dict[int, set[str]]", snapshot["folder_feed_urls_by_id"]))
+    folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
+    folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
+
+    inbox, feed_inbox_counts, archived_count = _read_mode_saved_index()
+
+    def _folder_inbox_count(fid: int) -> int:
+        feeds = folder_feed_urls_by_id.get(fid, set())
+        return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
+
+    on_all = folder_id == root_id and not tag and not archived and not q
+    folder_nodes: list[dict] = [{
+        "label": "All", "glyph": "★",  # ★
+        "href": _read_browse_href(root_id, None, False, None),
+        "count": len(inbox), "active": on_all,
+    }]
+    for row in raw_folder_rows:
+        fid = int(row["id"])
+        if fid == root_id:
+            continue
+        c = _folder_inbox_count(fid)
+        if not c:
+            continue
+        folder_nodes.append({
+            "label": str(row["name"]), "glyph": "▸",  # ▸
+            "href": _read_browse_href(fid, None, False, None),
+            "count": c,
+            "active": (not archived and not tag and folder_id == fid),
+        })
+    uncat = _folder_inbox_count(UNCATEGORIZED_FOLDER_ID)
+    if uncat:
+        folder_nodes.append({
+            "label": "Uncategorized", "glyph": "▸",  # ▸
+            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None),
+            "count": uncat,
+            "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
+        })
+
+    # Manual-tag buckets restricted to the inbox: only tags on non-archived saved
+    # items, counted over them. Tucked in a collapsed <details> (heavy taggers
+    # have dozens); clicking narrows the inbox to that tag.
+    inbox_tag_counts = _inbox_tag_counts(inbox)
+    tag_nodes = [{
+        "label": "#" + name, "glyph": "",
+        "href": _read_browse_href(None, name, False, None),
+        "count": inbox_tag_counts[name],
+        "active": (not archived and tag == name),
+    } for name in sorted(inbox_tag_counts)]
+
+    if not node_selected:
+        selected_label = "Saved Articles"
+    elif archived:
+        selected_label = "Archive"
+    elif q:
+        selected_label = f'Search: “{q}”'
+    elif tag:
+        selected_label = "#" + tag
+    else:
+        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
+
+    list_items = [{
+        "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "subtitle": _read_mode_subtitle(it),
+        "read": bool(it.get("read", False)),
+        "href": _reader_href(str(it["feed_url"]), str(it["id"]),
+                             folder_id=folder_id, tag=tag, archived=archived, q=q),
+    } for it in items]
+
+    return {
+        "folder_nodes": folder_nodes,
+        "tag_nodes": tag_nodes,
+        "archive_node": {
+            "label": "Archive", "glyph": "▤",  # ▤
+            "href": _read_browse_href(None, None, True, None),
+            "count": archived_count, "active": archived,
+        },
+        "list_items": list_items,
+        "selected_label": selected_label,
+        "node_selected": node_selected,
+        "search_query": q or "",
+        "tags_open": bool(tag),  # expand the tag list when a tag is selected
+        "static_asset_version": STATIC_ASSET_VERSION,
+    }
+
+
+@app.get("/read", response_class=HTMLResponse)
+def reader_view(
+    request: Request,
+    feed_url: str | None = Query(default=None),
+    entry_id: str | None = Query(default=None),
+    folder_id: int | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    archived: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+):
+    """Read Mode. No entry selected -> the 2-pane browse (saved tree + item
+    list). An entry selected -> the full-screen paginated reader. Read Mode
+    ignores read/unread; the Archive flag is the done-axis."""
+    tag_val = normalize_tag_value(tag)
+    q_val = normalize_search_query(q)
+    # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
+    archived_view = str(archived) == "1"
+    archived_filter = None if q_val else archived_view
+    # A node is "selected" once the user picks All (root folder), a folder, a tag,
+    # Archive, or a search. A bare /read has no node selected: it lands on the
+    # tree only, so we never auto-load the whole (huge) saved backlog.
+    node_selected = folder_id is not None or bool(tag_val) or archived_view or bool(q_val)
+
+    def _load_backlog(limit: int) -> list[dict]:
+        return resolve_reader_backlog(
+            folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
+            tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
+            archived=archived_filter, limit=limit,
+        )
+
+    # --- BROWSE: no article selected -> 2-pane tree + list -------------------
+    if not (entry_id and feed_url):
+        items = _load_backlog(150) if node_selected else []
+        context = _build_read_mode_context(
+            request, folder_id=folder_id, tag=tag_val, archived=archived_view,
+            q=q_val, items=items, node_selected=node_selected,
+        )
+        return templates.TemplateResponse(
+            request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
+        )
+
+    # --- READ: an article is selected -> full-screen paginated reader --------
+    backlog = _load_backlog(250)
+    def _href(rec: dict | None) -> str:
+        if not rec:
+            return ""
+        return _reader_href(
+            rec["feed_url"], rec["id"],
+            folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val,
+        )
+
+    current: dict | None = None
+    prev_rec: dict | None = None
+    next_rec: dict | None = None
+    for i, rec in enumerate(backlog):
+        if rec["feed_url"] == feed_url and rec["id"] == entry_id:
+            current = rec
+            prev_rec = backlog[i - 1] if i > 0 else None
+            next_rec = backlog[i + 1] if i + 1 < len(backlog) else None
+            break
+    if current is None:
+        # Not in the current node's list (just archived/deleted, or a stale
+        # link): still render it; "next" points at the head of what remains.
+        detail = get_entry_detail(feed_url, entry_id)
+        if detail is None and not backlog:
+            return _reader_empty_response()
+        current = detail or {"feed_url": feed_url, "id": entry_id, "title": feed_url, "link": ""}
+        next_rec = backlog[0] if backlog else None
+
+    cur_feed = str(current["feed_url"])
+    cur_id = str(current["id"])
+    cur_title = str(current.get("title") or current.get("link") or "(untitled)")
+    cur_link = str(current.get("link") or "")
+
+    if not current.get("read", False):
+        _mark_entry_read_background(
+            cur_feed, cur_id, cur_title, cur_link, str(current.get("feed_title") or "")
+        )
+
+    article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
+    is_archived = (cur_feed, cur_id) in get_archived_saved_keys()
+
+    return build_reader_page(
+        title=cur_title,
+        article_html=article_html,
+        source_link=cur_link,
+        prev_href=_href(prev_rec),
+        next_href=_href(next_rec),
+        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val),
+        feed_url=cur_feed,
+        entry_id=cur_id,
+        is_archived=is_archived,
+        csrf_token=_csrf_token_for(request),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -20658,6 +21204,19 @@ def toggle_entry_saved(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
         status_code=303,
     )
+
+
+@app.post("/entries/archive")
+def toggle_entry_archived(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+    archived: int = Form(...),
+):
+    """Read Mode: Archive / un-Archive a saved item. Keeps the star; only flips
+    saved_entries.archived_at so the item leaves (or rejoins) the inbox."""
+    set_entry_archived(feed_url, entry_id, bool(archived))
+    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "archived": bool(archived)})
 
 
 # --- Save Article (read-later capture of arbitrary URLs) ---

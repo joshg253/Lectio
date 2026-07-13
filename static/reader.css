@@ -1,0 +1,291 @@
+/* Lectio e-ink reader view — high-contrast, paginated, motion-free.
+ *
+ * This is a STANDALONE page (not the app shell): it deliberately ships its own
+ * minimal styles instead of style.css/themes so it renders fast and predictably
+ * on a slow e-ink browser (e.g. Supernote Manta). Pure black on white, large
+ * type, big tap targets, and — critically — no transitions/animations, which
+ * ghost badly on e-ink. Content is paginated into screen-width CSS columns
+ * (see reader.js); there is no vertical scrolling. */
+
+:root {
+  --reader-fs: 1.2rem;   /* base body size; adjusted by A-/A+ (persisted) */
+  --reader-bar-h: 48px;
+  --reader-pad: 26px;
+}
+
+* { box-sizing: border-box; }
+
+/* Kill all motion — e-ink cannot animate cleanly. */
+* {
+  transition: none !important;
+  animation: none !important;
+  scroll-behavior: auto !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #fff;
+  color: #000;
+  overflow: hidden;
+}
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* --- Top bar ------------------------------------------------------------- */
+.reader-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--reader-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: #fff;
+  border-bottom: 2px solid #000;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  font-size: 15px;
+  z-index: 10;
+}
+
+.reader-bar .reader-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reader-bar .reader-pageinfo {
+  flex: 0 0 auto;
+  min-width: 54px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-ctl {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 34px;
+  padding: 0 10px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: 700 16px/1 -apple-system, "Segoe UI", Arial, sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* --- Paginated article --------------------------------------------------- */
+#reader-viewport {
+  position: fixed;
+  top: var(--reader-bar-h);
+  left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+}
+
+/* One screen-width column per "page"; overflow columns extend to the right and
+ * are revealed by translateX (reader.js). Column stride = column-width +
+ * column-gap = (100vw - 2*pad) + 2*pad = 100vw, so each page shifts by 100vw
+ * with a consistent `--reader-pad` gutter on both sides. */
+#reader-columns {
+  height: 100%;
+  padding: 18px var(--reader-pad);
+  column-width: calc(100vw - (2 * var(--reader-pad)));
+  column-gap: calc(2 * var(--reader-pad));
+  column-fill: auto;
+  transform: translateX(0);
+  font-size: var(--reader-fs);
+  line-height: 1.62;
+}
+
+/* Force high contrast; hue is meaningless on grayscale e-ink. */
+#reader-columns,
+#reader-columns * {
+  color: #000 !important;
+  background: transparent !important;
+}
+
+#reader-columns a { text-decoration: underline; }
+
+.reader-headline {
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.22;
+  margin: 0 0 .6em;
+}
+
+#reader-columns h1,
+#reader-columns h2,
+#reader-columns h3 { line-height: 1.25; }
+
+#reader-columns p { margin: 0 0 .9em; }
+
+#reader-columns img,
+#reader-columns svg,
+#reader-columns video,
+#reader-columns iframe {
+  max-width: 100%;
+  max-height: 86vh;
+  height: auto;
+  break-inside: avoid;
+}
+
+#reader-columns pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#reader-columns table { max-width: 100%; }
+
+#reader-columns blockquote {
+  margin: 0 0 .9em;
+  padding-left: 14px;
+  border-left: 3px solid #000;
+}
+
+/* --- Empty state --------------------------------------------------------- */
+.reader-empty {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+}
+.reader-empty h1 { margin: 0; font-size: 1.4rem; }
+.reader-empty a { color: #000; }
+
+/* --- Read Mode: 2-pane browse (saved tree + item list) ------------------- */
+body.rm-body {
+  overflow: hidden;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+}
+.rm-layout {
+  position: fixed;
+  inset: 0;
+  display: flex;
+}
+
+/* Left: simplified saved tree */
+.rm-tree {
+  flex: 0 0 clamp(220px, 30%, 340px);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-right: 2px solid #000;
+  background: #fff;
+}
+.rm-exit {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 2px solid #000;
+  color: #000;
+  font-weight: 700;
+  text-decoration: none;
+}
+.rm-tree-scroll { flex: 1 1 auto; overflow-y: auto; }
+.rm-tree-section { padding: 6px 0; }
+.rm-tree-tags { border-top: 1px solid #000; padding: 0; }
+.rm-tags-summary { cursor: pointer; list-style: none; font-weight: 700; }
+.rm-tags-summary::-webkit-details-marker { display: none; }
+.rm-tags-summary::after { content: "▸"; margin-left: auto; }
+.rm-tree-tags[open] .rm-tags-summary::after { content: "▾"; }
+.rm-tag-node { padding-left: 30px; min-height: 40px; }
+.rm-tree-pinned { flex: 0 0 auto; border-top: 2px solid #000; }
+
+.rm-node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 16px;
+  color: #000;
+  text-decoration: none;
+  font-size: 1.05rem;
+}
+.rm-node.active { background: #000; color: #fff; }
+.rm-glyph { flex: 0 0 auto; width: 1.1em; text-align: center; }
+.rm-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rm-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* Right: item list */
+.rm-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: #fff;
+}
+.rm-list-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 2px solid #000;
+}
+.rm-list-title { font-weight: 700; font-size: 1.1rem; flex: 0 0 auto; }
+.rm-search { flex: 1 1 auto; }
+.rm-search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: inherit;
+}
+.rm-items { flex: 1 1 auto; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
+.rm-item { border-bottom: 1px solid #000; }
+.rm-item-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 16px;
+  color: #000;
+  text-decoration: none;
+}
+.rm-item-title { font-size: 1.1rem; line-height: 1.3; font-weight: 600; }
+.rm-item-feed { font-size: 0.85rem; opacity: 0.7; }
+.rm-item.rm-read .rm-item-title { font-weight: 400; opacity: 0.6; }
+.rm-empty { padding: 24px 16px; opacity: 0.7; }
+
+/* Narrow (e-ink portrait / phone): stack, tree first. */
+@media (max-width: 620px) {
+  .rm-layout { flex-direction: column; }
+  .rm-tree {
+    flex: 0 0 auto;
+    max-height: 45%;
+    border-right: 0;
+    border-bottom: 2px solid #000;
+  }
+}
