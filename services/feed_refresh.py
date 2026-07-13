@@ -17,6 +17,12 @@ def _feed_domain(feed_url: str) -> str:
         return ""
 
 
+# Domain-level backoff tracks host *reachability* and must re-probe often — much
+# sooner than the per-feed backoff cap (~24h). A stuck domain backoff otherwise
+# starves every feed on a high-fanout host (e.g. 692 youtube.com subscriptions).
+_DOMAIN_BACKOFF_MAX_SECONDS = 3600  # 1h: re-probe an unreachable host hourly.
+
+
 class FeedRefreshService:
     """Encapsulates feed refresh orchestration and failure backoff state."""
 
@@ -217,13 +223,14 @@ class FeedRefreshService:
             if domains:
                 domain_placeholders = ",".join("?" for _ in domains)
                 domain_rows = conn.execute(
-                    f"SELECT domain, consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
+                    f"SELECT domain, consecutive_failures, next_retry_at, last_failure_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
                     domains,
                 ).fetchall()
                 for row in domain_rows:
                     domain_state_map[str(row["domain"])] = {
                         "consecutive_failures": int(row["consecutive_failures"] or 0),
                         "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
+                        "last_failure_at": float(row["last_failure_at"]) if row["last_failure_at"] is not None else None,
                     }
         # Read transaction committed; meta DB lock released before any HTTP fetches.
 
@@ -237,6 +244,15 @@ class FeedRefreshService:
                     # Skip if either the feed-level or domain-level backoff is active.
                     feed_next_retry = feed_state.get("next_retry_at")
                     domain_next_retry = domain_state.get("next_retry_at")
+                    # Clamp domain backoff at read time so an over-long / stuck one
+                    # (e.g. a pre-fix ~24h youtube.com lock) re-probes within the cap
+                    # of when it was SET, instead of starving every feed on the host
+                    # for a day. Clamp relative to last_failure_at (not now) so it
+                    # actually expires rather than perpetually re-arming.
+                    if domain_next_retry is not None:
+                        _dom_set_at = domain_state.get("last_failure_at")
+                        if _dom_set_at is not None:
+                            domain_next_retry = min(domain_next_retry, _dom_set_at + _DOMAIN_BACKOFF_MAX_SECONDS)
 
                     # Also respect reader's built-in update_after, which captures
                     # Retry-After from 429/503 responses and Cache-Control max-age.
@@ -450,19 +466,24 @@ class FeedRefreshService:
                                 "next_retry_at": next_retry,
                             }
 
-                            # Update domain-level backoff: use the max consecutive_failures
-                            # seen from any feed on this domain so far in this cycle.
-                            # Permanent per-feed statuses are excluded: a 404/410
-                            # says nothing about domain health, and one dead feed
-                            # retried first after each backoff expiry re-locks every
-                            # feed on the domain (692 youtube.com feeds went dark
-                            # for 4 days behind two dead channels' 404s).
+                            # Domain-level backoff tracks host REACHABILITY only.
+                            # Any HTTP response — even 404/429/5xx — proves the host
+                            # answered, so it CLEARS the domain backoff: one host's
+                            # per-feed errors must never starve its other feeds (692
+                            # youtube.com subscriptions went dark for days behind a
+                            # few dead channels + a stuck backoff). Only a transport
+                            # failure (DNS/connect/timeout — no HTTP status) escalates
+                            # it, and even then it's capped so the host re-probes
+                            # within the hour.
                             _http_status = self._http_status_of(exc)
-                            if domain and _http_status not in (404, 410, 451):
+                            if domain and _http_status is None:
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
                                 domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
-                                domain_backoff = self.compute_failed_feed_backoff_seconds(domain_consecutive)
+                                domain_backoff = min(
+                                    self.compute_failed_feed_backoff_seconds(domain_consecutive),
+                                    _DOMAIN_BACKOFF_MAX_SECONDS,
+                                )
                                 domain_next_retry_new = now_ts + domain_backoff
                                 conn.execute(
                                     """
@@ -479,6 +500,13 @@ class FeedRefreshService:
                                     "consecutive_failures": domain_consecutive,
                                     "next_retry_at": domain_next_retry_new,
                                 }
+                            elif domain and _http_status is not None:
+                                # Host answered (reachable) → clear any domain backoff.
+                                conn.execute(
+                                    "DELETE FROM domain_failure_state WHERE domain = ?",
+                                    (domain,),
+                                )
+                                domain_state_map.pop(domain, None)
                             self._record_fetch_history(
                                 conn, feed_url, "error",
                                 http_status=self._http_status_of(exc),

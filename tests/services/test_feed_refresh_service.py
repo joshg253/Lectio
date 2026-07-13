@@ -366,13 +366,58 @@ def test_permanent_404_does_not_poison_domain_backoff(tmp_path: Path):
     assert domain_row is None             # domain untouched
 
 
-def test_transient_failure_still_counts_toward_domain(tmp_path: Path):
+class _TransportFailReader(_FakeReader):
+    """Raises a transport-level error (no http_info) — the host is unreachable."""
+    def __init__(self, fail_urls):
+        super().__init__()
+        self.fail_urls = set(fail_urls)
+
+    def update_feed(self, feed_url: str):
+        self.updated.append(feed_url)
+        if feed_url in self.fail_urls:
+            raise RuntimeError("connection refused")
+
+    def get_feed(self, feed_url: str, _default=None):
+        class _F:
+            update_after = None
+            last_updated = 1.0
+        return _F()
+
+
+def test_http_error_clears_domain_backoff(tmp_path: Path):
+    """An HTTP response — even a 503 — proves the host is reachable, so it must
+    NOT escalate domain backoff and must clear any existing (stuck) one. This is
+    what unsticks a high-fanout host like youtube.com whose 692 feeds were dark
+    behind a domain lock that could never clear while every feed was skipped."""
     db_path = tmp_path / "meta.sqlite"
-    flaky = "https://www.youtube.com/feeds/videos.xml?channel_id=FLAKY"
-    reader = _StatusFailReader({flaky: 503})
+    url = "https://www.youtube.com/feeds/videos.xml?channel_id=FLAKY"
+    reader = _StatusFailReader({url: 503})
+    service = _build_service(db_path, reader, [], [])
+    with _make_conn(db_path) as conn:  # pre-existing, already-expired domain lock
+        conn.execute(
+            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at) VALUES (?, ?, ?)",
+            ("www.youtube.com", 9, time.time() - 10),
+        )
+
+    service.update_feeds([url])
+    with _make_conn(db_path) as conn:
+        domain_row = conn.execute("SELECT * FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
+    assert domain_row is None  # reachable host → domain backoff cleared, not escalated
+
+
+def test_transport_error_escalates_domain_backoff_capped(tmp_path: Path):
+    """A transport failure (no HTTP response — host unreachable) is what actually
+    escalates domain backoff, and it's capped so the host re-probes within ~1h
+    rather than starving all its feeds for a day."""
+    db_path = tmp_path / "meta.sqlite"
+    url = "https://down.example/feed.xml"
+    reader = _TransportFailReader({url})
     service = _build_service(db_path, reader, [], [])
 
-    service.update_feeds([flaky])
+    service.update_feeds([url])
     with _make_conn(db_path) as conn:
-        domain_row = conn.execute("SELECT consecutive_failures FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
-    assert domain_row and domain_row[0] >= 1
+        row = conn.execute(
+            "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
+        ).fetchone()
+    assert row and row[0] >= 1
+    assert row[1] <= time.time() + 3600 + 5  # capped at ~1h
