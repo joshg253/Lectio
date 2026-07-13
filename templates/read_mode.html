@@ -9,8 +9,8 @@
 </head>
 <body class="rm-body">
   <div class="rm-layout">
-    <nav class="rm-tree" aria-label="Saved articles">
-      <a class="rm-exit" href="/" title="Back to Lectio">&#8249; Lectio</a>
+    <nav class="rm-tree" aria-label="Read Mode">
+      <a class="rm-exit" href="{{ exit_href|default('/') }}" title="Back to Lectio">&#8249; Lectio</a>
 
       <div class="rm-tree-scroll">
         <div class="rm-tree-section">
@@ -39,6 +39,7 @@
         {% endif %}
       </div>
 
+      {% if archive_node %}
       <div class="rm-tree-pinned">
         <a class="rm-node{% if archive_node.active %} active{% endif %}" href="{{ archive_node.href }}">
           <span class="rm-glyph" aria-hidden="true">{{ archive_node.glyph }}</span>
@@ -46,14 +47,17 @@
           {% if archive_node.count %}<span class="rm-count">{{ archive_node.count }}</span>{% endif %}
         </a>
       </div>
+      {% endif %}
     </nav>
 
     <main class="rm-list">
       <header class="rm-list-header">
         <span class="rm-list-title">{{ selected_label }}</span>
         <form class="rm-search" method="get" action="/read" role="search">
+          {% if scope and scope != 'saved' %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
           <input type="search" name="q" value="{{ search_query }}"
-                 placeholder="Search saved…" aria-label="Search saved articles">
+                 placeholder="{% if scope == 'feeds' %}Search feeds…{% else %}Search saved…{% endif %}"
+                 aria-label="Search articles">
         </form>
       </header>
 
