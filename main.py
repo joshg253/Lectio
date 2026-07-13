@@ -14070,26 +14070,49 @@ def _mark_entry_read_background(
     threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
 
 
+def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body: str) -> str:
+    """Prepend the entry's cached lead/hero image to the reader body when it isn't
+    already there. Readability extraction usually strips the opening image (Lectio
+    tracks it separately as the lead image), so without this the first image is
+    missing in Read Mode — the normal reader view re-adds it client-side."""
+    if not (feed_url and entry_id):
+        return body
+    try:
+        lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
+    except Exception:
+        lead = None
+    if not lead or lead in body or html.escape(lead, quote=True) in body:
+        return body
+    lead_html = (
+        f'<p class="reader-lead"><img src="{html.escape(lead, quote=True)}"'
+        ' alt="" loading="lazy"></p>'
+    )
+    # Route through the same hotlink/no-referrer handling as article images.
+    lead_html = add_no_referrer_to_images(proxy_hotlink_images(lead_html))
+    return lead_html + body
+
+
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
     """Return sanitized article HTML for the e-ink reader, preferring the offline
     archived readability copy, then a live readability extraction of *link*, then
     the stored feed content. Every source is already sanitized (archive at
     capture, live via sanitize_readability_html, stored via reader_sanitize at
-    ingest), so the caller embeds the result directly."""
+    ingest), so the caller embeds the result directly. The entry's lead image is
+    prepended (readability strips it; Lectio tracks it separately)."""
     archived_html = _resolve_archived_readability_html(feed_url, entry_id)
     if archived_html:
-        return _strip_bandcamp_track_signature(archived_html)
+        return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
             if article_html:
-                return article_html
+                return _prepend_reader_lead_image(feed_url, entry_id, article_html)
         except Exception:
             LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)
     if feed_url and entry_id:
         detail = get_entry_detail(feed_url, entry_id)
         if detail and detail.get("content_html"):
-            return str(detail["content_html"])
+            return _prepend_reader_lead_image(feed_url, entry_id, str(detail["content_html"]))
     esc = html.escape(link or "", quote=True)
     tail = (
         f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
