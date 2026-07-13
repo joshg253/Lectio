@@ -14390,6 +14390,15 @@ def _read_mode_subtitle(it: dict) -> str:
     return str(it.get("feed_title") or "")
 
 
+def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
+    """The Saved / Feeds switcher shown at the top of the Read Mode tree so you
+    can flip between the two scopes without leaving Read Mode."""
+    return [
+        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
+        {"label": "Feeds", "glyph": "☰", "href": "/read?scope=feeds", "active": current_scope == "feeds"},
+    ]
+
+
 def _build_feeds_mode_context(
     request: Request,
     *,
@@ -14409,9 +14418,9 @@ def _build_feeds_mode_context(
     unread_by_feed = get_unread_counts_by_feed()
     unread_by_folder = get_unread_counts_by_folder(raw_folder_rows, unread_by_feed, direct)
 
-    on_all = folder_id in (None, root_id) and not q
+    on_all = folder_id == root_id and not q
     folder_nodes: list[dict] = [{
-        "label": "All Feeds", "glyph": "☰",
+        "label": "All", "glyph": "▸",
         "href": _read_browse_href(root_id, None, False, None, "feeds"),
         "count": unread_by_folder.get(root_id, 0), "active": on_all,
     }]
@@ -14429,10 +14438,12 @@ def _build_feeds_mode_context(
             "active": (folder_id == fid),
         })
 
-    if q:
+    if not node_selected:
+        selected_label = "Feeds"
+    elif q:
         selected_label = f'Search: “{q}”'
     else:
-        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All Feeds")
+        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
@@ -14443,6 +14454,7 @@ def _build_feeds_mode_context(
     } for it in items]
 
     return {
+        "scope_tabs": _read_mode_scope_tabs("feeds"),
         "folder_nodes": folder_nodes,
         "tag_nodes": [],
         "archive_node": None,
@@ -14491,7 +14503,7 @@ def _build_read_mode_context(
 
     on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "★",  # ★
+        "label": "All", "glyph": "▸",
         "href": _read_browse_href(root_id, None, False, None),
         "count": len(inbox), "active": on_all,
     }]
@@ -14529,7 +14541,7 @@ def _build_read_mode_context(
     } for name in sorted(inbox_tag_counts)]
 
     if not node_selected:
-        selected_label = "Saved Articles"
+        selected_label = "Saved"
     elif archived:
         selected_label = "Archive"
     elif q:
@@ -14548,6 +14560,7 @@ def _build_read_mode_context(
     } for it in items]
 
     return {
+        "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
         "tag_nodes": tag_nodes,
         "archive_node": {

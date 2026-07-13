@@ -12,6 +12,17 @@
     <nav class="rm-tree" aria-label="Read Mode">
       <a class="rm-exit" href="{{ exit_href|default('/') }}" title="Back to Lectio">&#8249; Lectio</a>
 
+      {% if scope_tabs %}
+      <div class="rm-scope-tabs">
+        {% for t in scope_tabs %}
+        <a class="rm-node rm-scope-tab{% if t.active %} active{% endif %}" href="{{ t.href }}">
+          <span class="rm-glyph" aria-hidden="true">{{ t.glyph }}</span>
+          <span class="rm-label">{{ t.label }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
       <div class="rm-tree-scroll">
         <div class="rm-tree-section">
           {% for n in folder_nodes %}

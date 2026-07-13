@@ -191,7 +191,7 @@
               title="Open Read Mode"
             >
               <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
-              <span class="name">Saved Articles</span>
+              <span class="name">Saved</span>
               {% if saved_unread_count %}<span class="count">{{ saved_unread_count }}</span>{% endif %}
             </a>
           </div>
@@ -246,7 +246,8 @@
               data-folder-name="{{ root_folder_row.name }}"
               data-folder-depth="{{ root_folder_row.depth }}"
             >
-              <span class="name">{{ root_folder_row.name }}</span>
+              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">menu</span>
+              <span class="name">Feeds</span>
               {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
             </a>
           </div>
