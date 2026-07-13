@@ -348,34 +348,19 @@ class _StatusFailReader(_FakeReader):
         return _F()
 
 
-def test_permanent_404_does_not_poison_domain_backoff(tmp_path: Path):
-    """A dead feed's 404 is a per-feed condition: it must earn feed-level
-    backoff but never lock the whole domain (two dead channels' 404s kept all
-    692 youtube.com feeds dark for days — each daily retry hit a dead feed
-    first and re-locked the domain)."""
-    db_path = tmp_path / "meta.sqlite"
-    dead = "https://www.youtube.com/feeds/videos.xml?channel_id=DEAD"
-    reader = _StatusFailReader({dead: 404})
-    service = _build_service(db_path, reader, [], [])
-
-    service.update_feeds([dead])
-    with _make_conn(db_path) as conn:
-        feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (dead,)).fetchone()
-        domain_row = conn.execute("SELECT * FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
-    assert feed_row and feed_row[0] == 1  # feed-level backoff applies
-    assert domain_row is None             # domain untouched
-
-
-class _TransportFailReader(_FakeReader):
-    """Raises a transport-level error (no http_info) — the host is unreachable."""
-    def __init__(self, fail_urls):
+class _FailReader(_FakeReader):
+    """Fails the given URLs. If a url maps to an int it raises with that HTTP
+    status (via http_info); otherwise it raises a transport-style error with no
+    http_info (mirroring reader, whose 404s often arrive with status=None)."""
+    def __init__(self, fails):
         super().__init__()
-        self.fail_urls = set(fail_urls)
+        self.fails = dict(fails) if isinstance(fails, dict) else {u: None for u in fails}
 
     def update_feed(self, feed_url: str):
         self.updated.append(feed_url)
-        if feed_url in self.fail_urls:
-            raise RuntimeError("connection refused")
+        if feed_url in self.fails:
+            status = self.fails[feed_url]
+            raise _NotFoundError(status) if status else RuntimeError("connection refused")
 
     def get_feed(self, feed_url: str, _default=None):
         class _F:
@@ -384,34 +369,52 @@ class _TransportFailReader(_FakeReader):
         return _F()
 
 
-def test_http_error_clears_domain_backoff(tmp_path: Path):
-    """An HTTP response — even a 503 — proves the host is reachable, so it must
-    NOT escalate domain backoff and must clear any existing (stuck) one. This is
-    what unsticks a high-fanout host like youtube.com whose 692 feeds were dark
-    behind a domain lock that could never clear while every feed was skipped."""
-    db_path = tmp_path / "meta.sqlite"
-    url = "https://www.youtube.com/feeds/videos.xml?channel_id=FLAKY"
-    reader = _StatusFailReader({url: 503})
-    service = _build_service(db_path, reader, [], [])
-    with _make_conn(db_path) as conn:  # pre-existing, already-expired domain lock
-        conn.execute(
-            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at) VALUES (?, ?, ?)",
-            ("www.youtube.com", 9, time.time() - 10),
-        )
+def _yt(n: int) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id=C{n}"
 
-    service.update_feeds([url])
+
+def test_high_fanout_domain_never_backs_off(tmp_path: Path):
+    """A host with many feeds in the batch (youtube.com) is exempt from
+    domain-level backoff: a few dead channels must never create a lock that
+    stalls the other subscriptions. Per-feed backoff still applies to the dead
+    ones."""
+    db_path = tmp_path / "meta.sqlite"
+    feeds = [_yt(i) for i in range(10)]
+    dead = {feeds[0]: 404, feeds[1]: 404, feeds[2]: 404}  # 3 dead channels
+    reader = _FailReader(dead)
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(feeds)
+    assert set(reader.updated) == set(feeds)  # every feed attempted, none skipped
     with _make_conn(db_path) as conn:
         domain_row = conn.execute("SELECT * FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
-    assert domain_row is None  # reachable host → domain backoff cleared, not escalated
+        feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (feeds[0],)).fetchone()
+    assert domain_row is None          # high-fanout host never domain-backed-off
+    assert feed_row and feed_row[0] == 1  # dead channel still earns per-feed backoff
 
 
-def test_single_transport_error_does_not_activate_domain_skip(tmp_path: Path):
-    """One transport blip must NOT back off the whole host — otherwise a single
-    flaky feed skips the rest of a high-fanout host's batch. It's tracked
-    (consecutive_failures=1) but next_retry stays NULL (no skip)."""
+def test_high_fanout_domain_ignores_stale_backoff(tmp_path: Path):
+    """A pre-existing (stuck) domain backoff must not skip a high-fanout host's
+    feeds — that was the original starvation."""
+    db_path = tmp_path / "meta.sqlite"
+    feeds = [_yt(i) for i in range(10)]
+    reader = _FailReader({})  # all succeed
+    service = _build_service(db_path, reader, [], [])
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at, last_failure_at) VALUES (?, ?, ?, ?)",
+            ("www.youtube.com", 17, time.time() + 80000, time.time()),
+        )
+
+    service.update_feeds(feeds)
+    assert set(reader.updated) == set(feeds)  # not skipped despite the stale lock
+
+
+def test_low_fanout_single_failure_no_skip(tmp_path: Path):
+    """One failure on a small host is tracked but doesn't activate the skip."""
     db_path = tmp_path / "meta.sqlite"
     url = "https://down.example/feed.xml"
-    reader = _TransportFailReader({url})
+    reader = _FailReader({url: None})  # transport-style
     service = _build_service(db_path, reader, [], [])
 
     service.update_feeds([url])
@@ -419,19 +422,18 @@ def test_single_transport_error_does_not_activate_domain_skip(tmp_path: Path):
         row = conn.execute(
             "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
         ).fetchone()
-    assert row and row[0] == 1
-    assert row[1] is None  # tracked but no active backoff yet
+    assert row and row[0] == 1 and row[1] is None  # tracked, no active backoff
 
 
-def test_repeated_transport_errors_back_off_domain_capped(tmp_path: Path):
-    """A host that's genuinely unreachable (>= MIN_FAILURES consecutive transport
-    failures) backs off, capped so it re-probes within ~1h."""
+def test_low_fanout_backs_off_after_threshold_capped(tmp_path: Path):
+    """A small host that's genuinely down (>= MIN_FAILURES consecutive failures)
+    backs off, capped so it re-probes within ~1h."""
     db_path = tmp_path / "meta.sqlite"
     urls = ["https://down.example/a.xml", "https://down.example/b.xml", "https://down.example/c.xml"]
-    reader = _TransportFailReader(urls)
+    reader = _FailReader({u: None for u in urls})
     service = _build_service(db_path, reader, [], [])
 
-    service.update_feeds(urls)  # 3 consecutive transport failures on down.example
+    service.update_feeds(urls)  # 3 consecutive failures on a low-fanout host
     with _make_conn(db_path) as conn:
         row = conn.execute(
             "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"

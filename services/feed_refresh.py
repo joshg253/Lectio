@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
@@ -21,10 +22,16 @@ def _feed_domain(feed_url: str) -> str:
 # sooner than the per-feed backoff cap (~24h). A stuck domain backoff otherwise
 # starves every feed on a high-fanout host (e.g. 692 youtube.com subscriptions).
 _DOMAIN_BACKOFF_MAX_SECONDS = 3600  # 1h: re-probe an unreachable host hourly.
-# Require several consecutive transport failures before a domain is treated as
-# down. One blip must not skip the rest of a high-fanout host's batch — only a
-# host that's genuinely unreachable (repeated connect failures) should back off.
+# Require several consecutive failures before a low-fanout host is treated as
+# down. One blip must not skip its batch.
 _DOMAIN_BACKOFF_MIN_FAILURES = 3
+# Hosts with at least this many feeds in a batch are EXEMPT from domain-level
+# backoff. reader doesn't reliably expose an HTTP status on its exceptions (real
+# youtube.com 404s arrive with status=None), so a few dead channels look like
+# transport failures and would otherwise starve all 692 subscriptions. Per-feed
+# backoff already handles the dead ones; the domain guard is only useful for
+# small hosts where a burst to a down server is worth avoiding.
+_HIGH_FANOUT_DOMAIN_FEEDS = 8
 
 
 class FeedRefreshService:
@@ -208,6 +215,9 @@ class FeedRefreshService:
 
         feed_state_map: dict[str, dict[str, int | float | None]] = {}
         domain_state_map: dict[str, dict[str, int | float | None]] = {}
+        # Feeds-per-host in this batch: high-fanout hosts are exempt from
+        # domain-level backoff (a few dead feeds must not stall the rest).
+        domain_feed_counts = Counter(_feed_domain(u) for u in feed_url_list if _feed_domain(u))
         # Short read transaction: load backoff state, then release the lock
         # immediately so the per-feed HTTP fetches below don't hold it open.
         with self._get_meta_connection() as conn:
@@ -247,12 +257,12 @@ class FeedRefreshService:
 
                     # Skip if either the feed-level or domain-level backoff is active.
                     feed_next_retry = feed_state.get("next_retry_at")
-                    domain_next_retry = domain_state.get("next_retry_at")
-                    # Clamp domain backoff at read time so an over-long / stuck one
-                    # (e.g. a pre-fix ~24h youtube.com lock) re-probes within the cap
-                    # of when it was SET, instead of starving every feed on the host
-                    # for a day. Clamp relative to last_failure_at (not now) so it
-                    # actually expires rather than perpetually re-arming.
+                    domain_high_fanout = domain_feed_counts.get(domain, 0) >= _HIGH_FANOUT_DOMAIN_FEEDS
+                    # High-fanout hosts are never domain-skipped (ignore any state,
+                    # incl. a stale pre-fix lock). Otherwise clamp an over-long / stuck
+                    # backoff to re-probe within the cap of when it was SET (relative to
+                    # last_failure_at, not now, so it actually expires).
+                    domain_next_retry = None if domain_high_fanout else domain_state.get("next_retry_at")
                     if domain_next_retry is not None:
                         _dom_set_at = domain_state.get("last_failure_at")
                         if _dom_set_at is not None:
@@ -470,21 +480,15 @@ class FeedRefreshService:
                                 "next_retry_at": next_retry,
                             }
 
-                            # Domain-level backoff tracks host REACHABILITY only.
-                            # Any HTTP response — even 404/429/5xx — proves the host
-                            # answered, so it CLEARS the domain backoff: one host's
-                            # per-feed errors must never starve its other feeds (692
-                            # youtube.com subscriptions went dark for days behind a
-                            # few dead channels + a stuck backoff). Only a transport
-                            # failure (DNS/connect/timeout — no HTTP status) escalates
-                            # it, and even then it's capped so the host re-probes
-                            # within the hour.
-                            _http_status = self._http_status_of(exc)
-                            if domain and _http_status is None:
-                                # Count consecutive transport failures for the HOST
-                                # (independent of any single feed's history), and
-                                # only activate the skip-inducing backoff once the
-                                # host looks genuinely down (>= MIN_FAILURES).
+                            # Domain-level backoff is a coarse "host looks down" guard,
+                            # secondary to per-feed backoff. It is SKIPPED for
+                            # high-fanout hosts (e.g. 692 youtube.com subscriptions):
+                            # a few dead channels must never stall the rest, and
+                            # reader doesn't reliably tag those as HTTP errors. For a
+                            # low-fanout host it activates only after several
+                            # consecutive failures (host likely down), is capped to
+                            # re-probe within the hour, and any success clears it.
+                            if domain and not domain_high_fanout:
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
                                 domain_consecutive = prev_domain_failures + 1
@@ -514,13 +518,6 @@ class FeedRefreshService:
                                     "next_retry_at": domain_next_retry_new,
                                     "last_failure_at": now_ts,
                                 }
-                            elif domain and _http_status is not None:
-                                # Host answered (reachable) → clear any domain backoff.
-                                conn.execute(
-                                    "DELETE FROM domain_failure_state WHERE domain = ?",
-                                    (domain,),
-                                )
-                                domain_state_map.pop(domain, None)
                             self._record_fetch_history(
                                 conn, feed_url, "error",
                                 http_status=self._http_status_of(exc),
