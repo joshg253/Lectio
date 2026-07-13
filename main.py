@@ -14461,6 +14461,11 @@ def _build_read_mode_context(
     }
 
 
+# Distinct User-Agents seen on /read, logged once each (capped) so we can learn
+# the Supernote Manta's UA for the e-ink auto-detect (it isn't in access logs).
+_READ_MODE_UA_SEEN: set[str] = set()
+
+
 @app.get("/read", response_class=HTMLResponse)
 def reader_view(
     request: Request,
@@ -14474,6 +14479,10 @@ def reader_view(
     """Read Mode. No entry selected -> the 2-pane browse (saved tree + item
     list). An entry selected -> the full-screen paginated reader. Read Mode
     ignores read/unread; the Archive flag is the done-axis."""
+    _ua = (request.headers.get("user-agent") or "").strip()
+    if _ua and _ua not in _READ_MODE_UA_SEEN and len(_READ_MODE_UA_SEEN) < 50:
+        _READ_MODE_UA_SEEN.add(_ua)
+        LOGGER.info("[read-mode-ua] %s", _ua[:300])
     tag_val = normalize_tag_value(tag)
     q_val = normalize_search_query(q)
     # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
