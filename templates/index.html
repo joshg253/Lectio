@@ -434,14 +434,13 @@
                 {# In star mode, All/Unread narrow the starred set (star_only rides
                    along); clicking the active Starred item exits star mode. #}
                 {# All/Unread narrow the CURRENT mode (star_only rides along) and
-                   the click persists to that mode's remembered filter (JS). The
-                   Starred item is a bare mode toggle — no read_filter, so the
-                   target mode's own remembered filter applies. #}
+                   the click persists to that mode's remembered filter (JS).
+                   Mode switching itself lives on the Feeds | Saved tabs — the
+                   old Starred toggle here was redundant and its exit-on-active
+                   behavior surprising. #}
                 {% set _fm_star = '&star_only=1' if selected_star_only else '' %}
-                {% set starred_href = (tb_base ~ tb_sort) if selected_star_only else (tb_base ~ tb_sort ~ '&star_only=1') %}
                 <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
                 <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
-                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ starred_href }}" {% if selected_star_only %}title="Exit Starred"{% endif %}><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
                 {% if tag_rows %}

@@ -14156,6 +14156,10 @@ def resolve_reader_backlog(
     selected_folder_id = folder_id or root_id
     if list_feed_url:
         entry_feed_urls = {list_feed_url}
+    elif star_only:
+        # Stars are deliberate curation: keep a disabled feed's saved items
+        # visible (the saved badges/counts include them).
+        entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set()))
     else:
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
 
@@ -15675,7 +15679,14 @@ def _home_inner(
     posts_start = time.perf_counter()
     # Exclude disabled feeds from the entry list unless the user has selected a
     # specific feed directly (clicking it should still let you browse its content).
-    entry_feed_urls = filtered_feed_urls if list_feed_url else filtered_feed_urls - disabled_feed_urls
+    # Star mode keeps them: stars are deliberate curation and the saved-folder
+    # badges count them, so hiding a disabled feed's saves made a folder show a
+    # badge of 4 with an empty list.
+    entry_feed_urls = (
+        filtered_feed_urls
+        if (list_feed_url or selected_star_only)
+        else filtered_feed_urls - disabled_feed_urls
+    )
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
