@@ -190,9 +190,11 @@
              Saved = the starred view (star_only=1, as the toolbar's Starred
              filter). No counters on the tabs. The .root-item/.saved-item classes
              + data attrs are preserved for the SPA scope/badge machinery. #}
+          {# The tabs are expand-only landings (home=1): switch mode + show the
+             tree, load no posts (All can be huge) — pick All/a folder explicitly. #}
           <div class="scope-tabs" role="tablist">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if not selected_star_only %}{{ _tree_rfq }}{% endif %}"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&home=1"
               class="tree-item root-item scope-tab {% if not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -203,7 +205,7 @@
               <span class="name">Feeds</span>
             </a>
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1&home=1"
               class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"
@@ -257,6 +259,22 @@
           </div>
 
           <div class="tree-children feeds-tree-children"{% if selected_star_only %} hidden{% endif %}>
+            {# "All": every feed — what the old All Feeds root row loaded. Sits at
+               folder level so opening it is a deliberate click (the Feeds tab
+               itself is an expand-only landing). #}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
+                  class="tree-item child-item feeds-all-item {% if not selected_star_only and not selected_home and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
+                  data-folder-id="{{ root_folder_row.id }}"
+                >
+                  <span class="name">All</span>
+                  {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {% for row in child_folder_rows %}
             {% if not (row.virtual and not row.get('has_display_feeds', True)) %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
@@ -2831,7 +2849,8 @@
     }
 
     function getUnreadCountFromRootBadge() {
-      const rootCountNode = document.querySelector('.root-item .count');
+      // Aggregate unread lives on the feeds "All" row (tabs carry no counter).
+      const rootCountNode = document.querySelector('.feeds-all-item .count');
       if (!rootCountNode) {
         return 0;
       }
@@ -4379,7 +4398,9 @@
       let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
-      const nextSavedHome = nextStarOnly && nextUrl.searchParams.get('saved_home') === '1';
+      const nextHome = nextUrl.searchParams.get('home') === '1'
+        || (nextStarOnly && nextUrl.searchParams.get('saved_home') === '1');
+      const nextSavedHome = nextStarOnly && nextHome;
       const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
       const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
       const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
@@ -4437,17 +4458,13 @@
         }
         let isMatch = false;
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
-          // Saved header: active only on its expand-only landing state.
-          if (folderLink.classList.contains('saved-item')) {
-            isMatch = nextSavedHome;
-          }
-          // For .root-item, active only if star_only=0
-          else if (folderLink.classList.contains('root-item')) {
-            isMatch = !nextStarOnly;
-          }
           // Saved "All" row: the whole-backlog view (root + star, not landing).
-          else if (folderLink.classList.contains('saved-all-item')) {
-            isMatch = nextStarOnly && !nextSavedHome;
+          if (folderLink.classList.contains('saved-all-item')) {
+            isMatch = nextStarOnly && !nextHome;
+          }
+          // Feeds "All" row: every feed (root, feeds mode, not landing).
+          else if (folderLink.classList.contains('feeds-all-item')) {
+            isMatch = !nextStarOnly && !nextHome;
           }
           // Saved-mode folder rows vs feeds-tree folder rows: same folder ids,
           // so activate only the copy that belongs to the current mode.
@@ -4455,7 +4472,7 @@
             isMatch = nextStarOnly;
           }
           else {
-            isMatch = !nextStarOnly;
+            isMatch = !nextStarOnly && !nextHome;
           }
         }
         folderLink.classList.toggle('active', isMatch);
@@ -8408,8 +8425,10 @@
           }
         }
       }
-      const rootItem = document.querySelector('.root-item.tree-item');
-      if (rootItem) adjustCountBadge(rootItem, delta);
+      // The aggregate unread badge lives on the feeds "All" row (the Feeds
+      // scope tab itself carries no counter).
+      const feedsAll = document.querySelector('.feeds-all-item');
+      if (feedsAll) adjustCountBadge(feedsAll, delta);
     }
 
     // Zero out sidebar count badges for a folder (or all folders when isRoot=true).
@@ -8440,8 +8459,8 @@
           folderItem.closest('.tree-folder-group')?.setAttribute('data-unread-count', '0');
         }
         if (remaining > 0) {
-          const rootItem = document.querySelector('.root-item.tree-item');
-          if (rootItem) adjustCountBadge(rootItem, -remaining);
+          const feedsAll = document.querySelector('.feeds-all-item');
+          if (feedsAll) adjustCountBadge(feedsAll, -remaining);
         }
       }
     }
@@ -9057,7 +9076,7 @@
                 if (_fg) _fg.setAttribute('data-unread-count', String(Math.max(0, Number(_fg.getAttribute('data-unread-count') || '0') - _feedRemaining)));
               }
             }
-            const _rootEl = document.querySelector('.root-item.tree-item');
+            const _rootEl = document.querySelector('.feeds-all-item');
             if (_rootEl) adjustCountBadge(_rootEl, -_feedRemaining);
           }
         }

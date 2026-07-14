@@ -156,20 +156,19 @@ The short version:
   same URL twice just re-stars the existing copy; a page that can't be
   extracted (paywall, bot-wall) is still saved as a starred bookmark and the
   archive worker retries the capture in the background.
-  A **Saved Articles** item at the top of the sidebar (with an unread-count
-  badge) opens the whole starred/saved backlog in the familiar three-pane
-  layout — always starting on **All** — and expands its own folder list
-  (folders that hold saved items, with total-saved badges) while the feeds
-  tree collapses, and vice versa. The toolbar filter narrows the backlog:
-  **All** shows everything kept, **Unread** just the not-yet-read part, and
-  the Tags submenu slices it by your tags (e.g. `#toread` vs `#todo`) without
-  leaving the view. Clicking **All Feeds** (or the active Starred filter)
-  exits back to normal browsing with your previous Read/Unread filter
-  restored. The internal Saved Articles feed no longer clutters
+  Side-by-side **Feeds | Saved** tabs at the top of the sidebar switch between
+  normal browsing and the starred/saved backlog (both in the familiar
+  three-pane layout). Clicking a tab is a landing: it shows that mode's tree —
+  an **All** row on top, then folders — without loading any posts until you
+  pick one (All can be huge). The toolbar filter narrows the backlog: **All**
+  shows everything kept, **Unread** just the not-yet-read part, and the Tags
+  submenu slices it by your tags (e.g. `#toread` vs `#todo`) without leaving
+  the view. The internal Saved Articles feed no longer clutters
   Feeds → Uncategorized — the sidebar view supersedes it.
-- **Read Mode (e-ink)** — clicking **Saved Articles** opens a distraction-free,
-  light-themed reading app built for slow grayscale e-ink browsers (the
-  Supernote Manta in particular, where Instapaper reads badly). It's a
+- **Read Mode (e-ink)** — the **eInk** button on the avatar menu's theme row
+  (Dark · Light · eInk) opens a distraction-free, light-themed reading app
+  built for slow grayscale e-ink browsers (the Supernote Manta in particular,
+  where Instapaper reads badly). It's a
   self-contained page at **`/read`** (bookmarkable on the device) with a
   **2-pane browse**: a simplified tree of your saved items (folders, your tag
   buckets like `#toread`/`#todo`, and an **Archive** at the bottom) on the left,

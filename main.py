@@ -15262,6 +15262,7 @@ def home(
     read_filter: str | None = None,
     star_only: str | None = None,
     saved_home: int | None = None,
+    home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -15301,6 +15302,7 @@ def home(
             read_filter=read_filter,
             star_only=star_only,
             saved_home=saved_home,
+            home=home,
             resume_read_filter=resume_read_filter,
             feed_url=feed_url,
             entry_id=entry_id,
@@ -15333,6 +15335,7 @@ def _home_inner(
     read_filter: str | None = None,
     star_only: str | None = None,
     saved_home: int | None = None,
+    home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -15521,11 +15524,12 @@ def _home_inner(
         if resume_read_filter is None and selected_read_filter != "all":
             selected_resume_read_filter = selected_read_filter
         selected_read_filter = "all"
-    # Saved-mode landing state: the Saved Articles header expands its folder
-    # list without loading any posts (the whole backlog is expensive) — the
-    # user picks All / a folder / Uncategorized from the sublist.
-    selected_saved_home = bool(saved_home) and selected_star_only
-    if selected_saved_home:
+    # Scope-tab landing state (`home=1`, either mode; legacy `saved_home=1` for
+    # Saved): the tab shows its tree without loading any posts (All can be huge)
+    # — the user picks All / a folder / a feed explicitly.
+    selected_home = bool(home) or (bool(saved_home) and selected_star_only)
+    selected_saved_home = selected_home and selected_star_only
+    if selected_home:
         selected_feed_url = None
         selected_tag = None
         filtered_feed_urls = set()
@@ -15794,6 +15798,7 @@ def _home_inner(
         "selected_read_filter": selected_read_filter,
         "selected_star_only": selected_star_only,
         "selected_saved_home": selected_saved_home,
+        "selected_home": selected_home,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
         "saved_counts_by_folder": saved_counts_by_folder,
