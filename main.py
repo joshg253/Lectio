@@ -14201,15 +14201,17 @@ def resolve_reader_backlog(
 
 def _read_scope_params(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
-    scope: str = "saved",
+    scope: str = "saved", list_feed_url: str | None = None,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
-    URLs (scope / folder / tag / Archive / search)."""
+    URLs (scope / folder / feed / tag / Archive / search)."""
     params: list[tuple[str, str]] = []
     if scope and scope != "saved":
         params.append(("scope", scope))
     if folder_id is not None:
         params.append(("folder_id", str(folder_id)))
+    if list_feed_url:
+        params.append(("list_feed_url", list_feed_url))
     if tag:
         params.append(("tag", tag))
     if archived:
@@ -14220,10 +14222,11 @@ def _read_scope_params(
 
 
 def _read_browse_href(
-    folder_id: int | None, tag: str | None, archived: bool, q: str | None, scope: str = "saved"
+    folder_id: int | None, tag: str | None, archived: bool, q: str | None,
+    scope: str = "saved", list_feed_url: str | None = None,
 ) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
-    params = _read_scope_params(folder_id, tag, archived, q, scope)
+    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -14236,11 +14239,12 @@ def _reader_href(
     archived: bool,
     q: str | None,
     scope: str = "saved",
+    list_feed_url: str | None = None,
 ) -> str:
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q, scope)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
     return "/read?" + urlencode(params)
 
 
@@ -14403,22 +14407,36 @@ def _build_feeds_mode_context(
     request: Request,
     *,
     folder_id: int | None,
+    list_feed_url: str | None,
+    tag: str | None,
     q: str | None,
     items: list[dict],
     node_selected: bool = True,
 ) -> dict:
-    """Read Mode context for the FEEDS scope: a simplified feeds tree (All Feeds +
-    folders with unread counts) and the unread item list for the selected node.
-    No tags/Archive — this is ordinary unread feed reading."""
+    """Read Mode context for the FEEDS scope: a feeds tree (All + folders that
+    expand to their individual feeds + manual-tag buckets) and the unread item
+    list for the selected node. Mirrors the regular view's navigation."""
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
     root_id = cast(int, snapshot["root_id"])
+    all_reader_feed_urls = get_all_reader_feed_urls()
     raw_folder_rows = cast("list[dict]", snapshot["raw_folder_rows"])
     direct = cast("dict[int, list[str]]", snapshot["direct_feed_urls_by_folder"])
     unread_by_feed = get_unread_counts_by_feed()
     unread_by_folder = get_unread_counts_by_folder(raw_folder_rows, unread_by_feed, direct)
+    title_map = get_feed_title_map()
 
-    on_all = folder_id == root_id and not q
+    def _feed_nodes(fid: int, feed_urls: list[str]) -> list[dict]:
+        nodes = [{
+            "label": title_map.get(furl, furl),
+            "href": _read_browse_href(fid, None, False, None, "feeds", list_feed_url=furl),
+            "count": unread_by_feed.get(furl, 0),
+            "active": (list_feed_url == furl),
+        } for furl in feed_urls if unread_by_feed.get(furl, 0)]
+        nodes.sort(key=lambda n: str(n["label"]).lower())
+        return nodes
+
+    on_all = folder_id == root_id and not list_feed_url and not tag and not q
     folder_nodes: list[dict] = [{
         "label": "All", "glyph": "▸",
         "href": _read_browse_href(root_id, None, False, None, "feeds"),
@@ -14431,17 +14449,32 @@ def _build_feeds_mode_context(
         c = unread_by_folder.get(fid, 0)
         if not c:
             continue
+        feeds = _feed_nodes(fid, direct.get(fid, []))
         folder_nodes.append({
             "label": str(row["name"]), "glyph": "▸",
             "href": _read_browse_href(fid, None, False, None, "feeds"),
             "count": c,
-            "active": (folder_id == fid),
+            "active": (not tag and not list_feed_url and folder_id == fid),
+            "feeds": feeds,
+            "open": any(f["active"] for f in feeds),  # keep expanded if a feed is active
         })
+
+    # Manual-tag buckets — the regular Tags (all entries, NOT saved-only).
+    tag_nodes = [{
+        "label": "#" + str(tr["name"]), "glyph": "",
+        "href": _read_browse_href(None, str(tr["name"]), False, None, "feeds"),
+        "count": int(tr["count"]),
+        "active": (tag == str(tr["name"])),
+    } for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))]
 
     if not node_selected:
         selected_label = "Feeds"
     elif q:
         selected_label = f'Search: “{q}”'
+    elif list_feed_url:
+        selected_label = title_map.get(list_feed_url, list_feed_url)
+    elif tag:
+        selected_label = "#" + tag
     else:
         selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
 
@@ -14450,19 +14483,20 @@ def _build_feeds_mode_context(
         "subtitle": str(it.get("feed_title") or ""),
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
-                             folder_id=folder_id, tag=None, archived=False, q=q, scope="feeds"),
+                             folder_id=folder_id, tag=tag, archived=False, q=q,
+                             scope="feeds", list_feed_url=list_feed_url),
     } for it in items]
 
     return {
         "scope_tabs": _read_mode_scope_tabs("feeds"),
         "folder_nodes": folder_nodes,
-        "tag_nodes": [],
+        "tag_nodes": tag_nodes,
         "archive_node": None,
         "list_items": list_items,
         "selected_label": selected_label,
         "node_selected": node_selected,
         "search_query": q or "",
-        "tags_open": False,
+        "tags_open": bool(tag),
         "scope": "feeds",
         "exit_href": "/?full=1",
         "static_asset_version": STATIC_ASSET_VERSION,
@@ -14590,6 +14624,7 @@ def reader_view(
     feed_url: str | None = Query(default=None),
     entry_id: str | None = Query(default=None),
     folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
     tag: str | None = Query(default=None),
     archived: str | None = Query(default=None),
     q: str | None = Query(default=None),
@@ -14597,25 +14632,28 @@ def reader_view(
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
-    Archive is the done-axis) and ``feeds`` (ordinary unread feed reading)."""
+    Archive is the done-axis) and ``feeds`` (ordinary unread feed reading, with a
+    feeds tree drilling to individual feeds)."""
     _ua = (request.headers.get("user-agent") or "").strip()
     if _ua and _ua not in _READ_MODE_UA_SEEN and len(_READ_MODE_UA_SEEN) < 50:
         _READ_MODE_UA_SEEN.add(_ua)
         LOGGER.info("[read-mode-ua] %s", _ua[:300])
     is_feeds = scope == "feeds"
-    tag_val = None if is_feeds else normalize_tag_value(tag)
+    tag_val = normalize_tag_value(tag)
     q_val = normalize_search_query(q)
+    feed_scope = list_feed_url or None
     # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
     archived_view = (not is_feeds) and str(archived) == "1"
     archived_filter = None if (is_feeds or q_val) else archived_view
-    # A node is "selected" once the user picks All (root folder), a folder, a tag,
-    # Archive, or a search. A bare /read has no node selected: it lands on the
-    # tree only, so we never auto-load the whole (huge) backlog.
-    node_selected = folder_id is not None or bool(tag_val) or archived_view or bool(q_val)
+    # A node is "selected" once the user picks All (root folder), a folder, a feed,
+    # a tag, Archive, or a search. A bare /read has no node selected: it lands on
+    # the tree only, so we never auto-load the whole (huge) backlog.
+    node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
+                     or archived_view or bool(q_val))
 
     def _load_backlog(limit: int) -> list[dict]:
         return resolve_reader_backlog(
-            folder_id=folder_id, list_feed_url=None,
+            folder_id=folder_id, list_feed_url=feed_scope,
             read_filter=("unread" if is_feeds else "all"),
             star_only=(not is_feeds),
             tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
@@ -14627,7 +14665,8 @@ def reader_view(
         items = _load_backlog(150) if node_selected else []
         if is_feeds:
             context = _build_feeds_mode_context(
-                request, folder_id=folder_id, q=q_val, items=items, node_selected=node_selected,
+                request, folder_id=folder_id, list_feed_url=feed_scope, tag=tag_val,
+                q=q_val, items=items, node_selected=node_selected,
             )
         else:
             context = _build_read_mode_context(
@@ -14646,6 +14685,7 @@ def reader_view(
         return _reader_href(
             rec["feed_url"], rec["id"],
             folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
+            list_feed_url=feed_scope,
         )
 
     current: dict | None = None
@@ -14685,7 +14725,7 @@ def reader_view(
         source_link=cur_link,
         prev_href=_href(prev_rec),
         next_href=_href(next_rec),
-        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope),
+        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope, feed_scope),
         feed_url=cur_feed,
         entry_id=cur_id,
         is_archived=is_archived,

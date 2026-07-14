@@ -26,11 +26,27 @@
       <div class="rm-tree-scroll">
         <div class="rm-tree-section">
           {% for n in folder_nodes %}
+          {% if n.feeds %}
+          <details class="rm-folder"{% if n.open %} open{% endif %}>
+            <summary class="rm-node rm-folder-summary{% if n.active %} active{% endif %}">
+              <span class="rm-glyph rm-folder-caret" aria-hidden="true">&#9656;</span>
+              <a class="rm-folder-link" href="{{ n.href }}">{{ n.label }}</a>
+              {% if n.count %}<span class="rm-count">{{ n.count }}</span>{% endif %}
+            </summary>
+            {% for f in n.feeds %}
+            <a class="rm-node rm-feed-node{% if f.active %} active{% endif %}" href="{{ f.href }}">
+              <span class="rm-label">{{ f.label }}</span>
+              {% if f.count %}<span class="rm-count">{{ f.count }}</span>{% endif %}
+            </a>
+            {% endfor %}
+          </details>
+          {% else %}
           <a class="rm-node{% if n.active %} active{% endif %}" href="{{ n.href }}">
             {% if n.glyph %}<span class="rm-glyph" aria-hidden="true">{{ n.glyph }}</span>{% endif %}
             <span class="rm-label">{{ n.label }}</span>
             {% if n.count %}<span class="rm-count">{{ n.count }}</span>{% endif %}
           </a>
+          {% endif %}
           {% endfor %}
         </div>
 
