@@ -4410,13 +4410,16 @@
 
       // Bare URLs are ambiguous in SPA/popstate flows. Prefer preserving
       // current visible selection to avoid active-state flicker/clearing.
+      // Scope tabs are excluded: they're mode indicators that always carry the
+      // root folder id, so falling back to one would light up the "All" row.
+      let nextHomeEffective = nextHome;
       if (!nextFolderId && !nextFeedUrl && !nextTag) {
         const activeFeed = document.querySelector('.feed-link.active[data-feed-url]');
         if (activeFeed instanceof HTMLElement) {
           nextFeedUrl = activeFeed.getAttribute('data-feed-url') || null;
           nextFolderId = activeFeed.getAttribute('data-folder-id') || nextFolderId;
         } else {
-          const activeFolder = document.querySelector('.tree-item.active[data-folder-id]');
+          const activeFolder = document.querySelector('.tree-item.active[data-folder-id]:not(.scope-tab)');
           if (activeFolder instanceof HTMLElement) {
             nextFolderId = activeFolder.getAttribute('data-folder-id') || nextFolderId;
           }
@@ -4424,6 +4427,10 @@
       }
 
       if (!nextFolderId && !nextFeedUrl && !nextTag) {
+        // Still nothing: a truly bare URL is the scope-tab landing (the server
+        // treats bare / as home=1) — keep every folder row inactive rather than
+        // defaulting to root, which used to auto-select "All".
+        nextHomeEffective = true;
         const rootTree = document.querySelector('.tree[data-root-folder-id]');
         if (rootTree instanceof HTMLElement) {
           nextFolderId = rootTree.getAttribute('data-root-folder-id') || null;
@@ -4462,11 +4469,11 @@
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
           // Saved "All" row: the whole-backlog view (root + star, not landing).
           if (folderLink.classList.contains('saved-all-item')) {
-            isMatch = nextStarOnly && !nextHome;
+            isMatch = nextStarOnly && !nextHomeEffective;
           }
           // Feeds "All" row: every feed (root, feeds mode, not landing).
           else if (folderLink.classList.contains('feeds-all-item')) {
-            isMatch = !nextStarOnly && !nextHome;
+            isMatch = !nextStarOnly && !nextHomeEffective;
           }
           // Saved-mode folder rows vs feeds-tree folder rows: same folder ids,
           // so activate only the copy that belongs to the current mode.
@@ -4474,7 +4481,7 @@
             isMatch = nextStarOnly;
           }
           else {
-            isMatch = !nextStarOnly && !nextHome;
+            isMatch = !nextStarOnly && !nextHomeEffective;
           }
         }
         folderLink.classList.toggle('active', isMatch);
