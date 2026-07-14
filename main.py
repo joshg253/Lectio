@@ -15363,7 +15363,7 @@ def _home_inner(
     # Explicit query/form state must win to avoid client preference overriding
     # an intentional filter selection during navigation.
     header_rf = request.headers.get("X-Lectio-Read-Filter")
-    if read_filter is None and header_rf:
+    if read_filter is None and header_rf and not normalize_star_only(star_only):
         read_filter = header_rf
 
     # Only use `resume_read_filter` as a fallback when no explicit
@@ -15371,14 +15371,14 @@ def _home_inner(
     if read_filter is None and resume_read_filter is not None:
         read_filter = resume_read_filter
 
-    # If still no explicit/read-resume value, fall back to the cookie-based
-    # persisted preference for full navigations. Feeds browsing and the Saved
-    # Articles view keep SEPARATE remembered filters (mode-blind memory meant
-    # picking All inside Saved leaked back into Feeds and vice versa); the
-    # Saved view defaults to All when nothing is remembered yet.
+    # If still no explicit value, fall back to the remembered preference — but
+    # only for Feeds browsing. The Saved view always defaults to All: saved
+    # items are usually already read (Archive is their done-axis), so a
+    # remembered Unread filter made folders look empty while their badges
+    # showed the total. The Unread pill still narrows explicitly per-visit.
     if read_filter is None:
         if normalize_star_only(star_only):
-            read_filter = request.cookies.get("lectio_read_filter_saved") or "all"
+            read_filter = "all"
         else:
             cookie_rf = request.cookies.get("lectio_read_filter")
             if cookie_rf:
