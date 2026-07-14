@@ -15283,6 +15283,17 @@ def home(
     if "supernote" in _ua and not full and not request.cookies.get("lectio_full_app"):
         return RedirectResponse("/read?scope=feeds", status_code=302)
 
+    # A bare `/` (fresh open, logo click, post-login) is the scope-tab landing:
+    # tree only, no posts — same as clicking the Feeds tab. Loading the whole
+    # All-feeds view on every app open was slow and never a deliberate choice.
+    if (folder_id is None and list_feed_url is None and tag is None
+            and feed_url is None and entry_id is None and q is None
+            and chunk is None and chunk_delta is None
+            and subscribe is None and subscribe_to is None
+            and star_only is None and read_filter is None
+            and saved_home is None and home is None):
+        home = 1
+
     # Limit concurrent expensive home renders (DB queries + context building).
     # Release before returning StreamingResponse so slow network delivery on the
     # client side doesn't hold the semaphore and block new renders with 503s.
