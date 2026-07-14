@@ -13304,6 +13304,11 @@
 
       function revealNextChunk() {
         const items = getPostItems();
+        // An empty list has no further chunks: chunk 1 is served pre-filtered,
+        // so zero items means either a scope-tab landing (no posts by design —
+        // chunk-fetching the bare URL here used to resurrect the all-feeds
+        // load) or a genuinely empty view.
+        if (items.length === 0) return;
         // If we've already revealed all items currently loaded, request
         // the next server-side chunk (by bumping the `chunk` query param).
         if (visibleCount >= items.length) {

@@ -15286,9 +15286,10 @@ def home(
     # A bare `/` (fresh open, logo click, post-login) is the scope-tab landing:
     # tree only, no posts — same as clicking the Feeds tab. Loading the whole
     # All-feeds view on every app open was slow and never a deliberate choice.
+    # Chunk params don't exempt: a chunk fetch against a bare URL is the SPA
+    # paginating the landing (deliberate views always carry folder/feed/tag).
     if (folder_id is None and list_feed_url is None and tag is None
             and feed_url is None and entry_id is None and q is None
-            and chunk is None and chunk_delta is None
             and subscribe is None and subscribe_to is None
             and star_only is None and read_filter is None
             and saved_home is None and home is None):
