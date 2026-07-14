@@ -186,17 +186,31 @@
            server-side; the scope-link stamper is exempt on mode switches). #}
         {% set _saved_rfq = '&star_only=1' ~ (('&read_filter=' ~ selected_read_filter) if (selected_star_only and selected_read_filter != 'all') else '') %}
         <div class="tree-block root-tree-block">
-          <div class="saved-items-row">
-            {# Hijack: Saved Articles opens the standalone /read Read Mode (a full
-               navigation — the SPA interceptor bails on non-'/' paths). #}
+          {# Feeds | Saved scope tabs (like Read Mode). Feeds = normal view;
+             Saved = the starred view (star_only=1, as the toolbar's Starred
+             filter). No counters on the tabs. The .root-item/.saved-item classes
+             + data attrs are preserved for the SPA scope/badge machinery. #}
+          <div class="scope-tabs" role="tablist">
             <a
-              href="/read"
-              class="tree-item saved-item"
-              title="Open Read Mode"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if not selected_star_only %}{{ _tree_rfq }}{% endif %}"
+              class="tree-item root-item scope-tab {% if not selected_star_only %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-folder-name="{{ root_folder_row.name }}"
+              data-folder-depth="{{ root_folder_row.depth }}"
+              title="Feeds"
+            >
+              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">menu</span>
+              <span class="name">Feeds</span>
+            </a>
+            <a
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1"
+              class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-saved-items="true"
+              title="Saved (starred)"
             >
               <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
               <span class="name">Saved</span>
-              {% if saved_unread_count %}<span class="count">{{ saved_unread_count }}</span>{% endif %}
             </a>
           </div>
 
@@ -240,20 +254,6 @@
             </div>
             {% endif %}
             {% endfor %}
-          </div>
-
-          <div class="root-item-row">
-            <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if not selected_star_only %}{{ _tree_rfq }}{% endif %}"
-              class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
-              data-folder-id="{{ root_folder_row.id }}"
-              data-folder-name="{{ root_folder_row.name }}"
-              data-folder-depth="{{ root_folder_row.depth }}"
-            >
-              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">menu</span>
-              <span class="name">Feeds</span>
-              {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
-            </a>
           </div>
 
           <div class="tree-children feeds-tree-children"{% if selected_star_only %} hidden{% endif %}>
@@ -4429,6 +4429,12 @@
       }
 
       for (const folderLink of document.querySelectorAll('.tree-item[data-folder-id]')) {
+        // Scope tabs are mode indicators: active by feeds/saved mode, not folder.
+        if (folderLink.classList.contains('scope-tab')) {
+          const savedTab = folderLink.classList.contains('saved-item');
+          folderLink.classList.toggle('active', savedTab ? nextStarOnly : !nextStarOnly);
+          continue;
+        }
         let isMatch = false;
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
           // Saved header: active only on its expand-only landing state.
@@ -8349,6 +8355,7 @@
     });
 
     function adjustCountBadge(containerEl, delta) {
+      if (containerEl.classList.contains('scope-tab')) return;  // tabs carry no counter
       let badge = containerEl.querySelector(':scope > .count');
       const current = badge ? Number(badge.textContent) : 0;
       const next = Math.max(0, current + delta);

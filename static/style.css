@@ -810,6 +810,35 @@ body[data-single-mode="1"] #folders-collapse-btn {
   color: var(--muted);
 }
 
+/* Feeds | Saved scope tabs at the top of the sidebar (mirrors Read Mode). */
+.scope-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-bottom: 1px solid var(--line);
+}
+.scope-tabs .scope-tab {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.scope-tabs .scope-tab .name { flex: 0 0 auto; }
+.scope-tabs .scope-tab:hover { background: var(--hover-bg); color: var(--ink); }
+.scope-tabs .scope-tab.active {
+  background: var(--hover-bg);
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
 .root-item-row {
   display: flex;
   align-items: stretch;
