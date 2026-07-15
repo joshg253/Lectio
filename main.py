@@ -9845,6 +9845,55 @@ def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], read
         return None
 
 
+def _sorted_star_key_window(
+    keys: set[tuple[str, str]],
+    *,
+    sort_by: str,
+    sort_dir: str,
+    reader_read_filter: bool | None,
+    limit: int,
+) -> list[tuple[str, str]]:
+    """Sort + read-filter + clip starred keys in SQL, returning only the keys
+    for the visible window. At a few thousand saves, hydrating every key via
+    reader.get_entry takes seconds; joining the keys against the entries table
+    for just the sort value is milliseconds. Keys whose entry no longer exists
+    don't join (same outcome as get_entry -> None). Falls back to the full key
+    set on any SQL error."""
+    sort_expr = (
+        "COALESCE(e.published, e.updated, e.first_updated)"
+        if sort_by == "post" else "e.first_updated"
+    )
+    read_clause = {
+        True: " AND e.read = 1",
+        False: " AND (e.read IS NULL OR e.read != 1)",
+    }.get(reader_read_filter, "")
+    scored: list[tuple[str, str, str]] = []
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            key_list = list(keys)
+            # 2 bound vars per key; stay under SQLite's 999-variable limit.
+            for i in range(0, len(key_list), 450):
+                chunk = key_list[i:i + 450]
+                values = ",".join("(?,?)" for _ in chunk)
+                params = [v for pair in chunk for v in pair]
+                rows = conn.execute(
+                    f"WITH k(feed, id) AS (VALUES {values}) "
+                    f"SELECT e.feed, e.id, {sort_expr} AS sv "
+                    f"FROM entries e JOIN k ON e.feed = k.feed AND e.id = k.id"
+                    f" WHERE 1=1{read_clause}",
+                    params,
+                ).fetchall()
+                scored.extend((str(r[0]), str(r[1]), str(r[2] or "")) for r in rows)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("star key window query failed, hydrating all keys: %s", exc)
+        return list(keys)
+    scored.sort(key=lambda t: t[2], reverse=(sort_dir != "asc"))
+    return [(f, i) for f, i, _sv in scored[:limit]]
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -9971,7 +10020,20 @@ def list_entries_for_feeds(
             # any newest-N fetch window, so windowed-scan-then-post-filter
             # shows nothing. saved_entries_set is already restricted to the
             # view's feeds; point-lookup exactly those keys instead.
-            for furl, eid in saved_entries_set:
+            star_keys: Iterable[tuple[str, str]] = saved_entries_set
+            if len(saved_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
+                # Big backlog: hydrating every saved key costs seconds (6k
+                # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
+                # the raw keys and hydrate only the visible window. Skipped for
+                # tag/search, which post-filter and need the whole set.
+                star_keys = _sorted_star_key_window(
+                    saved_entries_set,
+                    sort_by=normalized_sort_by,
+                    sort_dir=normalized_sort_dir,
+                    reader_read_filter=reader_read_filter,
+                    limit=fetch_limit,
+                )
+            for furl, eid in star_keys:
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
