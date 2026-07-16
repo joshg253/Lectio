@@ -65,6 +65,7 @@ from services import podcast_audio
 from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
+from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
 from services import takeout_service
@@ -22747,6 +22748,116 @@ async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, F
         )
     parts = [f"{v} {k.replace('_', ' ')}" for k, v in summary.items() if v]
     msg = "Takeout imported: " + ", ".join(parts) if parts else "Takeout imported (nothing new to add)."
+    return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
+
+
+def _import_instapaper_for_current_user(data: bytes) -> dict:
+    """Import an Instapaper CSV export into the Saved Items of the current user.
+
+    Each bookmark becomes a starred entry in the Saved Articles feed with its
+    original save time; Instapaper's Archive folder maps to Lectio's archived
+    flag, custom folders and the Starred flag to manual tags. Readable content
+    is NOT fetched inline — every item is enqueued to the starred-archive
+    worker, which fetches and extracts pages offline (same as a bookmarklet
+    save), so importing hundreds of URLs doesn't block or hammer sites.
+    """
+    plan = instapaper_import_service.plan_import(
+        data,
+        normalize_url=saved_articles_service.normalize_article_url,
+        normalize_tag=normalize_tag_value,
+    )
+    summary = {"imported": 0, "duplicates": 0, "archived": 0, "tagged": 0}
+    if not plan:
+        return summary
+
+    reader = get_reader()
+    created_feed = saved_articles_service.ensure_saved_feed(reader)
+    with get_meta_connection() as conn:
+        for bm in plan:
+            saved_dt = (
+                datetime.fromtimestamp(bm.saved_at, tz=timezone.utc)
+                if bm.saved_at is not None else datetime.now(timezone.utc)
+            )
+            existing = reader.get_entry((saved_articles_service.SAVED_FEED_URL, bm.url), None)
+            if existing is None:
+                entry: dict = {
+                    "feed_url": saved_articles_service.SAVED_FEED_URL,
+                    "id": bm.url,
+                    "link": bm.url,
+                    "title": bm.title,
+                    "published": saved_dt,
+                }
+                try:
+                    reader.add_entry(entry)
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("instapaper import: add_entry failed for %s", bm.url)
+                    continue
+                summary["imported"] += 1
+            else:
+                summary["duplicates"] += 1
+
+            archived_at = saved_dt.isoformat() if bm.archived else None
+            conn.execute(
+                "INSERT INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(feed_url, entry_id) DO UPDATE SET "
+                "archived_at = COALESCE(excluded.archived_at, saved_entries.archived_at)",
+                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat(), archived_at),
+            )
+            if bm.archived:
+                summary["archived"] += 1
+
+            if bm.tags:
+                # Presence-only manual tags; set_tag is idempotent, so this
+                # merges with any tags the entry already carries.
+                resource_id = (saved_articles_service.SAVED_FEED_URL, bm.url)
+                for tag in bm.tags:
+                    try:
+                        reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{tag}")
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("instapaper import: tag %r failed for %s", tag, bm.url)
+                summary["tagged"] += 1
+
+            try:
+                starred_archive_service.enqueue_archive(
+                    saved_articles_service.SAVED_FEED_URL, bm.url
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("instapaper import: archive enqueue failed for %s: %s", bm.url, exc)
+        conn.commit()
+
+    if created_feed:
+        invalidate_meta_structure_cache()
+        invalidate_problematic_feeds_cache()
+    invalidate_unread_counts_cache()
+    if summary["tagged"]:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    if _search_index_ready.get(tenancy.current_user_id()):
+        try:
+            reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[search] post-import index update failed: %s", exc)
+    return summary
+
+
+@app.post("/instapaper/import")
+async def instapaper_import(request: Request, instapaper_file: Annotated[UploadFile, File(...)]):
+    """Import an Instapaper CSV export into Saved Items. Session-authenticated."""
+    data = await instapaper_file.read()
+    summary = _import_instapaper_for_current_user(data)
+    if not any(summary.values()):
+        msg = "No bookmarks found in that file. Use Instapaper's CSV export."
+    else:
+        bits = []
+        if summary["imported"]:
+            bits.append(f"{summary['imported']} imported")
+        if summary["duplicates"]:
+            bits.append(f"{summary['duplicates']} already saved")
+        if summary["archived"]:
+            bits.append(f"{summary['archived']} archived")
+        if summary["tagged"]:
+            bits.append(f"{summary['tagged']} tagged")
+        msg = "Instapaper import: " + ", ".join(bits) + ". Article text is being fetched in the background."
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 

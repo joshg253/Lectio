@@ -119,6 +119,10 @@
     {{ csrf_input(request)|safe }}
     <input id="takeout-file-input" type="file" name="takeout_file" accept=".zip,application/zip" required />
   </form>
+  <form id="instapaper-import-form" method="post" action="/instapaper/import" enctype="multipart/form-data" hidden>
+    {{ csrf_input(request)|safe }}
+    <input id="instapaper-file-input" type="file" name="instapaper_file" accept=".csv,text/csv" required />
+  </form>
 
   <div id="medium-pane-backdrop" class="medium-pane-backdrop" hidden></div>
 
@@ -2062,6 +2066,7 @@
           <button type="button" class="feeds-tab-btn" data-migrator-view="miniflux" role="tab" aria-selected="false">Miniflux</button>
           <button type="button" class="feeds-tab-btn" data-migrator-view="freshrss" role="tab" aria-selected="false">FreshRSS</button>
           <button type="button" class="feeds-tab-btn" data-migrator-view="ttrss" role="tab" aria-selected="false">tt-rss</button>
+          <button type="button" class="feeds-tab-btn" data-migrator-view="instapaper" role="tab" aria-selected="false">Instapaper</button>
         </div>
 
         <!-- General: OPML + Takeout -->
@@ -2182,6 +2187,14 @@
               <button type="button" id="mig-ttrss-reset" class="settings-inline-btn" hidden>Reset</button>
               <span id="mig-ttrss-status" class="settings-inline-status"></span>
             </div>
+          </div>
+        </div>
+
+        <!-- Instapaper migrator: import saved bookmarks into Saved Items -->
+        <div class="feeds-tab-panel settings-section" data-migrator-panel="instapaper" hidden style="margin-top:0">
+          <p class="settings-hint" style="grid-column:1 / -1;margin-top:0">Import your Instapaper bookmarks into <strong>Saved Items</strong>. In Instapaper, go to <em>Settings → Export → Download .CSV file</em>, then upload it here. Archived Instapaper articles import as archived saves; custom folders and the Liked/Starred flag become tags. Article text is fetched in the background after import.</p>
+          <div style="grid-column:1 / -1;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+            <label for="instapaper-file-input" class="settings-inline-btn" style="cursor:pointer"><span class="material-symbols-rounded" style="font-size:15px;vertical-align:-2px" aria-hidden="true">upload</span> Upload CSV</label>
           </div>
         </div>
       </div>

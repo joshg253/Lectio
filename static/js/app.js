@@ -583,6 +583,14 @@
       }
     });
 
+    const instapaperInput = document.getElementById('instapaper-file-input');
+    const instapaperForm = document.getElementById('instapaper-import-form');
+    instapaperInput?.addEventListener('change', () => {
+      if (instapaperInput.files && instapaperInput.files.length > 0) {
+        instapaperForm?.submit();
+      }
+    });
+
     document.getElementById('dedup-feeds-btn')?.addEventListener('click', async () => {
       const resp = await fetch('/feeds/duplicates');
       const data = await resp.json();
