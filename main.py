@@ -15692,7 +15692,14 @@ def _home_inner(
         selected_star_only = False
 
     tag_start = time.perf_counter()
-    tag_rows = get_tag_counts_for_feeds(filtered_feed_urls)
+    # The landing (home=1) suppresses POSTS, not sidebar navigation — the folder
+    # tree still renders, so the sidebar Tags list should too. filtered_feed_urls
+    # was emptied above for the post query, which would also blank the tag list;
+    # scope tags to the folder's feeds instead. Without this, deleting a tag
+    # (which reloads onto the landing) makes the whole Tags list look empty even
+    # though the tags still exist.
+    tag_scope_feed_urls = feed_urls if selected_home else filtered_feed_urls
+    tag_rows = get_tag_counts_for_feeds(tag_scope_feed_urls)
     tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
