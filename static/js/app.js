@@ -5847,18 +5847,22 @@
     function adjustSidebarUnreadCount(feedUrl, delta, isSaved = false) {
       if (isSaved) adjustSavedUnreadBadge(delta);
       const feedLink = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`);
-      if (feedLink) {
-        adjustCountBadge(feedLink, delta);
-        const folderId = feedLink.getAttribute('data-folder-id');
-        if (folderId) {
-          const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item):not(.saved-folder-item)`);
-          if (folderItem) {
-            adjustCountBadge(folderItem, delta);
-            const folderGroup = folderItem.closest('.tree-folder-group');
-            if (folderGroup) {
-              const cur = Number(folderGroup.getAttribute('data-unread-count') || '0');
-              folderGroup.setAttribute('data-unread-count', String(Math.max(0, cur + delta)));
-            }
+      if (feedLink) adjustCountBadge(feedLink, delta);
+      // The feed's tree row only exists once its folder has been expanded
+      // (rows lazy-load), so for the folder badge fall back to the post-list /
+      // entry-pane feed links, which carry the feed's own folder id.
+      const folderId = feedLink?.getAttribute('data-folder-id')
+        || document.querySelector(
+          `.post-feed-link[data-feed-url="${CSS.escape(feedUrl)}"], .entry-feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`
+        )?.getAttribute('data-folder-id');
+      if (folderId) {
+        const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item):not(.saved-folder-item)`);
+        if (folderItem) {
+          adjustCountBadge(folderItem, delta);
+          const folderGroup = folderItem.closest('.tree-folder-group');
+          if (folderGroup) {
+            const cur = Number(folderGroup.getAttribute('data-unread-count') || '0');
+            folderGroup.setAttribute('data-unread-count', String(Math.max(0, cur + delta)));
           }
         }
       }
@@ -5892,7 +5896,13 @@
       } else {
         const folderItem = document.querySelector(`.tree-item[data-folder-id="${CSS.escape(folderId)}"]:not(.root-item):not(.saved-folder-item)`);
         if (folderItem) {
-          folderItem.querySelector(':scope > .count')?.remove();
+          // Prefer the folder's own badge for the "All" decrement: an
+          // unexpanded folder has no feed rows in the DOM, so `remaining`
+          // (summed from them) undercounts.
+          const folderBadge = folderItem.querySelector(':scope > .count');
+          const folderCount = folderBadge ? (Number(folderBadge.textContent) || 0) : 0;
+          remaining = Math.max(remaining, folderCount);
+          folderBadge?.remove();
           folderItem.closest('.tree-folder-group')?.setAttribute('data-unread-count', '0');
         }
         if (remaining > 0) {
@@ -5998,20 +6008,42 @@
       _refreshSidebarCounts();
     }
 
+    // Set a badge to an absolute value (adjustCountBadge handles creation/removal).
+    function setCountBadge(containerEl, value) {
+      const badge = containerEl.querySelector(':scope > .count');
+      const current = badge ? (Number(badge.textContent) || 0) : 0;
+      if (value !== current) adjustCountBadge(containerEl, value - current);
+    }
+
     async function _refreshSidebarCounts() {
       try {
         const resp = await fetch('/api/unread-counts', { credentials: 'same-origin' });
         if (!resp.ok) return;
-        const counts = await resp.json();
+        const data = await resp.json();
+        const feedCounts = data.feeds || {};
+        // Feed rows present in the DOM (unexpanded folders have none — their
+        // rows arrive with fresh counts when the folder loads on expand).
         for (const feedLink of document.querySelectorAll('.feed-link[data-feed-url]')) {
           const feedUrl = feedLink.getAttribute('data-feed-url');
           if (!feedUrl) continue;
-          const serverCount = counts[feedUrl] ?? 0;
-          const badge = feedLink.querySelector(':scope > .count');
-          const currentCount = badge ? (Number(badge.textContent) || 0) : 0;
-          if (serverCount !== currentCount) {
-            adjustSidebarUnreadCount(feedUrl, serverCount - currentCount);
-          }
+          const serverCount = feedCounts[feedUrl] ?? 0;
+          setCountBadge(feedLink, serverCount);
+          feedLink.closest('.tree-feed-item')?.setAttribute('data-unread-count', String(serverCount));
+        }
+        // Folder badges come straight from the server — they can never be
+        // derived from feed rows, which don't exist for unexpanded folders.
+        const folderCounts = data.folders || {};
+        for (const folderLink of document.querySelectorAll('.feeds-tree-children .tree-item.child-item[data-folder-id]:not(.feeds-all-item)')) {
+          const fid = folderLink.getAttribute('data-folder-id');
+          if (!fid || !(fid in folderCounts)) continue;
+          const serverCount = folderCounts[fid] ?? 0;
+          setCountBadge(folderLink, serverCount);
+          folderLink.closest('.tree-folder-group')?.setAttribute('data-unread-count', String(serverCount));
+        }
+        const feedsAll = document.querySelector('.feeds-all-item');
+        if (feedsAll && typeof data.total === 'number') {
+          setCountBadge(feedsAll, data.total);
+          feedsAll.closest('.tree-folder-group')?.setAttribute('data-unread-count', String(data.total));
         }
         // Re-evaluate the "Unread only" folder filter against the fresh counts:
         // a folder emptied by mark-all-read then refilled by a background feed

@@ -22748,10 +22748,38 @@ async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, F
 
 @app.get("/api/unread-counts")
 def api_unread_counts() -> JSONResponse:
-    """Return per-feed unread counts. Used by the client to refresh sidebar
-    badges after bulk mark-read actions that may affect off-screen entries."""
+    """Per-feed and per-folder unread counts plus the all-feeds total.
+
+    The client reconciles sidebar badges from this (90s poll, tab refocus, and
+    after bulk mark-read). Folder counts must come from the server: tree feed
+    rows lazy-load on folder expand, so the client cannot derive an unexpanded
+    folder's badge from its (absent) feed rows. Mirrors the home render's
+    badge math: disabled feeds excluded, virtual Uncategorized folder counted,
+    root total widened to every reader feed."""
     counts = get_unread_counts_by_feed()
-    return JSONResponse(counts)
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        raw_folder_rows = cast(list[dict], snapshot["raw_folder_rows"])
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        root_id = cast(int, snapshot["root_id"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+    active_counts = {u: c for u, c in counts.items() if u not in disabled_feed_urls}
+    folder_counts = get_unread_counts_by_folder(
+        raw_folder_rows, active_counts, direct_feed_urls_by_folder
+    )
+    _uncat_display_urls = (
+        get_all_reader_feed_urls() - all_feed_urls
+        - {saved_articles_service.SAVED_FEED_URL}
+    )
+    uncategorized_unread = sum(active_counts.get(u, 0) for u in _uncat_display_urls)
+    folder_counts[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
+    folder_counts[root_id] = folder_counts.get(root_id, 0) + uncategorized_unread
+    return JSONResponse({
+        "feeds": counts,
+        "folders": folder_counts,
+        "total": folder_counts.get(root_id, 0),
+    })
 
 
 # Formats we re-encode when downscaling /api/img cache entries. Anything else

@@ -46,12 +46,14 @@ def configured(tmp_path, monkeypatch):
             (FEED, folder_id),
         )
     main.invalidate_meta_structure_cache()
+    main.invalidate_unread_counts_cache()
     try:
         yield folder_id
     finally:
         main.close_thread_db_pools()
         tenancy._layout = saved
         main.invalidate_meta_structure_cache()
+        main.invalidate_unread_counts_cache()
 
 
 def _client() -> TestClient:
@@ -87,6 +89,18 @@ def test_tree_folder_feeds_fragment(configured):
     assert '<li class="tree-feed-item"' in body
     assert f'data-feed-url="{FEED}"' in body
     assert f'data-folder-id="{configured}"' in body
+
+
+def test_unread_counts_endpoint_reports_folders_and_total(configured):
+    """Folder badges are reconciled from the server (the client can't derive
+    an unexpanded folder's count from its absent feed rows), so the endpoint
+    must report per-folder counts and the all-feeds total alongside feeds."""
+    resp = _client().get("/api/unread-counts")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feeds"][FEED] == 1
+    assert data["folders"][str(configured)] == 1
+    assert data["total"] == 1
 
 
 def test_tree_folder_feeds_fragment_empty_folder(configured):
