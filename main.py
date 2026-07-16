@@ -10325,7 +10325,10 @@ def list_entries_for_feeds(
                     "feed_url": entry.feed_url,
                     "id": entry.id,
                     "title": title_text,
-                    "link": entry.link or _derived_entry_link(entry),
+                    # Sanitized here (not after the rebase below) so an unsafe
+                    # link is emptied before anything else consumes it — the
+                    # rebase then no-ops on the falsy value. See safe_link_url.
+                    "link": html_sanitize.safe_link_url(entry.link or _derived_entry_link(entry)),
                     "read": is_read,
                     "saved": is_saved,
                     sort_key: sort_value,
@@ -10687,7 +10690,9 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "feed_url": feed_url,
         "id": entry_id,
         "title": archived.get("title") or "",
-        "link": archived.get("link") or "",
+        # Archived copies carry the link the feed gave us — same guard as the
+        # live path (see safe_link_url).
+        "link": html_sanitize.safe_link_url(archived.get("link")),
         "summary": "",
         "content_html": content_html,
         "lead_image_url": None,
@@ -12330,7 +12335,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
-        _display_link = _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
+        # Drop a feed-supplied javascript:/data:/etc link before it reaches the
+        # entry pane's href / data-source-url attributes (see safe_link_url).
+        _display_link = html_sanitize.safe_link_url(
+            _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
+        )
 
         # Suppress summaries that consist entirely of img tags with no text (e.g. xkcd,
         # Deathbulge).  After the lead image is shown above the content, rendering the

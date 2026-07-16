@@ -420,6 +420,19 @@ feeds must be excluded from the global caches.
   standing between feed HTML and a `| safe` render — it drops scriptable tags,
   all `on*` handlers, `style`, `javascript:`/`vbscript:`/`data:` URLs (incl.
   control-char-obfuscated), and `object`/`embed`/`form`.
+- **Link fields are feed input too** — that allowlist only covers URLs *inside*
+  content HTML. An entry's own `link` is equally attacker-controlled, and Jinja
+  escaping protects the attribute *context*, not the scheme: `href="{{ link }}"`
+  with a `javascript:` link renders a clickable XSS in our origin (confirmed —
+  it reached four live hrefs plus `data-source-url`/`data-post-link` before
+  2026-07-16). So every link that reaches a template or a `data-*` attribute
+  passes `html_sanitize.safe_link_url` (http/https/mailto/tel, same rule as
+  content hrefs) at the presentation choke points — `get_entry_detail`,
+  `list_entries_for_feeds`, `_build_orphan_entry_detail` — which empties unsafe
+  links so the `{% if entry.link %}` guards hide them. Sanitize at those
+  hydration points, not per template line: new render sites inherit the guard.
+  `safeHttpUrl()` in `static/js/app.js` mirrors it for values read back out of
+  the DOM (defense in depth; also what CodeQL's `js/xss-through-dom` flagged).
 - **Embed allowlist** — `<iframe>` is kept only when its `src` host is on
   `_EMBED_HOST_ALLOWLIST` (YouTube/Vimeo/Dailymotion/Twitch/SoundCloud/Bandcamp/
   Spotify + Twitter/CodePen/Reddit/Archive.org), https-only, matched by exact or

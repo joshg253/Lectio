@@ -152,6 +152,24 @@ def _is_safe_attr_url(attr: str, value: str) -> bool:
     return scheme in ("http", "https")
 
 
+def safe_link_url(value: str | None) -> str:
+    """Return *value* if it is safe to render as a link href, else "".
+
+    An entry's own `link` is attacker-controlled: a malicious — or compromised
+    — feed can set it to `javascript:...`, which Jinja will happily emit as
+    `href="javascript:..."` (escaping protects the attribute *context*, not the
+    URL scheme). Clicking it would run script in Lectio's origin, with the
+    session cookie and CSRF token. The body-HTML sanitizer already blocks this
+    for hrefs *inside* content; this applies the identical rule (http/https
+    plus mailto/tel, control-char obfuscation stripped) to the link fields that
+    reach templates and data-* attributes, so the UI hides an unsafe link
+    instead of rendering it.
+    """
+    if not value:
+        return ""
+    return value if _is_safe_attr_url("href", value) else ""
+
+
 def _embed_host_allowed(src: str) -> bool:
     """True if an iframe src points at a host on the embed allowlist (https only)."""
     try:
