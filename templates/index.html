@@ -310,29 +310,18 @@
               </div>
 
               {% if folder_feeds %}
+              {% if row.id == selected_folder_id %}
+              {# The selected folder ships its rows inline so the active-feed
+                 highlight and auto-expand work on full page load. #}
               <ul id="folder-feeds-{{ row.id }}" class="feed-list tree-feed-list" hidden>
-                {% for feed in folder_feeds %}
-                <li class="tree-feed-item" data-unread-count="{{ feed.unread_count }}">
-                  <a
-                    class="feed-link {% if selected_feed_url == feed.url %}active{% endif %}"
-                    href="/?folder_id={{ row.id }}&list_feed_url={{ feed.url | urlencode }}{{ _tree_sq }}{{ _tree_rfq }}"
-                    data-feed-url="{{ feed.url }}"
-                    data-folder-id="{{ row.id }}"
-                    title="{{ feed.url }}"
-                  >
-                    <span class="feed-label">
-                      {% if feed.icon_url %}
-                      <img class="feed-favicon" src="{{ feed.icon_url }}" alt="" loading="lazy" onerror="this.style.display='none'" />
-                      {% endif %}
-                      <span>{{ feed.title }}</span>
-                      {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
-                    </span>
-                    {% if feed.has_error %}<span class="feed-error-badge" title="Fetch errors — right-click → Properties for details">⚠</span>{% endif %}
-                    {% if feed.unread_count %}<span class="count">{{ feed.unread_count }}</span>{% endif %}
-                  </a>
-                </li>
-                {% endfor %}
+                {% include "_tree_folder_feeds.html" %}
               </ul>
+              {% else %}
+              {# Deferred: rows load from /tree/folder-feeds/{{ row.id }} on
+                 first expand — inlining every folder's rows costs megabytes
+                 at thousands of feeds. #}
+              <ul id="folder-feeds-{{ row.id }}" class="feed-list tree-feed-list" data-lazy-feeds="{{ row.id }}" hidden></ul>
+              {% endif %}
               {% endif %}
             </div>
             {% endif %}

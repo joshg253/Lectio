@@ -506,6 +506,29 @@
       }
     }
 
+    // Deferred sidebar feed lists: only the selected folder ships its rows
+    // inline — every other folder has an empty <ul data-lazy-feeds="<id>">
+    // whose rows are fetched on first expand (inlining all rows costs
+    // megabytes at thousands of feeds). On window because callers live in
+    // different top-level blocks.
+    window._ensureTreeFeedsLoaded = async function (ul) {
+      if (!ul) return;
+      const fid = ul.getAttribute('data-lazy-feeds');
+      if (!fid) return;
+      ul.removeAttribute('data-lazy-feeds');
+      ul.innerHTML = '<li class="tree-feed-item"><span class="feed-label">Loading…</span></li>';
+      try {
+        const resp = await fetch(`/tree/folder-feeds/${encodeURIComponent(fid)}`, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        ul.innerHTML = await resp.text();
+        window._refreshUnreadFoldersOnly?.();
+      } catch (err) {
+        ul.setAttribute('data-lazy-feeds', fid); // retry on next expand
+        ul.innerHTML = '<li class="tree-feed-item"><span class="feed-label">Failed to load — collapse and expand to retry.</span></li>';
+        console.error('tree feeds load failed:', err);
+      }
+    };
+
     for (const toggle of document.querySelectorAll('.tree-toggle')) {
       const targetId = toggle.getAttribute('data-tree-target');
       if (!targetId) {
@@ -526,6 +549,7 @@
       toggle.addEventListener('click', () => {
         const willExpand = target.hasAttribute('hidden');
         if (willExpand) {
+          void window._ensureTreeFeedsLoaded(target);
           target.removeAttribute('hidden');
           toggle.classList.add('expanded');
           toggle.setAttribute('aria-expanded', 'true');
@@ -1244,6 +1268,11 @@
         unreadFoldersOnlyToggle.setAttribute('aria-pressed', onlyUnread ? 'true' : 'false');
       }
     }
+    // Lazy-injected tree rows arrive after the load-time pass, so the loader
+    // re-applies the persisted unread-only state to them via this hook.
+    window._refreshUnreadFoldersOnly = () => {
+      applyUnreadFoldersOnly(window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1');
+    };
 
     {
       const savedUnreadOnly = window.localStorage.getItem(UNREAD_FOLDERS_ONLY_KEY) === '1';
@@ -1877,6 +1906,29 @@
               toggle.setAttribute('aria-expanded', 'true');
             }
           }
+        }
+      }
+
+      // Selected feed inside a folder whose deferred rows haven't loaded yet:
+      // fetch them so the tree can highlight and reveal it (matches the
+      // pre-lazy behavior where every folder's rows were always in the DOM).
+      if (nextFeedUrl && nextFolderId
+          && !document.querySelector(`.feed-link[data-feed-url="${CSS.escape(nextFeedUrl)}"]`)) {
+        const lazyUl = document.getElementById(`folder-feeds-${nextFolderId}`);
+        if (lazyUl && lazyUl.hasAttribute('data-lazy-feeds')) {
+          const wantedFeedUrl = nextFeedUrl;
+          void window._ensureTreeFeedsLoaded?.(lazyUl).then(() => {
+            for (const feedLink of lazyUl.querySelectorAll('.feed-link[data-feed-url]')) {
+              if (feedLink.getAttribute('data-feed-url') !== wantedFeedUrl) continue;
+              feedLink.classList.add('active');
+              lazyUl.removeAttribute('hidden');
+              const toggle = document.querySelector(`.tree-toggle[data-tree-target="${CSS.escape(lazyUl.id)}"]`);
+              if (toggle) {
+                toggle.classList.add('expanded');
+                toggle.setAttribute('aria-expanded', 'true');
+              }
+            }
+          });
         }
       }
 
@@ -4761,9 +4813,15 @@
       });
     }
 
-    for (const feedLink of document.querySelectorAll('.feed-link')) {
-      feedLink.addEventListener('contextmenu', (event) => {
-        if (!contextMenu) {
+    // Delegated on the tree nav (not per feed link): sidebar feed rows are
+    // lazy-injected on folder expand, so per-element bindings would miss them.
+    // stopPropagation at the nav keeps the document-level tree-background
+    // context menu from firing, matching the old per-element behavior.
+    {
+      const treeNav = document.querySelector('nav.tree');
+      treeNav?.addEventListener('contextmenu', (event) => {
+        const feedLink = event.target.closest('.feed-link');
+        if (!feedLink || !contextMenu) {
           return;
         }
 
@@ -4795,7 +4853,11 @@
       });
 
       // Double-click a feed row → open its Properties.
-      feedLink.addEventListener('dblclick', (event) => {
+      treeNav?.addEventListener('dblclick', (event) => {
+        const feedLink = event.target.closest('.feed-link');
+        if (!feedLink) {
+          return;
+        }
         const feedUrl = feedLink.getAttribute('data-feed-url');
         if (!feedUrl) {
           return;

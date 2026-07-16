@@ -22353,6 +22353,73 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/tree/folder-feeds/{folder_id}")
+def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
+    """One folder's sidebar feed rows (<li> fragment).
+
+    The sidebar renders folder rows only; each collapsed folder's feed list is
+    an empty <ul data-lazy-feeds> filled from here on first expand — inlining
+    every folder's rows costs megabytes at thousands of feeds. Link query
+    fragments (sort / read filter) are rebuilt from the remembered preferences
+    and the read-filter cookie — the same sources a fresh full render uses —
+    and the SPA re-stamps them from live state at click time anyway.
+    """
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        problematic_feeds = get_problematic_feeds_cached(conn)
+        sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
+        sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+
+    if folder_id == UNCATEGORIZED_FOLDER_ID:
+        urls = sorted(
+            get_all_reader_feed_urls() - all_feed_urls
+            - {saved_articles_service.SAVED_FEED_URL}
+        )
+    else:
+        urls = direct_feed_urls_by_folder.get(folder_id, [])
+
+    error_feed_urls: set[str] = {
+        cast(str, pf["feed_url"])
+        for pf in problematic_feeds
+        if not pf.get("acknowledged_at")
+    }
+    feed_title_map = get_feed_title_map()
+    unread_counts_by_feed = get_unread_counts_by_feed()
+    folder_feeds = [
+        FeedInFolder(
+            url=url,
+            title=feed_title_map.get(url, url),
+            icon_url=get_favicon_url(url),
+            unread_count=unread_counts_by_feed.get(url, 0),
+            has_error=url in error_feed_urls,
+        )
+        for url in urls
+        if url not in disabled_feed_urls  # sidebar shows active feeds only
+    ]
+    folder_feeds.sort(key=lambda f: f.title.casefold())
+
+    # Same compact query fragments as the tree links in index.html: omit
+    # default values, never carry star mode.
+    read_filter = normalize_read_filter(request.cookies.get("lectio_read_filter"))
+    tree_read_filter = "all" if read_filter == "history" else read_filter
+    _tree_sq = (f"&sort_by={sort_by}" if sort_by != "post" else "") + (
+        f"&sort_dir={sort_dir}" if sort_dir != "asc" else ""
+    )
+    _tree_rfq = f"&read_filter={tree_read_filter}" if tree_read_filter != "all" else ""
+    html = templates.env.get_template("_tree_folder_feeds.html").render({
+        "row": {"id": folder_id},
+        "folder_feeds": folder_feeds,
+        "selected_feed_url": None,
+        "push_feed_urls": get_push_active_feed_urls(),
+        "_tree_sq": _tree_sq,
+        "_tree_rfq": _tree_rfq,
+    })
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/settings/problematic-feeds/acknowledge")
 def acknowledge_problematic_feed(request: Request, feed_url: str = Form(...)):
     with get_meta_connection() as conn:

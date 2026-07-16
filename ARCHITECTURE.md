@@ -56,15 +56,28 @@ row sections must not render inline in `index.html`. They live in `_*.html`
 fragment templates served by dedicated GET endpoints, and the page ships a
 small container `<div data-lazy-src="…">` that client JS fills on first open.
 
-Current fragments (`/settings/feeds/panel/{folders,stale}` →
-`_settings_feeds_folders.html`, `_settings_feeds_stale.html`): the
-Settings → Feeds folders table (a hidden row per feed, including disabled) and
-the Stale view (every active feed ranked by last-post age). This works without
-any rebinding because all row interactions are event-delegated on stable
-ancestors (`#settings-tab-feeds`, `document`); only small shells with direct
-`getElementById` bindings (search input, comparison toolbar) stay
-server-rendered in the page. Fragment responses are `Cache-Control: no-store`,
-like the page itself.
+Current fragments:
+- `/settings/feeds/panel/{folders,stale}` (`_settings_feeds_folders.html`,
+  `_settings_feeds_stale.html`): the Settings → Feeds folders table (a hidden
+  row per feed, including disabled) and the Stale view (every active feed
+  ranked by last-post age), fetched on first open of the Feeds tab / Stale
+  view.
+- `/tree/folder-feeds/{folder_id}` (`_tree_folder_feeds.html`): one sidebar
+  folder's feed `<li>` rows, fetched on first expand. Only the selected
+  folder inlines its rows (the active-feed highlight and auto-expand must
+  work on full page load); the same template is `{% include %}`d there so the
+  markup can't drift. `updateScopeActiveState` fetches a folder's rows when
+  SPA navigation selects a feed whose folder hasn't loaded, and the loader
+  re-applies the unread-only tree filter to injected rows.
+
+This works without rebinding because row interactions are event-delegated on
+stable ancestors (`#settings-tab-feeds`, `nav.tree`, `document`) — new tree
+row handlers must follow that pattern, never per-element binding at load.
+Only small shells with direct `getElementById` bindings (search input,
+comparison toolbar) stay server-rendered in the page. Tree link hrefs carry
+initial sort/filter state (rebuilt server-side from remembered preferences in
+the fragment path) but the SPA re-stamps them from live state at click time.
+Fragment responses are `Cache-Control: no-store`, like the page itself.
 
 The app's main script lives in `static/js/app.js` (long-lived cache, busted by
 `?v={STATIC_ASSET_VERSION}` — new static files must be added to
