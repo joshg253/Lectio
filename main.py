@@ -14574,7 +14574,9 @@ def _build_feeds_mode_context(
 
     on_all = folder_id == root_id and not list_feed_url and not tag and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "▸",
+        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
+        # spacer keeps its label aligned with the folder rows' caret+label.
+        "label": "All", "glyph": "",
         "href": _read_browse_href(root_id, None, False, None, "feeds"),
         "count": unread_by_folder.get(root_id, 0), "active": on_all,
     }]
@@ -14673,7 +14675,9 @@ def _build_read_mode_context(
 
     on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "▸",
+        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
+        # spacer keeps its label aligned with the folder rows.
+        "label": "All", "glyph": "",
         "href": _read_browse_href(root_id, None, False, None),
         "count": len(inbox), "active": on_all,
     }]

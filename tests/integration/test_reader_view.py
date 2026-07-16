@@ -102,6 +102,22 @@ def test_bare_read_renders_two_pane_browse(monkeypatch):
     assert "Item One" in body and "#toread" in body and "Archive" in body
 
 
+def test_all_node_empty_glyph_renders_spacer_not_arrow(monkeypatch):
+    """'All' is plain navigation — no expand arrow — but it still gets the
+    fixed-width glyph spacer so its label aligns with the folder rows."""
+    ctx = dict(_CANNED_CTX, folder_nodes=[
+        {"label": "All", "glyph": "", "href": "/read?scope=feeds", "count": 3, "active": True},
+        {"label": "Tech", "glyph": "▸", "href": "/read?folder_id=5", "count": 2, "active": False},
+    ])
+    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: [])
+    monkeypatch.setattr(main, "_build_read_mode_context", lambda *a, **k: dict(ctx))
+    with TestClient(_app()) as client:
+        body = client.get("/read").text
+    # The All row keeps an (empty) spacer; only Tech carries the arrow.
+    assert '<span class="rm-glyph" aria-hidden="true"></span>' in body
+    assert body.count("▸") == 1
+
+
 def test_browse_passes_archived_and_scope(monkeypatch):
     seen = {}
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
