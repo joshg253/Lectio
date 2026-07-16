@@ -6,8 +6,10 @@
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
     // empties unsafe links (services/html_sanitize.safe_link_url); this is
-    // defense in depth for values read back out of the DOM, and matches that
-    // allowlist (http/https/mailto/tel; relative resolves same-origin).
+    // defense in depth for values read back out of the DOM, and mirrors that
+    // allowlist (SAFE_LINK_SCHEMES; relative resolves same-origin). The two
+    // lists are intentionally independent — this guard must hold even if the
+    // server's is wrong — so a Python test asserts they never drift apart.
     const _SAFE_URL_PROTOCOLS = ['http:', 'https:', 'mailto:', 'tel:'];
     function safeHttpUrl(value) {
       if (!value) return '';
@@ -18,7 +20,6 @@
         return '';
       }
     }
-    window.safeHttpUrl = safeHttpUrl;
 
     const themeToggle = null; // replaced by two-button picker in Settings
     const themeStylesheet = document.getElementById('theme-stylesheet');
