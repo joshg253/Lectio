@@ -4953,6 +4953,44 @@ body[data-keyboard-open="1"] .action-modal-panel {
   word-break: break-all;
   min-width: 0;
 }
+.saved-dedup-confirmed-list,
+.saved-dedup-possible-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+.saved-dedup-row { cursor: pointer; }
+.saved-dedup-row .dedup-tag { width: 2.6rem; }
+.saved-dedup-main { min-width: 0; }
+.saved-dedup-reasons {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.saved-dedup-badge {
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  margin-left: 0.3rem;
+}
+.saved-dedup-badge--unread { color: var(--accent, #2c7); border-color: currentColor; }
+.saved-dedup-date {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: 0.4rem;
+}
+.saved-dedup-possible-section {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
 .dedup-cross-section {
   margin-top: 0.8rem;
   display: flex;

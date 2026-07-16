@@ -155,7 +155,13 @@ The short version:
   read/unread, tags, and keyboard navigation like any other entry. Saving the
   same URL twice just re-stars the existing copy; a page that can't be
   extracted (paywall, bot-wall) is still saved as a starred bookmark and the
-  archive worker retries the capture in the background.
+  archive worker retries the capture in the background. The same article saved
+  under *different* URLs (tracking-param variants, or an Instapaper import
+  overlapping earlier saves) can be cleaned up with Settings → Feeds →
+  Duplicates → **Scan Saved for duplicates**: confirmed matches (same
+  canonical URL or slug) arrive preselected keeping the oldest copy with
+  content, while same-title / same-text matches are listed as *possible*
+  duplicates for manual review before a one-click delete.
   **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
   takes your Instapaper CSV export (Settings → Export → Download .CSV file in
   Instapaper) and imports every bookmark into Saved Items, preserving its

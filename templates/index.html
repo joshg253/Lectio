@@ -2025,6 +2025,7 @@
           <div class="feeds-dedup-controls">
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
+            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
             <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
           </div>
@@ -2053,6 +2054,18 @@
                 Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
               </label>
               <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
+            </div>
+          </div>
+          <div id="saved-dedup-results" hidden>
+            <p class="action-modal-label saved-dedup-intro"></p>
+            <div class="saved-dedup-confirmed-list"></div>
+            <div class="saved-dedup-possible-section" hidden>
+              <p class="action-modal-label saved-dedup-possible-intro"></p>
+              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <div class="saved-dedup-possible-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
             </div>
           </div>
         </div>

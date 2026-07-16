@@ -210,6 +210,15 @@ no build step) into a Lectio-branded extension. Motivations, in value order:
 Keep the wire protocol unchanged (`/api/bookmarklet/save`) so the stock
 extension keeps working too.
 
+### Saved-articles dupe scan follow-ups (deferred)
+- **Fuzzy title matching in the Saved scan** — `/saved/duplicates` matches on
+  canonical URL/slug (confirmed) and exact normalized title / extracted-body
+  prefix (possible). A typo-fixed re-save where the title, URL, *and* body all
+  changed slips through; the safe-dedup fuzzy tier (`title_word_similarity`
+  ≥ 0.80) would catch it but needs blocking (e.g. rarest-title-word buckets) to
+  stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
+  behind after the Instapaper-import cleanup.
+
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
   (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/

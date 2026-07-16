@@ -741,6 +741,105 @@
     const _mfEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // ── Saved Articles duplicate scan ──────────────────────────────────────
+    const SAVED_DEDUP_GROUP_CAP = 200;
+
+    const savedDedupGroupHtml = (g, preselect) => {
+      const rows = g.entries.map((e, i) => {
+        const keeper = preselect && i === 0;
+        const badges =
+          `<span class="saved-dedup-badge${e.read ? '' : ' saved-dedup-badge--unread'}">${e.read ? 'read' : 'unread'}</span>` +
+          (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
+        const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
+        return `<label class="dedup-pair-row saved-dedup-row">` +
+          `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"${preselect && !keeper ? ' checked' : ''}>` +
+          `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> ${badges}${date}` +
+          `<br><span class="dedup-url">${_mfEscape(e.link)}</span></span>` +
+          `</label>`;
+      }).join('');
+      const reasons = (g.reasons || []).join(', ');
+      return `<div class="dedup-pair saved-dedup-group">` +
+        (reasons ? `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` : '') +
+        rows + `</div>`;
+    };
+
+    const savedDedupListHtml = (groups, preselect) =>
+      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, preselect)).join('') +
+      (groups.length > SAVED_DEDUP_GROUP_CAP
+        ? `<p class="muted">Showing the first ${SAVED_DEDUP_GROUP_CAP} of ${groups.length} groups — re-run the scan after deleting these.</p>`
+        : '');
+
+    document.getElementById('saved-dedup-btn')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-dedup-results');
+      const intro = results.querySelector('.saved-dedup-intro');
+      const confirmedList = results.querySelector('.saved-dedup-confirmed-list');
+      const possibleSection = results.querySelector('.saved-dedup-possible-section');
+      const possibleList = results.querySelector('.saved-dedup-possible-list');
+      const okBtn = document.getElementById('saved-dedup-ok');
+      let data;
+      try {
+        const resp = await fetch('/saved/duplicates');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        alert('Saved duplicate scan failed: ' + err);
+        return;
+      }
+      const confirmed = data.confirmed || [];
+      const possible = data.possible || [];
+      results.hidden = false;
+
+      if (confirmed.length === 0 && possible.length === 0) {
+        intro.textContent = `No duplicate saved articles found (${data.scanned} scanned).`;
+        confirmedList.innerHTML = '';
+        possibleSection.hidden = true;
+        okBtn.hidden = true;
+        return;
+      }
+      okBtn.hidden = false;
+      if (confirmed.length > 0) {
+        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the oldest copy with content:`;
+        confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
+      } else {
+        intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;
+        confirmedList.innerHTML = '';
+      }
+      if (possible.length > 0) {
+        possibleSection.hidden = false;
+        possibleSection.querySelector('.saved-dedup-possible-intro').textContent =
+          `${possible.length} possible duplicate group(s) — same title or same extracted content under different URLs:`;
+        possibleList.innerHTML = savedDedupListHtml(possible, false);
+      } else {
+        possibleSection.hidden = true;
+      }
+    });
+
+    document.getElementById('saved-dedup-ok')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-dedup-results');
+      const ids = [...results.querySelectorAll('.saved-dedup-check:checked')].map(cb => cb.dataset.entryId);
+      if (ids.length === 0) { alert('Nothing selected.'); return; }
+      if (!confirm(`Permanently delete ${ids.length} saved article(s)? This cannot be undone.`)) return;
+      let data;
+      try {
+        const resp = await fetch('/saved/deduplicate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entry_ids: ids }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        alert('Delete failed: ' + err);
+        return;
+      }
+      alert(data.errors
+        ? `Deleted ${data.deleted} — ${data.errors} failed, see server logs.`
+        : `Deleted ${data.deleted} duplicate saved article(s).`);
+      results.hidden = true;
+      window.location.reload();
+    });
+
     document.getElementById('multi-folder-btn')?.addEventListener('click', async () => {
       const results = document.getElementById('multi-folder-results');
       const intro = results?.querySelector('.multi-folder-intro');

@@ -6101,6 +6101,12 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
       Same article syndicated to two feeds (e.g. blog + planet aggregator).
       Keeps the oldest copy across feeds, marks the rest read.
 
+    Saved Articles (lectio:saved) are excluded from both passes: a saved copy
+    shares its link with the source feed's entry, and suppressing it here would
+    silently mark the saved copy read and bury it in the read-later backlog.
+    Duplicates *within* Saved are handled by the user-driven /saved/duplicates
+    scan instead.
+
     Returns total entries suppressed.
     """
     from datetime import datetime
@@ -6113,6 +6119,8 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     # ── Pass 1: per-feed slug + title+date dedup ──────────────────────────────
     for feed in reader.get_feeds():
         feed_url = str(feed.url)
+        if saved_articles_service.is_saved_articles_feed(feed_url):
+            continue
         try:
             slug_entries: dict[str, list] = {}
             title_entries: dict[str, list] = {}
@@ -6161,6 +6169,8 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     try:
         link_entries: dict[str, list] = {}
         for entry in reader.get_entries(read=False):
+            if saved_articles_service.is_saved_articles_feed(str(entry.feed_url)):
+                continue
             if not entry.link:
                 continue
             canon = normalize_entry_link_for_dedupe(entry.link)
@@ -20439,9 +20449,9 @@ def feed_curation_count_route(feed_url: str = Query(...)):
     return JSONResponse(counts)
 
 
-@app.post("/entries/delete")
-def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
-    """Hard-delete a single entry (spam, corrupted post) and tombstone it.
+def _hard_delete_entry(reader, feed_url: str, entry_id: str, entry) -> None:
+    """Tombstone and hard-delete one entry (shared by /entries/delete and
+    /saved/deduplicate).
 
     reader.delete_entry only covers user-added entries; feed-provided ones go
     through the storage-level delete (the same API reader's own entry_dedupe
@@ -20449,24 +20459,30 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
     entry while it's still in the publisher's feed window — the refresh service
     purges tombstoned entries after each update.
     """
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
+            (feed_url, entry_id),
+        )
+        conn.execute(
+            "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+    if getattr(entry, "added_by", "") == "user":
+        reader.delete_entry((feed_url, entry_id), missing_ok=True)
+    else:
+        reader._storage.delete_entries([(feed_url, entry_id)])
+
+
+@app.post("/entries/delete")
+def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
+    """Hard-delete a single entry (spam, corrupted post) and tombstone it."""
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if entry is None:
             return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
-        with get_meta_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
-                (feed_url, entry_id),
-            )
-            conn.execute(
-                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            )
         try:
-            if getattr(entry, "added_by", "") == "user":
-                reader.delete_entry((feed_url, entry_id), missing_ok=True)
-            else:
-                reader._storage.delete_entries([(feed_url, entry_id)])
+            _hard_delete_entry(reader, feed_url, entry_id, entry)
         except Exception:  # noqa: BLE001
             LOGGER.exception("[delete-entry] failed for %s in %s", entry_id, feed_url)
             return JSONResponse({"ok": False, "error": "Delete failed — see server logs."}, status_code=500)
@@ -20957,6 +20973,175 @@ async def deduplicate_feeds(request: Request):
 
     invalidate_meta_structure_cache()
     return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded), "rescued_count": rescued_count})
+
+
+# ── Saved Articles duplicate scan ─────────────────────────────────────────────
+
+_SAVED_DUP_BODY_HEAD_CHARS = 400
+_SAVED_DUP_BODY_SQL_CHARS = 2000
+
+
+def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[dict]]:
+    """Union-find over shared signal values: records that share any non-empty
+    value for any of *keys* end up in the same group. Returns groups of 2+."""
+    parent = list(range(len(records)))
+
+    def _find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first_seen: dict[tuple[str, str], int] = {}
+    for i, r in enumerate(records):
+        for key in keys:
+            val = r[key]
+            if not val:
+                continue
+            bucket = (key, val)
+            if bucket in first_seen:
+                ri, rj = _find(first_seen[bucket]), _find(i)
+                if ri != rj:
+                    parent[rj] = ri
+            else:
+                first_seen[bucket] = i
+
+    groups: dict[int, list[dict]] = {}
+    for i, r in enumerate(records):
+        groups.setdefault(_find(i), []).append(r)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _saved_dup_reasons(group: list[dict], checks: list[tuple[str, str]]) -> list[str]:
+    reasons = []
+    for field, label in checks:
+        vals = [r[field] for r in group if r[field]]
+        if len(vals) != len(set(vals)):
+            reasons.append(label)
+    return reasons
+
+
+@app.get("/saved/duplicates")
+def get_saved_duplicates():
+    """Report likely duplicate articles within Saved Articles (lectio:saved).
+
+    Saved entries are keyed by their normalized URL, so re-saving the same URL
+    can't duplicate — dupes are the same article saved under *different* URLs
+    (amp/www/tracking-param variants, or an Instapaper import overlapping
+    earlier saves). Two confidence tiers:
+
+      confirmed — same canonical link or same URL slug.
+      possible  — same normalized title, or same extracted-body prefix (catches
+                  a re-save after the publisher fixed both the title and URL).
+
+    Entries in each group are ordered keep-first (has extracted content, then
+    oldest save). Read-only — the client posts the copies to remove to
+    /saved/deduplicate.
+    """
+    import html as _html
+
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    with get_reader() as reader:
+        if reader.get_feed(saved_url, None) is None:
+            return JSONResponse({"confirmed": [], "possible": [], "scanned": 0})
+        # Direct storage read: reader.get_entries() would materialize every
+        # saved article's full extracted body; only a short prefix is needed.
+        rows = reader._storage.get_db().execute(
+            "SELECT id, link, title, published, read,"
+            " substr(json_extract(content, '$[0].value'), 1, ?)"
+            " FROM entries WHERE feed = ?",
+            (_SAVED_DUP_BODY_SQL_CHARS, saved_url),
+        ).fetchall()
+
+    records: list[dict] = []
+    for entry_id, link, title, published, read, body_head in rows:
+        link = str(link or entry_id)
+        body = ""
+        if body_head:
+            body = _SAFE_DEDUP_TAG_RE.sub(" ", body_head)
+            body = _html.unescape(body)
+            body = " ".join(body.split())[:_SAVED_DUP_BODY_HEAD_CHARS].lower()
+        ntitle = normalize_entry_title_for_dedupe(title)
+        records.append({
+            "entry_id": str(entry_id),
+            "link": link,
+            "title": str(title or ""),
+            "published": str(published or ""),
+            "read": bool(read),
+            "has_content": body_head is not None,
+            "_canon": normalize_entry_link_for_dedupe(link),
+            "_slug": _safe_dedup_entry_slug(link),
+            "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
+            "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
+        })
+
+    def _keep_order(r: dict):
+        # Keeper first: prefer a copy with extracted content, then the oldest
+        # dated save (undated copies come from failed extractions — keep last).
+        return (not r["has_content"], not r["published"], r["published"])
+
+    def _emit(groups: list[list[dict]], checks: list[tuple[str, str]]) -> list[dict]:
+        out = []
+        for group in groups:
+            group.sort(key=_keep_order)
+            out.append({
+                "reasons": _saved_dup_reasons(group, checks),
+                "entries": [
+                    {k: r[k] for k in ("entry_id", "link", "title", "published", "read", "has_content")}
+                    for r in group
+                ],
+            })
+        out.sort(key=lambda g: (g["entries"][0]["title"] or "").lower())
+        return out
+
+    confirmed_groups = _saved_dup_groups(records, ("_canon", "_slug"))
+    confirmed_member: dict[str, int] = {}
+    for gi, group in enumerate(confirmed_groups):
+        for r in group:
+            confirmed_member[r["entry_id"]] = gi
+
+    possible_groups = []
+    for group in _saved_dup_groups(records, ("_ntitle", "_body")):
+        # Skip groups the confirmed tier already covers entirely (distinct
+        # negative sentinels keep two non-members from looking like a match).
+        gids = {confirmed_member.get(r["entry_id"], -1 - i) for i, r in enumerate(group)}
+        if len(gids) == 1 and next(iter(gids)) >= 0:
+            continue
+        possible_groups.append(group)
+
+    return JSONResponse({
+        "confirmed": _emit(confirmed_groups, [("_canon", "same URL"), ("_slug", "same slug")]),
+        "possible": _emit(possible_groups, [("_ntitle", "same title"), ("_body", "same content")]),
+        "scanned": len(records),
+    })
+
+
+@app.post("/saved/deduplicate")
+async def deduplicate_saved(request: Request):
+    """Hard-delete the selected duplicate copies from Saved Articles.
+
+    Body (JSON): {"entry_ids": [...]} — ids of the copies to remove (a saved
+    entry's id is its normalized article URL). Each one is tombstoned and
+    deleted exactly like /entries/delete."""
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    deleted = 0
+    errors = 0
+    with get_reader() as reader:
+        for entry_id in entry_ids:
+            entry = reader.get_entry((saved_url, entry_id), None)
+            if entry is None:
+                continue
+            try:
+                _hard_delete_entry(reader, saved_url, entry_id, entry)
+                deleted += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[saved-dedup] delete failed for %s", entry_id)
+                errors += 1
+    if deleted:
+        invalidate_unread_counts_cache()
+    return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
 
 
 @app.get("/feeds/multi-folder")
