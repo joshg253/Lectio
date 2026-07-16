@@ -99,3 +99,45 @@ def test_missing_timestamp_is_none():
     csv = HEADER + "https://a.test/1,T,,Unread,\n"
     (bm,) = _plan(csv)
     assert bm.saved_at is None
+
+
+# --- Tags column (newer 6-column export) -------------------------------------
+
+HEADER6 = "URL,Title,Selection,Folder,Timestamp,Tags\n"
+
+
+def test_tags_column_json_array_of_strings():
+    # csv quoting: the JSON array field contains commas, so it's quoted with
+    # doubled internal quotes.
+    csv = HEADER6 + 'https://a.test/1,T,,Unread,1600000000,"[""Music"",""Guitar""]"\n'
+    (bm,) = _plan(csv)
+    assert bm.tags == ["music", "guitar"]
+    assert bm.archived is False
+
+
+def test_tags_column_empty_array():
+    csv = HEADER6 + "https://a.test/1,T,,Unread,1600000000,[]\n"
+    (bm,) = _plan(csv)
+    assert bm.tags == []
+
+
+def test_tags_column_merges_with_folder_and_star():
+    csv = HEADER6 + 'https://a.test/1,T,,Recipes,1600000000,"[""quick""]"\n'
+    (bm,) = _plan(csv)
+    # Column tag first, then the custom-folder tag; deduped, order preserved.
+    assert bm.tags == ["quick", "recipes"]
+
+
+def test_parse_tags_cell_object_array():
+    assert instapaper_import.parse_tags_cell('[{"name": "Jazz"}, {"name": "Live"}]') == ["Jazz", "Live"]
+
+
+def test_parse_tags_cell_bare_string_fallback():
+    # Not valid JSON — comma-split fallback still yields tags.
+    assert instapaper_import.parse_tags_cell("music, guitar") == ["music", "guitar"]
+
+
+def test_parse_tags_cell_empty_forms():
+    assert instapaper_import.parse_tags_cell("[]") == []
+    assert instapaper_import.parse_tags_cell("") == []
+    assert instapaper_import.parse_tags_cell("   ") == []

@@ -160,7 +160,8 @@ The short version:
   takes your Instapaper CSV export (Settings → Export → Download .CSV file in
   Instapaper) and imports every bookmark into Saved Items, preserving its
   original save time. Archived Instapaper articles arrive already archived,
-  custom folders and the Liked/Starred flag become tags, and each article's
+  your Instapaper tags (plus custom folders and the Liked/Starred flag) become
+  Lectio tags, and each article's
   text is fetched by the offline archive worker after import (nothing is
   fetched inline, so large libraries import instantly).
   Side-by-side **Feeds | Saved** tabs at the top of the sidebar switch between
