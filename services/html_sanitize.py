@@ -133,6 +133,16 @@ _MATHML_ATTRS = frozenset({
 })
 
 
+# Schemes allowed in an href. `safeHttpUrl()` in static/js/app.js guards the
+# same values client-side (as `http:`-style protocols) for URLs read back out of
+# the DOM; the two lists are deliberately independent — the client guard is
+# defense in depth and must not depend on server config to hold — so
+# tests/unit/test_safe_link_url.py fails if they drift apart.
+SAFE_LINK_SCHEMES = ("http", "https", "mailto", "tel")
+# Non-href single-URL attributes (src, poster, …) never need mailto/tel.
+SAFE_SRC_SCHEMES = ("http", "https")
+
+
 def _is_safe_attr_url(attr: str, value: str) -> bool:
     """Reject javascript:/vbscript:/data: (and control-char-obfuscated variants);
     allow relative URLs and http(s) (plus mailto/tel for href)."""
@@ -148,8 +158,26 @@ def _is_safe_attr_url(attr: str, value: str) -> bool:
     if scheme == "":
         return True  # relative URL
     if attr == "href":
-        return scheme in ("http", "https", "mailto", "tel")
-    return scheme in ("http", "https")
+        return scheme in SAFE_LINK_SCHEMES
+    return scheme in SAFE_SRC_SCHEMES
+
+
+def safe_link_url(value: str | None) -> str:
+    """Return *value* if it is safe to render as a link href, else "".
+
+    An entry's own `link` is attacker-controlled: a malicious — or compromised
+    — feed can set it to `javascript:...`, which Jinja will happily emit as
+    `href="javascript:..."` (escaping protects the attribute *context*, not the
+    URL scheme). Clicking it would run script in Lectio's origin, with the
+    session cookie and CSRF token. The body-HTML sanitizer already blocks this
+    for hrefs *inside* content; this applies the identical rule (http/https
+    plus mailto/tel, control-char obfuscation stripped) to the link fields that
+    reach templates and data-* attributes, so the UI hides an unsafe link
+    instead of rendering it.
+    """
+    if not value:
+        return ""
+    return value if _is_safe_attr_url("href", value) else ""
 
 
 def _embed_host_allowed(src: str) -> bool:

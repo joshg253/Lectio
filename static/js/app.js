@@ -2,6 +2,25 @@
 // it across navigations (it was ~580KB of inline JS re-shipped with every
 // full page render). Template-derived values arrive via the window.* config
 // object in the document <head>; this file must stay Jinja-free.
+    // Only web-ish schemes may reach an href/src. Entry and feed URLs are
+    // feed-controlled: a `javascript:` URL assigned to an anchor's href would
+    // run in our origin the moment the user clicks it. The server already
+    // empties unsafe links (services/html_sanitize.safe_link_url); this is
+    // defense in depth for values read back out of the DOM, and mirrors that
+    // allowlist (SAFE_LINK_SCHEMES; relative resolves same-origin). The two
+    // lists are intentionally independent — this guard must hold even if the
+    // server's is wrong — so a Python test asserts they never drift apart.
+    const _SAFE_URL_PROTOCOLS = ['http:', 'https:', 'mailto:', 'tel:'];
+    function safeHttpUrl(value) {
+      if (!value) return '';
+      try {
+        const parsed = new URL(value, window.location.origin);
+        return _SAFE_URL_PROTOCOLS.includes(parsed.protocol) ? value : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
     const themeToggle = null; // replaced by two-button picker in Settings
     const themeStylesheet = document.getElementById('theme-stylesheet');
     let appUnreadCount = null;
@@ -2916,7 +2935,7 @@
       setFeedPropText(feedPropWebsite, '-');
       if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
       setFeedPropText(feedPropXml, feedUrl);
-      if (feedPropXmlOpen) { feedPropXmlOpen.href = feedUrl || '#'; feedPropXmlOpen.hidden = !feedUrl; }
+      if (feedPropXmlOpen) { feedPropXmlOpen.href = safeHttpUrl(feedUrl) || '#'; feedPropXmlOpen.hidden = !feedUrl; }
       setFeedPropText(feedPropHealth, '-');
       setFeedPropText(feedPropHealthDetail, '-');
       setFeedPropText(feedPropTotal, '-');
@@ -3005,7 +3024,7 @@
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         if (feedPropXmlOpen) {
           const xu = (data.feed_url || feedUrl || '').trim();
-          feedPropXmlOpen.href = xu || '#';
+          feedPropXmlOpen.href = safeHttpUrl(xu) || '#';
           feedPropXmlOpen.hidden = !xu;
         }
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
@@ -5190,7 +5209,7 @@
           setSourceModeIndicator('readability');
           entryReadabilityButton.classList.add('active');
           entrySourceButton?.classList.remove('active');
-          if (entrySourceOpenExternal) entrySourceOpenExternal.href = sourceUrl;
+          if (entrySourceOpenExternal) entrySourceOpenExternal.href = safeHttpUrl(sourceUrl);
           entryBody.setAttribute('hidden', '');
           if (entryReadabilityContainer) {
             entryReadabilityContainer.innerHTML = '<p class="entry-readability-loading">Loading reader view…</p>';
@@ -10933,12 +10952,12 @@
         entrySourceFrame.srcdoc = '';
         fetchAndInjectProxy(sourceViewUrl);
       } else if (entrySourceFrame.src !== iframeUrl) {
-        entrySourceFrame.src = iframeUrl;
+        entrySourceFrame.src = safeHttpUrl(iframeUrl);
       } else {
         sourceFrameLoaded = true;
       }
       if (entrySourceOpenExternal) {
-        entrySourceOpenExternal.href = sourceUrl;
+        entrySourceOpenExternal.href = safeHttpUrl(sourceUrl);
       }
       entryBody.setAttribute('hidden', '');
       if (entryReadabilityContainer) {

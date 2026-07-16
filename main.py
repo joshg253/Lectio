@@ -10325,7 +10325,10 @@ def list_entries_for_feeds(
                     "feed_url": entry.feed_url,
                     "id": entry.id,
                     "title": title_text,
-                    "link": entry.link or _derived_entry_link(entry),
+                    # Sanitized here (not after the rebase below) so an unsafe
+                    # link is emptied before anything else consumes it — the
+                    # rebase then no-ops on the falsy value. See safe_link_url.
+                    "link": html_sanitize.safe_link_url(entry.link or _derived_entry_link(entry)),
                     "read": is_read,
                     "saved": is_saved,
                     sort_key: sort_value,
@@ -10687,7 +10690,9 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "feed_url": feed_url,
         "id": entry_id,
         "title": archived.get("title") or "",
-        "link": archived.get("link") or "",
+        # Archived copies carry the link the feed gave us — same guard as the
+        # live path (see safe_link_url).
+        "link": html_sanitize.safe_link_url(archived.get("link")),
         "summary": "",
         "content_html": content_html,
         "lead_image_url": None,
@@ -12330,7 +12335,11 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
 
         _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
-        _display_link = _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
+        # Drop a feed-supplied javascript:/data:/etc link before it reaches the
+        # entry pane's href / data-source-url attributes (see safe_link_url).
+        _display_link = html_sanitize.safe_link_url(
+            _rebase_proxy_entry_link(entry.link or _derived_entry_link(entry), feed_url, _channel_link)
+        )
 
         # Suppress summaries that consist entirely of img tags with no text (e.g. xkcd,
         # Deathbulge).  After the lead image is shown above the content, rendering the
@@ -15692,7 +15701,14 @@ def _home_inner(
         selected_star_only = False
 
     tag_start = time.perf_counter()
-    tag_rows = get_tag_counts_for_feeds(filtered_feed_urls)
+    # The landing (home=1) suppresses POSTS, not sidebar navigation — the folder
+    # tree still renders, so the sidebar Tags list should too. filtered_feed_urls
+    # was emptied above for the post query, which would also blank the tag list;
+    # scope tags to the folder's feeds instead. Without this, deleting a tag
+    # (which reloads onto the landing) makes the whole Tags list look empty even
+    # though the tags still exist.
+    tag_scope_feed_urls = feed_urls if selected_home else filtered_feed_urls
+    tag_rows = get_tag_counts_for_feeds(tag_scope_feed_urls)
     tag_block_ms = int((time.perf_counter() - tag_start) * 1000)
     LOGGER.info("[perf] home: tag_block=%dms", tag_block_ms)
 
