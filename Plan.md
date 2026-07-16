@@ -13,6 +13,22 @@ validate-and-return-same-string sanitizer, so any future edit near
 `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
 rationale.)
 
+### Page-weight reduction — follow-ups (main work landed 2026-07-15)
+
+The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
+Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
+feed rows (2.7MB), and by moving the ~580KB inline script to
+`static/js/app.js`. Remaining:
+
+- **Entry-pane loading state/timeout** — slow pane loads still look like dead
+  clicks (pending nicety carried over from the 2026-07-15 session).
+- **Delete orphaned `templates/js/_layout_shell.js` and
+  `templates/js/_pull_to_refresh.js`** — unreferenced leftovers from an
+  earlier extraction attempt; confirm nothing external uses them, then drop.
+- **Optional**: the pane-swap path still renders the full page server-side per
+  fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
+  endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
+
 
 ## Later
 

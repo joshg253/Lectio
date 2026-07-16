@@ -285,6 +285,11 @@ The short version:
 | `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
 | `lectio_meta.sqlite` | Starred/saved entry archive |
 
+Pages stay light at large subscription counts: per-feed row sections (the
+sidebar folder feed lists, the Settings → Feeds table, and the Stale view)
+load as HTML fragments on first open instead of shipping with every page, and
+the app script is a cacheable static file rather than inline JS.
+
 ---
 
 ## Stack
