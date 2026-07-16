@@ -693,6 +693,71 @@ def youtube_embed_host() -> str:
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
+# Instance-level settings are saved from the Administration page into the
+# saving admin's own app_settings, but their consumers run in arbitrary
+# contexts: background threads (maintenance hour, image-cache eviction),
+# pre-auth requests (login lockout), or other users' requests. The admin-tier
+# lookup below makes them resolvable from any context. TTL-cached because
+# list_users() is a DB query and get_img_cache_max_dim sits on the /api/img
+# hot path; the settings-save route invalidates it so edits apply immediately.
+_INSTANCE_SETTING_TTL_SECONDS = 60.0
+_instance_setting_cache: dict[str, tuple[float, str]] = {}
+_instance_setting_cache_lock = threading.Lock()
+
+
+def invalidate_instance_setting_cache() -> None:
+    with _instance_setting_cache_lock:
+        _instance_setting_cache.clear()
+
+
+def _get_admin_instance_setting(key: str) -> str:
+    """First enabled admin's stored value for *key* ("" if none), from any context.
+
+    Reads via get_setting (DB-backed) rather than the in-memory cache alone, so
+    it works in background threads before the admin's cache has ever loaded
+    (e.g. the 3am maintenance check right after a container restart).
+    """
+    now = time.monotonic()
+    with _instance_setting_cache_lock:
+        hit = _instance_setting_cache.get(key)
+        if hit and now - hit[0] < _INSTANCE_SETTING_TTL_SECONDS:
+            return hit[1]
+    val = ""
+    if user_store is not None:
+        # Never crash the caller (login lockout checks run pre-auth; a
+        # half-provisioned admin dir must degrade to the env fallback).
+        try:
+            for u in user_store.list_users():
+                if not u.get("is_admin") or u.get("disabled"):
+                    continue
+                with tenancy.user_context(u["user_id"]):
+                    with get_meta_connection() as conn:
+                        v = get_setting(conn, key)
+                if v:
+                    val = v
+                    break
+        except Exception:
+            LOGGER.debug("admin instance-setting lookup failed for %r", key, exc_info=True)
+    with _instance_setting_cache_lock:
+        _instance_setting_cache[key] = (now, val)
+    return val
+
+
+def get_instance_setting(key: str, env_fallback: str = "") -> str:
+    """Resolve an instance-level (admin-managed) setting from any context.
+
+    Resolution: current context's own setting → first enabled admin's setting
+    → env fallback. The current-context tier keeps single-user installs (where
+    settings live under the default user) and legitimate per-user overrides
+    working; the admin tier is what makes Administration → Instance Config
+    authoritative for background threads and other users in multi mode.
+    """
+    val = get_cached_setting(key)
+    if val:
+        return val
+    return _get_admin_instance_setting(key) or env_fallback
+
+
 def _get_shared_credential(key: str) -> str:
     """Read a shared-instance credential from the first admin user's settings.
 
@@ -700,35 +765,27 @@ def _get_shared_credential(key: str) -> str:
     under a namespaced key (e.g. shared_yt_oauth_client_id) and are used as a
     middle tier: per-user setting → shared-instance → env var.
     """
-    if user_store is None:
-        return ""
-    for u in user_store.list_users():
-        if u.get("is_admin") and not u.get("disabled"):
-            with tenancy.user_context(u["user_id"]):
-                val = get_runtime_setting(key)
-                if val:
-                    return val
-    return ""
+    return _get_admin_instance_setting(key)
 
 
 def get_fetch_history_keep() -> int:
-    return int(get_runtime_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
+    return int(get_instance_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
 
 
 def get_fetch_history_max_age_days() -> int:
-    return int(get_runtime_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+    return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
 
 
 def get_login_max_failures() -> int:
-    return int(get_runtime_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
+    return int(get_instance_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
 
 
 def get_login_window_seconds() -> int:
-    return int(get_runtime_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
+    return int(get_instance_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
 
 
 def get_instance_default_auto_refresh() -> int:
-    raw = int(get_runtime_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
+    raw = int(get_instance_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
     return 0 if raw <= 0 else max(raw, MIN_AUTO_REFRESH_MINUTES)
 
 
@@ -1467,7 +1524,7 @@ def push_galleries_to_deviantart_watchlist() -> dict:
 
 
 def get_maintenance_hour() -> int | None:
-    val = get_runtime_setting(SETTING_MAINTENANCE_HOUR, "")
+    val = get_instance_setting(SETTING_MAINTENANCE_HOUR, "")
     if val:
         try:
             h = int(val)
@@ -1481,7 +1538,7 @@ def get_maintenance_hour() -> int | None:
 def get_img_cache_days() -> int:
     """Last-accessed TTL (days) for the /api/img cache. 0 = keep forever.
     DB override (admin-managed) takes precedence over the env fallback."""
-    val = get_runtime_setting(SETTING_IMG_CACHE_DAYS, "")
+    val = get_instance_setting(SETTING_IMG_CACHE_DAYS, "")
     if val:
         try:
             d = int(val)
@@ -1494,7 +1551,7 @@ def get_img_cache_days() -> int:
 
 def get_img_cache_max_dim() -> int:
     """Longest-side px to downscale cached images to. 0 = store originals as-is."""
-    val = get_runtime_setting(SETTING_IMG_CACHE_MAX_DIM, "")
+    val = get_instance_setting(SETTING_IMG_CACHE_MAX_DIM, "")
     if val:
         try:
             d = int(val)
@@ -19905,6 +19962,9 @@ async def save_all_settings(request: Request):
                 set_setting(conn, key, str_val)
             else:
                 delete_setting(conn, key)
+    # Instance-level values may have changed — drop the TTL'd admin-tier cache
+    # so background threads (maintenance loop, image eviction) see them now.
+    invalidate_instance_setting_cache()
 
     # Newly-configured YouTube → sync now, in the configuring user's context.
     if not yt_configured_before and get_yt_api_key() and get_yt_channel_id():

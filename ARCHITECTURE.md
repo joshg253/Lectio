@@ -279,6 +279,24 @@ counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
 purely by content (e.g. domain classification, source-HTML by URL) may stay
 global.
 
+### Instance-level settings
+
+Instance config (Administration → Instance Config: maintenance hour,
+image-cache tunables, fetch-history retention, login lockout, default
+auto-refresh, shared OAuth creds) is *stored* in the saving admin's own
+`app_settings`, but *consumed* from arbitrary contexts — the daily-maintenance
+loop is a bare thread bound to the default user, login lockout checks run
+pre-auth, image-cache eviction runs in maintenance. These values must
+therefore be read through `get_instance_setting()` (current context's setting
+→ first enabled admin's setting → env fallback), never `get_runtime_setting()`
+directly — the latter silently reads the wrong user's (empty) settings and
+the feature dies without an error, which is exactly how nightly maintenance
+sat disabled for three weeks in 2026-07. The admin tier reads through
+`get_setting` (DB-backed, not cache-only) so it works before the admin's
+cache ever loads, is TTL-cached (60s; `list_users()` is a DB query and
+`get_img_cache_max_dim` sits on the `/api/img` hot path), and is invalidated
+by the settings-save route so edits apply immediately.
+
 ### Integrations
 
 The Resend **API key** is instance-shared (`get_resend_api_key` keeps its env
