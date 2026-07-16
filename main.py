@@ -21076,9 +21076,11 @@ def get_saved_duplicates():
         })
 
     def _keep_order(r: dict):
-        # Keeper first: prefer a copy with extracted content, then the oldest
-        # dated save (undated copies come from failed extractions — keep last).
-        return (not r["has_content"], not r["published"], r["published"])
+        # Keeper first: prefer a copy with extracted content, then https over
+        # http, then the oldest dated save (undated copies come from failed
+        # extractions — keep last).
+        return (not r["has_content"], not r["link"].startswith("https:"),
+                not r["published"], r["published"])
 
     def _emit(groups: list[list[dict]], checks: list[tuple[str, str]]) -> list[dict]:
         out = []

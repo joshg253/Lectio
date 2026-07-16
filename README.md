@@ -159,8 +159,9 @@ The short version:
   under *different* URLs (tracking-param variants, or an Instapaper import
   overlapping earlier saves) can be cleaned up with Settings → Feeds →
   Duplicates → **Scan Saved for duplicates**: confirmed matches (same
-  canonical URL or slug) arrive preselected keeping the oldest copy with
-  content, while same-title / same-text matches are listed as *possible*
+  canonical URL or slug) arrive preselected keeping the best copy (extracted
+  content first, then https over http, then the oldest save), while
+  same-title / same-text matches are listed as *possible*
   duplicates for manual review before a one-click delete.
   **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
   takes your Instapaper CSV export (Settings → Export → Download .CSV file in

@@ -149,6 +149,40 @@ def test_saved_duplicates_scan_groups_and_tiers(configured):
     assert "same title" in data["possible"][0]["reasons"]
 
 
+def test_saved_duplicates_keeper_prefers_https_over_older_http(configured):
+    http_url = "http://a.example.test/my-great-article"
+    https_url = "https://a.example.test/my-great-article"
+    with main.get_reader() as reader:
+        saved_articles_service.ensure_saved_feed(reader)
+        _add_entry(reader, SAVED, http_url, link=http_url, title="My Great Article",
+                   published=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        _add_entry(reader, SAVED, https_url, link=https_url, title="My Great Article",
+                   published=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    with _client() as c:
+        r = c.get("/saved/duplicates")
+    data = r.json()
+    assert len(data["confirmed"]) == 1
+    ids = [e["entry_id"] for e in data["confirmed"][0]["entries"]]
+    assert ids == [https_url, http_url]  # https keeper despite the older http save
+
+
+def test_saved_duplicates_content_beats_https(configured):
+    http_url = "http://a.example.test/my-great-article"
+    https_url = "https://a.example.test/my-great-article"
+    with main.get_reader() as reader:
+        saved_articles_service.ensure_saved_feed(reader)
+        _add_entry(reader, SAVED, http_url, link=http_url, title="My Great Article",
+                   published=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                   content="<p>" + "the only extracted copy " * 5 + "</p>")
+        _add_entry(reader, SAVED, https_url, link=https_url, title="My Great Article",
+                   published=datetime(2026, 7, 1, tzinfo=timezone.utc))
+    with _client() as c:
+        r = c.get("/saved/duplicates")
+    data = r.json()
+    ids = [e["entry_id"] for e in data["confirmed"][0]["entries"]]
+    assert ids == [http_url, https_url]  # don't throw away the only copy with content
+
+
 def test_saved_duplicates_same_body_lands_in_possible(configured):
     body = "<p>" + "identical extracted text " * 5 + "</p>"
     with main.get_reader() as reader:

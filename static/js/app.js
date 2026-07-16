@@ -799,7 +799,7 @@
       }
       okBtn.hidden = false;
       if (confirmed.length > 0) {
-        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the oldest copy with content:`;
+        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the copy with content, preferring https, then oldest:`;
         confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
       } else {
         intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;
