@@ -76,6 +76,21 @@ def test_home_page_does_not_inline_heavy_panels(configured):
     assert 'data-lazy-src="/settings/feeds/panel/stale"' in body
 
 
+def test_app_js_is_external_not_inline(configured):
+    """The app script ships as a cacheable static file, never inline."""
+    resp = _client().get("/?home=1")
+    assert resp.status_code == 200
+    body = resp.text
+    assert '<script src="/static/js/app.js?v=' in body
+    # A marker from deep inside the extracted script must not be inlined.
+    assert "function measureAndSetTileHeight" not in body
+    js = _client().get("/static/js/app.js")
+    assert js.status_code == 200
+    assert "function measureAndSetTileHeight" in js.text
+    # The extracted file must stay Jinja-free (it is served verbatim).
+    assert "{{" not in js.text and "{%" not in js.text
+
+
 def test_folders_panel_fragment_renders_folder_and_feed_rows(configured):
     resp = _client().get("/settings/feeds/panel/folders")
     assert resp.status_code == 200

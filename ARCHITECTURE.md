@@ -66,6 +66,16 @@ ancestors (`#settings-tab-feeds`, `document`); only small shells with direct
 server-rendered in the page. Fragment responses are `Cache-Control: no-store`,
 like the page itself.
 
+The app's main script lives in `static/js/app.js` (long-lived cache, busted by
+`?v={STATIC_ASSET_VERSION}` — new static files must be added to
+`_static_asset_version()`'s hash list or their changes won't bust caches). It
+must stay Jinja-free: template-derived values reach it via the `window.*`
+config object rendered in the document `<head>`. Only small inline scripts
+remain in `index.html` (head config, CSRF shim, theme bootstrap, layout
+shell) — the CSRF shim and theme bootstrap must run before anything else, and
+the theme bootstrap uses `document.write`, which Chrome may block for
+parser-inserted external scripts on slow connections.
+
 ## Adaptive layout model
 
 Lectio uses responsive layouts rather than a fixed three-pane assumption:

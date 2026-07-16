@@ -500,7 +500,7 @@ def _static_asset_version() -> str:
         combined = b"".join(
             (_static / name).read_bytes()
             for name in ("style.css", "themes/dark.css", "media-player.js",
-                         "reader.css", "reader.js")
+                         "reader.css", "reader.js", "js/app.js")
         )
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
