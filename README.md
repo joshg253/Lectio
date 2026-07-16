@@ -156,6 +156,14 @@ The short version:
   same URL twice just re-stars the existing copy; a page that can't be
   extracted (paywall, bot-wall) is still saved as a starred bookmark and the
   archive worker retries the capture in the background.
+  **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
+  takes your Instapaper CSV export (Settings → Export → Download .CSV file in
+  Instapaper) and imports every bookmark into Saved Items, preserving its
+  original save time. Archived Instapaper articles arrive already archived,
+  your Instapaper tags (plus custom folders and the Liked/Starred flag) become
+  Lectio tags, and each article's
+  text is fetched by the offline archive worker after import (nothing is
+  fetched inline, so large libraries import instantly).
   Side-by-side **Feeds | Saved** tabs at the top of the sidebar switch between
   normal browsing and the starred/saved backlog (both in the familiar
   three-pane layout). Clicking a tab is a landing: it shows that mode's tree —
@@ -284,6 +292,11 @@ The short version:
 | `lectio.db` | reader's SQLite feed+entry store |
 | `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
 | `lectio_meta.sqlite` | Starred/saved entry archive |
+
+Pages stay light at large subscription counts: per-feed row sections (the
+sidebar folder feed lists, the Settings → Feeds table, and the Stale view)
+load as HTML fragments on first open instead of shipping with every page, and
+the app script is a cacheable static file rather than inline JS.
 
 ---
 

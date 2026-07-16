@@ -1,0 +1,25 @@
+{# Settings → Feeds → Stale list. Served by /settings/feeds/panel/stale and
+   injected on first open of the Stale view — it ranks EVERY active feed, so
+   at thousands of feeds it must never ship inline with the page. Row actions
+   are delegated document-wide ([data-problem-feed-*]), so no rebinding. #}
+{% if stale_feeds %}
+<ul class="problem-feed-list">
+  {% for row in stale_feeds %}
+  <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+    <div class="problem-feed-row">
+      <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+      <div class="problem-feed-actions">
+        <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+        <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id if row.folder_id is not none else selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+      </div>
+    </div>
+    <div class="problem-feed-meta">
+      <span>{{ row.folder_name }}</span>
+      {% if row.last_post %}<span>Last post: {{ row.last_post }}{% if row.days_since is not none %} ({{ row.days_since }} day{{ 's' if row.days_since != 1 else '' }} ago){% endif %}</span>{% else %}<span>No posts yet</span>{% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No feeds to show.</p>
+{% endif %}

@@ -65,6 +65,7 @@ from services import podcast_audio
 from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
+from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
 from services import takeout_service
@@ -500,7 +501,7 @@ def _static_asset_version() -> str:
         combined = b"".join(
             (_static / name).read_bytes()
             for name in ("style.css", "themes/dark.css", "media-player.js",
-                         "reader.css", "reader.js")
+                         "reader.css", "reader.js", "js/app.js")
         )
         return hashlib.md5(combined).hexdigest()[:10]
     except Exception:
@@ -693,6 +694,71 @@ def youtube_embed_host() -> str:
     return "www.youtube.com" if youtube_embed_account_features_enabled() else "www.youtube-nocookie.com"
 
 
+# Instance-level settings are saved from the Administration page into the
+# saving admin's own app_settings, but their consumers run in arbitrary
+# contexts: background threads (maintenance hour, image-cache eviction),
+# pre-auth requests (login lockout), or other users' requests. The admin-tier
+# lookup below makes them resolvable from any context. TTL-cached because
+# list_users() is a DB query and get_img_cache_max_dim sits on the /api/img
+# hot path; the settings-save route invalidates it so edits apply immediately.
+_INSTANCE_SETTING_TTL_SECONDS = 60.0
+_instance_setting_cache: dict[str, tuple[float, str]] = {}
+_instance_setting_cache_lock = threading.Lock()
+
+
+def invalidate_instance_setting_cache() -> None:
+    with _instance_setting_cache_lock:
+        _instance_setting_cache.clear()
+
+
+def _get_admin_instance_setting(key: str) -> str:
+    """First enabled admin's stored value for *key* ("" if none), from any context.
+
+    Reads via get_setting (DB-backed) rather than the in-memory cache alone, so
+    it works in background threads before the admin's cache has ever loaded
+    (e.g. the 3am maintenance check right after a container restart).
+    """
+    now = time.monotonic()
+    with _instance_setting_cache_lock:
+        hit = _instance_setting_cache.get(key)
+        if hit and now - hit[0] < _INSTANCE_SETTING_TTL_SECONDS:
+            return hit[1]
+    val = ""
+    if user_store is not None:
+        # Never crash the caller (login lockout checks run pre-auth; a
+        # half-provisioned admin dir must degrade to the env fallback).
+        try:
+            for u in user_store.list_users():
+                if not u.get("is_admin") or u.get("disabled"):
+                    continue
+                with tenancy.user_context(u["user_id"]):
+                    with get_meta_connection() as conn:
+                        v = get_setting(conn, key)
+                if v:
+                    val = v
+                    break
+        except Exception:
+            LOGGER.debug("admin instance-setting lookup failed for %r", key, exc_info=True)
+    with _instance_setting_cache_lock:
+        _instance_setting_cache[key] = (now, val)
+    return val
+
+
+def get_instance_setting(key: str, env_fallback: str = "") -> str:
+    """Resolve an instance-level (admin-managed) setting from any context.
+
+    Resolution: current context's own setting → first enabled admin's setting
+    → env fallback. The current-context tier keeps single-user installs (where
+    settings live under the default user) and legitimate per-user overrides
+    working; the admin tier is what makes Administration → Instance Config
+    authoritative for background threads and other users in multi mode.
+    """
+    val = get_cached_setting(key)
+    if val:
+        return val
+    return _get_admin_instance_setting(key) or env_fallback
+
+
 def _get_shared_credential(key: str) -> str:
     """Read a shared-instance credential from the first admin user's settings.
 
@@ -700,35 +766,27 @@ def _get_shared_credential(key: str) -> str:
     under a namespaced key (e.g. shared_yt_oauth_client_id) and are used as a
     middle tier: per-user setting → shared-instance → env var.
     """
-    if user_store is None:
-        return ""
-    for u in user_store.list_users():
-        if u.get("is_admin") and not u.get("disabled"):
-            with tenancy.user_context(u["user_id"]):
-                val = get_runtime_setting(key)
-                if val:
-                    return val
-    return ""
+    return _get_admin_instance_setting(key)
 
 
 def get_fetch_history_keep() -> int:
-    return int(get_runtime_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
+    return int(get_instance_setting(SETTING_FETCH_HISTORY_KEEP) or 50)
 
 
 def get_fetch_history_max_age_days() -> int:
-    return int(get_runtime_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+    return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
 
 
 def get_login_max_failures() -> int:
-    return int(get_runtime_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
+    return int(get_instance_setting(SETTING_LOGIN_MAX_FAILURES) or 5)
 
 
 def get_login_window_seconds() -> int:
-    return int(get_runtime_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
+    return int(get_instance_setting(SETTING_LOGIN_WINDOW_SECONDS) or 300)
 
 
 def get_instance_default_auto_refresh() -> int:
-    raw = int(get_runtime_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
+    raw = int(get_instance_setting(SETTING_DEFAULT_AUTO_REFRESH_MINUTES) or DEFAULT_AUTO_REFRESH_MINUTES)
     return 0 if raw <= 0 else max(raw, MIN_AUTO_REFRESH_MINUTES)
 
 
@@ -1467,7 +1525,7 @@ def push_galleries_to_deviantart_watchlist() -> dict:
 
 
 def get_maintenance_hour() -> int | None:
-    val = get_runtime_setting(SETTING_MAINTENANCE_HOUR, "")
+    val = get_instance_setting(SETTING_MAINTENANCE_HOUR, "")
     if val:
         try:
             h = int(val)
@@ -1481,7 +1539,7 @@ def get_maintenance_hour() -> int | None:
 def get_img_cache_days() -> int:
     """Last-accessed TTL (days) for the /api/img cache. 0 = keep forever.
     DB override (admin-managed) takes precedence over the env fallback."""
-    val = get_runtime_setting(SETTING_IMG_CACHE_DAYS, "")
+    val = get_instance_setting(SETTING_IMG_CACHE_DAYS, "")
     if val:
         try:
             d = int(val)
@@ -1494,7 +1552,7 @@ def get_img_cache_days() -> int:
 
 def get_img_cache_max_dim() -> int:
     """Longest-side px to downscale cached images to. 0 = store originals as-is."""
-    val = get_runtime_setting(SETTING_IMG_CACHE_MAX_DIM, "")
+    val = get_instance_setting(SETTING_IMG_CACHE_MAX_DIM, "")
     if val:
         try:
             d = int(val)
@@ -1672,6 +1730,19 @@ _problematic_feeds_cache = _PerUserDict()
 def invalidate_problematic_feeds_cache() -> None:
     with _problematic_feeds_cache_lock:
         _problematic_feeds_cache.clear()
+
+
+def get_problematic_feeds_cached(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """TTL-cached problematic-feeds list (see cache comment above)."""
+    now_pf = time.time()
+    with _problematic_feeds_cache_lock:
+        cached_pf = _problematic_feeds_cache.get(limit)
+    if cached_pf and now_pf - cached_pf[0] < PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS:
+        return [dict(r) for r in cached_pf[1]]
+    problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=limit)
+    with _problematic_feeds_cache_lock:
+        _problematic_feeds_cache[limit] = (time.time(), [dict(r) for r in problematic_feeds])
+    return [dict(r) for r in problematic_feeds]
 
 
 def is_async_action_request(request: Request, expected_header: str | None = None) -> bool:
@@ -14504,7 +14575,9 @@ def _build_feeds_mode_context(
 
     on_all = folder_id == root_id and not list_feed_url and not tag and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "▸",
+        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
+        # spacer keeps its label aligned with the folder rows' caret+label.
+        "label": "All", "glyph": "",
         "href": _read_browse_href(root_id, None, False, None, "feeds"),
         "count": unread_by_folder.get(root_id, 0), "active": on_all,
     }]
@@ -14603,7 +14676,9 @@ def _build_read_mode_context(
 
     on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "▸",
+        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
+        # spacer keeps its label aligned with the folder rows.
+        "label": "All", "glyph": "",
         "href": _read_browse_href(root_id, None, False, None),
         "count": len(inbox), "active": on_all,
     }]
@@ -15573,15 +15648,7 @@ def _home_inner(
             """
         ).fetchall()
         _tick("global_note")
-        now_pf = time.time()
-        with _problematic_feeds_cache_lock:
-            cached_pf = _problematic_feeds_cache.get(50)
-        if cached_pf and now_pf - cached_pf[0] < PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS:
-            problematic_feeds = [dict(r) for r in cached_pf[1]]
-        else:
-            problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=50)
-            with _problematic_feeds_cache_lock:
-                _problematic_feeds_cache[50] = (time.time(), [dict(r) for r in problematic_feeds])
+        problematic_feeds = get_problematic_feeds_cached(conn)
         _tick("problematic_feeds")
         feed_urls = folder_feed_urls_by_id.get(selected_folder_id, set())
 
@@ -15668,10 +15735,6 @@ def _home_inner(
         if not pf.get("acknowledged_at")
     }
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
-    # Like feeds_by_folder but also includes disabled feeds (flagged), for the
-    # Settings → Feeds folders tree where disabled feeds show greyed out. The
-    # sidebar uses feeds_by_folder and keeps excluding them.
-    settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     # feed_url → containing_folder_id, so feed-name links in posts/entry can
     # navigate to the feed's own folder rather than the currently-viewed one.
     feed_to_folder: dict[str, int] = {}
@@ -15691,41 +15754,15 @@ def _home_inner(
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
-        settings_feeds_by_folder[folder_row_id] = all_folder_feeds
         feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
         for url in urls:
             feed_to_folder[url] = folder_row_id
 
     root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
-    folder_failing_counts: dict[int, int] = {
-        fid: sum(1 for f in feeds if f.has_error)
-        for fid, feeds in feeds_by_folder.items()
-        if any(f.has_error for f in feeds)
-    }
-
-    # Stale-feeds view (Settings → Feeds): every active feed ranked by how long
-    # ago its newest post is, oldest first. Feeds that have never posted (no
-    # entries) sort to the very top so they surface for pruning.
-    folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
-    last_post_dates = get_feed_last_post_dates()
-    _now_utc = datetime.now(timezone.utc)
-    stale_feeds = []
-    for url in all_reader_feed_urls:
-        if url in disabled_feed_urls:
-            continue
-        last_dt = last_post_dates.get(url)
-        fid = feed_to_folder.get(url)
-        stale_feeds.append({
-            "feed_url": url,
-            "feed_title": feed_title_map.get(url, url),
-            "folder_id": fid,
-            "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
-            "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
-            "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
-            "days_since": (_now_utc - last_dt).days if last_dt else None,
-        })
-    stale_feeds.sort(key=lambda x: x["last_post_sort"])
+    # The Settings → Feeds folders table and stale list are NOT built here:
+    # they render a row per feed (megabytes at thousands of feeds), so
+    # /settings/feeds/panel/{folders,stale} serves them on first open.
 
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
@@ -15864,10 +15901,8 @@ def _home_inner(
         "folder_rows": folder_rows,
         "root_folder_row": root_folder_row,
         "child_folder_rows": child_folder_rows,
-        "folder_failing_counts": folder_failing_counts,
         "folder_options": folder_options,
         "feeds_by_folder": feeds_by_folder,
-        "settings_feeds_by_folder": settings_feeds_by_folder,
         "feed_to_folder": feed_to_folder,
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
@@ -15904,7 +15939,6 @@ def _home_inner(
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
-        "stale_feeds": stale_feeds,
         "posts": posts,
         "selected_entry": selected_entry,
         "message": message,
@@ -19933,6 +19967,9 @@ async def save_all_settings(request: Request):
                 set_setting(conn, key, str_val)
             else:
                 delete_setting(conn, key)
+    # Instance-level values may have changed — drop the TTL'd admin-tier cache
+    # so background threads (maintenance loop, image eviction) see them now.
+    invalidate_instance_setting_cache()
 
     # Newly-configured YouTube → sync now, in the configuring user's context.
     if not yt_configured_before and get_yt_api_key() and get_yt_channel_id():
@@ -22265,6 +22302,189 @@ def mark_problematic_feeds_viewed(request: Request):
     return RedirectResponse(url="/", status_code=303)
 
 
+@app.get("/settings/feeds/panel/{panel_name}")
+def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response:
+    """HTML fragments for the heavyweight Settings → Feeds panels.
+
+    The folders table and the stale list render a row per feed — megabytes of
+    (mostly hidden) markup at thousands of feeds — so index.html ships lazy
+    containers instead and the client fetches these on first open of the
+    Feeds tab / Stale view. Markup matches what index.html used to inline;
+    all row interactions are event-delegated, so injection needs no JS hooks.
+    """
+    if panel_name not in {"folders", "stale"}:
+        return Response(status_code=404)
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        raw_folder_rows = cast(list[dict], snapshot["raw_folder_rows"])
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        root_id = cast(int, snapshot["root_id"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        problematic_feeds = get_problematic_feeds_cached(conn)
+
+    # Same virtual "Uncategorized" derivation as the home route: reader feeds
+    # in no folder, minus the local Saved Articles feed for display purposes.
+    all_reader_feed_urls = get_all_reader_feed_urls()
+    uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+    _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+    direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
+    direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
+    feed_title_map = get_feed_title_map()
+    folder_rows: list[dict] = [dict(row) for row in raw_folder_rows]
+    if uncategorized_feed_urls:
+        folder_rows.append({
+            "id": UNCATEGORIZED_FOLDER_ID,
+            "name": UNCATEGORIZED_FOLDER_NAME,
+            "cadence_minutes": None,
+            "depth": 1,
+            "path": UNCATEGORIZED_FOLDER_NAME,
+            "feed_count": len(_uncat_display_urls),
+            "virtual": True,
+        })
+
+    if panel_name == "stale":
+        # Every active feed ranked by how long ago its newest post is, oldest
+        # first. Feeds that have never posted sort to the very top so they
+        # surface for pruning.
+        feed_to_folder: dict[str, int] = {}
+        for row in folder_rows:
+            for url in direct_feed_urls_by_folder.get(int(row["id"]), []):
+                feed_to_folder[url] = int(row["id"])
+        folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
+        last_post_dates = get_feed_last_post_dates()
+        _now_utc = datetime.now(timezone.utc)
+        stale_feeds = []
+        for url in all_reader_feed_urls:
+            if url in disabled_feed_urls:
+                continue
+            last_dt = last_post_dates.get(url)
+            fid = feed_to_folder.get(url)
+            stale_feeds.append({
+                "feed_url": url,
+                "feed_title": feed_title_map.get(url, url),
+                "folder_id": fid,
+                "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
+                "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
+                "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
+                "days_since": (_now_utc - last_dt).days if last_dt else None,
+            })
+        stale_feeds.sort(key=lambda x: x["last_post_sort"])
+        html = templates.env.get_template("_settings_feeds_stale.html").render({
+            "stale_feeds": stale_feeds,
+            # Unsubscribe fallback target for unfoldered feeds. The inline
+            # panel used the currently-selected folder; a fragment has no
+            # selection, so fall back to the root ("All Feeds") folder.
+            "selected_folder_id": root_id,
+        })
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    error_feed_urls: set[str] = {
+        cast(str, pf["feed_url"])
+        for pf in problematic_feeds
+        if not pf.get("acknowledged_at")
+    }
+    # Like the sidebar's feeds_by_folder but including disabled feeds
+    # (flagged), so the settings table can show them greyed out.
+    settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
+    folder_failing_counts: dict[int, int] = {}
+    for row in folder_rows:
+        folder_row_id = int(row["id"])
+        urls = direct_feed_urls_by_folder.get(folder_row_id, [])
+        folder_feeds = [
+            FeedInFolder(
+                url=url,
+                title=feed_title_map.get(url, url),
+                icon_url=None,  # settings table shows no favicons
+                unread_count=0,  # settings table shows no unread badges
+                has_error=url in error_feed_urls,
+                disabled=url in disabled_feed_urls,
+            )
+            for url in urls
+        ]
+        # Active feeds first (alphabetical), disabled greyed at the bottom.
+        folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
+        settings_feeds_by_folder[folder_row_id] = folder_feeds
+        # Failing counts consider active feeds only, matching the sidebar.
+        failing = sum(1 for f in folder_feeds if f.has_error and not f.disabled)
+        if failing:
+            folder_failing_counts[folder_row_id] = failing
+    html = templates.env.get_template("_settings_feeds_folders.html").render({
+        "folder_rows": folder_rows,
+        "settings_feeds_by_folder": settings_feeds_by_folder,
+        "folder_failing_counts": folder_failing_counts,
+        "push_feed_urls": get_push_active_feed_urls(),
+    })
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/tree/folder-feeds/{folder_id}")
+def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
+    """One folder's sidebar feed rows (<li> fragment).
+
+    The sidebar renders folder rows only; each collapsed folder's feed list is
+    an empty <ul data-lazy-feeds> filled from here on first expand — inlining
+    every folder's rows costs megabytes at thousands of feeds. Link query
+    fragments (sort / read filter) are rebuilt from the remembered preferences
+    and the read-filter cookie — the same sources a fresh full render uses —
+    and the SPA re-stamps them from live state at click time anyway.
+    """
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        problematic_feeds = get_problematic_feeds_cached(conn)
+        sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
+        sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+
+    if folder_id == UNCATEGORIZED_FOLDER_ID:
+        urls = sorted(
+            get_all_reader_feed_urls() - all_feed_urls
+            - {saved_articles_service.SAVED_FEED_URL}
+        )
+    else:
+        urls = direct_feed_urls_by_folder.get(folder_id, [])
+
+    error_feed_urls: set[str] = {
+        cast(str, pf["feed_url"])
+        for pf in problematic_feeds
+        if not pf.get("acknowledged_at")
+    }
+    feed_title_map = get_feed_title_map()
+    unread_counts_by_feed = get_unread_counts_by_feed()
+    folder_feeds = [
+        FeedInFolder(
+            url=url,
+            title=feed_title_map.get(url, url),
+            icon_url=get_favicon_url(url),
+            unread_count=unread_counts_by_feed.get(url, 0),
+            has_error=url in error_feed_urls,
+        )
+        for url in urls
+        if url not in disabled_feed_urls  # sidebar shows active feeds only
+    ]
+    folder_feeds.sort(key=lambda f: f.title.casefold())
+
+    # Same compact query fragments as the tree links in index.html: omit
+    # default values, never carry star mode.
+    read_filter = normalize_read_filter(request.cookies.get("lectio_read_filter"))
+    tree_read_filter = "all" if read_filter == "history" else read_filter
+    _tree_sq = (f"&sort_by={sort_by}" if sort_by != "post" else "") + (
+        f"&sort_dir={sort_dir}" if sort_dir != "asc" else ""
+    )
+    _tree_rfq = f"&read_filter={tree_read_filter}" if tree_read_filter != "all" else ""
+    html = templates.env.get_template("_tree_folder_feeds.html").render({
+        "row": {"id": folder_id},
+        "folder_feeds": folder_feeds,
+        "selected_feed_url": None,
+        "push_feed_urls": get_push_active_feed_urls(),
+        "_tree_sq": _tree_sq,
+        "_tree_rfq": _tree_rfq,
+    })
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/settings/problematic-feeds/acknowledge")
 def acknowledge_problematic_feed(request: Request, feed_url: str = Form(...)):
     with get_meta_connection() as conn:
@@ -22531,12 +22751,150 @@ async def takeout_import(request: Request, takeout_file: Annotated[UploadFile, F
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 
+def _import_instapaper_for_current_user(data: bytes) -> dict:
+    """Import an Instapaper CSV export into the Saved Items of the current user.
+
+    Each bookmark becomes a starred entry in the Saved Articles feed with its
+    original save time; Instapaper's Archive folder maps to Lectio's archived
+    flag, custom folders and the Starred flag to manual tags. Readable content
+    is NOT fetched inline — every item is enqueued to the starred-archive
+    worker, which fetches and extracts pages offline (same as a bookmarklet
+    save), so importing hundreds of URLs doesn't block or hammer sites.
+    """
+    plan = instapaper_import_service.plan_import(
+        data,
+        normalize_url=saved_articles_service.normalize_article_url,
+        normalize_tag=normalize_tag_value,
+    )
+    summary = {"imported": 0, "duplicates": 0, "archived": 0, "tagged": 0}
+    if not plan:
+        return summary
+
+    reader = get_reader()
+    created_feed = saved_articles_service.ensure_saved_feed(reader)
+    with get_meta_connection() as conn:
+        for bm in plan:
+            saved_dt = (
+                datetime.fromtimestamp(bm.saved_at, tz=timezone.utc)
+                if bm.saved_at is not None else datetime.now(timezone.utc)
+            )
+            existing = reader.get_entry((saved_articles_service.SAVED_FEED_URL, bm.url), None)
+            if existing is None:
+                entry: dict = {
+                    "feed_url": saved_articles_service.SAVED_FEED_URL,
+                    "id": bm.url,
+                    "link": bm.url,
+                    "title": bm.title,
+                    "published": saved_dt,
+                }
+                try:
+                    reader.add_entry(entry)
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception("instapaper import: add_entry failed for %s", bm.url)
+                    continue
+                summary["imported"] += 1
+            else:
+                summary["duplicates"] += 1
+
+            archived_at = saved_dt.isoformat() if bm.archived else None
+            conn.execute(
+                "INSERT INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(feed_url, entry_id) DO UPDATE SET "
+                "archived_at = COALESCE(excluded.archived_at, saved_entries.archived_at)",
+                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat(), archived_at),
+            )
+            if bm.archived:
+                summary["archived"] += 1
+
+            if bm.tags:
+                # Presence-only manual tags; set_tag is idempotent, so this
+                # merges with any tags the entry already carries.
+                resource_id = (saved_articles_service.SAVED_FEED_URL, bm.url)
+                for tag in bm.tags:
+                    try:
+                        reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{tag}")
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("instapaper import: tag %r failed for %s", tag, bm.url)
+                summary["tagged"] += 1
+
+            try:
+                starred_archive_service.enqueue_archive(
+                    saved_articles_service.SAVED_FEED_URL, bm.url
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("instapaper import: archive enqueue failed for %s: %s", bm.url, exc)
+        conn.commit()
+
+    if created_feed:
+        invalidate_meta_structure_cache()
+        invalidate_problematic_feeds_cache()
+    invalidate_unread_counts_cache()
+    if summary["tagged"]:
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    if _search_index_ready.get(tenancy.current_user_id()):
+        try:
+            reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[search] post-import index update failed: %s", exc)
+    return summary
+
+
+@app.post("/instapaper/import")
+async def instapaper_import(request: Request, instapaper_file: Annotated[UploadFile, File(...)]):
+    """Import an Instapaper CSV export into Saved Items. Session-authenticated."""
+    data = await instapaper_file.read()
+    summary = _import_instapaper_for_current_user(data)
+    if not any(summary.values()):
+        msg = "No bookmarks found in that file. Use Instapaper's CSV export."
+    else:
+        bits = []
+        if summary["imported"]:
+            bits.append(f"{summary['imported']} imported")
+        if summary["duplicates"]:
+            bits.append(f"{summary['duplicates']} already saved")
+        if summary["archived"]:
+            bits.append(f"{summary['archived']} archived")
+        if summary["tagged"]:
+            bits.append(f"{summary['tagged']} tagged")
+        msg = "Instapaper import: " + ", ".join(bits) + ". Article text is being fetched in the background."
+    return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
+
+
 @app.get("/api/unread-counts")
 def api_unread_counts() -> JSONResponse:
-    """Return per-feed unread counts. Used by the client to refresh sidebar
-    badges after bulk mark-read actions that may affect off-screen entries."""
+    """Per-feed and per-folder unread counts plus the all-feeds total.
+
+    The client reconciles sidebar badges from this (90s poll, tab refocus, and
+    after bulk mark-read). Folder counts must come from the server: tree feed
+    rows lazy-load on folder expand, so the client cannot derive an unexpanded
+    folder's badge from its (absent) feed rows. Mirrors the home render's
+    badge math: disabled feeds excluded, virtual Uncategorized folder counted,
+    root total widened to every reader feed."""
     counts = get_unread_counts_by_feed()
-    return JSONResponse(counts)
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        raw_folder_rows = cast(list[dict], snapshot["raw_folder_rows"])
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        root_id = cast(int, snapshot["root_id"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+    active_counts = {u: c for u, c in counts.items() if u not in disabled_feed_urls}
+    folder_counts = get_unread_counts_by_folder(
+        raw_folder_rows, active_counts, direct_feed_urls_by_folder
+    )
+    _uncat_display_urls = (
+        get_all_reader_feed_urls() - all_feed_urls
+        - {saved_articles_service.SAVED_FEED_URL}
+    )
+    uncategorized_unread = sum(active_counts.get(u, 0) for u in _uncat_display_urls)
+    folder_counts[UNCATEGORIZED_FOLDER_ID] = uncategorized_unread
+    folder_counts[root_id] = folder_counts.get(root_id, 0) + uncategorized_unread
+    return JSONResponse({
+        "feeds": counts,
+        "folders": folder_counts,
+        "total": folder_counts.get(root_id, 0),
+    })
 
 
 # Formats we re-encode when downscaling /api/img cache entries. Anything else

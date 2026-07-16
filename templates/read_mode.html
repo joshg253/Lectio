@@ -42,7 +42,9 @@
           </details>
           {% else %}
           <a class="rm-node{% if n.active %} active{% endif %}" href="{{ n.href }}">
-            {% if n.glyph %}<span class="rm-glyph" aria-hidden="true">{{ n.glyph }}</span>{% endif %}
+            {# An empty glyph still renders the fixed-width spacer so rows
+               without an arrow (e.g. "All") stay aligned with folder rows. #}
+            {% if n.glyph is defined %}<span class="rm-glyph" aria-hidden="true">{{ n.glyph }}</span>{% endif %}
             <span class="rm-label">{{ n.label }}</span>
             {% if n.count %}<span class="rm-count">{{ n.count }}</span>{% endif %}
           </a>

@@ -1,0 +1,87 @@
+{# Settings → Feeds → Folders table. Served by /settings/feeds/panel/folders
+   and injected on first open of the Feeds tab — at thousands of feeds this
+   table is the single heaviest fragment in the app (every feed gets a hidden
+   row), so it must never ship inline with the page. All row interactions are
+   delegated on #settings-tab-feeds, so injected rows need no rebinding. #}
+{% set child_rows = folder_rows | selectattr('depth', 'equalto', 1) | list %}
+{# Also list feeds attached directly to the root "All Feeds" folder
+   (depth 0) — otherwise feeds added without a folder are invisible
+   and unmanageable here. Shown last, labelled "Ungrouped". #}
+{% set _root_rows = folder_rows | selectattr('depth', 'equalto', 0) | list %}
+{% if _root_rows and settings_feeds_by_folder.get(_root_rows[0].id) %}
+{% set child_rows = child_rows + [_root_rows[0]] %}
+{% endif %}
+{% if child_rows %}
+{% set cadence_options = [(0, 'Global'), (1, '1 min'), (2, '2 min'), (5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '1 hr'), (120, '2 hr'), (360, '6 hr'), (720, '12 hr'), (1440, '1 day')] %}
+<table class="settings-folders-table">
+  <colgroup>
+    <col />
+    <col style="width: 2.5rem" />
+    <col style="width: 5rem" />
+    <col style="width: 4.75rem" />
+    <col style="width: 2rem" />
+  </colgroup>
+  <thead><tr><th>Folder</th><th style="text-align:right">Feeds</th><th>Refresh</th><th></th><th class="sfc-col-check" title="Select for comparison"></th></tr></thead>
+  <tbody>
+  {% for row in child_rows %}
+  {% set failing = folder_failing_counts.get(row.id, 0) %}
+  {% set folder_feeds = settings_feeds_by_folder.get(row.id, []) %}
+  {% set cad = row.cadence_minutes or 0 %}
+  <tr class="settings-folder-row" data-folder-row="{{ row.id }}">
+    <td class="settings-folder-name">
+      <div class="settings-folder-name-inner">
+        <button type="button" class="settings-folder-toggle" data-folder-toggle="{{ row.id }}" aria-expanded="false" {% if not folder_feeds %}disabled{% endif %} title="Show feeds" aria-label="Show feeds"><span class="material-symbols-rounded" aria-hidden="true">chevron_right</span></button>
+        <span class="settings-folder-name-text">{{ 'Ungrouped' if row.depth == 0 else row.name }}</span>
+        {% if failing %}<span class="settings-folder-error-badge" title="{{ failing }} failing feed{{ 's' if failing != 1 else '' }}">{{ failing }}</span>{% endif %}
+      </div>
+    </td>
+    <td class="settings-folder-feeds">{{ row.feed_count }}</td>
+    <td class="settings-folder-refresh">
+      {% if not row.virtual %}
+      <select class="settings-folder-cadence-select feed-prop-strategy-select" data-folder-id="{{ row.id }}" data-prev-value="{{ cad }}" title="Refresh frequency for this folder" aria-label="Refresh frequency for {{ row.name }}">
+        {% for value, label in cadence_options %}
+        <option value="{{ value }}"{% if value == cad %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+    </td>
+    <td class="settings-folder-actions">
+      {% if not row.virtual %}
+      <button type="button" class="settings-folder-props-btn" data-folder-automation-id="{{ row.id }}" title="Folder automation" aria-label="Folder automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
+      <button type="button" class="settings-folder-props-btn" data-settings-folder-id="{{ row.id }}" title="Folder properties" aria-label="Folder properties"><span class="material-symbols-rounded" aria-hidden="true">settings</span></button>
+      {% endif %}
+    </td>
+    <td class="sfc-col-check">
+      {% if folder_feeds %}
+      <input type="checkbox" class="sfc-check-all" data-folder-check="{{ row.id }}" title="Select all feeds in this folder" aria-label="Select all feeds in {{ 'Ungrouped' if row.depth == 0 else row.name }}" />
+      {% endif %}
+    </td>
+  </tr>
+  {% for feed in folder_feeds %}
+  <tr class="settings-feed-row{% if feed.disabled %} settings-feed-row--disabled{% endif %}" data-folder-feeds="{{ row.id }}" data-feed-url="{{ feed.url }}" hidden>
+    <td class="settings-feed-name" colspan="3">
+      <button type="button" class="settings-feed-name-text settings-feed-name-btn" data-feed-properties-url="{{ feed.url }}"{% if feed.has_error %} data-feed-error="1"{% endif %} title="{{ feed.url }}">{{ feed.title }}</button>
+      {% if feed.url in push_feed_urls %}<span class="feed-push-badge" title="Instant updates (WebSub)">⚡</span>{% endif %}
+      {% if feed.has_error %}<span class="settings-folder-error-badge" title="Feed is failing">!</span>{% endif %}
+      {% if feed.disabled %}<span class="settings-feed-disabled-tag">disabled</span>{% endif %}
+    </td>
+    <td class="settings-folder-actions">
+      <button type="button" class="settings-folder-props-btn" data-feed-automation-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Feed automation" aria-label="Feed automation"><span class="material-symbols-rounded" aria-hidden="true">bolt</span></button>
+      {% if feed.disabled %}
+      <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-enable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Enable feed" aria-label="Enable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility</span></button>
+      {% else %}
+      <button type="button" class="settings-folder-props-btn settings-feed-toggle-btn" data-feed-disable-url="{{ feed.url }}" data-folder-id="{{ row.id }}" title="Disable feed" aria-label="Disable feed"><span class="material-symbols-rounded" aria-hidden="true">visibility_off</span></button>
+      {% endif %}
+      <button type="button" class="settings-folder-props-btn settings-feed-unsub-btn" data-settings-feed-unsubscribe data-feed-url="{{ feed.url }}" data-feed-title="{{ feed.title }}" data-folder-id="{{ row.id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+    </td>
+    <td class="sfc-col-check">
+      <input type="checkbox" class="sfc-check" aria-label="Select {{ feed.title }} for comparison" title="Select for comparison" />
+    </td>
+  </tr>
+  {% endfor %}
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted" style="padding:0.5rem 0">No folders yet.</p>
+{% endif %}

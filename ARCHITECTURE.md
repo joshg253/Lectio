@@ -48,6 +48,47 @@ state (current track, position, playback speed) is transient client-side state
 only — no server or DB involvement — with playback speed persisted to
 `localStorage`.
 
+## Page weight: lazy HTML fragments
+
+At thousands of feeds, any template section that renders a row per feed is
+megabytes of HTML — far heavier than the posts themselves. The rule: per-feed
+row sections must not render inline in `index.html`. They live in `_*.html`
+fragment templates served by dedicated GET endpoints, and the page ships a
+small container `<div data-lazy-src="…">` that client JS fills on first open.
+
+Current fragments:
+- `/settings/feeds/panel/{folders,stale}` (`_settings_feeds_folders.html`,
+  `_settings_feeds_stale.html`): the Settings → Feeds folders table (a hidden
+  row per feed, including disabled) and the Stale view (every active feed
+  ranked by last-post age), fetched on first open of the Feeds tab / Stale
+  view.
+- `/tree/folder-feeds/{folder_id}` (`_tree_folder_feeds.html`): one sidebar
+  folder's feed `<li>` rows, fetched on first expand. Only the selected
+  folder inlines its rows (the active-feed highlight and auto-expand must
+  work on full page load); the same template is `{% include %}`d there so the
+  markup can't drift. `updateScopeActiveState` fetches a folder's rows when
+  SPA navigation selects a feed whose folder hasn't loaded, and the loader
+  re-applies the unread-only tree filter to injected rows.
+
+This works without rebinding because row interactions are event-delegated on
+stable ancestors (`#settings-tab-feeds`, `nav.tree`, `document`) — new tree
+row handlers must follow that pattern, never per-element binding at load.
+Only small shells with direct `getElementById` bindings (search input,
+comparison toolbar) stay server-rendered in the page. Tree link hrefs carry
+initial sort/filter state (rebuilt server-side from remembered preferences in
+the fragment path) but the SPA re-stamps them from live state at click time.
+Fragment responses are `Cache-Control: no-store`, like the page itself.
+
+The app's main script lives in `static/js/app.js` (long-lived cache, busted by
+`?v={STATIC_ASSET_VERSION}` — new static files must be added to
+`_static_asset_version()`'s hash list or their changes won't bust caches). It
+must stay Jinja-free: template-derived values reach it via the `window.*`
+config object rendered in the document `<head>`. Only small inline scripts
+remain in `index.html` (head config, CSRF shim, theme bootstrap, layout
+shell) — the CSRF shim and theme bootstrap must run before anything else, and
+the theme bootstrap uses `document.write`, which Chrome may block for
+parser-inserted external scripts on slow connections.
+
 ## Adaptive layout model
 
 Lectio uses responsive layouts rather than a fixed three-pane assumption:
@@ -237,6 +278,24 @@ opens a DB by the raw `READER_DB_PATH`/`META_DB_PATH` constant instead of
 counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
 purely by content (e.g. domain classification, source-HTML by URL) may stay
 global.
+
+### Instance-level settings
+
+Instance config (Administration → Instance Config: maintenance hour,
+image-cache tunables, fetch-history retention, login lockout, default
+auto-refresh, shared OAuth creds) is *stored* in the saving admin's own
+`app_settings`, but *consumed* from arbitrary contexts — the daily-maintenance
+loop is a bare thread bound to the default user, login lockout checks run
+pre-auth, image-cache eviction runs in maintenance. These values must
+therefore be read through `get_instance_setting()` (current context's setting
+→ first enabled admin's setting → env fallback), never `get_runtime_setting()`
+directly — the latter silently reads the wrong user's (empty) settings and
+the feature dies without an error, which is exactly how nightly maintenance
+sat disabled for three weeks in 2026-07. The admin tier reads through
+`get_setting` (DB-backed, not cache-only) so it works before the admin's
+cache ever loads, is TTL-cached (60s; `list_users()` is a DB query and
+`get_img_cache_max_dim` sits on the `/api/img` hot path), and is invalidated
+by the settings-save route so edits apply immediately.
 
 ### Integrations
 
