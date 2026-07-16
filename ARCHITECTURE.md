@@ -48,6 +48,24 @@ state (current track, position, playback speed) is transient client-side state
 only — no server or DB involvement — with playback speed persisted to
 `localStorage`.
 
+## Page weight: lazy HTML fragments
+
+At thousands of feeds, any template section that renders a row per feed is
+megabytes of HTML — far heavier than the posts themselves. The rule: per-feed
+row sections must not render inline in `index.html`. They live in `_*.html`
+fragment templates served by dedicated GET endpoints, and the page ships a
+small container `<div data-lazy-src="…">` that client JS fills on first open.
+
+Current fragments (`/settings/feeds/panel/{folders,stale}` →
+`_settings_feeds_folders.html`, `_settings_feeds_stale.html`): the
+Settings → Feeds folders table (a hidden row per feed, including disabled) and
+the Stale view (every active feed ranked by last-post age). This works without
+any rebinding because all row interactions are event-delegated on stable
+ancestors (`#settings-tab-feeds`, `document`); only small shells with direct
+`getElementById` bindings (search input, comparison toolbar) stay
+server-rendered in the page. Fragment responses are `Cache-Control: no-store`,
+like the page itself.
+
 ## Adaptive layout model
 
 Lectio uses responsive layouts rather than a fixed three-pane assumption:

@@ -1674,6 +1674,19 @@ def invalidate_problematic_feeds_cache() -> None:
         _problematic_feeds_cache.clear()
 
 
+def get_problematic_feeds_cached(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """TTL-cached problematic-feeds list (see cache comment above)."""
+    now_pf = time.time()
+    with _problematic_feeds_cache_lock:
+        cached_pf = _problematic_feeds_cache.get(limit)
+    if cached_pf and now_pf - cached_pf[0] < PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS:
+        return [dict(r) for r in cached_pf[1]]
+    problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=limit)
+    with _problematic_feeds_cache_lock:
+        _problematic_feeds_cache[limit] = (time.time(), [dict(r) for r in problematic_feeds])
+    return [dict(r) for r in problematic_feeds]
+
+
 def is_async_action_request(request: Request, expected_header: str | None = None) -> bool:
     requested_with = (request.headers.get("X-Requested-With") or "").strip()
     if not requested_with:
@@ -15573,15 +15586,7 @@ def _home_inner(
             """
         ).fetchall()
         _tick("global_note")
-        now_pf = time.time()
-        with _problematic_feeds_cache_lock:
-            cached_pf = _problematic_feeds_cache.get(50)
-        if cached_pf and now_pf - cached_pf[0] < PROBLEMATIC_FEEDS_CACHE_TTL_SECONDS:
-            problematic_feeds = [dict(r) for r in cached_pf[1]]
-        else:
-            problematic_feeds = feed_refresh_service.get_problematic_feeds(conn, limit=50)
-            with _problematic_feeds_cache_lock:
-                _problematic_feeds_cache[50] = (time.time(), [dict(r) for r in problematic_feeds])
+        problematic_feeds = get_problematic_feeds_cached(conn)
         _tick("problematic_feeds")
         feed_urls = folder_feed_urls_by_id.get(selected_folder_id, set())
 
@@ -15668,10 +15673,6 @@ def _home_inner(
         if not pf.get("acknowledged_at")
     }
     feeds_by_folder: dict[int, list[FeedInFolder]] = {}
-    # Like feeds_by_folder but also includes disabled feeds (flagged), for the
-    # Settings → Feeds folders tree where disabled feeds show greyed out. The
-    # sidebar uses feeds_by_folder and keeps excluding them.
-    settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
     # feed_url → containing_folder_id, so feed-name links in posts/entry can
     # navigate to the feed's own folder rather than the currently-viewed one.
     feed_to_folder: dict[str, int] = {}
@@ -15691,41 +15692,15 @@ def _home_inner(
         ]
         # Active feeds first (alphabetical), disabled greyed at the bottom.
         all_folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
-        settings_feeds_by_folder[folder_row_id] = all_folder_feeds
         feeds_by_folder[folder_row_id] = [f for f in all_folder_feeds if not f.disabled]
         for url in urls:
             feed_to_folder[url] = folder_row_id
 
     root_folder_row = next((row for row in folder_rows if int(row["depth"]) == 0), None)
     child_folder_rows = [row for row in folder_rows if int(row["depth"]) == 1]
-    folder_failing_counts: dict[int, int] = {
-        fid: sum(1 for f in feeds if f.has_error)
-        for fid, feeds in feeds_by_folder.items()
-        if any(f.has_error for f in feeds)
-    }
-
-    # Stale-feeds view (Settings → Feeds): every active feed ranked by how long
-    # ago its newest post is, oldest first. Feeds that have never posted (no
-    # entries) sort to the very top so they surface for pruning.
-    folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
-    last_post_dates = get_feed_last_post_dates()
-    _now_utc = datetime.now(timezone.utc)
-    stale_feeds = []
-    for url in all_reader_feed_urls:
-        if url in disabled_feed_urls:
-            continue
-        last_dt = last_post_dates.get(url)
-        fid = feed_to_folder.get(url)
-        stale_feeds.append({
-            "feed_url": url,
-            "feed_title": feed_title_map.get(url, url),
-            "folder_id": fid,
-            "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
-            "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
-            "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
-            "days_since": (_now_utc - last_dt).days if last_dt else None,
-        })
-    stale_feeds.sort(key=lambda x: x["last_post_sort"])
+    # The Settings → Feeds folders table and stale list are NOT built here:
+    # they render a row per feed (megabytes at thousands of feeds), so
+    # /settings/feeds/panel/{folders,stale} serves them on first open.
 
     # Determine server-side limit. If the client requested a "chunk" (page) use
     # CHUNK_SIZE per chunk; otherwise use the default limit from list_entries_for_feeds.
@@ -15864,10 +15839,8 @@ def _home_inner(
         "folder_rows": folder_rows,
         "root_folder_row": root_folder_row,
         "child_folder_rows": child_folder_rows,
-        "folder_failing_counts": folder_failing_counts,
         "folder_options": folder_options,
         "feeds_by_folder": feeds_by_folder,
-        "settings_feeds_by_folder": settings_feeds_by_folder,
         "feed_to_folder": feed_to_folder,
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
@@ -15904,7 +15877,6 @@ def _home_inner(
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
         "inactive_feed_count": len(inactive_feeds),
-        "stale_feeds": stale_feeds,
         "posts": posts,
         "selected_entry": selected_entry,
         "message": message,
@@ -22263,6 +22235,122 @@ def mark_problematic_feeds_viewed(request: Request):
         return JSONResponse({"ok": True, "viewed_at": viewed_at})
 
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/settings/feeds/panel/{panel_name}")
+def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response:
+    """HTML fragments for the heavyweight Settings → Feeds panels.
+
+    The folders table and the stale list render a row per feed — megabytes of
+    (mostly hidden) markup at thousands of feeds — so index.html ships lazy
+    containers instead and the client fetches these on first open of the
+    Feeds tab / Stale view. Markup matches what index.html used to inline;
+    all row interactions are event-delegated, so injection needs no JS hooks.
+    """
+    if panel_name not in {"folders", "stale"}:
+        return Response(status_code=404)
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+        raw_folder_rows = cast(list[dict], snapshot["raw_folder_rows"])
+        direct_feed_urls_by_folder = cast(dict[int, list[str]], snapshot["direct_feed_urls_by_folder"])
+        all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
+        root_id = cast(int, snapshot["root_id"])
+        disabled_feed_urls = get_disabled_feed_urls(conn)
+        problematic_feeds = get_problematic_feeds_cached(conn)
+
+    # Same virtual "Uncategorized" derivation as the home route: reader feeds
+    # in no folder, minus the local Saved Articles feed for display purposes.
+    all_reader_feed_urls = get_all_reader_feed_urls()
+    uncategorized_feed_urls = all_reader_feed_urls - all_feed_urls
+    _uncat_display_urls = uncategorized_feed_urls - {saved_articles_service.SAVED_FEED_URL}
+    direct_feed_urls_by_folder = dict(direct_feed_urls_by_folder)
+    direct_feed_urls_by_folder[UNCATEGORIZED_FOLDER_ID] = sorted(_uncat_display_urls)
+    feed_title_map = get_feed_title_map()
+    folder_rows: list[dict] = [dict(row) for row in raw_folder_rows]
+    if uncategorized_feed_urls:
+        folder_rows.append({
+            "id": UNCATEGORIZED_FOLDER_ID,
+            "name": UNCATEGORIZED_FOLDER_NAME,
+            "cadence_minutes": None,
+            "depth": 1,
+            "path": UNCATEGORIZED_FOLDER_NAME,
+            "feed_count": len(_uncat_display_urls),
+            "virtual": True,
+        })
+
+    if panel_name == "stale":
+        # Every active feed ranked by how long ago its newest post is, oldest
+        # first. Feeds that have never posted sort to the very top so they
+        # surface for pruning.
+        feed_to_folder: dict[str, int] = {}
+        for row in folder_rows:
+            for url in direct_feed_urls_by_folder.get(int(row["id"]), []):
+                feed_to_folder[url] = int(row["id"])
+        folder_name_by_id = {int(row["id"]): str(row["name"]) for row in folder_rows}
+        last_post_dates = get_feed_last_post_dates()
+        _now_utc = datetime.now(timezone.utc)
+        stale_feeds = []
+        for url in all_reader_feed_urls:
+            if url in disabled_feed_urls:
+                continue
+            last_dt = last_post_dates.get(url)
+            fid = feed_to_folder.get(url)
+            stale_feeds.append({
+                "feed_url": url,
+                "feed_title": feed_title_map.get(url, url),
+                "folder_id": fid,
+                "folder_name": folder_name_by_id.get(fid, UNCATEGORIZED_FOLDER_NAME) if fid is not None else UNCATEGORIZED_FOLDER_NAME,
+                "last_post": format_datetime_for_ui(last_dt) if last_dt else None,
+                "last_post_sort": last_dt.timestamp() if last_dt else 0.0,
+                "days_since": (_now_utc - last_dt).days if last_dt else None,
+            })
+        stale_feeds.sort(key=lambda x: x["last_post_sort"])
+        html = templates.env.get_template("_settings_feeds_stale.html").render({
+            "stale_feeds": stale_feeds,
+            # Unsubscribe fallback target for unfoldered feeds. The inline
+            # panel used the currently-selected folder; a fragment has no
+            # selection, so fall back to the root ("All Feeds") folder.
+            "selected_folder_id": root_id,
+        })
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    error_feed_urls: set[str] = {
+        cast(str, pf["feed_url"])
+        for pf in problematic_feeds
+        if not pf.get("acknowledged_at")
+    }
+    # Like the sidebar's feeds_by_folder but including disabled feeds
+    # (flagged), so the settings table can show them greyed out.
+    settings_feeds_by_folder: dict[int, list[FeedInFolder]] = {}
+    folder_failing_counts: dict[int, int] = {}
+    for row in folder_rows:
+        folder_row_id = int(row["id"])
+        urls = direct_feed_urls_by_folder.get(folder_row_id, [])
+        folder_feeds = [
+            FeedInFolder(
+                url=url,
+                title=feed_title_map.get(url, url),
+                icon_url=None,  # settings table shows no favicons
+                unread_count=0,  # settings table shows no unread badges
+                has_error=url in error_feed_urls,
+                disabled=url in disabled_feed_urls,
+            )
+            for url in urls
+        ]
+        # Active feeds first (alphabetical), disabled greyed at the bottom.
+        folder_feeds.sort(key=lambda f: (f.disabled, f.title.casefold()))
+        settings_feeds_by_folder[folder_row_id] = folder_feeds
+        # Failing counts consider active feeds only, matching the sidebar.
+        failing = sum(1 for f in folder_feeds if f.has_error and not f.disabled)
+        if failing:
+            folder_failing_counts[folder_row_id] = failing
+    html = templates.env.get_template("_settings_feeds_folders.html").render({
+        "folder_rows": folder_rows,
+        "settings_feeds_by_folder": settings_feeds_by_folder,
+        "folder_failing_counts": folder_failing_counts,
+        "push_feed_urls": get_push_active_feed_urls(),
+    })
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/settings/problematic-feeds/acknowledge")
