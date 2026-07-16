@@ -9845,6 +9845,55 @@ def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], read
         return None
 
 
+def _sorted_star_key_window(
+    keys: set[tuple[str, str]],
+    *,
+    sort_by: str,
+    sort_dir: str,
+    reader_read_filter: bool | None,
+    limit: int,
+) -> list[tuple[str, str]]:
+    """Sort + read-filter + clip starred keys in SQL, returning only the keys
+    for the visible window. At a few thousand saves, hydrating every key via
+    reader.get_entry takes seconds; joining the keys against the entries table
+    for just the sort value is milliseconds. Keys whose entry no longer exists
+    don't join (same outcome as get_entry -> None). Falls back to the full key
+    set on any SQL error."""
+    sort_expr = (
+        "COALESCE(e.published, e.updated, e.first_updated)"
+        if sort_by == "post" else "e.first_updated"
+    )
+    read_clause = {
+        True: " AND e.read = 1",
+        False: " AND (e.read IS NULL OR e.read != 1)",
+    }.get(reader_read_filter, "")
+    scored: list[tuple[str, str, str]] = []
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            key_list = list(keys)
+            # 2 bound vars per key; stay under SQLite's 999-variable limit.
+            for i in range(0, len(key_list), 450):
+                chunk = key_list[i:i + 450]
+                values = ",".join("(?,?)" for _ in chunk)
+                params = [v for pair in chunk for v in pair]
+                rows = conn.execute(
+                    f"WITH k(feed, id) AS (VALUES {values}) "
+                    f"SELECT e.feed, e.id, {sort_expr} AS sv "
+                    f"FROM entries e JOIN k ON e.feed = k.feed AND e.id = k.id"
+                    f" WHERE 1=1{read_clause}",
+                    params,
+                ).fetchall()
+                scored.extend((str(r[0]), str(r[1]), str(r[2] or "")) for r in rows)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("star key window query failed, hydrating all keys: %s", exc)
+        return list(keys)
+    scored.sort(key=lambda t: t[2], reverse=(sort_dir != "asc"))
+    return [(f, i) for f, i, _sv in scored[:limit]]
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -9971,7 +10020,20 @@ def list_entries_for_feeds(
             # any newest-N fetch window, so windowed-scan-then-post-filter
             # shows nothing. saved_entries_set is already restricted to the
             # view's feeds; point-lookup exactly those keys instead.
-            for furl, eid in saved_entries_set:
+            star_keys: Iterable[tuple[str, str]] = saved_entries_set
+            if len(saved_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
+                # Big backlog: hydrating every saved key costs seconds (6k
+                # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
+                # the raw keys and hydrate only the visible window. Skipped for
+                # tag/search, which post-filter and need the whole set.
+                star_keys = _sorted_star_key_window(
+                    saved_entries_set,
+                    sort_by=normalized_sort_by,
+                    sort_dir=normalized_sort_dir,
+                    reader_read_filter=reader_read_filter,
+                    limit=fetch_limit,
+                )
+            for furl, eid in star_keys:
                 e = reader.get_entry((furl, eid), None)
                 if e is not None:
                     all_feed_entries.append(e)
@@ -14070,26 +14132,49 @@ def _mark_entry_read_background(
     threading.Thread(target=_run_in_user_context, args=(_uid, _bg_mark_read), daemon=True).start()
 
 
+def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body: str) -> str:
+    """Prepend the entry's cached lead/hero image to the reader body when it isn't
+    already there. Readability extraction usually strips the opening image (Lectio
+    tracks it separately as the lead image), so without this the first image is
+    missing in Read Mode — the normal reader view re-adds it client-side."""
+    if not (feed_url and entry_id):
+        return body
+    try:
+        lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
+    except Exception:
+        lead = None
+    if not lead or lead in body or html.escape(lead, quote=True) in body:
+        return body
+    lead_html = (
+        f'<p class="reader-lead"><img src="{html.escape(lead, quote=True)}"'
+        ' alt="" loading="lazy"></p>'
+    )
+    # Route through the same hotlink/no-referrer handling as article images.
+    lead_html = add_no_referrer_to_images(proxy_hotlink_images(lead_html))
+    return lead_html + body
+
+
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
     """Return sanitized article HTML for the e-ink reader, preferring the offline
     archived readability copy, then a live readability extraction of *link*, then
     the stored feed content. Every source is already sanitized (archive at
     capture, live via sanitize_readability_html, stored via reader_sanitize at
-    ingest), so the caller embeds the result directly."""
+    ingest), so the caller embeds the result directly. The entry's lead image is
+    prepended (readability strips it; Lectio tracks it separately)."""
     archived_html = _resolve_archived_readability_html(feed_url, entry_id)
     if archived_html:
-        return _strip_bandcamp_track_signature(archived_html)
+        return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
             if article_html:
-                return article_html
+                return _prepend_reader_lead_image(feed_url, entry_id, article_html)
         except Exception:
             LOGGER.info("reader-view live extraction failed for %s", link, exc_info=True)
     if feed_url and entry_id:
         detail = get_entry_detail(feed_url, entry_id)
         if detail and detail.get("content_html"):
-            return str(detail["content_html"])
+            return _prepend_reader_lead_image(feed_url, entry_id, str(detail["content_html"]))
     esc = html.escape(link or "", quote=True)
     tail = (
         f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
@@ -14133,6 +14218,10 @@ def resolve_reader_backlog(
     selected_folder_id = folder_id or root_id
     if list_feed_url:
         entry_feed_urls = {list_feed_url}
+    elif star_only:
+        # Stars are deliberate curation: keep a disabled feed's saved items
+        # visible (the saved badges/counts include them).
+        entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set()))
     else:
         entry_feed_urls = set(folder_feed_urls_by_id.get(selected_folder_id, set())) - disabled_feed_urls
 
@@ -14177,13 +14266,18 @@ def resolve_reader_backlog(
 
 
 def _read_scope_params(
-    folder_id: int | None, tag: str | None, archived: bool, q: str | None
+    folder_id: int | None, tag: str | None, archived: bool, q: str | None,
+    scope: str = "saved", list_feed_url: str | None = None,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
-    URLs (folder / tag / Archive / search)."""
+    URLs (scope / folder / feed / tag / Archive / search)."""
     params: list[tuple[str, str]] = []
+    if scope and scope != "saved":
+        params.append(("scope", scope))
     if folder_id is not None:
         params.append(("folder_id", str(folder_id)))
+    if list_feed_url:
+        params.append(("list_feed_url", list_feed_url))
     if tag:
         params.append(("tag", tag))
     if archived:
@@ -14193,9 +14287,12 @@ def _read_scope_params(
     return params
 
 
-def _read_browse_href(folder_id: int | None, tag: str | None, archived: bool, q: str | None) -> str:
+def _read_browse_href(
+    folder_id: int | None, tag: str | None, archived: bool, q: str | None,
+    scope: str = "saved", list_feed_url: str | None = None,
+) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
-    params = _read_scope_params(folder_id, tag, archived, q)
+    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -14207,11 +14304,13 @@ def _reader_href(
     tag: str | None,
     archived: bool,
     q: str | None,
+    scope: str = "saved",
+    list_feed_url: str | None = None,
 ) -> str:
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
     return "/read?" + urlencode(params)
 
 
@@ -14241,6 +14340,7 @@ def build_reader_page(
     entry_id: str,
     is_archived: bool,
     csrf_token: str,
+    show_saved_actions: bool = True,
 ) -> HTMLResponse:
     esc_title = html.escape(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
@@ -14253,9 +14353,17 @@ def build_reader_page(
         " title='Open original'>&#8599;</a>"
         if source_link else ""
     )
-    # Archive shows a filled box when already archived (tap = un-archive).
+    # Archive shows a filled box when already archived (tap = un-archive). Saved
+    # actions (Archive/Delete) only apply to the saved scope; the feeds scope is
+    # ordinary unread reading (marked read on open).
     archive_glyph = "&#9635;" if is_archived else "&#9634;"
     archive_title = "Un-archive" if is_archived else "Archive"
+    saved_actions = (
+        f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
+        f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
+        "<button class='reader-ctl' id='reader-delete-btn' type='button' title='Delete (unsave)'>&#128465;</button>"
+        if show_saved_actions else ""
+    )
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -14284,9 +14392,7 @@ def build_reader_page(
         "<span class='reader-pageinfo' id='reader-pageinfo'>1 / 1</span>"
         "<button class='reader-ctl' id='reader-fs-minus' type='button' title='Smaller text'>A&#8722;</button>"
         "<button class='reader-ctl' id='reader-fs-plus' type='button' title='Larger text'>A+</button>"
-        f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
-        f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
-        "<button class='reader-ctl' id='reader-delete-btn' type='button' title='Delete (unsave)'>&#128465;</button>"
+        f"{saved_actions}"
         f"{open_original}"
         "</header>"
         "<main id='reader-viewport'>"
@@ -14354,6 +14460,115 @@ def _read_mode_subtitle(it: dict) -> str:
     return str(it.get("feed_title") or "")
 
 
+def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
+    """The Saved / Feeds switcher shown at the top of the Read Mode tree so you
+    can flip between the two scopes without leaving Read Mode."""
+    return [
+        {"label": "Feeds", "glyph": "☰", "href": "/read?scope=feeds", "active": current_scope == "feeds"},
+        {"label": "Saved", "glyph": "★", "href": "/read", "active": current_scope == "saved"},
+    ]
+
+
+def _build_feeds_mode_context(
+    request: Request,
+    *,
+    folder_id: int | None,
+    list_feed_url: str | None,
+    tag: str | None,
+    q: str | None,
+    items: list[dict],
+    node_selected: bool = True,
+) -> dict:
+    """Read Mode context for the FEEDS scope: a feeds tree (All + folders that
+    expand to their individual feeds + manual-tag buckets) and the unread item
+    list for the selected node. Mirrors the regular view's navigation."""
+    with get_meta_connection() as conn:
+        snapshot = get_meta_structure_snapshot(conn)
+    root_id = cast(int, snapshot["root_id"])
+    all_reader_feed_urls = get_all_reader_feed_urls()
+    raw_folder_rows = cast("list[dict]", snapshot["raw_folder_rows"])
+    direct = cast("dict[int, list[str]]", snapshot["direct_feed_urls_by_folder"])
+    unread_by_feed = get_unread_counts_by_feed()
+    unread_by_folder = get_unread_counts_by_folder(raw_folder_rows, unread_by_feed, direct)
+    title_map = get_feed_title_map()
+
+    def _feed_nodes(fid: int, feed_urls: list[str]) -> list[dict]:
+        nodes = [{
+            "label": title_map.get(furl, furl),
+            "href": _read_browse_href(fid, None, False, None, "feeds", list_feed_url=furl),
+            "count": unread_by_feed.get(furl, 0),
+            "active": (list_feed_url == furl),
+        } for furl in feed_urls if unread_by_feed.get(furl, 0)]
+        nodes.sort(key=lambda n: str(n["label"]).lower())
+        return nodes
+
+    on_all = folder_id == root_id and not list_feed_url and not tag and not q
+    folder_nodes: list[dict] = [{
+        "label": "All", "glyph": "▸",
+        "href": _read_browse_href(root_id, None, False, None, "feeds"),
+        "count": unread_by_folder.get(root_id, 0), "active": on_all,
+    }]
+    for row in raw_folder_rows:
+        fid = int(row["id"])
+        if fid == root_id:
+            continue
+        c = unread_by_folder.get(fid, 0)
+        if not c:
+            continue
+        feeds = _feed_nodes(fid, direct.get(fid, []))
+        folder_nodes.append({
+            "label": str(row["name"]), "glyph": "▸",
+            "href": _read_browse_href(fid, None, False, None, "feeds"),
+            "count": c,
+            "active": (not tag and not list_feed_url and folder_id == fid),
+            "feeds": feeds,
+            "open": any(f["active"] for f in feeds),  # keep expanded if a feed is active
+        })
+
+    # Manual-tag buckets — the regular Tags (all entries, NOT saved-only).
+    tag_nodes = [{
+        "label": "#" + str(tr["name"]), "glyph": "",
+        "href": _read_browse_href(None, str(tr["name"]), False, None, "feeds"),
+        "count": int(tr["count"]),
+        "active": (tag == str(tr["name"])),
+    } for tr in get_tag_counts_for_feeds(set(all_reader_feed_urls))]
+
+    if not node_selected:
+        selected_label = "Feeds"
+    elif q:
+        selected_label = f'Search: “{q}”'
+    elif list_feed_url:
+        selected_label = title_map.get(list_feed_url, list_feed_url)
+    elif tag:
+        selected_label = "#" + tag
+    else:
+        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
+
+    list_items = [{
+        "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "subtitle": str(it.get("feed_title") or ""),
+        "read": bool(it.get("read", False)),
+        "href": _reader_href(str(it["feed_url"]), str(it["id"]),
+                             folder_id=folder_id, tag=tag, archived=False, q=q,
+                             scope="feeds", list_feed_url=list_feed_url),
+    } for it in items]
+
+    return {
+        "scope_tabs": _read_mode_scope_tabs("feeds"),
+        "folder_nodes": folder_nodes,
+        "tag_nodes": tag_nodes,
+        "archive_node": None,
+        "list_items": list_items,
+        "selected_label": selected_label,
+        "node_selected": node_selected,
+        "search_query": q or "",
+        "tags_open": bool(tag),
+        "scope": "feeds",
+        "exit_href": "/?full=1",
+        "static_asset_version": STATIC_ASSET_VERSION,
+    }
+
+
 def _build_read_mode_context(
     request: Request,
     *,
@@ -14388,7 +14603,7 @@ def _build_read_mode_context(
 
     on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
-        "label": "All", "glyph": "★",  # ★
+        "label": "All", "glyph": "▸",
         "href": _read_browse_href(root_id, None, False, None),
         "count": len(inbox), "active": on_all,
     }]
@@ -14426,7 +14641,7 @@ def _build_read_mode_context(
     } for name in sorted(inbox_tag_counts)]
 
     if not node_selected:
-        selected_label = "Saved Articles"
+        selected_label = "Saved"
     elif archived:
         selected_label = "Archive"
     elif q:
@@ -14445,6 +14660,7 @@ def _build_read_mode_context(
     } for it in items]
 
     return {
+        "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
         "tag_nodes": tag_nodes,
         "archive_node": {
@@ -14457,8 +14673,15 @@ def _build_read_mode_context(
         "node_selected": node_selected,
         "search_query": q or "",
         "tags_open": bool(tag),  # expand the tag list when a tag is selected
+        "scope": "saved",
+        "exit_href": "/",
         "static_asset_version": STATIC_ASSET_VERSION,
     }
+
+
+# Distinct User-Agents seen on /read, logged once each (capped) so we can learn
+# the Supernote Manta's UA for the e-ink auto-detect (it isn't in access logs).
+_READ_MODE_UA_SEEN: set[str] = set()
 
 
 @app.get("/read", response_class=HTMLResponse)
@@ -14467,26 +14690,38 @@ def reader_view(
     feed_url: str | None = Query(default=None),
     entry_id: str | None = Query(default=None),
     folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
     tag: str | None = Query(default=None),
     archived: str | None = Query(default=None),
     q: str | None = Query(default=None),
+    scope: str = Query(default="saved"),
 ):
-    """Read Mode. No entry selected -> the 2-pane browse (saved tree + item
-    list). An entry selected -> the full-screen paginated reader. Read Mode
-    ignores read/unread; the Archive flag is the done-axis."""
+    """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
+    the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
+    Archive is the done-axis) and ``feeds`` (ordinary unread feed reading, with a
+    feeds tree drilling to individual feeds)."""
+    _ua = (request.headers.get("user-agent") or "").strip()
+    if _ua and _ua not in _READ_MODE_UA_SEEN and len(_READ_MODE_UA_SEEN) < 50:
+        _READ_MODE_UA_SEEN.add(_ua)
+        LOGGER.info("[read-mode-ua] %s", _ua[:300])
+    is_feeds = scope == "feeds"
     tag_val = normalize_tag_value(tag)
     q_val = normalize_search_query(q)
+    feed_scope = list_feed_url or None
     # Search reaches every saved item; otherwise the inbox, unless ?archived=1.
-    archived_view = str(archived) == "1"
-    archived_filter = None if q_val else archived_view
-    # A node is "selected" once the user picks All (root folder), a folder, a tag,
-    # Archive, or a search. A bare /read has no node selected: it lands on the
-    # tree only, so we never auto-load the whole (huge) saved backlog.
-    node_selected = folder_id is not None or bool(tag_val) or archived_view or bool(q_val)
+    archived_view = (not is_feeds) and str(archived) == "1"
+    archived_filter = None if (is_feeds or q_val) else archived_view
+    # A node is "selected" once the user picks All (root folder), a folder, a feed,
+    # a tag, Archive, or a search. A bare /read has no node selected: it lands on
+    # the tree only, so we never auto-load the whole (huge) backlog.
+    node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
+                     or archived_view or bool(q_val))
 
     def _load_backlog(limit: int) -> list[dict]:
         return resolve_reader_backlog(
-            folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
+            folder_id=folder_id, list_feed_url=feed_scope,
+            read_filter=("unread" if is_feeds else "all"),
+            star_only=(not is_feeds),
             tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
             archived=archived_filter, limit=limit,
         )
@@ -14494,10 +14729,16 @@ def reader_view(
     # --- BROWSE: no article selected -> 2-pane tree + list -------------------
     if not (entry_id and feed_url):
         items = _load_backlog(150) if node_selected else []
-        context = _build_read_mode_context(
-            request, folder_id=folder_id, tag=tag_val, archived=archived_view,
-            q=q_val, items=items, node_selected=node_selected,
-        )
+        if is_feeds:
+            context = _build_feeds_mode_context(
+                request, folder_id=folder_id, list_feed_url=feed_scope, tag=tag_val,
+                q=q_val, items=items, node_selected=node_selected,
+            )
+        else:
+            context = _build_read_mode_context(
+                request, folder_id=folder_id, tag=tag_val, archived=archived_view,
+                q=q_val, items=items, node_selected=node_selected,
+            )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
         )
@@ -14509,7 +14750,8 @@ def reader_view(
             return ""
         return _reader_href(
             rec["feed_url"], rec["id"],
-            folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val,
+            folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
+            list_feed_url=feed_scope,
         )
 
     current: dict | None = None
@@ -14541,7 +14783,7 @@ def reader_view(
         )
 
     article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
-    is_archived = (cur_feed, cur_id) in get_archived_saved_keys()
+    is_archived = (not is_feeds) and (cur_feed, cur_id) in get_archived_saved_keys()
 
     return build_reader_page(
         title=cur_title,
@@ -14549,11 +14791,12 @@ def reader_view(
         source_link=cur_link,
         prev_href=_href(prev_rec),
         next_href=_href(next_rec),
-        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val),
+        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope, feed_scope),
         feed_url=cur_feed,
         entry_id=cur_id,
         is_archived=is_archived,
         csrf_token=_csrf_token_for(request),
+        show_saved_actions=not is_feeds,
     )
 
 
@@ -15085,6 +15328,7 @@ def home(
     read_filter: str | None = None,
     star_only: str | None = None,
     saved_home: int | None = None,
+    home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -15095,7 +15339,28 @@ def home(
     chunk_delta: str | None = None,
     subscribe: str | None = None,
     subscribe_to: str | None = None,
+    full: int | None = None,
 ):
+    # E-ink auto-detect: a Supernote tablet's browser gets the light, paginated
+    # Feeds Read Mode instead of the heavy three-pane app. `?full=1` (the Read
+    # Mode exit link) opts back into the full app and remembers it in a cookie so
+    # in-app navigation isn't re-redirected.
+    _ua = (request.headers.get("user-agent") or "").lower()
+    if "supernote" in _ua and not full and not request.cookies.get("lectio_full_app"):
+        return RedirectResponse("/read?scope=feeds", status_code=302)
+
+    # A bare `/` (fresh open, logo click, post-login) is the scope-tab landing:
+    # tree only, no posts — same as clicking the Feeds tab. Loading the whole
+    # All-feeds view on every app open was slow and never a deliberate choice.
+    # Chunk params don't exempt: a chunk fetch against a bare URL is the SPA
+    # paginating the landing (deliberate views always carry folder/feed/tag).
+    if (folder_id is None and list_feed_url is None and tag is None
+            and feed_url is None and entry_id is None and q is None
+            and subscribe is None and subscribe_to is None
+            and star_only is None and read_filter is None
+            and saved_home is None and home is None):
+        home = 1
+
     # Limit concurrent expensive home renders (DB queries + context building).
     # Release before returning StreamingResponse so slow network delivery on the
     # client side doesn't hold the semaphore and block new renders with 503s.
@@ -15105,7 +15370,7 @@ def home(
             headers={"Retry-After": "2", "Cache-Control": "no-store"},
         )
     try:
-        return _home_inner(
+        _resp = _home_inner(
             request=request,
             folder_id=folder_id,
             list_feed_url=list_feed_url,
@@ -15115,6 +15380,7 @@ def home(
             read_filter=read_filter,
             star_only=star_only,
             saved_home=saved_home,
+            home=home,
             resume_read_filter=resume_read_filter,
             feed_url=feed_url,
             entry_id=entry_id,
@@ -15125,6 +15391,14 @@ def home(
             chunk_delta=chunk_delta,
             subscribe=subscribe or subscribe_to,
         )
+        if full:
+            # Remember the full-app opt-out on this device (Supernote) so later
+            # in-app navigation isn't redirected back to Read Mode.
+            _resp.set_cookie(
+                "lectio_full_app", "1", max_age=60 * 60 * 24 * 365,
+                httponly=True, samesite="lax",
+            )
+        return _resp
     finally:
         _home_request_semaphore.release()
 
@@ -15139,6 +15413,7 @@ def _home_inner(
     read_filter: str | None = None,
     star_only: str | None = None,
     saved_home: int | None = None,
+    home: int | None = None,
     resume_read_filter: str | None = None,
     feed_url: str | None = None,
     entry_id: str | None = None,
@@ -15154,7 +15429,7 @@ def _home_inner(
     # Explicit query/form state must win to avoid client preference overriding
     # an intentional filter selection during navigation.
     header_rf = request.headers.get("X-Lectio-Read-Filter")
-    if read_filter is None and header_rf:
+    if read_filter is None and header_rf and not normalize_star_only(star_only):
         read_filter = header_rf
 
     # Only use `resume_read_filter` as a fallback when no explicit
@@ -15162,14 +15437,14 @@ def _home_inner(
     if read_filter is None and resume_read_filter is not None:
         read_filter = resume_read_filter
 
-    # If still no explicit/read-resume value, fall back to the cookie-based
-    # persisted preference for full navigations. Feeds browsing and the Saved
-    # Articles view keep SEPARATE remembered filters (mode-blind memory meant
-    # picking All inside Saved leaked back into Feeds and vice versa); the
-    # Saved view defaults to All when nothing is remembered yet.
+    # If still no explicit value, fall back to the remembered preference — but
+    # only for Feeds browsing. The Saved view always defaults to All: saved
+    # items are usually already read (Archive is their done-axis), so a
+    # remembered Unread filter made folders look empty while their badges
+    # showed the total. The Unread pill still narrows explicitly per-visit.
     if read_filter is None:
         if normalize_star_only(star_only):
-            read_filter = request.cookies.get("lectio_read_filter_saved") or "all"
+            read_filter = "all"
         else:
             cookie_rf = request.cookies.get("lectio_read_filter")
             if cookie_rf:
@@ -15327,11 +15602,12 @@ def _home_inner(
         if resume_read_filter is None and selected_read_filter != "all":
             selected_resume_read_filter = selected_read_filter
         selected_read_filter = "all"
-    # Saved-mode landing state: the Saved Articles header expands its folder
-    # list without loading any posts (the whole backlog is expensive) — the
-    # user picks All / a folder / Uncategorized from the sublist.
-    selected_saved_home = bool(saved_home) and selected_star_only
-    if selected_saved_home:
+    # Scope-tab landing state (`home=1`, either mode; legacy `saved_home=1` for
+    # Saved): the tab shows its tree without loading any posts (All can be huge)
+    # — the user picks All / a folder / a feed explicitly.
+    selected_home = bool(home) or (bool(saved_home) and selected_star_only)
+    selected_saved_home = selected_home and selected_star_only
+    if selected_home:
         selected_feed_url = None
         selected_tag = None
         filtered_feed_urls = set()
@@ -15465,7 +15741,14 @@ def _home_inner(
     posts_start = time.perf_counter()
     # Exclude disabled feeds from the entry list unless the user has selected a
     # specific feed directly (clicking it should still let you browse its content).
-    entry_feed_urls = filtered_feed_urls if list_feed_url else filtered_feed_urls - disabled_feed_urls
+    # Star mode keeps them: stars are deliberate curation and the saved-folder
+    # badges count them, so hiding a disabled feed's saves made a folder show a
+    # badge of 4 with an empty list.
+    entry_feed_urls = (
+        filtered_feed_urls
+        if (list_feed_url or selected_star_only)
+        else filtered_feed_urls - disabled_feed_urls
+    )
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -15600,6 +15883,7 @@ def _home_inner(
         "selected_read_filter": selected_read_filter,
         "selected_star_only": selected_star_only,
         "selected_saved_home": selected_saved_home,
+        "selected_home": selected_home,
         "selected_resume_read_filter": selected_resume_read_filter,
         "saved_unread_count": saved_unread_count,
         "saved_counts_by_folder": saved_counts_by_folder,

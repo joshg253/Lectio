@@ -150,3 +150,67 @@ def test_article_html_falls_back_live_then_stored(monkeypatch):
                         lambda url: (_ for _ in ()).throw(RuntimeError("down")))
     monkeypatch.setattr(main, "get_entry_detail", lambda f, e: {"content_html": "<p>STORED</p>"})
     assert "STORED" in main.resolve_reader_article_html("feed1", "e1", "https://example.com/1")
+
+
+# --- Feeds scope --------------------------------------------------------------
+
+_FEEDS_CTX = {
+    "folder_nodes": [{"label": "All Feeds", "glyph": "☰", "href": "/read?scope=feeds", "count": 5, "active": True}],
+    "tag_nodes": [], "archive_node": None,
+    "list_items": [{"title": "Item", "subtitle": "Feed", "read": False, "href": "/read?scope=feeds&feed_url=f&entry_id=e"}],
+    "selected_label": "All Feeds", "node_selected": True, "search_query": "",
+    "tags_open": False, "scope": "feeds", "exit_href": "/?full=1", "static_asset_version": "t",
+}
+
+
+def test_feeds_scope_uses_unread_not_starred(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: seen.update(k) or [])
+    monkeypatch.setattr(main, "_build_feeds_mode_context", lambda *a, **k: dict(_FEEDS_CTX))
+    with TestClient(_app()) as client:
+        r = client.get("/read", params={"scope": "feeds", "folder_id": "5"})
+    assert r.status_code == 200 and "All Feeds" in r.text
+    assert seen["star_only"] is False and seen["read_filter"] == "unread" and seen["archived"] is None
+
+
+def test_feeds_reader_hides_saved_actions(monkeypatch):
+    _patch_read(monkeypatch, backlog=[_rec(1), _rec(2)])
+    with TestClient(_app()) as client:
+        r = client.get("/read", params={"scope": "feeds", "feed_url": "feed1", "entry_id": "e1"})
+    body = r.text
+    assert r.status_code == 200 and "reader-columns" in body
+    assert "id='reader-archive-btn'" not in body and "id='reader-delete-btn'" not in body
+    assert "scope=feeds" in body  # prev/next carry the feeds scope
+
+
+# --- Supernote e-ink auto-detect (home redirect) ------------------------------
+
+def _home_app():
+    app = FastAPI()
+    app.add_api_route("/", main.home, methods=["GET"])
+    return app
+
+
+_SUPERNOTE_UA = "Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A; wv) Chrome/96 Safari/537.36"
+
+
+def test_supernote_redirects_to_feeds_read_mode():
+    with TestClient(_home_app()) as client:
+        r = client.get("/", headers={"User-Agent": _SUPERNOTE_UA}, follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/read?scope=feeds"
+
+
+def test_supernote_full_opt_out_sets_cookie(monkeypatch):
+    from fastapi.responses import PlainTextResponse
+    monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
+    with TestClient(_home_app()) as client:
+        r = client.get("/", params={"full": "1"}, headers={"User-Agent": _SUPERNOTE_UA}, follow_redirects=False)
+    assert r.status_code == 200 and "lectio_full_app" in r.headers.get("set-cookie", "")
+
+
+def test_non_supernote_not_redirected(monkeypatch):
+    from fastapi.responses import PlainTextResponse
+    monkeypatch.setattr(main, "_home_inner", lambda **k: PlainTextResponse("app"))
+    with TestClient(_home_app()) as client:
+        r = client.get("/", headers={"User-Agent": "Mozilla/5.0 Chrome/120"}, follow_redirects=False)
+    assert r.status_code == 200

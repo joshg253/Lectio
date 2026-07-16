@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
@@ -15,6 +16,27 @@ def _feed_domain(feed_url: str) -> str:
         return urlparse(feed_url).netloc.lower()
     except Exception:
         return ""
+
+
+# Domain-level backoff tracks host *reachability* and must re-probe often — much
+# sooner than the per-feed backoff cap (~24h). A stuck domain backoff otherwise
+# starves every feed on a high-fanout host (e.g. 692 youtube.com subscriptions).
+_DOMAIN_BACKOFF_MAX_SECONDS = 3600  # 1h: re-probe an unreachable host hourly.
+# Require several consecutive failures before a low-fanout host is treated as
+# down. One blip must not skip its batch.
+_DOMAIN_BACKOFF_MIN_FAILURES = 3
+# Hosts with at least this many feeds in a batch are EXEMPT from domain-level
+# backoff. reader doesn't reliably expose an HTTP status on its exceptions (real
+# youtube.com 404s arrive with status=None), so a few dead channels look like
+# transport failures and would otherwise starve all 692 subscriptions. Per-feed
+# backoff already handles the dead ones; the domain guard is only useful for
+# small hosts where a burst to a down server is worth avoiding.
+_HIGH_FANOUT_DOMAIN_FEEDS = 8
+# A tight burst of hundreds of requests to one host gets throttled (YouTube RSS
+# returns spurious 404s to a ~700-feed burst even though each feed is fine
+# one-at-a-time). Pace requests to a high-fanout host so we stay a polite client
+# and don't trip its rate limit; feeds to other hosts run at full speed between.
+_HIGH_FANOUT_PACE_SECONDS = 0.7
 
 
 class FeedRefreshService:
@@ -198,6 +220,11 @@ class FeedRefreshService:
 
         feed_state_map: dict[str, dict[str, int | float | None]] = {}
         domain_state_map: dict[str, dict[str, int | float | None]] = {}
+        # Feeds-per-host in this batch: high-fanout hosts are exempt from
+        # domain-level backoff (a few dead feeds must not stall the rest) and are
+        # paced (below) so a big burst doesn't get rate-limited.
+        domain_feed_counts = Counter(_feed_domain(u) for u in feed_url_list if _feed_domain(u))
+        domain_last_request: dict[str, float] = {}
         # Short read transaction: load backoff state, then release the lock
         # immediately so the per-feed HTTP fetches below don't hold it open.
         with self._get_meta_connection() as conn:
@@ -217,13 +244,14 @@ class FeedRefreshService:
             if domains:
                 domain_placeholders = ",".join("?" for _ in domains)
                 domain_rows = conn.execute(
-                    f"SELECT domain, consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
+                    f"SELECT domain, consecutive_failures, next_retry_at, last_failure_at FROM domain_failure_state WHERE domain IN ({domain_placeholders})",
                     domains,
                 ).fetchall()
                 for row in domain_rows:
                     domain_state_map[str(row["domain"])] = {
                         "consecutive_failures": int(row["consecutive_failures"] or 0),
                         "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
+                        "last_failure_at": float(row["last_failure_at"]) if row["last_failure_at"] is not None else None,
                     }
         # Read transaction committed; meta DB lock released before any HTTP fetches.
 
@@ -236,7 +264,16 @@ class FeedRefreshService:
 
                     # Skip if either the feed-level or domain-level backoff is active.
                     feed_next_retry = feed_state.get("next_retry_at")
-                    domain_next_retry = domain_state.get("next_retry_at")
+                    domain_high_fanout = domain_feed_counts.get(domain, 0) >= _HIGH_FANOUT_DOMAIN_FEEDS
+                    # High-fanout hosts are never domain-skipped (ignore any state,
+                    # incl. a stale pre-fix lock). Otherwise clamp an over-long / stuck
+                    # backoff to re-probe within the cap of when it was SET (relative to
+                    # last_failure_at, not now, so it actually expires).
+                    domain_next_retry = None if domain_high_fanout else domain_state.get("next_retry_at")
+                    if domain_next_retry is not None:
+                        _dom_set_at = domain_state.get("last_failure_at")
+                        if _dom_set_at is not None:
+                            domain_next_retry = min(domain_next_retry, _dom_set_at + _DOMAIN_BACKOFF_MAX_SECONDS)
 
                     # Also respect reader's built-in update_after, which captures
                     # Retry-After from 429/503 responses and Cache-Control max-age.
@@ -287,6 +324,18 @@ class FeedRefreshService:
                                 feed_url,
                             )
                         continue
+
+                    # Pace requests to a high-fanout host so a big burst (e.g. ~700
+                    # youtube.com subscriptions) doesn't get throttled into spurious
+                    # 404s. Only consecutive requests to the SAME host wait; other
+                    # hosts interleave at full speed.
+                    if domain_high_fanout:
+                        _last = domain_last_request.get(domain)
+                        if _last is not None:
+                            _wait = _HIGH_FANOUT_PACE_SECONDS - (time.monotonic() - _last)
+                            if _wait > 0:
+                                time.sleep(_wait)
+                        domain_last_request[domain] = time.monotonic()
 
                     try:
                         if self._refresh_debug_enabled:
@@ -450,20 +499,28 @@ class FeedRefreshService:
                                 "next_retry_at": next_retry,
                             }
 
-                            # Update domain-level backoff: use the max consecutive_failures
-                            # seen from any feed on this domain so far in this cycle.
-                            # Permanent per-feed statuses are excluded: a 404/410
-                            # says nothing about domain health, and one dead feed
-                            # retried first after each backoff expiry re-locks every
-                            # feed on the domain (692 youtube.com feeds went dark
-                            # for 4 days behind two dead channels' 404s).
-                            _http_status = self._http_status_of(exc)
-                            if domain and _http_status not in (404, 410, 451):
+                            # Domain-level backoff is a coarse "host looks down" guard,
+                            # secondary to per-feed backoff. It is SKIPPED for
+                            # high-fanout hosts (e.g. 692 youtube.com subscriptions):
+                            # a few dead channels must never stall the rest, and
+                            # reader doesn't reliably tag those as HTTP errors. For a
+                            # low-fanout host it activates only after several
+                            # consecutive failures (host likely down), is capped to
+                            # re-probe within the hour, and any success clears it.
+                            if domain and not domain_high_fanout:
                                 prev_domain = domain_state_map.get(domain) or {}
                                 prev_domain_failures = int(prev_domain.get("consecutive_failures") or 0)
-                                domain_consecutive = max(prev_domain_failures + 1, consecutive_failures)
-                                domain_backoff = self.compute_failed_feed_backoff_seconds(domain_consecutive)
-                                domain_next_retry_new = now_ts + domain_backoff
+                                domain_consecutive = prev_domain_failures + 1
+                                if domain_consecutive >= _DOMAIN_BACKOFF_MIN_FAILURES:
+                                    domain_backoff = min(
+                                        self.compute_failed_feed_backoff_seconds(
+                                            domain_consecutive - _DOMAIN_BACKOFF_MIN_FAILURES + 1
+                                        ),
+                                        _DOMAIN_BACKOFF_MAX_SECONDS,
+                                    )
+                                    domain_next_retry_new = now_ts + domain_backoff
+                                else:
+                                    domain_next_retry_new = None  # track, but don't skip yet
                                 conn.execute(
                                     """
                                     INSERT INTO domain_failure_state (domain, consecutive_failures, next_retry_at, last_failure_at)
@@ -478,6 +535,7 @@ class FeedRefreshService:
                                 domain_state_map[domain] = {
                                     "consecutive_failures": domain_consecutive,
                                     "next_retry_at": domain_next_retry_new,
+                                    "last_failure_at": now_ts,
                                 }
                             self._record_fetch_history(
                                 conn, feed_url, "error",

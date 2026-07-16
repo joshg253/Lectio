@@ -5,7 +5,17 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
+import services.feed_refresh as _feed_refresh_mod
 from services.feed_refresh import FeedRefreshService
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pace_sleep(monkeypatch):
+    """Neutralize the high-fanout pacing sleep so tests don't wait in real time.
+    The pacing-specific tests re-patch sleep with their own recorder."""
+    monkeypatch.setattr(_feed_refresh_mod.time, "sleep", lambda s: None)
 
 
 class _ReaderCtx:
@@ -348,31 +358,124 @@ class _StatusFailReader(_FakeReader):
         return _F()
 
 
-def test_permanent_404_does_not_poison_domain_backoff(tmp_path: Path):
-    """A dead feed's 404 is a per-feed condition: it must earn feed-level
-    backoff but never lock the whole domain (two dead channels' 404s kept all
-    692 youtube.com feeds dark for days — each daily retry hit a dead feed
-    first and re-locked the domain)."""
+class _FailReader(_FakeReader):
+    """Fails the given URLs. If a url maps to an int it raises with that HTTP
+    status (via http_info); otherwise it raises a transport-style error with no
+    http_info (mirroring reader, whose 404s often arrive with status=None)."""
+    def __init__(self, fails):
+        super().__init__()
+        self.fails = dict(fails) if isinstance(fails, dict) else {u: None for u in fails}
+
+    def update_feed(self, feed_url: str):
+        self.updated.append(feed_url)
+        if feed_url in self.fails:
+            status = self.fails[feed_url]
+            raise _NotFoundError(status) if status else RuntimeError("connection refused")
+
+    def get_feed(self, feed_url: str, _default=None):
+        class _F:
+            update_after = None
+            last_updated = 1.0
+        return _F()
+
+
+def _yt(n: int) -> str:
+    return f"https://www.youtube.com/feeds/videos.xml?channel_id=C{n}"
+
+
+def test_high_fanout_domain_never_backs_off(tmp_path: Path):
+    """A host with many feeds in the batch (youtube.com) is exempt from
+    domain-level backoff: a few dead channels must never create a lock that
+    stalls the other subscriptions. Per-feed backoff still applies to the dead
+    ones."""
     db_path = tmp_path / "meta.sqlite"
-    dead = "https://www.youtube.com/feeds/videos.xml?channel_id=DEAD"
-    reader = _StatusFailReader({dead: 404})
+    feeds = [_yt(i) for i in range(10)]
+    dead = {feeds[0]: 404, feeds[1]: 404, feeds[2]: 404}  # 3 dead channels
+    reader = _FailReader(dead)
     service = _build_service(db_path, reader, [], [])
 
-    service.update_feeds([dead])
+    service.update_feeds(feeds)
+    assert set(reader.updated) == set(feeds)  # every feed attempted, none skipped
     with _make_conn(db_path) as conn:
-        feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (dead,)).fetchone()
         domain_row = conn.execute("SELECT * FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
-    assert feed_row and feed_row[0] == 1  # feed-level backoff applies
-    assert domain_row is None             # domain untouched
+        feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (feeds[0],)).fetchone()
+    assert domain_row is None          # high-fanout host never domain-backed-off
+    assert feed_row and feed_row[0] == 1  # dead channel still earns per-feed backoff
 
 
-def test_transient_failure_still_counts_toward_domain(tmp_path: Path):
+def test_high_fanout_domain_ignores_stale_backoff(tmp_path: Path):
+    """A pre-existing (stuck) domain backoff must not skip a high-fanout host's
+    feeds — that was the original starvation."""
     db_path = tmp_path / "meta.sqlite"
-    flaky = "https://www.youtube.com/feeds/videos.xml?channel_id=FLAKY"
-    reader = _StatusFailReader({flaky: 503})
+    feeds = [_yt(i) for i in range(10)]
+    reader = _FailReader({})  # all succeed
+    service = _build_service(db_path, reader, [], [])
+    with _make_conn(db_path) as conn:
+        conn.execute(
+            "INSERT INTO domain_failure_state(domain, consecutive_failures, next_retry_at, last_failure_at) VALUES (?, ?, ?, ?)",
+            ("www.youtube.com", 17, time.time() + 80000, time.time()),
+        )
+
+    service.update_feeds(feeds)
+    assert set(reader.updated) == set(feeds)  # not skipped despite the stale lock
+
+
+def test_low_fanout_single_failure_no_skip(tmp_path: Path):
+    """One failure on a small host is tracked but doesn't activate the skip."""
+    db_path = tmp_path / "meta.sqlite"
+    url = "https://down.example/feed.xml"
+    reader = _FailReader({url: None})  # transport-style
     service = _build_service(db_path, reader, [], [])
 
-    service.update_feeds([flaky])
+    service.update_feeds([url])
     with _make_conn(db_path) as conn:
-        domain_row = conn.execute("SELECT consecutive_failures FROM domain_failure_state WHERE domain = 'www.youtube.com'").fetchone()
-    assert domain_row and domain_row[0] >= 1
+        row = conn.execute(
+            "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
+        ).fetchone()
+    assert row and row[0] == 1 and row[1] is None  # tracked, no active backoff
+
+
+def test_low_fanout_backs_off_after_threshold_capped(tmp_path: Path):
+    """A small host that's genuinely down (>= MIN_FAILURES consecutive failures)
+    backs off, capped so it re-probes within ~1h."""
+    db_path = tmp_path / "meta.sqlite"
+    urls = ["https://down.example/a.xml", "https://down.example/b.xml", "https://down.example/c.xml"]
+    reader = _FailReader({u: None for u in urls})
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds(urls)  # 3 consecutive failures on a low-fanout host
+    with _make_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT consecutive_failures, next_retry_at FROM domain_failure_state WHERE domain = 'down.example'"
+        ).fetchone()
+    assert row and row[0] >= 3
+    assert row[1] is not None and row[1] <= time.time() + 3600 + 5  # active, capped ~1h
+
+
+def test_high_fanout_requests_are_paced(tmp_path: Path, monkeypatch):
+    """Requests to a high-fanout host are spaced out so a big burst isn't
+    throttled — every request after the first on that host waits."""
+    import services.feed_refresh as fr
+    db_path = tmp_path / "meta.sqlite"
+    feeds = [_yt(i) for i in range(10)]  # 10 feeds on one host
+    reader = _FailReader({})  # all succeed instantly
+    service = _build_service(db_path, reader, [], [])
+    sleeps: list[float] = []
+    monkeypatch.setattr(fr.time, "sleep", lambda s: sleeps.append(s))
+
+    service.update_feeds(feeds)
+    assert len([s for s in sleeps if s > 0]) >= len(feeds) - 1  # all but the first paced
+
+
+def test_low_fanout_requests_are_not_paced(tmp_path: Path, monkeypatch):
+    """Small hosts are not paced — no needless delay on ordinary feeds."""
+    import services.feed_refresh as fr
+    db_path = tmp_path / "meta.sqlite"
+    feeds = ["https://a.example/f.xml", "https://b.example/f.xml"]
+    reader = _FailReader({})
+    service = _build_service(db_path, reader, [], [])
+    sleeps: list[float] = []
+    monkeypatch.setattr(fr.time, "sleep", lambda s: sleeps.append(s))
+
+    service.update_feeds(feeds)
+    assert not [s for s in sleeps if s > 0]

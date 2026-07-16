@@ -125,6 +125,11 @@
           <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="{{ profile_avatar_url }}" alt="" /></summary>
           <div class="menu-popover anchor-left">
             <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
+            <div class="menu-item menu-theme-row" role="group" aria-label="Theme">
+              <button type="button" class="menu-theme-btn" data-menu-theme="dark" title="Dark theme" aria-label="Dark theme"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span><span class="menu-theme-label">Dark</span></button>
+              <button type="button" class="menu-theme-btn" data-menu-theme="light" title="Light theme" aria-label="Light theme"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span><span class="menu-theme-label">Light</span></button>
+              <a class="menu-theme-btn" href="/read?scope=feeds" title="e-ink Read Mode" aria-label="e-ink Read Mode"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span><span class="menu-theme-label">eInk</span></a>
+            </div>
             <hr class="menu-divider" />
             <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
             <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
@@ -181,17 +186,33 @@
            server-side; the scope-link stamper is exempt on mode switches). #}
         {% set _saved_rfq = '&star_only=1' ~ (('&read_filter=' ~ selected_read_filter) if (selected_star_only and selected_read_filter != 'all') else '') %}
         <div class="tree-block root-tree-block">
-          <div class="saved-items-row">
-            {# Hijack: Saved Articles opens the standalone /read Read Mode (a full
-               navigation — the SPA interceptor bails on non-'/' paths). #}
+          {# Feeds | Saved scope tabs (like Read Mode). Feeds = normal view;
+             Saved = the starred view (star_only=1, as the toolbar's Starred
+             filter). No counters on the tabs. The .root-item/.saved-item classes
+             + data attrs are preserved for the SPA scope/badge machinery. #}
+          {# The tabs are expand-only landings (home=1): switch mode + show the
+             tree, load no posts (All can be huge) — pick All/a folder explicitly. #}
+          <div class="scope-tabs" role="tablist">
             <a
-              href="/read"
-              class="tree-item saved-item"
-              title="Open Read Mode"
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&home=1"
+              class="tree-item root-item scope-tab {% if not selected_star_only %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-folder-name="{{ root_folder_row.name }}"
+              data-folder-depth="{{ root_folder_row.depth }}"
+              title="Feeds"
+            >
+              <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">menu</span>
+              <span class="name">Feeds</span>
+            </a>
+            <a
+              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1&home=1"
+              class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
+              data-folder-id="{{ root_folder_row.id }}"
+              data-saved-items="true"
+              title="Saved (starred)"
             >
               <span class="material-symbols-rounded saved-items-icon" aria-hidden="true">star</span>
-              <span class="name">Saved Articles</span>
-              {% if saved_unread_count %}<span class="count">{{ saved_unread_count }}</span>{% endif %}
+              <span class="name">Saved</span>
             </a>
           </div>
 
@@ -237,20 +258,23 @@
             {% endfor %}
           </div>
 
-          <div class="root-item-row">
-            <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{% if not selected_star_only %}{{ _tree_rfq }}{% endif %}"
-              class="tree-item root-item {% if root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_star_only %}active{% endif %}"
-              data-folder-id="{{ root_folder_row.id }}"
-              data-folder-name="{{ root_folder_row.name }}"
-              data-folder-depth="{{ root_folder_row.depth }}"
-            >
-              <span class="name">{{ root_folder_row.name }}</span>
-              {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
-            </a>
-          </div>
-
           <div class="tree-children feeds-tree-children"{% if selected_star_only %} hidden{% endif %}>
+            {# "All": every feed — what the old All Feeds root row loaded. Sits at
+               folder level so opening it is a deliberate click (the Feeds tab
+               itself is an expand-only landing). #}
+            <div class="tree-folder-group feeds-all-group" data-unread-count="{{ root_folder_row.unread_count }}">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _tree_rfq }}"
+                  class="tree-item child-item feeds-all-item {% if not selected_star_only and not selected_home and root_folder_row.id == selected_folder_id and not selected_feed_url and not selected_tag %}active{% endif %}"
+                  data-folder-id="{{ root_folder_row.id }}"
+                >
+                  <span class="name">All</span>
+                  {% if root_folder_row.unread_count %}<span class="count">{{ root_folder_row.unread_count }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {% for row in child_folder_rows %}
             {% if not (row.virtual and not row.get('has_display_feeds', True)) %}
             {% set folder_feeds = feeds_by_folder.get(row.id, []) %}
@@ -410,14 +434,13 @@
                 {# In star mode, All/Unread narrow the starred set (star_only rides
                    along); clicking the active Starred item exits star mode. #}
                 {# All/Unread narrow the CURRENT mode (star_only rides along) and
-                   the click persists to that mode's remembered filter (JS). The
-                   Starred item is a bare mode toggle — no read_filter, so the
-                   target mode's own remembered filter applies. #}
+                   the click persists to that mode's remembered filter (JS).
+                   Mode switching itself lives on the Feeds | Saved tabs — the
+                   old Starred toggle here was redundant and its exit-on-active
+                   behavior surprising. #}
                 {% set _fm_star = '&star_only=1' if selected_star_only else '' %}
-                {% set starred_href = (tb_base ~ tb_sort) if selected_star_only else (tb_base ~ tb_sort ~ '&star_only=1') %}
                 <a class="menu-item {% if not filter_is_active and selected_read_filter != 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=all' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">format_list_bulleted</span> All</a>
                 <a class="menu-item {% if selected_read_filter == 'unread' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=unread' ~ _fm_star }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">mark_email_unread</span> Unread</a>
-                <a class="menu-item {% if selected_star_only %}active{% endif %}" href="{{ starred_href }}" {% if selected_star_only %}title="Exit Starred"{% endif %}><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>
                 {% if tag_rows %}
@@ -2825,7 +2848,8 @@
     }
 
     function getUnreadCountFromRootBadge() {
-      const rootCountNode = document.querySelector('.root-item .count');
+      // Aggregate unread lives on the feeds "All" row (tabs carry no counter).
+      const rootCountNode = document.querySelector('.feeds-all-item .count');
       if (!rootCountNode) {
         return 0;
       }
@@ -2945,6 +2969,12 @@
       const btnLight = document.getElementById('theme-btn-light');
       if (btnDark) { btnDark.classList.toggle('sett-theme-btn--active', theme === 'dark'); btnDark.setAttribute('aria-pressed', String(theme === 'dark')); }
       if (btnLight) { btnLight.classList.toggle('sett-theme-btn--active', theme === 'light'); btnLight.setAttribute('aria-pressed', String(theme === 'light')); }
+      // Mirror onto the avatar-menu theme row (Dark / Light / eInk).
+      document.querySelectorAll('[data-menu-theme]').forEach((b) => {
+        const on = b.getAttribute('data-menu-theme') === theme;
+        b.classList.toggle('menu-theme-btn--active', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
 
       updateDynamicFavicon();
     }
@@ -2977,6 +3007,8 @@
     applyTheme(window.__lectioTheme || 'dark');
     document.getElementById('theme-btn-dark')?.addEventListener('click', () => applyTheme('dark'));
     document.getElementById('theme-btn-light')?.addEventListener('click', () => applyTheme('light'));
+    document.querySelectorAll('[data-menu-theme]').forEach((b) =>
+      b.addEventListener('click', () => applyTheme(b.getAttribute('data-menu-theme'))));
 
     updateHamburgerFlyoutDirection();
     window.addEventListener('resize', updateHamburgerFlyoutDirection);
@@ -3830,6 +3862,8 @@
       // Feeds tree only: the Saved sublist has no unread counts (badges are
       // total saved) and always shows exactly the folders that hold saves.
       for (const group of document.querySelectorAll('.feeds-tree-children .tree-folder-group')) {
+        // The "All" row is navigation, not a folder — never filter it out.
+        if (group.classList.contains('feeds-all-group')) { group.hidden = false; continue; }
         const unreadCount = Number(group.getAttribute('data-unread-count') || '0');
         group.hidden = onlyUnread && unreadCount <= 0;
       }
@@ -4365,7 +4399,9 @@
       let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
-      const nextSavedHome = nextStarOnly && nextUrl.searchParams.get('saved_home') === '1';
+      const nextHome = nextUrl.searchParams.get('home') === '1'
+        || (nextStarOnly && nextUrl.searchParams.get('saved_home') === '1');
+      const nextSavedHome = nextStarOnly && nextHome;
       const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
       const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
       const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
@@ -4373,13 +4409,16 @@
 
       // Bare URLs are ambiguous in SPA/popstate flows. Prefer preserving
       // current visible selection to avoid active-state flicker/clearing.
+      // Scope tabs are excluded: they're mode indicators that always carry the
+      // root folder id, so falling back to one would light up the "All" row.
+      let nextHomeEffective = nextHome;
       if (!nextFolderId && !nextFeedUrl && !nextTag) {
         const activeFeed = document.querySelector('.feed-link.active[data-feed-url]');
         if (activeFeed instanceof HTMLElement) {
           nextFeedUrl = activeFeed.getAttribute('data-feed-url') || null;
           nextFolderId = activeFeed.getAttribute('data-folder-id') || nextFolderId;
         } else {
-          const activeFolder = document.querySelector('.tree-item.active[data-folder-id]');
+          const activeFolder = document.querySelector('.tree-item.active[data-folder-id]:not(.scope-tab)');
           if (activeFolder instanceof HTMLElement) {
             nextFolderId = activeFolder.getAttribute('data-folder-id') || nextFolderId;
           }
@@ -4387,6 +4426,10 @@
       }
 
       if (!nextFolderId && !nextFeedUrl && !nextTag) {
+        // Still nothing: a truly bare URL is the scope-tab landing (the server
+        // treats bare / as home=1) — keep every folder row inactive rather than
+        // defaulting to root, which used to auto-select "All".
+        nextHomeEffective = true;
         const rootTree = document.querySelector('.tree[data-root-folder-id]');
         if (rootTree instanceof HTMLElement) {
           nextFolderId = rootTree.getAttribute('data-root-folder-id') || null;
@@ -4415,19 +4458,21 @@
       }
 
       for (const folderLink of document.querySelectorAll('.tree-item[data-folder-id]')) {
+        // Scope tabs are mode indicators: active by feeds/saved mode, not folder.
+        if (folderLink.classList.contains('scope-tab')) {
+          const savedTab = folderLink.classList.contains('saved-item');
+          folderLink.classList.toggle('active', savedTab ? nextStarOnly : !nextStarOnly);
+          continue;
+        }
         let isMatch = false;
         if (!nextFeedUrl && folderLink.getAttribute('data-folder-id') === nextFolderId) {
-          // Saved header: active only on its expand-only landing state.
-          if (folderLink.classList.contains('saved-item')) {
-            isMatch = nextSavedHome;
-          }
-          // For .root-item, active only if star_only=0
-          else if (folderLink.classList.contains('root-item')) {
-            isMatch = !nextStarOnly;
-          }
           // Saved "All" row: the whole-backlog view (root + star, not landing).
-          else if (folderLink.classList.contains('saved-all-item')) {
-            isMatch = nextStarOnly && !nextSavedHome;
+          if (folderLink.classList.contains('saved-all-item')) {
+            isMatch = nextStarOnly && !nextHomeEffective;
+          }
+          // Feeds "All" row: every feed (root, feeds mode, not landing).
+          else if (folderLink.classList.contains('feeds-all-item')) {
+            isMatch = !nextStarOnly && !nextHomeEffective;
           }
           // Saved-mode folder rows vs feeds-tree folder rows: same folder ids,
           // so activate only the copy that belongs to the current mode.
@@ -4435,7 +4480,7 @@
             isMatch = nextStarOnly;
           }
           else {
-            isMatch = !nextStarOnly;
+            isMatch = !nextStarOnly && !nextHomeEffective;
           }
         }
         folderLink.classList.toggle('active', isMatch);
@@ -8335,6 +8380,7 @@
     });
 
     function adjustCountBadge(containerEl, delta) {
+      if (containerEl.classList.contains('scope-tab')) return;  // tabs carry no counter
       let badge = containerEl.querySelector(':scope > .count');
       const current = badge ? Number(badge.textContent) : 0;
       const next = Math.max(0, current + delta);
@@ -8387,8 +8433,10 @@
           }
         }
       }
-      const rootItem = document.querySelector('.root-item.tree-item');
-      if (rootItem) adjustCountBadge(rootItem, delta);
+      // The aggregate unread badge lives on the feeds "All" row (the Feeds
+      // scope tab itself carries no counter).
+      const feedsAll = document.querySelector('.feeds-all-item');
+      if (feedsAll) adjustCountBadge(feedsAll, delta);
     }
 
     // Zero out sidebar count badges for a folder (or all folders when isRoot=true).
@@ -8419,8 +8467,8 @@
           folderItem.closest('.tree-folder-group')?.setAttribute('data-unread-count', '0');
         }
         if (remaining > 0) {
-          const rootItem = document.querySelector('.root-item.tree-item');
-          if (rootItem) adjustCountBadge(rootItem, -remaining);
+          const feedsAll = document.querySelector('.feeds-all-item');
+          if (feedsAll) adjustCountBadge(feedsAll, -remaining);
         }
       }
     }
@@ -9036,7 +9084,7 @@
                 if (_fg) _fg.setAttribute('data-unread-count', String(Math.max(0, Number(_fg.getAttribute('data-unread-count') || '0') - _feedRemaining)));
               }
             }
-            const _rootEl = document.querySelector('.root-item.tree-item');
+            const _rootEl = document.querySelector('.feeds-all-item');
             if (_rootEl) adjustCountBadge(_rootEl, -_feedRemaining);
           }
         }
@@ -13255,6 +13303,11 @@
 
       function revealNextChunk() {
         const items = getPostItems();
+        // An empty list has no further chunks: chunk 1 is served pre-filtered,
+        // so zero items means either a scope-tab landing (no posts by design —
+        // chunk-fetching the bare URL here used to resurrect the all-feeds
+        // load) or a genuinely empty view.
+        if (items.length === 0) return;
         // If we've already revealed all items currently loaded, request
         // the next server-side chunk (by bumping the `chunk` query param).
         if (visibleCount >= items.length) {
