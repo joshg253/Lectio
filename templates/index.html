@@ -133,15 +133,14 @@
         <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu folders-pane-menu">
           <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="{{ profile_avatar_url }}" alt="" /></summary>
           <div class="menu-popover anchor-left">
-            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
+            <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
+            <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
+            <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <div class="menu-item menu-theme-row" role="group" aria-label="Theme">
               <button type="button" class="menu-theme-btn" data-menu-theme="dark" title="Dark theme" aria-label="Dark theme"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span><span class="menu-theme-label">Dark</span></button>
               <button type="button" class="menu-theme-btn" data-menu-theme="light" title="Light theme" aria-label="Light theme"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span><span class="menu-theme-label">Light</span></button>
               <a class="menu-theme-btn" href="/read?scope=feeds" title="e-ink Read Mode" aria-label="e-ink Read Mode"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span><span class="menu-theme-label">eInk</span></a>
             </div>
-            <hr class="menu-divider" />
-            <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
-            <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
             <div class="flyout-item">
               <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
               <div class="flyout-panel">
@@ -155,10 +154,9 @@
                 </form>
               </div>
             </div>
-            <hr class="menu-divider" />
-            <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
             <hr class="menu-divider" />
+            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
             {% if is_admin %}
             <a class="menu-item" href="/administration"><span class="material-symbols-rounded" aria-hidden="true">admin_panel_settings</span> Administration</a>
             {% endif %}
