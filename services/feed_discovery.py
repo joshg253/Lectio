@@ -174,6 +174,48 @@ def _body_is_feed(text: str) -> bool:
     return bool(_FEED_BODY_RE.search(text[:1024]))
 
 
+def _advertised_feed_dead(url: str, *, headers: dict | None) -> bool:
+    """Positively confirm an advertised feed URL is broken (stale autodiscovery
+    tag — sites move a feed and leave the old <link rel="alternate"> behind,
+    e.g. dropmark.com advertising /rss while the feed lives at /feed.xml).
+
+    Conservative on purpose: an advertised link is only discarded when a HEAD
+    comes back 4xx/5xx with the current identity AND after a browser-identity
+    retry. 405/501 (HEAD-hostile servers), redirects, network errors, and
+    SSRF-blocked URLs all keep the link."""
+    def _confirms_dead(resp) -> bool:
+        return resp is not None and resp.status_code >= 400 and resp.status_code not in (405, 501)
+
+    try:
+        head = _guarded_head(url, timeout=3.0, headers=headers)
+        if head is None or not _confirms_dead(head):
+            return False
+        if headers is _BROWSER_HEADERS:
+            return True
+        return _confirms_dead(_guarded_head(url, timeout=3.0, headers=_BROWSER_HEADERS))
+    except Exception:
+        return False
+
+
+def _probe_conventional_paths(final_url: str, *, headers: dict | None) -> list[dict]:
+    """HEAD-probe the conventional feed paths — from the site root first, then
+    relative to the page path. Returns the first hit as [{"url", "title"}]."""
+    parsed = urlparse(final_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    page_dir = parsed.path.rstrip("/")
+    prefixes = [""] + ([page_dir] if page_dir else [])
+    for prefix in prefixes:
+        for suffix in _COMMON_FEED_PATHS:
+            probe = origin + prefix + suffix
+            try:
+                head = _guarded_head(probe, timeout=3.0, headers=headers)
+                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
+                    return [{"url": str(head.url), "title": None}]
+            except Exception:
+                continue
+    return []
+
+
 def _parse_attrs(tag_body: str) -> dict[str, str]:
     attrs: dict[str, str] = {}
     for m in _ATTR_RE.finditer(tag_body):
@@ -220,6 +262,12 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         return {"status": "feed", "feeds": [{"url": final_url, "title": None}], "message": "", "direct": True}
 
     if not resp.is_success:
+        # The pasted URL itself is dead — often a stale advertised feed URL
+        # (dropmark.com/rss) whose feed simply moved. Probe the conventional
+        # paths on the same origin before giving up.
+        fallback = _probe_conventional_paths(final_url, headers=_probe_headers)
+        if fallback:
+            return {"status": "feed", "feeds": fallback, "message": ""}
         return {"status": "error", "feeds": [], "message": f"HTTP {resp.status_code} — server denied the request."}
 
     # 2xx but suspiciously empty HTML → bot protection / challenge page
@@ -252,27 +300,29 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         seen.add(absolute)
         feeds.append({"url": absolute, "title": attrs.get("title", "").strip() or None})
 
+    stale_advertised: list[dict] = []
     if feeds:
-        return {
-            "status": "feed" if len(feeds) == 1 else "feeds",
-            "feeds": feeds,
-            "message": "",
-        }
+        live = [f for f in feeds if not _advertised_feed_dead(f["url"], headers=_probe_headers)]
+        if live:
+            return {
+                "status": "feed" if len(live) == 1 else "feeds",
+                "feeds": live,
+                "message": "",
+            }
+        # Every advertised link is confirmed dead — fall through to the
+        # conventional-path probes, keeping the advertised links as a last
+        # resort so a fully bot-walled site behaves exactly as before.
+        stale_advertised = feeds
+        _LOGGER.info("discovery: all %d advertised feed link(s) on %s look dead; probing conventional paths",
+                     len(feeds), final_url)
 
     # Probe common path suffixes: first from the site root, then relative to the page path.
+    path_hit = _probe_conventional_paths(final_url, headers=_probe_headers)
+    if path_hit:
+        return {"status": "feed", "feeds": path_hit, "message": ""}
     parsed = urlparse(final_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     page_dir = parsed.path.rstrip("/")
-    prefixes = [""] + ([page_dir] if page_dir else [])
-    for prefix in prefixes:
-        for suffix in _COMMON_FEED_PATHS:
-            probe = origin + prefix + suffix
-            try:
-                head = _guarded_head(probe, timeout=3.0, headers=_probe_headers)
-                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
-                    return {"status": "feed", "feeds": [{"url": str(head.url), "title": None}], "message": ""}
-            except Exception:
-                continue
 
     # Probe WordPress-style query-param variants — collect ALL matches so the picker
     # can show every format option (rss2 / rss / atom may all coexist).
@@ -294,6 +344,14 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         return {
             "status": "feed" if len(qp_feeds) == 1 else "feeds",
             "feeds": qp_feeds,
+            "message": "",
+        }
+
+    if stale_advertised:
+        # Nothing better found — surface the advertised links after all.
+        return {
+            "status": "feed" if len(stale_advertised) == 1 else "feeds",
+            "feeds": stale_advertised,
             "message": "",
         }
 
@@ -340,8 +398,15 @@ def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str]
             if absolute not in candidates:
                 candidates.append(absolute)
 
+    stale_candidates: list[str] = []
     if candidates:
-        return candidates, escalated
+        live = [c for c in candidates if not _advertised_feed_dead(c, headers=probe_headers)]
+        if live:
+            return live, escalated
+        # All advertised links confirmed dead (stale autodiscovery) — probe the
+        # conventional paths; keep the advertised ones as a last resort.
+        stale_candidates = candidates
+        candidates = []
 
     # Probe common path suffixes: first from the site root, then relative to the page path.
     parsed = urlparse(final_url)
@@ -376,4 +441,4 @@ def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str]
             except Exception:
                 continue
 
-    return candidates, escalated
+    return candidates or stale_candidates, escalated
