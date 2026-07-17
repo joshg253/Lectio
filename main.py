@@ -15541,6 +15541,47 @@ async def admin_rename_user(request: Request):
     return _account_redirect(msg=f"Renamed {old_username!r} to {new_username!r} (data and tokens unchanged).")
 
 
+@app.post("/admin/users/vacuum")
+async def admin_vacuum_user(request: Request):
+    """Admin action: VACUUM one user's reader/meta/starred DBs in the background.
+
+    Nightly maintenance vacuums meta/starred but skips the reader DB (the big
+    one); this reclaims space after a large purge or unsubscribe spree. A DB
+    busy with another writer just logs and skips — the nightly pass retries."""
+    if user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    target_id = str(form.get("user_id") or "")
+    if user_store.get_by_id(target_id) is None:
+        return JSONResponse({"ok": False, "error": "No such user."}, status_code=404)
+
+    def _vacuum() -> None:
+        for label, path in [
+            ("reader", tenancy.reader_db_path()),
+            ("meta", tenancy.meta_db_path()),
+            ("starred-archive", tenancy.starred_archive_db_path()),
+        ]:
+            try:
+                p = Path(path)
+                if not p.exists():
+                    continue
+                before = p.stat().st_size
+                conn = sqlite3.connect(str(p), timeout=30)
+                conn.execute("VACUUM")
+                conn.close()
+                LOGGER.info("[admin-vacuum] %s %s: %.1f MB -> %.1f MB",
+                            target_id, label, before / 1048576, p.stat().st_size / 1048576)
+            except Exception:
+                LOGGER.exception("[admin-vacuum] %s %s failed", target_id, label)
+
+    threading.Thread(target=_run_in_user_context, args=(target_id, _vacuum),
+                     daemon=True, name=f"admin-vacuum-{target_id[:12]}").start()
+    return JSONResponse({"ok": True, "started": True})
+
+
 # Log levels ranked so the Logs tab's filter can select a minimum severity.
 _LOG_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 _LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ (\w+) ")
