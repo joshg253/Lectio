@@ -17861,7 +17861,12 @@ def rules_run_now_route(
     with get_meta_connection() as conn:
         if type == "deduplicate":
             match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
+            # User-triggered Run Now sweeps the whole unread backlog. The default
+            # 500-per-feed sample (right for post-refresh runs, where fresh dupes
+            # are always in the newest slice) misses older duplicates entirely on
+            # high-volume feeds — e.g. entries restored to unread days later.
             result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
+                                    max_per_feed=10000,
                                     exclude_scope_ids=exclude_scope_ids)
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)

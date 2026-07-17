@@ -98,6 +98,28 @@ def test_rule_ignores_entries_older_than_cutoff(configured, monkeypatch):
     assert not _is_starred("e-match")
 
 
+def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
+    """User-triggered Run Now must not use the 500-per-feed refresh sample —
+    older duplicates (e.g. entries restored to unread) live outside it."""
+    from fastapi.testclient import TestClient
+
+    seen = {}
+
+    def fake_run_now_dedup(conn, scope, scope_id, match_method, window_hours,
+                           max_per_feed=500, exclude_scope_ids=""):
+        seen["max_per_feed"] = max_per_feed
+        return {"count": 0, "entries": [], "kept": []}
+
+    monkeypatch.setattr(main, "_run_now_dedup", fake_run_now_dedup)
+    app = FastAPI()
+    app.post("/rules/run-now")(main.rules_run_now_route)
+    with TestClient(app) as c:
+        r = c.post("/rules/run-now", data={"type": "deduplicate", "scope": "folder",
+                                           "scope_id": "8", "keyword": "safe"})
+    assert r.status_code == 200
+    assert seen["max_per_feed"] == 10000
+
+
 # ── safe-dedup GUID signal ────────────────────────────────────────────────────
 
 def _rec(feed: str, entry_id: str, link: str, title: str = "", body: str = "") -> dict:
