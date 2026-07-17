@@ -39,6 +39,9 @@
     .adm-panel { display: none; }
     .adm-panel.active { display: block; }
     .tuning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem; }
+    /* Inputs pin to the cell bottom so a label that wraps to two lines can't
+       push its field out of alignment with the rest of the row. */
+    .tuning-grid .fld input, .tuning-grid .fld select { margin-top: auto; }
     .adm-logs-controls { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .5rem; }
     .adm-log-output { max-height: 60vh; overflow: auto; background: rgba(127,127,127,.08);
                       border: 1px solid var(--line, #ccc); border-radius: 6px; padding: .6rem .75rem;
@@ -70,30 +73,10 @@
         <h2>Instance settings</h2>
         <p class="account-hint">Shared across the whole instance. Changes apply immediately after Save.</p>
 
-        <h3>Maintenance</h3>
-        <label class="fld">Hour (0–23, server local time)
-          <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
-        </label>
-        {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
-
-        <h3>Image cache</h3>
+        <h3>Maintenance &amp; cleanup</h3>
         <div class="tuning-grid">
-          <label class="fld">Retention (days, 0 = keep forever)
-            <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
-          </label>
-          <label class="fld">Max dimension (longest side, px; 0 = store originals)
-            <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
-          </label>
-        </div>
-        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
-
-        <h3>Tuning</h3>
-        <div class="tuning-grid">
-          <label class="fld">Login max failures
-            <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
-          </label>
-          <label class="fld">Lockout window (seconds)
-            <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
+          <label class="fld">Maintenance hour (0–23)
+            <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
           </label>
           <label class="fld">Feed history keep (rows/feed)
             <input type="number" id="adm-fetch-history-keep" min="1" value="{{ fetch_history_keep }}" placeholder="50" />
@@ -104,15 +87,44 @@
           <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries; after this many days the entry has left every feed window and the tombstone is swept. 0 keeps them forever.">Tomb sweeping (days, 0 = never)
             <input type="number" id="adm-tombstone-sweep" min="0" value="{{ tombstone_sweep_days }}" placeholder="90" />
           </label>
+        </div>
+        <p class="account-hint">Runs nightly at the set hour (server local time): prunes feed fetch history, applies per-folder retention, sweeps tombstones, and evicts the image cache.{% if maintenance_last %} Last ran: {{ maintenance_last }}.{% endif %}</p>
+        <div style="margin:.25rem 0 .75rem">
+          <button type="button" id="adm-run-maint">Run maintenance now</button>
+        </div>
+
+        <h3>Image cache</h3>
+        <div class="tuning-grid">
+          <label class="fld">Retention (days, 0 = keep forever)
+            <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
+          </label>
+          <label class="fld">Max dimension (px, 0 = originals)
+            <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
+          </label>
+        </div>
+        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries not viewed within the retention window are evicted nightly; larger images are downscaled to the max dimension before storing.</p>
+
+        <h3>Security</h3>
+        <div class="tuning-grid">
+          <label class="fld">Login max failures
+            <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
+          </label>
+          <label class="fld">Lockout window (seconds)
+            <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
+          </label>
+        </div>
+        <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
+
+        <h3>New users</h3>
+        <div class="tuning-grid">
           <label class="fld">Default auto-refresh (min, 0 = off)
             <input type="number" id="adm-instance-auto-refresh" min="0" value="{{ instance_auto_refresh }}" placeholder="60" />
           </label>
         </div>
-        <p class="account-hint">Login lockout, feed history, and tomb sweeping are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
+        <p class="account-hint">Seeds the auto-refresh setting for newly created users.</p>
 
-        <div style="display:flex; gap:.5rem; margin-top:.75rem">
+        <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
-          <button type="button" id="adm-run-maint">Run maintenance now</button>
         </div>
       </section>
     </div>
