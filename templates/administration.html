@@ -76,6 +76,7 @@
         <p class="account-hint">Shared across the whole instance. Changes apply immediately after Save.</p>
 
         <h3>Maintenance &amp; cleanup</h3>
+        <p class="account-hint">Runs nightly at the set hour (server local time): prunes feed fetch history, applies per-folder retention, sweeps tombstones, and evicts the image cache.{% if maintenance_last %} Last ran: {{ maintenance_last }}.{% endif %}</p>
         <div class="tuning-grid">
           <label class="fld">Maintenance hour (0–23)
             <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
@@ -90,12 +91,12 @@
             <input type="number" id="adm-tombstone-sweep" min="0" value="{{ tombstone_sweep_days }}" placeholder="90" />
           </label>
         </div>
-        <p class="account-hint">Runs nightly at the set hour (server local time): prunes feed fetch history, applies per-folder retention, sweeps tombstones, and evicts the image cache.{% if maintenance_last %} Last ran: {{ maintenance_last }}.{% endif %}</p>
         <div style="margin:.25rem 0 .75rem">
           <button type="button" id="adm-run-maint">Run maintenance now</button>
         </div>
 
         <h3>Image cache</h3>
+        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries not viewed within the retention window are evicted nightly; larger images are downscaled to the max dimension before storing.</p>
         <div class="tuning-grid">
           <label class="fld">Retention (days, 0 = keep forever)
             <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
@@ -104,9 +105,9 @@
             <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
           </label>
         </div>
-        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries not viewed within the retention window are evicted nightly; larger images are downscaled to the max dimension before storing.</p>
 
         <h3>Security</h3>
+        <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
         <div class="tuning-grid">
           <label class="fld">Login max failures
             <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
@@ -115,15 +116,14 @@
             <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
           </label>
         </div>
-        <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
 
         <h3>New users</h3>
+        <p class="account-hint">Seeds the auto-refresh setting for newly created users.</p>
         <div class="tuning-grid">
           <label class="fld">Default auto-refresh (min, 0 = off)
             <input type="number" id="adm-instance-auto-refresh" min="0" value="{{ instance_auto_refresh }}" placeholder="60" />
           </label>
         </div>
-        <p class="account-hint">Seeds the auto-refresh setting for newly created users.</p>
 
         <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
@@ -138,6 +138,7 @@
         <p class="account-hint">Instance-wide credentials. The email key sends on behalf of the whole instance; the OAuth apps are a shared fallback for users who haven't set their own (a user's own credentials always take priority).</p>
 
         <h3>Email (Resend)</h3>
+        <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
         <div class="tuning-grid keys-grid">
           <label class="fld">API key
             <input type="password" id="adm-resend-key" autocomplete="new-password"
@@ -147,9 +148,9 @@
             <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
           </label>
         </div>
-        <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
 
         <h3>YouTube OAuth</h3>
+        <p class="account-hint">Register at the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> with <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
         <div class="tuning-grid keys-grid">
           <label class="fld">Client ID
             <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
@@ -159,9 +160,9 @@
                    placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
           </label>
         </div>
-        <p class="account-hint">Register at the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> with <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
 
         <h3>Pinterest OAuth</h3>
+        <p class="account-hint">Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
         <div class="tuning-grid keys-grid">
           <label class="fld">Client ID
             <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
@@ -171,9 +172,9 @@
                    placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
           </label>
         </div>
-        <p class="account-hint">Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
 
         <h3>Reddit OAuth</h3>
+        <p class="account-hint">Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
         <div class="tuning-grid keys-grid">
           <label class="fld">Client ID
             <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
@@ -183,7 +184,6 @@
                    placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
           </label>
         </div>
-        <p class="account-hint">Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
 
         <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
