@@ -27,6 +27,9 @@
     .account-users { width: 100%; border-collapse: collapse; margin: .5rem 0; }
     .account-users th, .account-users td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid rgba(127,127,127,.25); }
     .account-hint { font-size: .82rem; opacity: .75; margin: .25rem 0; }
+    /* Group descriptions sit between the heading and the field grid — give the
+       fields a bit of air below the text. */
+    h3 + .account-hint { margin-bottom: .65rem; }
     .account-users button.danger { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
     .account-users td > div form { margin: 0; }
     /* tabs */
