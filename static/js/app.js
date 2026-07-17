@@ -6274,18 +6274,59 @@
       };
       if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
       try {
-        await fetch(form.action, {
+        const resp = await fetch(form.action, {
           method: 'POST',
           credentials: 'same-origin',
           headers,
           body: body.toString(),
         });
+        const data = await resp.json();
+        if (data && data.undo_token && data.marked > 0) {
+          showUndoMarkReadToast(data.marked, data.undo_token);
+        }
       } catch (_err) {
         // Network error — UI already updated optimistically, silently ignore.
       }
       // After any bulk mark-read, refresh sidebar counts from the server so that
       // off-screen entries (not in the current post list) are reflected correctly.
       _refreshSidebarCounts();
+    }
+
+    // Undo toast for bulk mark-as-read: the server stamps each batch with one
+    // shared read_at timestamp and hands it back as the undo token.
+    function showUndoMarkReadToast(marked, undoToken) {
+      document.getElementById('toast-message')?.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toast-message';
+      toast.className = 'toast-message';
+      toast.textContent = `Marked ${marked} post${marked === 1 ? '' : 's'} read. `;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const resp = await fetch('/entries/undo-mark-read', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: new URLSearchParams({ read_at: undoToken }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          window.location.reload();
+        } catch (err) {
+          toast.remove();
+          alert('Undo failed: ' + (err.message || err));
+        }
+      });
+      toast.appendChild(btn);
+      document.body.appendChild(toast);
+      window.setTimeout(() => {
+        toast.classList.add('fade-out');
+        window.setTimeout(() => toast.remove(), 500);
+      }, 8000);
     }
 
     // Set a badge to an absolute value (adjustCountBadge handles creation/removal).

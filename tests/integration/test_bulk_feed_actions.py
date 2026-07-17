@@ -45,7 +45,7 @@ def test_mark_read_uses_batch(monkeypatch):
 
     def _mock(urls):
         seen["urls"] = urls
-        return 7
+        return 7, "2026-07-17T00:00:00"
 
     monkeypatch.setattr(main, "mark_feeds_as_read", _mock)
     with TestClient(_app()) as c:

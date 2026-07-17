@@ -43,7 +43,8 @@ and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and
 The short version:
 
 - **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
-  mark-as-read, manual tags (space-separated; multi-word tags are hyphenated, e.g.
+  mark-as-read (with an **Undo** toast for a few seconds after any bulk mark,
+  restoring exactly that batch), manual tags (space-separated; multi-word tags are hyphenated, e.g.
   `games to play` → `games-to-play`), read history, search, and a
   Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
   that filters the current selection (folder/feed + read state) by tag, and a

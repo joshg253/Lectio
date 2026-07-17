@@ -12485,9 +12485,12 @@ def entry_pane(
     )
 
 
-def mark_feeds_as_read(feed_urls: set[str]) -> int:
+def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:
+    """Mark every unread entry in *feed_urls* read. Returns (count, batch
+    timestamp). The whole batch shares one read_at stamp, which doubles as the
+    undo token for /entries/undo-mark-read."""
     if not feed_urls:
-        return 0
+        return 0, None
 
     to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
@@ -12496,6 +12499,7 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
                 reader.mark_entry_as_read((entry.feed_url, entry.id))
                 to_sync.append((entry.feed_url, entry.id))
 
+    when = None
     if to_sync:
         when = datetime.now().isoformat()
         with get_meta_connection() as conn:
@@ -12507,7 +12511,7 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
                 """,
                 [(fu, eid, when) for fu, eid in to_sync],
             )
-    return len(to_sync)
+    return len(to_sync), when
 
 
 def _is_youtube_host(host: str) -> bool:
@@ -21473,14 +21477,14 @@ def mark_folder_as_read(
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
-    marked_count = mark_feeds_as_read(feed_urls)
+    marked_count, undo_token = mark_feeds_as_read(feed_urls)
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -21513,7 +21517,7 @@ def bulk_feed_action(
                 enable_feed(u)
                 count += 1
         elif action == "mark-read":
-            count = mark_feeds_as_read(set(urls))
+            count, _ = mark_feeds_as_read(set(urls))
             invalidate_unread_counts_cache()
         elif action == "refresh":
             feed_refresh_service.update_feeds(urls, enhance=False)
@@ -21566,7 +21570,7 @@ def mark_feed_as_read(
     resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    marked_count = mark_feeds_as_read({feed_url})
+    marked_count, undo_token = mark_feeds_as_read({feed_url})
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -21580,7 +21584,7 @@ def mark_feed_as_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_fmr)
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
@@ -22409,6 +22413,7 @@ def mark_entries_older_than_read(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     marked_count = 0
+    undo_token = None
     to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
         for fu in filtered_feed_urls:
@@ -22432,7 +22437,7 @@ def mark_entries_older_than_read(
                 marked_count += 1
 
     if to_sync:
-        when = datetime.now().isoformat()
+        when = undo_token = datetime.now().isoformat()
         with get_meta_connection() as conn:
             conn.executemany(
                 """
@@ -22455,11 +22460,52 @@ def mark_entries_older_than_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
     )
+
+
+_UNDO_MARK_READ_WINDOW = timedelta(minutes=15)
+
+
+@app.post("/entries/undo-mark-read")
+def undo_mark_read(read_at: str = Form(...)):
+    """Undo a bulk mark-as-read (the toast's Undo button).
+
+    Every bulk mark stamps its whole batch with one shared entry_read_state
+    read_at value; that timestamp is the undo token. Restores exactly that
+    batch to unread — reads before or after it are untouched. Tokens older
+    than the undo window are refused: this is a just-pressed-the-wrong-button
+    escape hatch, not history."""
+    try:
+        stamped = datetime.fromisoformat(read_at)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
+    if datetime.now() - stamped > _UNDO_MARK_READ_WINDOW:
+        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+
+    with get_meta_connection() as conn:
+        pairs = conn.execute(
+            "SELECT feed_url, entry_id FROM entry_read_state WHERE read_at = ?", (read_at,)
+        ).fetchall()
+    if not pairs:
+        return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
+
+    restored = 0
+    with get_reader() as reader:
+        for feed_url, entry_id in pairs:
+            try:
+                reader.mark_entry_as_unread((str(feed_url), str(entry_id)))
+                restored += 1
+            except Exception:  # noqa: BLE001 — entry may have been deleted since
+                LOGGER.debug("[undo-mark-read] could not restore %s in %s", entry_id, feed_url)
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM entry_read_state WHERE read_at = ?", (read_at,))
+    invalidate_unread_counts_cache()
+    LOGGER.info("[undo-mark-read] restored %d of %d entries from batch %s", restored, len(pairs), read_at)
+    return JSONResponse({"ok": True, "restored": restored})
 
 
 @app.post("/entries/mark-newer-than-unread")
