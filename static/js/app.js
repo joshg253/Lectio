@@ -755,14 +755,56 @@
           `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"${preselect && !keeper ? ' checked' : ''}>` +
           `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
           `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> ${badges}${date}` +
-          `<br><span class="dedup-url">${_mfEscape(e.link)}</span></span>` +
+          `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
           `</label>`;
       }).join('');
       const reasons = (g.reasons || []).join(', ');
       return `<div class="dedup-pair saved-dedup-group">` +
-        (reasons ? `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` : '') +
+        `<div class="saved-dedup-group-head">` +
+        `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
+        `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
+        `</div>` +
         rows + `</div>`;
     };
+
+    const _sdHost = (link) => { try { return new URL(link).hostname; } catch (_e) { return link; } };
+
+    document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('.saved-dedup-compare-btn');
+      if (!btn) return;
+      const group = btn.closest('.saved-dedup-group');
+      const existing = group.querySelector('.saved-dedup-compare');
+      if (existing) { existing.remove(); btn.textContent = 'Compare'; return; }
+      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      btn.disabled = true;
+      let data;
+      try {
+        const resp = await fetch('/saved/duplicates/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entry_ids: ids }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        btn.disabled = false;
+        alert('Compare failed: ' + err);
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = 'Hide';
+      const pane = document.createElement('div');
+      pane.className = 'saved-dedup-compare';
+      pane.innerHTML = (data.previews || []).map(p => {
+        const truncated = p.chars > p.text.length;
+        return `<div class="saved-dedup-compare-col">` +
+          `<div class="saved-dedup-compare-head">${_mfEscape(_sdHost(p.link))}` +
+          `${p.published ? ' · ' + _mfEscape(String(p.published).slice(0, 10)) : ''} · ${p.words} words</div>` +
+          `<div class="saved-dedup-compare-text">${p.text ? _mfEscape(p.text) + (truncated ? '…' : '') : '<em>no stored content</em>'}</div>` +
+          `</div>`;
+      }).join('');
+      group.appendChild(pane);
+    });
 
     const savedDedupListHtml = (groups, preselect) =>
       groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, preselect)).join('') +

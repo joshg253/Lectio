@@ -162,7 +162,8 @@ The short version:
   canonical URL or slug) arrive preselected keeping the best copy (extracted
   content first, then https over http, then the oldest save), while
   same-title / same-text matches are listed as *possible*
-  duplicates for manual review before a one-click delete.
+  duplicates for manual review — each group's **Compare** button lays the
+  stored text of every copy side by side — before a one-click delete.
   **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
   takes your Instapaper CSV export (Settings → Export → Download .CSV file in
   Instapaper) and imports every bookmark into Saved Items, preserving its

@@ -21118,6 +21118,51 @@ def get_saved_duplicates():
     })
 
 
+_SAVED_DUP_PREVIEW_CHARS = 1500
+_SAVED_DUP_PREVIEW_MAX_IDS = 12
+
+
+@app.post("/saved/duplicates/preview")
+async def preview_saved_duplicates(request: Request):
+    """Side-by-side compare support for the Saved duplicate scan: return a
+    plain-text preview of each requested saved article's stored content so a
+    'possible' match can be judged before anything is deleted.
+
+    Body (JSON): {"entry_ids": [...]} — one group's ids (capped). Unknown ids
+    are skipped."""
+    import html as _html
+
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e][:_SAVED_DUP_PREVIEW_MAX_IDS]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    previews: list[dict] = []
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        for entry_id in entry_ids:
+            row = db.execute(
+                "SELECT title, link, published, json_extract(content, '$[0].value')"
+                " FROM entries WHERE feed = ? AND id = ?",
+                (saved_url, entry_id),
+            ).fetchone()
+            if row is None:
+                continue
+            title, link, published, raw = row
+            text = ""
+            if raw:
+                text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
+                text = " ".join(_html.unescape(text).split())
+            previews.append({
+                "entry_id": entry_id,
+                "title": str(title or ""),
+                "link": str(link or entry_id),
+                "published": str(published or ""),
+                "chars": len(text),
+                "words": len(text.split()),
+                "text": text[:_SAVED_DUP_PREVIEW_CHARS],
+            })
+    return JSONResponse({"previews": previews})
+
+
 @app.post("/saved/deduplicate")
 async def deduplicate_saved(request: Request):
     """Hard-delete the selected duplicate copies from Saved Articles.

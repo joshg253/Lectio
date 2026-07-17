@@ -58,6 +58,7 @@ def _client() -> TestClient:
     app = FastAPI()
     app.get("/saved/duplicates")(main.get_saved_duplicates)
     app.post("/saved/deduplicate")(main.deduplicate_saved)
+    app.post("/saved/duplicates/preview")(main.preview_saved_duplicates)
     return TestClient(app)
 
 
@@ -207,6 +208,24 @@ def test_saved_duplicates_empty_without_saved_feed(configured):
     with _client() as c:
         r = c.get("/saved/duplicates")
     assert r.json() == {"confirmed": [], "possible": [], "scanned": 0}
+
+
+def test_saved_duplicates_preview_returns_stored_text(configured):
+    with_content = "https://a.example.test/my-great-article"
+    without = "https://a.example.test/my-great-article?utm_source=ig"
+    with main.get_reader() as reader:
+        _seed_saved(reader)
+    with _client() as c:
+        r = c.post("/saved/duplicates/preview",
+                   json={"entry_ids": [with_content, without, "https://nope.example.test/gone"]})
+    assert r.status_code == 200
+    previews = r.json()["previews"]
+    assert [p["entry_id"] for p in previews] == [with_content, without]  # unknown id skipped
+    assert "great content" in previews[0]["text"]
+    assert previews[0]["words"] > 0
+    assert previews[0]["chars"] == len(previews[0]["text"])  # short body: untruncated
+    assert previews[1]["text"] == "" and previews[1]["words"] == 0
+    assert previews[0]["title"] == "My Great Article"
 
 
 # ── /saved/deduplicate bulk delete ────────────────────────────────────────────

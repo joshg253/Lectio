@@ -4963,6 +4963,50 @@ body[data-keyboard-open="1"] .action-modal-panel {
   overflow-y: auto;
 }
 .saved-dedup-row { cursor: pointer; }
+.saved-dedup-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.saved-dedup-compare-btn {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.saved-dedup-compare-btn:hover { color: var(--fg, inherit); }
+.saved-dedup-compare {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+.saved-dedup-compare-col {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.4rem;
+  min-width: 0;
+}
+.saved-dedup-compare-head {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+  word-break: break-all;
+}
+.saved-dedup-compare-text {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-height: 14rem;
+  overflow-y: auto;
+  word-break: break-word;
+}
+a.dedup-url { color: inherit; }
 .saved-dedup-row .dedup-tag { width: 2.6rem; }
 .saved-dedup-main { min-width: 0; }
 .saved-dedup-reasons {
