@@ -219,6 +219,37 @@ def safe_get(
     raise UnsafeURLError(f"too many redirects starting from {url!r}")
 
 
+def safe_head_follow(
+    url: str,
+    *,
+    timeout: float = 5.0,
+    headers: dict | None = None,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+) -> httpx.Response:
+    """SSRF-safe HEAD that follows redirects with per-hop validation.
+
+    HEAD counterpart of :func:`safe_get` for liveness probes that need the
+    final destination (e.g. the saved-articles URL checker): every hop is
+    checked with :func:`is_safe_outbound_url` before the request is made.
+    Returns the final (non-3xx) response — its ``.url`` is the destination.
+    Raises :class:`UnsafeURLError` for an unsafe hop or too many redirects.
+    """
+    with build_client(timeout=timeout, headers=headers) as client:
+        current = url
+        for _ in range(max_redirects + 1):
+            if not is_safe_outbound_url(current):
+                raise UnsafeURLError(current)
+            resp = client.head(current)
+            if resp.is_redirect:
+                nxt = _redirect_target(resp)
+                if nxt is None:
+                    return resp
+                current = nxt
+                continue
+            return resp
+    raise UnsafeURLError(f"too many redirects starting from {url!r}")
+
+
 def safe_head(
     url: str,
     *,

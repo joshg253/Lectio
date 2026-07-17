@@ -164,6 +164,11 @@ The short version:
   same-title / same-text matches are listed as *possible*
   duplicates for manual review — each group's **Compare** button lays the
   stored text of every copy side by side — before a one-click delete.
+  **Check URLs** (per group, or a throttled **Check all URLs** pass) probes
+  each copy's link: dead links (404/410, confirmed by a GET retry) are
+  flagged and the kept copy automatically switches to a live one, redirects
+  landing on the same page earn a "same destination" proof badge, and
+  bot-walls (403/429) are marked inconclusive rather than dead.
   **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
   takes your Instapaper CSV export (Settings → Export → Download .CSV file in
   Instapaper) and imports every bookmark into Saved Items, preserving its

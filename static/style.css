@@ -4969,7 +4969,9 @@ body[data-keyboard-open="1"] .action-modal-panel {
   justify-content: space-between;
   gap: 0.4rem;
 }
-.saved-dedup-compare-btn {
+.saved-dedup-group-btns { display: flex; gap: 0.3rem; flex-shrink: 0; }
+.saved-dedup-compare-btn,
+.saved-dedup-check-urls-btn {
   font-size: 0.72rem;
   padding: 0.1rem 0.5rem;
   background: transparent;
@@ -4979,7 +4981,11 @@ body[data-keyboard-open="1"] .action-modal-panel {
   cursor: pointer;
   flex-shrink: 0;
 }
-.saved-dedup-compare-btn:hover { color: var(--fg, inherit); }
+.saved-dedup-compare-btn:hover,
+.saved-dedup-check-urls-btn:hover { color: var(--fg, inherit); }
+.saved-dedup-badge--dead { color: var(--danger, #c0392b); border-color: currentColor; }
+.saved-dedup-badge--alive { color: var(--accent, #2c7); border-color: currentColor; }
+.saved-dedup-same-dest { margin-left: 0.4rem; }
 .saved-dedup-compare {
   display: grid;
   grid-auto-flow: column;

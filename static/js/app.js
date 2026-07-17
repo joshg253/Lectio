@@ -752,9 +752,10 @@
           (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
         const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
         return `<label class="dedup-pair-row saved-dedup-row">` +
-          `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"${preselect && !keeper ? ' checked' : ''}>` +
+          `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
+          ` data-has-content="${e.has_content ? '1' : '0'}"${preselect && !keeper ? ' checked' : ''}>` +
           `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
-          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> ${badges}${date}` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> <span class="saved-dedup-row-badges">${badges}</span>${date}` +
           `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
           `</label>`;
       }).join('');
@@ -762,14 +763,97 @@
       return `<div class="dedup-pair saved-dedup-group">` +
         `<div class="saved-dedup-group-head">` +
         `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
+        `<span class="saved-dedup-group-btns">` +
+        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and the kept copy switches to a live one">Check URLs</button>` +
         `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
-        `</div>` +
+        `</span></div>` +
         rows + `</div>`;
     };
 
     const _sdHost = (link) => { try { return new URL(link).hostname; } catch (_e) { return link; } };
 
+    const _sdUrlBadge = (r) => {
+      const b = document.createElement('span');
+      b.className = 'saved-dedup-badge saved-dedup-url-badge';
+      if (r.dead) {
+        b.classList.add('saved-dedup-badge--dead');
+        b.textContent = `dead (${r.status})`;
+      } else if (r.alive) {
+        b.classList.add('saved-dedup-badge--alive');
+        b.textContent = r.status === 200 ? 'alive' : `alive (${r.status})`;
+      } else {
+        b.textContent = r.status ? `HTTP ${r.status}` : (r.error || 'unreachable');
+        b.title = 'Inconclusive — bot-wall or network hiccup, not proof the page is gone';
+      }
+      return b;
+    };
+
+    // Flip the group's selection to keep a live copy — only when every
+    // currently-kept row turned out dead, and never at the cost of deleting
+    // the only copy with stored content.
+    const _sdFlipKeeper = (group, byId) => {
+      if (!group.closest('.saved-dedup-confirmed-list')) return;
+      const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => {
+        const cb = row.querySelector('.saved-dedup-check');
+        return { row, cb, r: byId.get(cb.dataset.entryId), hasContent: cb.dataset.hasContent === '1' };
+      });
+      const kept = info.filter(i => !i.cb.checked);
+      if (!kept.length || !kept.every(i => i.r && i.r.dead)) return;
+      const candidate = info.find(i => i.r && i.r.alive);  // rows are in keep-priority order
+      if (!candidate) return;
+      if (!candidate.hasContent && info.some(i => i.hasContent)) return;  // human call
+      for (const i of info) {
+        i.cb.checked = i !== candidate && !!(i.r && (i.r.alive || i.r.dead));
+        const tag = i.row.querySelector('.dedup-tag');
+        tag.textContent = i === candidate ? 'keep' : '';
+        tag.classList.toggle('keep-tag', i === candidate);
+      }
+    };
+
+    const _sdCheckGroupUrls = async (group) => {
+      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      const resp = await fetch('/saved/duplicates/check-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: ids }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const byId = new Map((data.results || []).map(r => [r.entry_id, r]));
+      for (const row of group.querySelectorAll('.saved-dedup-row')) {
+        const cb = row.querySelector('.saved-dedup-check');
+        const r = byId.get(cb.dataset.entryId);
+        row.querySelector('.saved-dedup-url-badge')?.remove();
+        if (r) row.querySelector('.saved-dedup-row-badges').appendChild(_sdUrlBadge(r));
+      }
+      // Two copies redirecting to the same final URL = proof of a dupe.
+      const finals = (data.results || []).filter(r => r.alive && r.final_url).map(r => r.final_url.replace(/\/$/, ''));
+      if (finals.length > 1 && new Set(finals).size < finals.length && !group.querySelector('.saved-dedup-same-dest')) {
+        const s = document.createElement('span');
+        s.className = 'saved-dedup-badge saved-dedup-badge--alive saved-dedup-same-dest';
+        s.textContent = 'same destination';
+        s.title = 'These URLs redirect to the same page';
+        group.querySelector('.saved-dedup-reasons').after(s);
+      }
+      _sdFlipKeeper(group, byId);
+    };
+
     document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
+      const checkBtn = ev.target.closest('.saved-dedup-check-urls-btn');
+      if (checkBtn) {
+        const group = checkBtn.closest('.saved-dedup-group');
+        checkBtn.disabled = true;
+        checkBtn.textContent = 'Checking…';
+        try {
+          await _sdCheckGroupUrls(group);
+          checkBtn.textContent = 'Re-check';
+        } catch (err) {
+          checkBtn.textContent = 'Check URLs';
+          alert('URL check failed: ' + err);
+        }
+        checkBtn.disabled = false;
+        return;
+      }
       const btn = ev.target.closest('.saved-dedup-compare-btn');
       if (!btn) return;
       const group = btn.closest('.saved-dedup-group');
@@ -831,15 +915,18 @@
       const confirmed = data.confirmed || [];
       const possible = data.possible || [];
       results.hidden = false;
+      const checkAllBtn = document.getElementById('saved-dedup-checkall');
 
       if (confirmed.length === 0 && possible.length === 0) {
         intro.textContent = `No duplicate saved articles found (${data.scanned} scanned).`;
         confirmedList.innerHTML = '';
         possibleSection.hidden = true;
         okBtn.hidden = true;
+        if (checkAllBtn) checkAllBtn.hidden = true;
         return;
       }
       okBtn.hidden = false;
+      if (checkAllBtn) checkAllBtn.hidden = false;
       if (confirmed.length > 0) {
         intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the copy with content, preferring https, then oldest:`;
         confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
@@ -855,6 +942,31 @@
       } else {
         possibleSection.hidden = true;
       }
+    });
+
+    let _sdCheckAllRunning = false;
+    let _sdCheckAllStop = false;
+    document.getElementById('saved-dedup-checkall')?.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      if (_sdCheckAllRunning) { _sdCheckAllStop = true; return; }
+      const groups = [...document.getElementById('saved-dedup-results').querySelectorAll('.saved-dedup-group')];
+      _sdCheckAllRunning = true;
+      _sdCheckAllStop = false;
+      let failures = 0;
+      for (let i = 0; i < groups.length; i++) {
+        if (_sdCheckAllStop) break;
+        btn.textContent = `Checking ${i + 1}/${groups.length}… (click to stop)`;
+        groups[i].scrollIntoView({ block: 'nearest' });
+        try {
+          await _sdCheckGroupUrls(groups[i]);
+        } catch (_err) {
+          if (++failures >= 3) { alert('URL checking keeps failing — stopped.'); break; }
+        }
+        // Pacing between groups — stay a polite client even over 200+ groups.
+        await new Promise(r => setTimeout(r, 400));
+      }
+      _sdCheckAllRunning = false;
+      btn.textContent = 'Check all URLs';
     });
 
     document.getElementById('saved-dedup-ok')?.addEventListener('click', async () => {

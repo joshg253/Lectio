@@ -59,6 +59,7 @@ def _client() -> TestClient:
     app.get("/saved/duplicates")(main.get_saved_duplicates)
     app.post("/saved/deduplicate")(main.deduplicate_saved)
     app.post("/saved/duplicates/preview")(main.preview_saved_duplicates)
+    app.post("/saved/duplicates/check-urls")(main.check_saved_duplicate_urls)
     return TestClient(app)
 
 
@@ -226,6 +227,84 @@ def test_saved_duplicates_preview_returns_stored_text(configured):
     assert previews[0]["chars"] == len(previews[0]["text"])  # short body: untruncated
     assert previews[1]["text"] == "" and previews[1]["words"] == 0
     assert previews[0]["title"] == "My Great Article"
+
+
+# ── /saved/duplicates/check-urls liveness probe ───────────────────────────────
+
+def test_check_urls_reports_per_entry_results(configured, monkeypatch):
+    keeper = "https://a.example.test/my-great-article"
+    dupe = "https://a.example.test/my-great-article?utm_source=ig"
+    with main.get_reader() as reader:
+        _seed_saved(reader)
+    canned = {
+        keeper: {"status": 404, "alive": False, "dead": True, "final_url": keeper, "error": None},
+        dupe: {"status": 200, "alive": True, "dead": False,
+               "final_url": "https://a.example.test/lessons/my-great-article", "error": None},
+    }
+    monkeypatch.setattr(main, "_check_saved_url", lambda url: canned[url])
+    monkeypatch.setattr(main, "_SAVED_DUP_CHECK_PAUSE", 0)
+    with _client() as c:
+        r = c.post("/saved/duplicates/check-urls",
+                   json={"entry_ids": [keeper, dupe, "https://nope.example.test/gone"]})
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert [x["entry_id"] for x in results] == [keeper, dupe]  # unknown id skipped
+    assert results[0]["dead"] is True and results[0]["status"] == 404
+    assert results[1]["alive"] is True
+    assert results[1]["final_url"].endswith("/lessons/my-great-article")
+
+
+class _FakeResp:
+    def __init__(self, status_code, url):
+        self.status_code = status_code
+        self.url = url
+
+
+def _patch_probes(monkeypatch, head_status, get_status=None):
+    from services import url_guard
+
+    def fake_head(url, **kw):
+        return _FakeResp(head_status, url)
+
+    def fake_get(client, url, **kw):
+        return _FakeResp(get_status, url)
+
+    class _NoopClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(url_guard, "safe_head_follow", fake_head)
+    monkeypatch.setattr(url_guard, "safe_get", fake_get)
+    monkeypatch.setattr(url_guard, "build_client", lambda **kw: _NoopClient())
+
+
+def test_check_saved_url_classification(configured, monkeypatch):
+    url = "https://a.example.test/x"
+
+    _patch_probes(monkeypatch, 200)
+    assert main._check_saved_url(url) == {
+        "status": 200, "alive": True, "dead": False, "final_url": url, "error": None}
+
+    _patch_probes(monkeypatch, 404, get_status=404)  # HEAD 4xx is confirmed with a GET
+    assert main._check_saved_url(url)["dead"] is True
+
+    _patch_probes(monkeypatch, 405, get_status=200)  # HEAD-hostile server: GET wins
+    assert main._check_saved_url(url)["alive"] is True
+
+    _patch_probes(monkeypatch, 403, get_status=403)  # bot-wall: inconclusive, NOT dead
+    res = main._check_saved_url(url)
+    assert res["alive"] is False and res["dead"] is False and res["status"] == 403
+
+    from services import url_guard
+
+    def boom(url, **kw):
+        raise TimeoutError("no route")
+
+    monkeypatch.setattr(url_guard, "safe_head_follow", boom)
+    res = main._check_saved_url(url)
+    assert res["dead"] is False and res["error"] == "TimeoutError"
 
 
 # ── /saved/deduplicate bulk delete ────────────────────────────────────────────

@@ -21163,6 +21163,72 @@ async def preview_saved_duplicates(request: Request):
     return JSONResponse({"previews": previews})
 
 
+_SAVED_DUP_CHECK_TIMEOUT = 8.0
+_SAVED_DUP_CHECK_PAUSE = 0.3  # between requests in one group — usually same host
+
+
+def _check_saved_url(url: str) -> dict:
+    """Liveness probe for one saved article URL. Honest UA, SSRF-guarded,
+    redirects followed with per-hop validation. Never raises.
+
+    Classification is deliberately conservative: only 404/410 count as dead
+    (the keeper auto-flip acts on it); 403/429/5xx are bot-walls or hiccups,
+    not proof the page is gone. A HEAD failure is retried once as a GET —
+    some servers reject or mishandle HEAD but serve the page fine."""
+    headers = {"User-Agent": LECTIO_HONEST_USER_AGENT}
+    status: int | None = None
+    final_url = url
+    try:
+        resp = url_guard.safe_head_follow(url, timeout=_SAVED_DUP_CHECK_TIMEOUT, headers=headers)
+        status, final_url = resp.status_code, str(resp.url)
+        if status >= 400:
+            with url_guard.build_client(timeout=_SAVED_DUP_CHECK_TIMEOUT, headers=headers) as client:
+                resp = url_guard.safe_get(client, url)
+            status, final_url = resp.status_code, str(resp.url)
+    except url_guard.UnsafeURLError:
+        return {"status": None, "alive": False, "dead": False, "final_url": url, "error": "unsafe URL"}
+    except Exception as exc:  # noqa: BLE001 — DNS failure, timeout, TLS, ...
+        return {"status": None, "alive": False, "dead": False, "final_url": url,
+                "error": type(exc).__name__}
+    return {
+        "status": status,
+        "alive": status < 400,
+        "dead": status in (404, 410),
+        "final_url": final_url,
+        "error": None,
+    }
+
+
+@app.post("/saved/duplicates/check-urls")
+async def check_saved_duplicate_urls(request: Request):
+    """Probe one duplicate group's URLs for liveness (dead-link detection).
+
+    Body (JSON): {"entry_ids": [...]} — one group's ids (capped). Sequential
+    with a small pause (the copies usually share a host); the client is
+    responsible for pacing across groups."""
+    from starlette.concurrency import run_in_threadpool
+
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e][:_SAVED_DUP_PREVIEW_MAX_IDS]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    targets: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for entry_id in entry_ids:
+            entry = reader.get_entry((saved_url, entry_id), None)
+            if entry is not None:
+                targets.append((entry_id, str(entry.link or entry_id)))
+
+    def _probe_all() -> list[dict]:
+        results = []
+        for i, (entry_id, link) in enumerate(targets):
+            if i:
+                time.sleep(_SAVED_DUP_CHECK_PAUSE)
+            results.append({"entry_id": entry_id, "link": link, **_check_saved_url(link)})
+        return results
+
+    return JSONResponse({"results": await run_in_threadpool(_probe_all)})
+
+
 @app.post("/saved/deduplicate")
 async def deduplicate_saved(request: Request):
     """Hard-delete the selected duplicate copies from Saved Articles.
