@@ -5447,6 +5447,15 @@ mark.highlight-mark {
   white-space: nowrap;
 }
 .feed-prop-inline-btn:hover { border-color: var(--accent, #3a7abf); color: var(--accent, #3a7abf); }
+.feed-prop-view-posts-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.feed-prop-view-posts-btn .material-symbols-rounded { font-size: 1rem; }
 .feed-prop-inline-btn--primary { border-color: var(--accent, #3a7abf); background: var(--accent, #3a7abf); color: #fff; }
 .feed-prop-inline-btn--primary:hover { opacity: 0.85; }
 .feed-prop-inline-btn:disabled { opacity: 0.5; cursor: not-allowed; }

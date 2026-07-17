@@ -4076,7 +4076,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -4953,9 +4953,16 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     slug_idx:  dict = _dd(list)
     title_idx: dict = _dd(list)
     body_idx:  dict = _dd(list)
+    guid_idx:  dict = _dd(list)
     by_feed:   dict = _dd(list)
 
     for r in records:
+        # Identical GUID in two different feeds is the publisher's own statement
+        # that it's the same item (e.g. slickdeals search feeds all carry
+        # guid=thread URL while varying the link) — sufficient evidence alone.
+        # Length guard keeps degenerate ids ("1", "42") from cross-matching.
+        if len(r["entry_id"]) >= 8:
+            guid_idx[r["entry_id"]].append(r)
         if r["slug"]:
             slug_idx[r["slug"]].append(r)
         if r["ntitle"] and len(r["ntitle"].split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS:
@@ -4968,6 +4975,7 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     slug_pairs  = _index_to_pairs(slug_idx)
     title_pairs = _index_to_pairs(title_idx)
     body_pairs  = _index_to_pairs(body_idx)
+    guid_pairs  = _index_to_pairs(guid_idx)
 
     link_feed: dict[str, str] = {r["link"]: r["feed_url"] for r in records if r["link"]}
     cand_pairs: set[tuple[str, str]] = set()
@@ -4994,16 +5002,19 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
                     if sim_b >= _SAFE_DEDUP_BODY_FUZZY_THRESH:
                         body_fuzzy_pairs.add(_mk_pair(a, b))
 
-    all_pairs = slug_pairs | title_pairs | fuzzy_pairs | body_pairs | body_fuzzy_pairs
+    all_pairs = slug_pairs | title_pairs | fuzzy_pairs | body_pairs | body_fuzzy_pairs | guid_pairs
     pair_modes: dict[tuple[str, str], list[str]] = {}
     for pk in all_pairs:
         modes: list[str] = []
+        if pk in guid_pairs:        modes.append("guid")
         if pk in slug_pairs:        modes.append("slug")
         if pk in title_pairs:       modes.append("title")
         if pk in fuzzy_pairs:       modes.append("fuzzy_near")
         if pk in body_pairs:        modes.append("body")
         if pk in body_fuzzy_pairs:  modes.append("body_fuzzy")
-        if frozenset(modes) in _SAFE_DEDUP_COMBOS:
+        # A shared GUID is accepted on its own; everything else needs a
+        # corroborated combo from _SAFE_DEDUP_COMBOS.
+        if "guid" in modes or frozenset(modes) in _SAFE_DEDUP_COMBOS:
             pair_modes[pk] = modes
     return pair_modes
 
@@ -6373,6 +6384,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         # Webhook rules likewise fire after mark_as_read/dedup.
         _run_webhook_rules_after_refresh(refreshed_feed_urls)
         _run_instapaper_rules_after_refresh(refreshed_feed_urls)
+        _run_save_article_rules_after_refresh(refreshed_feed_urls)
         _run_quire_rules_after_refresh(refreshed_feed_urls)
         # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
         # add" doesn't fight an earlier rule).
@@ -6770,6 +6782,93 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[instapaper-auto] error in _run_instapaper_rules_after_refresh")
+
+
+_SAVE_ARTICLE_AUTO_PER_RUN_CAP = 50  # archive worker fan-out bound
+_SAVE_ARTICLE_INBOX_TAG = "inbox"
+
+
+def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Star matching freshly-refreshed entries into the Saved backlog and tag
+    them 'inbox' (the Lectio-native counterpart of the Instapaper rule).
+
+    Idempotent per entry: an already-starred entry is skipped, so re-refreshes
+    never re-tag something the user already filed out of the Inbox. Bounded by
+    the 15-min added cutoff and a per-run cap like the other save-out rules."""
+    if not refreshed_feed_urls:
+        return
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "save_article"]
+        if not rules:
+            return
+
+        saved = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if saved >= _SAVE_ARTICLE_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            # Empty keyword = save every new entry in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            fu = str(entry.feed_url or "")
+                            eid = str(entry.id)
+                            result = _star_entry_for_current_user(fu, eid)
+                            if not result.get("ok") or result.get("duplicate"):
+                                continue  # missing, or already in Saved — don't re-tag
+                            saved += 1
+                            try:
+                                existing = get_manual_tags_for_entry(fu, eid)
+                                if _SAVE_ARTICLE_INBOX_TAG not in existing:
+                                    set_manual_tags_for_entry(
+                                        fu, eid, " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG])
+                                    )
+                            except Exception:  # noqa: BLE001 — star landed; tag is best-effort
+                                LOGGER.warning("[save-article-auto] inbox tag failed for %s", eid)
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            with get_meta_connection() as conn:
+                                _log_auto_run(conn, now_str, "save_article", scope, scope_id, keyword, {
+                                    "count": 1,
+                                    "entries": [{"feed_url": fu, "entry_id": eid,
+                                                 "title": str(entry.title or ""), "link": str(entry.link or ""),
+                                                 "feed_title": feed_title_cache.get(fu, fu)}],
+                                })
+            except Exception:
+                LOGGER.exception("[save-article-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[save-article-auto] error in _run_save_article_rules_after_refresh")
 
 
 # Cap a run well under the Free-tier 50/min so an automation burst never trips the
@@ -7738,6 +7837,7 @@ _AUTOMATION_TYPE_LABELS = {
     "webhook": "Webhook",
     "youtube_playlist": "Add to YT playlist",
     "instapaper": "Save to Instapaper",
+    "save_article": "Save/Star article",
     "quire": "Add to Quire",
     "tag_filter": "Tag filter",
 }
@@ -7766,6 +7866,8 @@ def _automation_rule_detail(rule: dict) -> str:
         return f"POST · {fmt} · matches {search_in}"
     if rule_type == "instapaper":
         return f"save · matches {search_in}"
+    if rule_type == "save_article":
+        return f"star + inbox tag · matches {search_in}"
     if rule_type == "youtube_playlist":
         parts = ["→ " + (str(rule.get("yt_playlist_title") or "") or "playlist")]
         kw = str(rule.get("keyword") or "").strip()

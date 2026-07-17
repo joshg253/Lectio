@@ -245,6 +245,21 @@
                 </a>
               </div>
             </div>
+            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
+               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
+            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
+                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
+                >
+                  <span class="name">Inbox</span>
+                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {% for row in child_folder_rows %}
             {% set saved_in_folder = saved_counts_by_folder.get(row.id, 0) %}
             {% if saved_in_folder %}
@@ -2271,6 +2286,7 @@
     <div class="action-modal-panel feed-properties-panel" role="dialog" aria-modal="true" aria-labelledby="feed-properties-title">
       <div class="feed-properties-header-row">
         <h3 id="feed-properties-title" class="action-modal-title">Feed Properties</h3>
+        <a id="feed-prop-view-posts" href="#" class="feed-prop-inline-btn feed-prop-view-posts-btn" hidden title="View this feed's posts in the reader"><span class="material-symbols-rounded" aria-hidden="true">list_alt</span> View posts</a>
         <button type="button" id="feed-properties-close" class="feed-properties-close" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">

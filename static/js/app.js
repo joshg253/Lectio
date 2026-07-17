@@ -3189,6 +3189,18 @@
       if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
       setFeedPropText(feedPropXml, feedUrl);
       if (feedPropXmlOpen) { feedPropXmlOpen.href = safeHttpUrl(feedUrl) || '#'; feedPropXmlOpen.hidden = !feedUrl; }
+      // "View posts" — open this feed's list in the reader. Prefer the sidebar
+      // link's folder id (the id the reader expects, root for uncategorized);
+      // refined below once /feeds/properties returns folder_ids. -1 renders the
+      // uncategorized view, so the button is always usable.
+      const feedPropViewPosts = document.getElementById('feed-prop-view-posts');
+      const setViewPostsHref = (folderId) => {
+        if (!feedPropViewPosts) return;
+        feedPropViewPosts.href = `/?folder_id=${encodeURIComponent(folderId)}&list_feed_url=${encodeURIComponent(feedUrl)}&read_filter=all`;
+        feedPropViewPosts.hidden = false;
+      };
+      const _sidebarFolderId = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`)?.dataset.folderId;
+      setViewPostsHref(_sidebarFolderId ?? '-1');
       setFeedPropText(feedPropHealth, '-');
       setFeedPropText(feedPropHealthDetail, '-');
       setFeedPropText(feedPropTotal, '-');
@@ -3325,6 +3337,7 @@
           feedPropFolderSelect.value = String(currentFolderId);
           feedPropFolderSelect.dataset.feedUrl = feedUrl;
           feedPropFolderSelect.dataset.currentFolderId = String(currentFolderId);
+          setViewPostsHref(String(currentFolderId));
         }
         if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
 
@@ -7446,7 +7459,7 @@
           return;
         }
         const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'quire'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', quire: 'Add to Quire' };
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -8123,7 +8136,7 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['tag_filter','Tag Filter'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['quire','Add to Quire'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['tag_filter','Tag Filter'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['save_article','Save/Star Article'],['quire','Add to Quire'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
           // YouTube playlist rule needs a connected account; hide the option until
           // connected (unless editing an existing rule of this type).

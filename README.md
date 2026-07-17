@@ -44,7 +44,9 @@ The short version:
 
 - **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
   mark-as-read (with an **Undo** toast for a few seconds after any bulk mark,
-  restoring exactly that batch), manual tags (space-separated; multi-word tags are hyphenated, e.g.
+  restoring exactly that batch), **View posts** jump links from Feed
+  Properties and the Stale list straight to a feed's posts in the reader,
+  manual tags (space-separated; multi-word tags are hyphenated, e.g.
   `games to play` → `games-to-play`), read history, search, and a
   Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
   that filters the current selection (folder/feed + read state) by tag, and a
@@ -109,7 +111,10 @@ The short version:
   entries are always kept), deduplicate, email-article,
   outbound-webhook (with an optional **batch mode** that groups all matches from
   one refresh run into a single `{entries:[...]}` request instead of one call per
-  entry), **save-to-Instapaper**, **add-to-YouTube-playlist**, and
+  entry), **save-to-Instapaper**, **save/star-article** (the Lectio-native
+  read-later counterpart: matching new entries are starred into Saved and
+  tagged `inbox`, surfacing in a pinned **Inbox** bucket at the top of the
+  Saved tree — file items out by removing the tag), **add-to-YouTube-playlist**, and
   **add-to-Quire** rules (the YouTube rule auto-adds new
   videos — including those embedded in any feed's article — to a chosen playlist,
   with include-Shorts, mark-read, and **min/max-duration** options; quota-capped,
