@@ -16526,7 +16526,12 @@ def starred_asset(asset_hash: str) -> Response:
 @app.get("/feeds/discover")
 def discover_feed_route(url: str = Query(...)):
     from services.feed_discovery import probe_url as _probe_url
-    return JSONResponse(_probe_url(url.strip()))
+    url = url.strip()
+    if url and "://" not in url:
+        # Schemeless paste (www.example.com) — assume https rather than letting
+        # the SSRF guard reject it with a misleading "private target" message.
+        url = "https://" + url
+    return JSONResponse(_probe_url(url))
 
 
 def _guid_type(ids: list[str]) -> str:

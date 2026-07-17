@@ -12025,9 +12025,20 @@
         msgEl.hidden = !text;
       }
 
-      function schedule(url) {
+      // Schemeless paste (www.example.com, example.com/feed) — assume https.
+      // Anything that doesn't yet look like a hostname stays pending silently
+      // (the user is still typing).
+      function normalizeInput(url) {
+        if (!url) return '';
+        if (url.includes('://')) return url;
+        if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:[/:?#]|$)/i.test(url)) return 'https://' + url;
+        return '';
+      }
+
+      function schedule(rawUrl) {
         clearTimeout(checkTimer);
-        if (!url || !url.includes('://')) {
+        const url = normalizeInput(rawUrl);
+        if (!url) {
           setMsg(''); submitBtn.disabled = true;
           pickEl.hidden = true; pfSection.hidden = true; selectedFeedUrl = null;
           return;
