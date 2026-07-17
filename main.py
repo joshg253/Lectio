@@ -3224,6 +3224,12 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE folders ADD COLUMN cadence_minutes INTEGER DEFAULT NULL")
         except Exception:
             pass
+        # Per-folder retention: delete read posts N days after they were read
+        # (NULL/0 = keep forever). Applied by the nightly maintenance prune.
+        try:
+            conn.execute("ALTER TABLE folders ADD COLUMN retention_days INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
         # separate from read/unread and from the star itself. NOT the offline
         # "starred archive" (archived_entry) — this is a read-later done-state.
@@ -8154,7 +8160,7 @@ def get_folder_properties(folder_id: int) -> dict:
     with get_meta_connection() as conn:
         folder_row = conn.execute(
             """
-            SELECT f.id, f.name, f.cadence_minutes,
+            SELECT f.id, f.name, f.cadence_minutes, f.retention_days,
                 CASE WHEN f.parent_id IS NULL THEN f.name
                      ELSE root.name || ' / ' || f.name END AS path
             FROM folders f
@@ -8177,6 +8183,7 @@ def get_folder_properties(folder_id: int) -> dict:
             "name": folder_row["name"],
             "path": folder_row["path"],
             "cadence_minutes": folder_row["cadence_minutes"],
+            "retention_days": folder_row["retention_days"],
             "feed_count": 0,
             "total_articles": 0,
             "unread_articles": 0,
@@ -8246,6 +8253,7 @@ def get_folder_properties(folder_id: int) -> dict:
         "name": folder_row["name"],
         "path": folder_row["path"],
         "cadence_minutes": folder_row["cadence_minutes"],
+        "retention_days": folder_row["retention_days"],
         "feed_count": feed_count,
         "total_articles": total_articles,
         "unread_articles": unread_articles,
@@ -13762,6 +13770,29 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] fetch-history prune failed")
 
+    # 1c. Per-folder retention: delete read posts N days after they were read
+    # (folders.retention_days; starred/tagged posts and Saved Articles are
+    # always protected — see _prune_entries).
+    try:
+        with get_meta_connection() as conn:
+            folder_rows = conn.execute(
+                "SELECT id, name, retention_days FROM folders WHERE retention_days > 0"
+            ).fetchall()
+            retention_folder_feeds = {
+                int(r["id"]): sorted(get_folder_feed_urls(conn, int(r["id"]))) for r in folder_rows
+            }
+        for row in folder_rows:
+            feeds = retention_folder_feeds.get(int(row["id"])) or []
+            if not feeds:
+                continue
+            days = int(row["retention_days"])
+            deleted = _prune_entries(list(feeds), read_cutoff=datetime.now() - timedelta(days=days))
+            if deleted:
+                LOGGER.info("[maintenance] retention: deleted %d read posts (>%dd after read) from folder %s",
+                            deleted, days, row["name"])
+    except Exception:
+        LOGGER.exception("[maintenance] retention prune failed")
+
     # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
     try:
         with get_reader() as reader:
@@ -17207,6 +17238,24 @@ def set_folder_cadence(folder_id: int = Form(...), cadence_minutes: str = Form(.
     return JSONResponse({"ok": True, "cadence_minutes": minutes if minutes > 0 else None})
 
 
+@app.post("/folders/retention")
+def set_folder_retention(folder_id: int = Form(...), retention_days: str = Form(...)):
+    """Set or clear the per-folder retention (delete read posts N days after
+    read, applied by the nightly maintenance; 0 = keep forever)."""
+    try:
+        days = int(retention_days)
+        if days < 0:
+            raise ValueError
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "retention_days must be a non-negative integer"}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE folders SET retention_days = ? WHERE id = ?",
+            (days if days > 0 else None, folder_id),
+        )
+    return JSONResponse({"ok": True, "retention_days": days if days > 0 else None})
+
+
 _VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "enclosure", "none", "webcomic", "artwork"}
 
 
@@ -20565,6 +20614,108 @@ def feed_curation_count_route(feed_url: str = Query(...)):
     return JSONResponse(counts)
 
 
+_PRUNE_DELETE_BATCH = 500
+
+
+def _parse_stored_dt(value) -> datetime | None:
+    """Parse reader's naive-UTC 'YYYY-MM-DD HH:MM:SS[.ffffff]' or an ISO-'T'
+    string from the meta DB. Returns None when absent/unparseable."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _prune_entries(
+    feed_urls: list[str],
+    *,
+    read_cutoff: datetime | None = None,
+    published_cutoff: datetime | None = None,
+    include_unread: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Bulk-delete old posts from *feed_urls* (retention + Purge utility core).
+
+    Selection: with read_cutoff, read entries whose read time (meta read_at,
+    falling back to reader's read_modified) is older; with published_cutoff,
+    entries whose effective date (published/updated/added) is older — read
+    only unless include_unread. Always protected: starred/saved entries,
+    manually tagged entries, and the Saved Articles feed itself.
+
+    Deletes are tombstoned (deleted_entries) so a refresh can't resurrect
+    copies still inside the publisher's feed window. Returns the count
+    (deleted, or matching when dry_run)."""
+    feed_urls = [u for u in feed_urls if not saved_articles_service.is_saved_articles_feed(u)]
+    if not feed_urls or (read_cutoff is None and published_cutoff is None):
+        return 0
+
+    placeholders = ",".join("?" * len(feed_urls))
+    with get_meta_connection() as conn:
+        starred = {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+        read_at_map = {
+            (str(r[0]), str(r[1])): _parse_stored_dt(r[2])
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id, read_at FROM entry_read_state WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+
+    to_delete: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        rows = reader._storage.get_db().execute(
+            # Manually tagged entries are user-curated — never prune them.
+            f"""SELECT e.feed, e.id, e.read, e.read_modified, e.published, e.updated, e.first_updated
+                FROM entries e
+                WHERE e.feed IN ({placeholders})
+                  AND NOT EXISTS (SELECT 1 FROM entry_tags t
+                                  WHERE t.feed = e.feed AND t.id = e.id
+                                    AND t.key LIKE '{MANUAL_TAG_KEY_PREFIX}%')""",
+            feed_urls,
+        ).fetchall()
+
+        for feed, eid, read, read_modified, published, updated, first_updated in rows:
+            pair = (str(feed), str(eid))
+            if pair in starred:
+                continue
+            if read_cutoff is not None:
+                if not read:
+                    continue
+                read_time = read_at_map.get(pair) or _parse_stored_dt(read_modified)
+                if read_time is None or read_time >= read_cutoff:
+                    continue
+            if published_cutoff is not None:
+                if not read and not include_unread:
+                    continue
+                effective = (_parse_stored_dt(published) or _parse_stored_dt(updated)
+                             or _parse_stored_dt(first_updated))
+                if effective is None or effective >= published_cutoff:
+                    continue
+            to_delete.append(pair)
+
+        if dry_run or not to_delete:
+            return len(to_delete)
+
+        for i in range(0, len(to_delete), _PRUNE_DELETE_BATCH):
+            batch = to_delete[i:i + _PRUNE_DELETE_BATCH]
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)", batch)
+                conn.executemany(
+                    "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
+            reader._storage.delete_entries(batch)
+
+    invalidate_unread_counts_cache()
+    return len(to_delete)
+
+
 def _hard_delete_entry(reader, feed_url: str, entry_id: str, entry) -> None:
     """Tombstone and hard-delete one entry (shared by /entries/delete and
     /saved/deduplicate).
@@ -21343,6 +21494,46 @@ async def check_saved_duplicate_urls(request: Request):
         return results
 
     return JSONResponse({"results": await run_in_threadpool(_probe_all)})
+
+
+@app.post("/entries/purge")
+async def purge_old_entries(request: Request):
+    """Purge utility (Settings → Feeds → Utilities): delete posts older than a
+    date from the selected folders.
+
+    Body (JSON): {"folder_ids": [..], "before": "YYYY-MM-DD",
+                  "include_unread": bool, "dry_run": bool}
+    dry_run returns the matching count without deleting. Protections are
+    _prune_entries': starred/saved posts, manually tagged posts, and the
+    Saved Articles feed are never touched."""
+    body = await request.json()
+    try:
+        folder_ids = [int(f) for f in body.get("folder_ids", [])]
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Bad folder_ids."}, status_code=400)
+    try:
+        cutoff = datetime.fromisoformat(str(body.get("before", "")))
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Bad 'before' date."}, status_code=400)
+    if not folder_ids:
+        return JSONResponse({"ok": False, "error": "No folders selected."}, status_code=400)
+    include_unread = bool(body.get("include_unread", False))
+    dry_run = bool(body.get("dry_run", False))
+
+    feed_urls: set[str] = set()
+    with get_meta_connection() as conn:
+        for fid in folder_ids:
+            feed_urls |= get_folder_feed_urls(conn, fid)
+    count = _prune_entries(
+        sorted(feed_urls),
+        published_cutoff=cutoff,
+        include_unread=include_unread,
+        dry_run=dry_run,
+    )
+    if not dry_run and count:
+        LOGGER.info("[purge] deleted %d posts older than %s from folders %s (unread=%s)",
+                    count, cutoff.date(), folder_ids, include_unread)
+    return JSONResponse({"ok": True, "count": count, "dry_run": dry_run})
 
 
 @app.post("/saved/deduplicate")

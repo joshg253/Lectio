@@ -944,6 +944,66 @@
       }
     });
 
+    // ── Purge old posts utility ────────────────────────────────────────────
+    document.getElementById('purge-old-btn')?.addEventListener('click', () => {
+      const panel = document.getElementById('purge-old-panel');
+      panel.hidden = !panel.hidden;
+    });
+
+    const _purgeParams = () => {
+      const folderIds = [...document.getElementById('purge-folders').selectedOptions].map(o => o.value);
+      const before = document.getElementById('purge-before').value;
+      return {
+        folder_ids: folderIds,
+        before,
+        include_unread: document.getElementById('purge-include-unread').checked,
+      };
+    };
+
+    const _purgePost = async (dryRun) => {
+      const params = _purgeParams();
+      if (!params.folder_ids.length) throw new Error('Select at least one folder.');
+      if (!params.before) throw new Error('Pick a cutoff date.');
+      const resp = await fetch('/entries/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...params, dry_run: dryRun }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data.count;
+    };
+
+    document.getElementById('purge-preview-btn')?.addEventListener('click', async () => {
+      const result = document.getElementById('purge-result');
+      const runBtn = document.getElementById('purge-run-btn');
+      try {
+        result.textContent = 'Counting…';
+        const count = await _purgePost(true);
+        result.textContent = count
+          ? `${count} post(s) would be deleted (starred/tagged posts excluded).`
+          : 'Nothing matches — no posts older than that date (or all are starred/tagged).';
+        runBtn.disabled = count === 0;
+      } catch (err) {
+        result.textContent = String(err.message || err);
+        runBtn.disabled = true;
+      }
+    });
+
+    document.getElementById('purge-run-btn')?.addEventListener('click', async () => {
+      const result = document.getElementById('purge-result');
+      const runBtn = document.getElementById('purge-run-btn');
+      if (!confirm('Permanently delete these posts? This cannot be undone.')) return;
+      runBtn.disabled = true;
+      try {
+        result.textContent = 'Purging…';
+        const count = await _purgePost(false);
+        result.textContent = `Deleted ${count} post(s).`;
+      } catch (err) {
+        result.textContent = String(err.message || err);
+      }
+    });
+
     let _sdCheckAllRunning = false;
     let _sdCheckAllStop = false;
     document.getElementById('saved-dedup-checkall')?.addEventListener('click', async (ev) => {
@@ -3994,6 +4054,15 @@
         }
         const cadenceStatus = document.getElementById('folder-prop-cadence-status');
         if (cadenceStatus) cadenceStatus.textContent = '';
+        const retentionSel = document.getElementById('folder-prop-retention');
+        if (retentionSel) {
+          retentionSel.dataset.folderId = String(folderId);
+          const retention = data.retention_days || 0;
+          const rMatch = Array.from(retentionSel.options).find(o => parseInt(o.value) === retention);
+          retentionSel.value = rMatch ? String(retention) : '0';
+        }
+        const retentionStatus = document.getElementById('folder-prop-retention-status');
+        if (retentionStatus) retentionStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -10094,6 +10163,23 @@
         // Keep the inline Feeds-tab cadence dropdown in sync.
         const inlineSel = document.querySelector(`.settings-folder-cadence-select[data-folder-id="${folderId}"]`);
         if (inlineSel) { inlineSel.value = sel.value; inlineSel.dataset.prevValue = sel.value; }
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    document.getElementById('folder-prop-retention')?.addEventListener('change', async (e) => {
+      const sel = e.target;
+      const folderId = sel.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-retention-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, retention_days: sel.value });
+        const resp = await fetch('/folders/retention', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
       } catch (err) {
         if (status) status.textContent = `Error: ${err.message}`;
       }

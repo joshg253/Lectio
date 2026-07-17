@@ -46,6 +46,11 @@ The short version:
   mark-as-read (with an **Undo** toast for a few seconds after any bulk mark,
   restoring exactly that batch), **View posts** jump links from Feed
   Properties and the Stale list straight to a feed's posts in the reader,
+  per-folder **retention** (Folder Properties → *Delete after read*: the
+  nightly maintenance deletes read posts N days after you read them — deals
+  expire, watched videos pile up) and a **Purge old posts** utility
+  (Settings → Feeds → Utilities: pick folders + a cutoff date, preview,
+  purge; both always keep starred and manually tagged posts),
   manual tags (space-separated; multi-word tags are hyphenated, e.g.
   `games to play` → `games-to-play`), read history, search, and a
   Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
