@@ -13870,6 +13870,9 @@ def _daily_maintenance_for_user() -> None:
                 continue
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
+            # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
+            # app's pooled connections holding the DB open it lingers otherwise.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
@@ -13951,6 +13954,9 @@ def _run_global_maintenance() -> None:
         try:
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
+            # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
+            # app's pooled connections holding the DB open it lingers otherwise.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
@@ -15568,12 +15574,17 @@ async def admin_vacuum_user(request: Request):
                 p = Path(path)
                 if not p.exists():
                     continue
-                before = p.stat().st_size
+                before = _dir_bytes(p)
                 conn = sqlite3.connect(str(p), timeout=30)
                 conn.execute("VACUUM")
+                # In WAL mode the vacuum copies the whole rebuilt DB through the
+                # -wal file, which then lingers at ~DB size while the app's
+                # pooled connections keep the DB open — making the total LARGER
+                # than before. Fold it back and truncate to zero.
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.close()
-                LOGGER.info("[admin-vacuum] %s %s: %.1f MB -> %.1f MB",
-                            target_id, label, before / 1048576, p.stat().st_size / 1048576)
+                LOGGER.info("[admin-vacuum] %s %s: %.1f MB -> %.1f MB (incl. sidecars)",
+                            target_id, label, before / 1048576, _dir_bytes(p) / 1048576)
             except Exception:
                 LOGGER.exception("[admin-vacuum] %s %s failed", target_id, label)
 
