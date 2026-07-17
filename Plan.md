@@ -219,13 +219,6 @@ extension keeps working too.
   stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
   behind after the Instapaper-import cleanup.
 
-### Retention follow-ups (deferred)
-- **Age-prune deleted_entries tombstones** — retention/purge tombstone every
-  deleted post so refreshes can't resurrect copies still in the publisher's
-  feed window, but the table has no timestamp column, so tombstones currently
-  accumulate forever. Add created_at (per-user migration) + a 90-day nightly
-  prune once the table's growth is actually noticeable.
-
 ### Code health (deferred — low value, no user impact)
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
   (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/

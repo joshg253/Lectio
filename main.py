@@ -421,6 +421,7 @@ SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
+SETTING_TOMBSTONE_SWEEP_DAYS = "tombstone_sweep_days"
 SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
 SETTING_LOGIN_WINDOW_SECONDS = "login_window_seconds"
 SETTING_DEFAULT_AUTO_REFRESH_MINUTES = "default_auto_refresh_minutes"
@@ -775,6 +776,13 @@ def get_fetch_history_keep() -> int:
 
 def get_fetch_history_max_age_days() -> int:
     return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+def get_tombstone_sweep_days() -> int:
+    """Age (days) after which deleted-entry tombstones are swept by nightly
+    maintenance; 0 disables sweeping. By then the entry has long left the
+    publisher's feed window, so a refresh can no longer resurrect it."""
+    return int(get_instance_setting(SETTING_TOMBSTONE_SWEEP_DAYS) or 90)
 
 
 def get_login_max_failures() -> int:
@@ -3228,6 +3236,20 @@ def ensure_meta_schema() -> None:
         # (NULL/0 = keep forever). Applied by the nightly maintenance prune.
         try:
             conn.execute("ALTER TABLE folders ADD COLUMN retention_days INTEGER DEFAULT NULL")
+        except Exception:
+            pass
+        # Tombstone age for the nightly sweep. Pre-existing rows (and rows
+        # written by old code during a rolling deploy) are backfilled to "now"
+        # so they age out one sweep-window from the upgrade, not immediately.
+        try:
+            conn.execute("ALTER TABLE deleted_entries ADD COLUMN created_at TIMESTAMP DEFAULT NULL")
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                "UPDATE deleted_entries SET created_at = ? WHERE created_at IS NULL",
+                (datetime.now().isoformat(),),
+            )
         except Exception:
             pass
         # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
@@ -13793,6 +13815,23 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] retention prune failed")
 
+    # 1d. Tomb sweeping: drop deleted-entry tombstones older than the instance
+    # setting (default 90 days, 0 = keep forever). By then the entries have
+    # left every publisher's feed window, so resurrection is no longer a risk.
+    try:
+        sweep_days = get_tombstone_sweep_days()
+        if sweep_days > 0:
+            cutoff = (datetime.now() - timedelta(days=sweep_days)).isoformat()
+            with get_meta_connection() as conn:
+                swept = conn.execute(
+                    "DELETE FROM deleted_entries WHERE created_at IS NOT NULL AND created_at < ?",
+                    (cutoff,),
+                ).rowcount
+            if swept:
+                LOGGER.info("[maintenance] swept %d tombstones older than %dd", swept, sweep_days)
+    except Exception:
+        LOGGER.exception("[maintenance] tombstone sweep failed")
+
     # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
     try:
         with get_reader() as reader:
@@ -15308,6 +15347,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             # Instance tuning
             "fetch_history_keep": get_fetch_history_keep(),
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
             "login_window_seconds": get_login_window_seconds(),
             "instance_auto_refresh": get_instance_default_auto_refresh(),
@@ -20040,6 +20080,7 @@ def get_all_settings():
         "public_url": LECTIO_PUBLIC_URL,
         "fetch_history_keep": get_fetch_history_keep(),
         "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "tombstone_sweep_days": get_tombstone_sweep_days(),
         "login_max_failures": get_login_max_failures(),
         "login_window_seconds": get_login_window_seconds(),
         "instance_auto_refresh": get_instance_default_auto_refresh(),
@@ -20098,6 +20139,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         "email_contacts", EMAIL_TO_SETTING_KEY,
@@ -20112,6 +20154,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         SETTING_INOREADER_EXPORT_DIR,
@@ -20707,7 +20750,8 @@ def _prune_entries(
             batch = to_delete[i:i + _PRUNE_DELETE_BATCH]
             with get_meta_connection() as conn:
                 conn.executemany(
-                    "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)", batch)
+                    "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+                    [(fu, eid, datetime.now().isoformat()) for fu, eid in batch])
                 conn.executemany(
                     "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
             reader._storage.delete_entries(batch)
@@ -20728,8 +20772,8 @@ def _hard_delete_entry(reader, feed_url: str, entry_id: str, entry) -> None:
     """
     with get_meta_connection() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
-            (feed_url, entry_id),
+            "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+            (feed_url, entry_id, datetime.now().isoformat()),
         )
         conn.execute(
             "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",

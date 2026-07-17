@@ -77,12 +77,14 @@
         {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
 
         <h3>Image cache</h3>
-        <label class="fld">Retention (days, 0 = keep forever)
-          <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
-        </label>
-        <label class="fld">Max dimension (longest side, px; 0 = store originals)
-          <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
-        </label>
+        <div class="tuning-grid">
+          <label class="fld">Retention (days, 0 = keep forever)
+            <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
+          </label>
+          <label class="fld">Max dimension (longest side, px; 0 = store originals)
+            <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
+          </label>
+        </div>
         <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
 
         <h3>Tuning</h3>
@@ -99,11 +101,14 @@
           <label class="fld">Feed history max age (days)
             <input type="number" id="adm-fetch-history-max-age" min="1" value="{{ fetch_history_max_age_days }}" placeholder="30" />
           </label>
+          <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries; after this many days the entry has left every feed window and the tombstone is swept. 0 keeps them forever.">Tomb sweeping (days, 0 = never)
+            <input type="number" id="adm-tombstone-sweep" min="0" value="{{ tombstone_sweep_days }}" placeholder="90" />
+          </label>
           <label class="fld">Default auto-refresh (min, 0 = off)
             <input type="number" id="adm-instance-auto-refresh" min="0" value="{{ instance_auto_refresh }}" placeholder="60" />
           </label>
         </div>
-        <p class="account-hint">Login lockout and feed history are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
+        <p class="account-hint">Login lockout, feed history, and tomb sweeping are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
 
         <div style="display:flex; gap:.5rem; margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
@@ -321,6 +326,7 @@
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
           fetch_history_keep: $('adm-fetch-history-keep')?.value.trim() || '',
           fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',
+          tombstone_sweep_days: $('adm-tombstone-sweep')?.value.trim() || '',
           login_max_failures: $('adm-login-max-failures')?.value.trim() || '',
           login_window_seconds: $('adm-login-window-seconds')?.value.trim() || '',
           default_auto_refresh_minutes: $('adm-instance-auto-refresh')?.value.trim() || '',

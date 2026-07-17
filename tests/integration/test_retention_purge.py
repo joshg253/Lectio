@@ -118,6 +118,43 @@ def test_nightly_maintenance_applies_folder_retention(configured):
         assert _exists(reader, "unread")
 
 
+def test_tombstone_sweep_drops_only_old_tombstones(configured):
+    old_ts = (datetime.now() - timedelta(days=120)).isoformat()
+    fresh_ts = datetime.now().isoformat()
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'old', ?)",
+                     (FEED, old_ts))
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'fresh', ?)",
+                     (FEED, fresh_ts))
+    main._daily_maintenance_for_user()
+    with main.get_meta_connection() as conn:
+        remaining = {r[0] for r in conn.execute("SELECT entry_id FROM deleted_entries WHERE feed_url = ?", (FEED,))}
+    assert remaining == {"fresh"}  # default 90-day sweep dropped only the old one
+
+
+def test_tombstone_sweep_default_and_disable(configured, monkeypatch):
+    assert main.get_tombstone_sweep_days() == 90
+    monkeypatch.setattr(main, "get_tombstone_sweep_days", lambda: 0)
+    old_ts = (datetime.now() - timedelta(days=400)).isoformat()
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)",
+                     (FEED, old_ts))
+    main._daily_maintenance_for_user()
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT 1 FROM deleted_entries WHERE entry_id = 'ancient'").fetchone()
+
+
+def test_prune_writes_timestamped_tombstones(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+        _seed(reader, entry_id="old-read", published=OLD, read=True, read_at=LONG_AGO)
+    main._prune_entries([FEED], read_cutoff=datetime.now() - timedelta(days=7))
+    with main.get_meta_connection() as conn:
+        row = conn.execute("SELECT created_at FROM deleted_entries WHERE feed_url = ? AND entry_id = 'old-read'",
+                           (FEED,)).fetchone()
+    assert row is not None and row[0]
+
+
 def _purge_client() -> TestClient:
     app = FastAPI()
     app.post("/entries/purge")(main.purge_old_entries)
