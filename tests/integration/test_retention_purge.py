@@ -185,6 +185,10 @@ def test_purge_route_dry_run_and_delete(configured):
         assert not _exists(reader, "ancient-read")
         assert not _exists(reader, "ancient-unread")
         assert _exists(reader, "recent-read")
+    # Folder Properties surfaces the tombstoned count next to the live total.
+    props = main.get_folder_properties(fid)
+    assert props["deleted_articles"] == 2
+    assert props["total_articles"] == 1
 
 
 def test_purge_route_rejects_bad_input(configured):

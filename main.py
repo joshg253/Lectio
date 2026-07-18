@@ -8197,6 +8197,16 @@ def get_folder_properties(folder_id: int) -> dict:
 
         feed_urls = get_folder_feed_urls(conn, folder_id)
         feed_count = len(feed_urls)
+        # Deleted = tombstoned posts (retention/purge/manual delete). Tombstones
+        # age out with the tomb-sweeping window, so this reads as "deleted
+        # recently", which is the useful number.
+        deleted_articles = 0
+        if feed_urls:
+            _ph = ",".join("?" * len(feed_urls))
+            deleted_articles = int(conn.execute(
+                f"SELECT COUNT(*) FROM deleted_entries WHERE feed_url IN ({_ph})",
+                sorted(feed_urls),
+            ).fetchone()[0])
 
     if not feed_urls:
         return {
@@ -8206,6 +8216,7 @@ def get_folder_properties(folder_id: int) -> dict:
             "path": folder_row["path"],
             "cadence_minutes": folder_row["cadence_minutes"],
             "retention_days": folder_row["retention_days"],
+            "deleted_articles": 0,
             "feed_count": 0,
             "total_articles": 0,
             "unread_articles": 0,
@@ -8276,6 +8287,7 @@ def get_folder_properties(folder_id: int) -> dict:
         "path": folder_row["path"],
         "cadence_minutes": folder_row["cadence_minutes"],
         "retention_days": folder_row["retention_days"],
+        "deleted_articles": deleted_articles,
         "feed_count": feed_count,
         "total_articles": total_articles,
         "unread_articles": unread_articles,

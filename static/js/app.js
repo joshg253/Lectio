@@ -4076,6 +4076,14 @@
             badge.textContent = ` (${unread.toLocaleString()} unread)`;
             totalEl.appendChild(badge);
           }
+          const deleted = data.deleted_articles ?? 0;
+          if (deleted > 0) {
+            const dBadge = document.createElement('span');
+            dBadge.className = 'folder-prop-unread-badge';
+            dBadge.textContent = ` (${deleted.toLocaleString()} deleted)`;
+            dBadge.title = 'Tombstoned posts from retention, purge, or manual deletes — ages out with tomb sweeping';
+            totalEl.appendChild(dBadge);
+          }
         }
 
         const tbody = document.getElementById('folder-prop-top-feeds-body');
