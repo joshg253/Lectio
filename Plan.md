@@ -220,6 +220,13 @@ extension keeps working too.
   behind after the Instapaper-import cleanup.
 
 ### Code health (deferred — low value, no user impact)
+- **Centralize schemeless-URL normalization** (Sourcery, PR #148): the
+  assume-https logic lives in both the add-feed dialog JS and `/feeds/discover`;
+  a shared helper would prevent drift.
+- **Wrap saved-dedup storage access** (Sourcery, PR #148): the Saved duplicate
+  scan reads reader's entries table directly (JSON content paths, substring
+  limits); a thin storage-layer wrapper would localize breakage if reader's
+  schema evolves.
 - **Consolidate the dedup routes** — PARTIAL. Shared feed-URL prologue extracted
   (`_resolve_dedup_feed_urls`). The match-method bodies (slug/title/both/fuzzy/
   safe) still diverge by preview-vs-apply output; a full shared-core-with-

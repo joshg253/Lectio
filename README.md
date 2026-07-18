@@ -42,267 +42,53 @@ Full detail lives in the wiki — **[Features](https://github.com/joshg253/Lecti
 and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and-APIs)**.
 The short version:
 
-- **Fast triage** — three-pane reader, keyboard nav, context menus, bulk
-  mark-as-read (with an **Undo** toast for a few seconds after any bulk mark,
-  restoring exactly that batch), **View posts** jump links from Feed
-  Properties and the Stale list straight to a feed's posts in the reader,
-  per-folder **retention** (Folder Properties → *Delete after read*: the
-  nightly maintenance deletes read posts N days after you read them — deals
-  expire, watched videos pile up) and a **Purge old posts** utility
-  (Settings → Feeds → Utilities: pick folders + a cutoff date, preview,
-  purge; both always keep starred and manually tagged posts),
-  manual tags (space-separated; multi-word tags are hyphenated, e.g.
-  `games to play` → `games-to-play`), read history, search, and a
-  Readability/web-view proxy. The posts filter dropdown has a **Tags** submenu
-  that filters the current selection (folder/feed + read state) by tag, and a
-  tag chip in an article's header opens that tag scoped to the article's own feed.
-  Feeds that publish per-entry tags (RSS/Atom `<category>`, e.g. dev.to or
-  WordPress blogs) show them as **[ + tag ▲ ▼ ]** chips in the post header —
-  captured at ingest so they render instantly (with an article-page fallback
-  for entries the feed never tagged). **+** adds the tag as one of
-  your own tags on that post; **▲**/**▼** build the feed's Tag Filter rule
-  (good tag / drop). The rule starts **off** so you can tune it while
-  browsing, then arm it in the Automation rules list; once on, chip edits
-  apply to unread posts immediately.
-- **Persistent audio player** — podcast/audio posts show a **Play** button that
-  loads the track into a global player bar pinned to the bottom of the app
-  (now-playing title, play/pause, seek scrubber, playback speed). Because the
-  player lives outside the article view, playback keeps going as you move between
-  posts instead of stopping the moment you navigate away. Any audio a feed embeds
-  in its own post body is pulled into the same bar (so you never get two streams at
-  once), and clicking the now-playing title jumps back to the post it came from
-  without interrupting playback.
-- **Rich content** — embeds that actually render (curated trusted-host allowlist),
-  podcast audio (incl. audio borrowed from a separate host feed), file
-  attachments, recovered YouTube embeds, and bare-text feed cleanup. When an older
-  article lost its player (the feed stripped the `<iframe>` before Lectio kept
-  them), the missing YouTube/Bandcamp/SoundCloud embed is recovered from the
-  source page and re-attached — including videos behind click-to-load facades
-  (thumbnail-only lazy embeds, e.g. guitarworld.com), where the page HTML never
-  contains an iframe at all. Bandcamp single-track players (domain-locked to
-  the original publisher, so they'd otherwise show "not available") fall back to
-  the album player so they actually stream. Titles that arrive HTML-encoded (or
-  double-encoded, as Tumblr does — `Magus&rsquo; Castle`) are decoded so they read
-  correctly instead of showing the raw entity. A bare
-  YouTube or Bandcamp album/track link sitting alone in its own paragraph (common
-  when a feed strips the oEmbed iframe) is turned into an inline player. (Bandcamp
-  resolves the numeric embed ID from the album page on first open and caches it; the
-  embed appears on the next open when the page isn't yet cached.) Reader view re-injects
-  allowlisted players (YouTube/Spotify/Bandcamp) that the readability extractor
-  would otherwise strip — audio players (Bandcamp/SoundCloud/Spotify) keep their
-  proper fixed height instead of a 16:9 video box — and de-duplicates a repeated
-  lead image.
-  YouTube embeds default to the privacy-enhanced host; a per-user Integrations
-  setting switches them to the standard host so Share / Watch Later work, and
-  connecting a YouTube account (per-user OAuth) adds an **Add to playlist** control
-  beneath each video embed (lists your playlists, creates new ones). A global
-  Integrations toggle auto-hides **Shorts** across all YouTube feeds, and a
-  **quota meter** estimates your daily YouTube API usage against the cap.
-- **Lead images** — per-feed extraction strategies with side-by-side comparison,
-  smart crop/fit tuning, caption sourcing, junk-image rejection, inline-SVG art,
-  and full-resolution webcomic panels (ComicControl thumb→full promotion). List
-  thumbnails fall back to a direct browser load when the server-side image proxy
-  is refused (some hosts IP-block the server but serve your own IP fine). The
-  proxy also handles hotlink protection: if a host refuses an image fetched with
-  no referrer, it retries once with the image's own site as the `Referer`, and
-  reader/web view routes hotlink-protected images through the proxy too.
-- **Automation** — highlight, mark-as-read, **tag-filter** (tame firehose
-  feeds like MakeUseOf/Lifehacker/How-To-Geek by their own per-entry tags:
-  one comma-separated spec — `-rust` drops rust posts, `+python` marks python
-  a *good* tag that rescues posts from drops, `++python` *requires* it
-  (whitelist); the post's **author** works the same way as a pseudo-tag
-  (`-by-some-author` drops their posts, with ▲/▼ right on the author name);
-  suppressed entries are auto-marked read at refresh; untagged
-  entries are always kept), deduplicate, email-article,
-  outbound-webhook (with an optional **batch mode** that groups all matches from
-  one refresh run into a single `{entries:[...]}` request instead of one call per
-  entry), **save-to-Instapaper**, **save/star-article** (the Lectio-native
-  read-later counterpart: matching new entries are starred into Saved and
-  tagged `inbox`, surfacing in a pinned **Inbox** bucket at the top of the
-  Saved tree — file items out by removing the tag), **add-to-YouTube-playlist**, and
-  **add-to-Quire** rules (the YouTube rule auto-adds new
-  videos — including those embedded in any feed's article — to a chosen playlist,
-  with include-Shorts, mark-read, and **min/max-duration** options; quota-capped,
-  no double-adds); scope a
-  rule to all feeds, a folder, a single feed, or **a multi-selected set of feeds**
-  (deduplicate can run across a selected set of feeds, not just a whole folder),
-  with a Duplicate button to clone one quickly; all fire at refresh time with a
-  manual "Run Now". Run history (per-rule and the global History tab) expands to
-  show exactly which articles each run touched; dedup runs also record the
-  **kept** copy each duplicate was matched against, so a marked entry never
-  appears without its surviving counterpart. **Starring** an article can also auto-send it to Instapaper, a
-  YouTube playlist, email, Quire, and/or Reddit (Integrations → On Star).
-- **Submit to Reddit** — connect a Reddit account (per-user OAuth) via Integrations → Reddit; a **Reddit** button appears in each article's share menu to post a link to any subreddit you choose. Once connected, Reddit feeds are also fetched via the authenticated API (60 req/min vs. anonymous limits), which helps with subreddits that 429 on anonymous RSS polling. Register a **web app** at reddit.com/prefs/apps; the shared-instance credential pattern is supported (admin sets instance-wide creds, users can override per-account). On Star can auto-submit starred articles to a configured subreddit.
-- **Save to Pinterest** — connect a Pinterest account (per-user OAuth) and a
-  **Pin** button appears on each article, saving its lead image (linked back to
-  the source) to a board you pick. Needs `PINTEREST_OAUTH_CLIENT_ID/SECRET`;
-  entries without an image can't be pinned.
-- **Add to Quire** — connect a [Quire](https://quire.io) account (per-user OAuth)
-  and pick a destination project; an **Add to Quire** button then appears on each
-  article and creates a task (titled from the entry, with the link in the
-  description). A plain click adds straight to your default project; right-click the
-  button to open a picker and send it to a different project instead. Also available
-  via On Star and Automation rules. Quire's
-  per-organization minute/hour rate limits are tracked with a usage meter in
-  Settings, and automation runs are capped and back off on a 429. Register an app
-  at [quire.io/apps/dev](https://quire.io/apps/dev) with redirect URI
-  `https://<your-host>/quire/callback`; creds are per-user (or
-  `QUIRE_CLIENT_ID/SECRET` as instance-wide fallback credentials).
-- **Save any article (read-it-later)** — capture pages that don't come from any
-  feed, Instapaper-style. Four ways in: **+ Save Article** in the app menu
-  (paste a URL), a drag-to-toolbar **bookmarklet** (Settings → Account), a
-  token-authenticated **`/api/save`** endpoint for phone share sheets / iOS
-  Shortcuts (`?username=…&token=…&url=…` with your existing API token), or —
-  the highest-fidelity path — a **browser extension**: Lectio speaks the
-  [Readit extension](https://github.com/mahmoudalwadia/readit-extension)'s
-  save protocol (`/api/bookmarklet/save`), so pointing that extension's
-  Backend at your Lectio instance (Save token = your API token) gives
-  one-click saves that ship the **rendered page from your authenticated
-  browser** — paywalled and bot-walled articles arrive with full text, no
-  server fetch involved. The
-  page's readable text is extracted server-side into a local **Saved Articles**
-  feed and the article is auto-starred, so it shows up in the Saved view, gets
-  the starred archive's full offline capture (page + images), and supports
-  read/unread, tags, and keyboard navigation like any other entry. Saving the
-  same URL twice just re-stars the existing copy; a page that can't be
-  extracted (paywall, bot-wall) is still saved as a starred bookmark and the
-  archive worker retries the capture in the background. The same article saved
-  under *different* URLs (tracking-param variants, or an Instapaper import
-  overlapping earlier saves) can be cleaned up with Settings → Feeds →
-  Duplicates → **Scan Saved for duplicates**: confirmed matches (same
-  canonical URL or slug) arrive preselected keeping the best copy (extracted
-  content first, then https over http, then the oldest save), while
-  same-title / same-text matches are listed as *possible*
-  duplicates for manual review — each group's **Compare** button lays the
-  stored text of every copy side by side — before a one-click delete.
-  **Check URLs** (per group, or a throttled **Check all URLs** pass) probes
-  each copy's link: dead links (404/410, confirmed by a GET retry) are
-  flagged and the kept copy automatically switches to a live one, redirects
-  landing on the same page earn a "same destination" proof badge, and
-  bot-walls (403/429) are marked inconclusive rather than dead.
-  **Migrating from Instapaper?** Settings → Import/Export → **Instapaper**
-  takes your Instapaper CSV export (Settings → Export → Download .CSV file in
-  Instapaper) and imports every bookmark into Saved Items, preserving its
-  original save time. Archived Instapaper articles arrive already archived,
-  your Instapaper tags (plus custom folders and the Liked/Starred flag) become
-  Lectio tags, and each article's
-  text is fetched by the offline archive worker after import (nothing is
-  fetched inline, so large libraries import instantly).
-  Side-by-side **Feeds | Saved** tabs at the top of the sidebar switch between
-  normal browsing and the starred/saved backlog (both in the familiar
-  three-pane layout). Clicking a tab is a landing: it shows that mode's tree —
-  an **All** row on top, then folders — without loading any posts until you
-  pick one (All can be huge). The toolbar filter narrows the backlog: **All**
-  shows everything kept, **Unread** just the not-yet-read part, and the Tags
-  submenu slices it by your tags (e.g. `#toread` vs `#todo`) without leaving
-  the view. The internal Saved Articles feed no longer clutters
-  Feeds → Uncategorized — the sidebar view supersedes it.
-- **Read Mode (e-ink)** — the **eInk** button on the avatar menu's theme row
-  (Dark · Light · eInk) opens a distraction-free, light-themed reading app
-  built for slow grayscale e-ink browsers (the Supernote Manta in particular,
-  where Instapaper reads badly). It's a
-  self-contained page at **`/read`** (bookmarkable on the device) with a
-  **2-pane browse**: a simplified tree of your saved items (folders, your tag
-  buckets like `#toread`/`#todo`, and an **Archive** at the bottom) on the left,
-  the item list on the right. Opening an item shows the article **paginated, not
-  scrolled** — tap the right two-thirds (or **swipe**, or arrow / page / space
-  keys) to turn the page, the left third to go back; past the last page it moves
-  to the next article. It prefers the starred archive's full offline copy over a
-  truncated feed summary. In the article header, **Archive** files a saved item
-  as done (it keeps its star but leaves the inbox — reach it later via the
-  Archive folder or Search) and **Delete** simply un-saves it; both advance to
-  the next article. `A−` / `A+` adjust text size (remembered on the device);
-  `✕` returns to the list and `↗` opens the original page. Because saved items
-  are usually already read, **Archive — not read/unread — is the "done" axis**
-  in Read Mode. There's also a **Feeds** scope (`/read?scope=feeds`, or
-  **Read Mode (e-ink)** in the menu) for reading your ordinary unread feeds the
-  same way — a feeds tree (All Feeds + folders with unread counts) into the
-  paginated reader. A **Supernote** tablet is auto-detected and taken straight to
-  it; the exit link drops back into the full app on that device.
-- **Feed management** — OPML, RSS/Atom auto-discovery (including site-specific
-  mappings for sites whose pages don't advertise their feeds — paste a
-  pinboard.in page like `/popular/`, `/recent/`, or a `u:user`/`t:tag` filter
-  and the matching feeds.pinboard.in feed is found automatically), Page Feeds (turn a
-  feedless page into a feed: click a link on a rendered preview of the page to
-  derive a selector, pick from suggested CSS selectors, or type your own; preview
-  the exact items before saving; and optionally backfill items already on the
-  page), dev.to filtered feeds (paste a dev.to front-page or tag URL and the Add
-  Feed dialog offers filters the raw RSS firehose lacks: top-posts window,
-  English-only via dev.to's own language label, minimum reactions, excluded tags —
-  editable later in feed Properties → Tuning), YouTube &
-  DeviantArt sync, Bluesky image recovery (bsky.app RSS is text-only — Lectio pulls
-  each post's images from the AT Protocol API so they show in the reader, including
-  content-labeled posts), per-folder cadence, feed compare, fetch-history & automations
-  tabs, and duplicate-feed scanning (consolidating a duplicate moves its tags and
-  stars onto the surviving feed, so no curation is lost). **Curation is never
-  dropped on unsubscribe:** removing a feed that has starred/tagged items offers
-  to move that curation onto another feed first: choosing **Move items to
-  another feed** lists every starred/tagged entry at stake with a checkbox
-  (all selected by default), so you can uncheck the ones to leave behind and
-  **Move & Unsubscribe** in one step; **Just unsubscribe** skips the migration
-  (unmoved stars are archived). Also, **Settings → Feeds** lets you
-  multi-select several feeds and **Combine** them into one survivor (migrating
-  their stars, tags, and optionally unread state, then unsubscribing the rest).
-  Individual posts can also be cherry-picked: the entry context menu's
-  **Move to feed…** carries one entry's star, tags, and read state onto another
-  feed, and **Move visible to feed…** batch-moves everything currently shown in
-  the post list — filter first (tag, search, unread, starred), then move the
-  survivors in one go (useful when swapping a firehose feed for a filtered
-  variant); posts already in the target feed are skipped.
-  **Delete post…** (also in the entry context menu) permanently removes a
-  single garbage entry (spam, corrupted post) after a confirm; a tombstone
-  stops the next refresh from re-adding it while it's still in the
-  publisher's feed window. **Edit date…** fixes a post with a garbage
-  published date (e.g. entries rendered as Jan 1 1970 that sort to the bottom
-  forever) via a date picker, and **Edit title…** renames a post (fixes
-  "(untitled)" posts, garbage feed titles, or a saved article whose extracted
-  title is off); both corrections are pinned so a refresh can't revert them.
-  Starred articles whose links go through a feed redirector (FeedBurner's
-  feedproxy, FeedsPortal) are **canonicalized automatically** — the offline
-  archive capture resolves the redirect and rewrites the link so it outlives
-  the redirector service; imports prefer non-redirector URLs, and a backfill
-  script recovers real URLs for stars whose redirector already died.
-  Each feed lives in a
-  single folder; **Settings → Feeds → Utilities → Fix multi-folder feeds** finds
-  feeds that drifted into several folders (from older imports/migrations) and lets
-  you pick the one to keep. Feeds that aren't in any folder (e.g. after
-  a reader migration, or added straight to the "All Feeds" root) are gathered
-  into an **Uncategorized** folder pinned to the
-  bottom of the sidebar, so they stay visible and easy to file — right-click a
-  feed there and pick **Add to folder** to categorize it. Adding or moving a feed
-  to the "All Feeds" root leaves it folderless (Uncategorized) rather than pinning
-  it to the root. "All Feeds" always includes them. Right-click a non-empty folder and pick **Delete Folder** to
-  choose what happens to the feeds inside: **unsubscribe all**, or **move all to
-  another folder** (including Uncategorized/no folder). Empty folders delete with
-  a simple confirm. **Double-click** a folder or feed name in the sidebar to open its
-  Properties. A feed's **Properties → Info** tab shows its current folder and lets
-  you reassign it (including to Uncategorized) from a dropdown. In **Settings → Feeds** you can multi-select feeds (or tick a
-  folder's header checkbox to select all its feeds) and **bulk move, disable/
-  enable, mark-read, refresh, or unsubscribe** them in one action. A **Stale**
-  sub-tab ranks active feeds by how long since their newest post (oldest first,
-  never-posted feeds at the top) to help find candidates to prune.
+- **Fast triage** — three-pane reader, keyboard nav, context menus, manual and
+  feed-provided tags, read history, search, and a Readability/web-view proxy.
+  Bulk mark-as-read shows an **Undo** toast that restores exactly that batch.
+- **Rich content** — embeds that actually render (curated trusted-host
+  allowlist), inline podcast audio (including audio borrowed from a separate
+  host feed), file attachments, recovered YouTube/Bandcamp/SoundCloud embeds,
+  and a **persistent audio player** bar that keeps playing as you navigate.
+- **Lead images** — per-feed extraction strategies with side-by-side
+  comparison, smart crop/fit tuning, caption sourcing, junk-image rejection,
+  and full-resolution webcomic panels.
+- **Automation** — highlight, mark-as-read, tag-filter, deduplicate,
+  email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
+  (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
+  add-to-Quire rules; scoped to all feeds, a folder, a feed, or a
+  multi-selected set; run history shows exactly what each run touched.
+- **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
+  sheets), or a browser extension that ships the rendered page past paywalls;
+  saved articles get offline capture, tags, and an e-ink **Read Mode** at
+  `/read` (paginated, Supernote-friendly). A **Scan Saved for duplicates**
+  utility (with side-by-side Compare and dead-link checking) cleans up
+  same-article-different-URL saves; an **Instapaper CSV import** brings your
+  whole library over with tags and archive state.
+- **Retention** — per-folder *Delete after read* (nightly), a **Purge old
+  posts** utility with preview, and tombstones that keep deleted posts from
+  resurrecting (swept only after they leave the publisher's feed window).
+  Starred and tagged posts are never auto-deleted.
+- **Feed management** — OPML, resilient RSS/Atom auto-discovery (survives
+  stale autodiscovery links and schemeless input), Page Feeds for feedless
+  sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
+  recovery, per-folder refresh cadence, feed compare, fetch history,
+  duplicate-feed scanning, and curation-preserving unsubscribe/combine/move.
+  Per-post fixes: delete (tombstoned), edit date, edit title.
+- **Integrations** — Reddit (submit + authenticated fetching), Pinterest
+  (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
+  per-user OAuth with optional shared-instance credentials. On Star can
+  fan out to any of them.
 - **Reliability** — conditional GET, per-feed/domain backoff, GUID-churn
   suppression, WebSub real-time push, WAL-mode SQLite, and browser-identity
   fetch fallback for feeds whose servers refuse the default client.
 - **Multi-user** — isolated per-user databases with shared content caches;
-  **GReader**, **Fever**, and **Miniflux v1** API compatibility; Instapaper & email integrations.
-- **Data portability** — Takeout-style ZIP export/import, online-safe backups, and platform migration. The Import/Export tab has dedicated migrator subtabs for four readers:
-  - **Inoreader** — file upload (ExportTool JSON / native export ZIP / JSON Feed, applying tags and starred state) or OAuth API drip (subscriptions, labels, starred, optional delete-from-source, 250 calls/day rate-limited).
-  - **Miniflux** — single-pass REST API import: subscriptions + category folders + starred articles + entry tags.
-  - **FreshRSS** — single-pass Google Reader API import: subscriptions + folder assignments + labels-as-tags + starred articles.
-  - **tt-rss** — single-pass JSON-RPC API import: subscriptions + category folders + starred articles + labels-as-tags.
-
-  Every migrator canonicalizes incoming feed URLs (old.reddit → www.reddit, `?alt=rss`, trailing slashes, YouTube channel forms) before subscribing, so variant URLs merge into an existing subscription instead of creating duplicate feeds.
-
-- **Browser-extension quick subscribe** — Lectio answers the `?subscribe=<feed>`
-  (Feedbin) and `?subscribe_to=<feed>` (Nextcloud News) quick-subscription URL
-  patterns on its home page: it opens the **Add Feed** dialog pre-filled with the
-  feed URL (prompting for login first if needed, then returning you to it). To use
-  it with [RSSHub-Radar](https://github.com/DIYgod/RSSHub-Radar), enable **Feedbin**
-  (or **Nextcloud News**) in the extension's quick-subscription settings and set its
-  address override to your Lectio origin (e.g. `https://your-lectio.example`, no
-  trailing slash). Clicking that service in the extension then drops the discovered
-  feed straight into Lectio's Add Feed dialog.
+  **GReader**, **Fever**, and **Miniflux v1** API compatibility.
+- **Data portability** — Takeout-style ZIP export/import, online-safe
+  backups, and one-shot migrators for **Inoreader, Miniflux, FreshRSS, and
+  tt-rss** (feed URLs canonicalized so variants merge, not duplicate).
+- **Browser-extension quick subscribe** — answers Feedbin/Nextcloud News
+  `?subscribe=` URL patterns, so RSSHub-Radar's quick-subscribe drops feeds
+  straight into the Add Feed dialog.
 
 ---
 

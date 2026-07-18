@@ -243,8 +243,10 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
     except httpx.TimeoutException:
         return {"status": "error", "feeds": [], "message": "Connection timed out."}
     except Exception as exc:
-        short = str(exc).split("\n")[0][:160]
-        return {"status": "error", "feeds": [], "message": f"Could not reach URL: {short}"}
+        # Only the exception class reaches the client (CodeQL: exception text
+        # can leak internal details); the full story goes to the log.
+        _LOGGER.debug("probe failed for %s", url, exc_info=True)
+        return {"status": "error", "feeds": [], "message": f"Could not reach URL ({type(exc).__name__})."}
     if resp is None:
         return {"status": "error", "feeds": [], "message": "Could not reach URL."}
     _probe_headers = _BROWSER_HEADERS if _escalated else _HEADERS
