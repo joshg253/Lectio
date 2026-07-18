@@ -345,6 +345,12 @@ class FeedRefreshService:
                         # update_feed returns an UpdatedFeed (with new/modified
                         # counts) or None when the feed was unchanged (304).
                         _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                        if _new_entries:
+                            # Purge THIS feed's re-ingested tombstoned entries
+                            # immediately: a paced batch (e.g. ~700 YouTube subs)
+                            # can run for an hour+, and the batch-end purge left
+                            # resurrected entries visible the whole time.
+                            self.purge_tombstoned_entries([feed_url])
                         _ok_duration_ms = int((time.perf_counter() - feed_started_at) * 1000)
                         if self._refresh_debug_enabled:
                             elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)
@@ -431,6 +437,8 @@ class FeedRefreshService:
                                     _updated = reader.update_feed(feed_url)
                                     success_count += 1
                                     _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
+                                    if _new_entries:
+                                        self.purge_tombstoned_entries([feed_url])
                                     self._logger.info(
                                         "[refresh] browser-identity retry succeeded for %s", feed_url
                                     )
@@ -604,8 +612,14 @@ class FeedRefreshService:
                     f"SELECT feed_url, entry_id FROM deleted_entries WHERE feed_url IN ({placeholders})",
                     feed_url_list,
                 ).fetchall()
-        except sqlite3.OperationalError:
-            # Table not migrated yet (fresh meta DB mid-upgrade); nothing to purge.
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                # Table not migrated yet (fresh meta DB mid-upgrade); nothing to purge.
+                return 0
+            # Anything else (e.g. "database is locked") used to be silently
+            # swallowed here — the purge no-oped for entire refresh cycles and
+            # purged entries resurrected from the publisher's feed window.
+            self._logger.warning("[refresh] tombstone purge query failed: %s", exc)
             return 0
         if not rows:
             return 0
