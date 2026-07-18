@@ -42,10 +42,13 @@ _ALLOWED_ATTRS = {
     # are harmless responsive hints. data-src/data-srcset/data-lazy-src/data-original/
     # data-image are lazyload sources the lead-image extractor (and lazy-media
     # render normalizer) read — stripping them broke lead images on inline feeds.
+    # align is the legacy presentational float/inline alignment some feeds
+    # still use (value-constrained, no scripting surface — same reasoning as
+    # the td/th/tr align kept below).
     "img": frozenset({
         "src", "srcset", "alt", "title", "loading", "width", "height", "sizes",
-        "decoding", "data-src", "data-srcset", "data-lazy-src", "data-original",
-        "data-image",
+        "decoding", "align", "data-src", "data-srcset", "data-lazy-src",
+        "data-original", "data-image",
     }),
     "source": frozenset({"src", "srcset", "type", "media", "width", "height", "sizes", "data-srcset"}),
     "video": frozenset({"src", "controls", "poster", "preload", "width", "height"}),
@@ -233,6 +236,101 @@ def _sanitize_mathml(root) -> None:
                 del el.attrs[attr_name]
 
 
+def _lift_img_style_sizes_on_tag(img) -> bool:
+    """Copy px width/height from an <img>'s inline style onto real attributes
+    (existing attributes win). Returns True if anything was set."""
+    style_value = str(img.attrs.get("style", ""))
+    if not style_value:
+        return False
+    changed = False
+    if not img.attrs.get("width"):
+        m = _STYLE_IMG_WIDTH_PX_RE.search(style_value)
+        if m:
+            img.attrs["width"] = str(max(1, round(float(m.group(1)))))
+            changed = True
+    if not img.attrs.get("height"):
+        m = _STYLE_IMG_HEIGHT_PX_RE.search(style_value)
+        if m:
+            img.attrs["height"] = str(max(1, round(float(m.group(1)))))
+            changed = True
+    return changed
+
+
+def lift_img_style_sizes(html: str) -> str:
+    """Standalone pre-pass for pipelines whose downstream cleaner strips inline
+    styles before sanitize_html runs — python-readability's .summary() drops
+    style attributes during extraction, so style-only-sized images (NewsBlur's
+    18px glyph icons) lose their size before the sanitizer's own lift can see
+    it. Run this on the raw page HTML first; width/height attributes survive
+    readability."""
+    if not html or "<img" not in html.lower():
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for img in soup.find_all("img"):
+        if _lift_img_style_sizes_on_tag(img):
+            changed = True
+    return str(soup) if changed else html
+
+
+def collect_img_sizes(html: str, base_url: str | None = None) -> dict[str, tuple[str | None, str | None]]:
+    """Map absolutized img src → (width, height) attributes from *html*.
+
+    Companion to reapply_img_sizes for pipelines that destroy image size
+    attributes entirely — python-readability's clean_attributes regex strips
+    width/height/style from its output, so sizes must be captured from the raw
+    page and put back afterwards. Run lift_img_style_sizes first so style-only
+    sizes are included."""
+    from urllib.parse import urljoin
+
+    sizes: dict[str, tuple[str | None, str | None]] = {}
+    if not html or "<img" not in html.lower():
+        return sizes
+    from bs4 import BeautifulSoup
+
+    for img in BeautifulSoup(html, "html.parser").find_all("img"):
+        src = str(img.attrs.get("src") or "").strip()
+        if not src:
+            continue
+        w = str(img.attrs.get("width") or "").strip() or None
+        h = str(img.attrs.get("height") or "").strip() or None
+        if not (w or h):
+            continue
+        key = urljoin(base_url, src) if base_url else src
+        sizes.setdefault(key, (w, h))
+    return sizes
+
+
+def reapply_img_sizes(html: str, sizes: dict[str, tuple[str | None, str | None]], base_url: str | None = None) -> str:
+    """Fill missing img width/height attributes in *html* from a collect_img_sizes map."""
+    if not html or not sizes or "<img" not in html.lower():
+        return html
+    from urllib.parse import urljoin
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for img in soup.find_all("img"):
+        src = str(img.attrs.get("src") or "").strip()
+        if not src:
+            continue
+        key = urljoin(base_url, src) if base_url else src
+        found = sizes.get(key)
+        if not found:
+            continue
+        w, h = found
+        if w and not img.attrs.get("width"):
+            img.attrs["width"] = w
+            changed = True
+        if h and not img.attrs.get("height"):
+            img.attrs["height"] = h
+            changed = True
+    return str(soup) if changed else html
+
+
 def _promote_math_height(tag, style_value: str) -> None:
     """Lift a Sphinx/dvisvgm math element's ``height: Npx`` inline style onto a real
     ``height`` attribute so the true rendered size (and the px-based valign baseline)
@@ -304,14 +402,7 @@ def sanitize_html(content: str) -> str:
         if _is_math_img(img):
             _promote_math_height(img, style_value)
             continue
-        if not img.attrs.get("width"):
-            m = _STYLE_IMG_WIDTH_PX_RE.search(style_value)
-            if m:
-                img.attrs["width"] = str(max(1, round(float(m.group(1)))))
-        if not img.attrs.get("height"):
-            m = _STYLE_IMG_HEIGHT_PX_RE.search(style_value)
-            if m:
-                img.attrs["height"] = str(max(1, round(float(m.group(1)))))
+        _lift_img_style_sizes_on_tag(img)
 
     for tag in soup.find_all(True):
         if tag.parent is None:

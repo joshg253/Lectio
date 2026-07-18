@@ -9887,6 +9887,12 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
     which sees past paywalls/bot-walls the server can't fetch through."""
+    # Readability's clean_attributes strips width/height/style from its output
+    # entirely, so style-only-sized images (NewsBlur's 18px glyph icons) blow
+    # up to column width. Lift style px sizes onto attributes, capture every
+    # image's size from the raw page, and reapply after extraction.
+    raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    _img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url
     summary = doc.summary(html_partial=True)
@@ -9913,6 +9919,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             fallback = _bs4_content_fallback(raw_html)
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
+    article_html = html_sanitize.reapply_img_sizes(article_html, _img_sizes, base_url=source_url)
     article_html = _dedupe_readability_images(article_html)
     article_html = _strip_bandcamp_track_signature(article_html)
     # Resolve any remaining relative src/href (esp. the BS4 fallback path,

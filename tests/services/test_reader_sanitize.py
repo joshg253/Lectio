@@ -121,6 +121,26 @@ def test_style_px_sizes_lift_onto_img_attributes():
     assert 'width="640"' in out
 
 
+def test_readability_keeps_style_sized_glyphs():
+    """readability's clean_attributes strips width/height/style from its output,
+    so sizes are captured from the raw page and reapplied post-extraction —
+    otherwise NewsBlur-style 18px inline icons render at column width."""
+    import main
+
+    body = "<p>" + "Genuine readable article content here. " * 40 + "</p>"
+    raw = ('<html><body><article>' + body +
+           '<p><img src="/assets/feed-icon-star.svg" style="width: 18px;height: 18px;"> Saved Stories</p>'
+           '</article></body></html>')
+    _title, article = main.extract_readability_article(raw, "https://blog.example.test/post/")
+    assert 'width="18"' in article and 'height="18"' in article
+
+
+def test_img_align_attribute_survives():
+    from services.html_sanitize import sanitize_html
+    out = sanitize_html('<img src="https://x.test/a.png" align="right">')
+    assert 'align="right"' in out
+
+
 def test_table_align_attribute_survives():
     """Legacy align on table cells is presentational layout some feeds still
     rely on (Old New Thing centers spanning before/after rows with
