@@ -63,3 +63,33 @@ def test_error_filter_only_error_records(tmp_path, monkeypatch):
     assert lines[0].endswith("ERROR app: boom")
     # Traceback continuation stays attached to the ERROR record.
     assert any('File "x.py", line 1, in <module>' in ln for ln in lines)
+
+
+# ── `since` timestamp filter (Logs tab datetime picker) ──────────────────────
+
+from datetime import datetime  # noqa: E402
+
+
+def test_since_drops_older_records(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch)
+    lines, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 3))
+    assert lines == ["2026-07-09 12:00:03,004 INFO app: recovered"]
+
+
+def test_since_keeps_boundary_and_rides_traceback(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch)
+    lines, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 1))
+    assert not any("12:00:00" in ln for ln in lines)          # 12:00:00 dropped
+    assert any(ln.endswith("database is locked") for ln in lines)  # 12:00:01 kept
+    assert any('File "x.py", line 1, in <module>' in ln for ln in lines)  # traceback rides
+
+
+def test_since_and_level_combine(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch)
+    lines, _ = main._read_log_tail(100, "ERROR", datetime(2026, 7, 9, 12, 0, 3))
+    assert lines == []  # the only ERROR is at 12:00:02, before the cutoff
+
+
+def test_log_line_dt_parses_record_not_continuation():
+    assert main._log_line_dt("2026-07-09 12:00:02,003 ERROR app: boom") == datetime(2026, 7, 9, 12, 0, 2)
+    assert main._log_line_dt('  File "x.py", line 1, in <module>') is None

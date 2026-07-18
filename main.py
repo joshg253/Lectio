@@ -13858,9 +13858,10 @@ def _daily_maintenance_for_user() -> None:
                 continue
             days = int(row["retention_days"])
             deleted = _prune_entries(list(feeds), read_cutoff=datetime.now() - timedelta(days=days))
-            if deleted:
-                LOGGER.info("[maintenance] retention: deleted %d read posts (>%dd after read) from folder %s",
-                            deleted, days, row["name"])
+            # Always log (even 0) so a run is auditable — "nothing happened" and
+            # "never ran" look identical otherwise.
+            LOGGER.info("[maintenance] retention: deleted %d read post(s) (>%dd after read) from folder %s",
+                        deleted, days, row["name"])
     except Exception:
         LOGGER.exception("[maintenance] retention prune failed")
 
@@ -13890,8 +13891,8 @@ def _daily_maintenance_for_user() -> None:
                     """,
                     (cutoff,),
                 ).rowcount
-            if swept:
-                LOGGER.info("[maintenance] swept %d tombstones older than %dd", swept, sweep_days)
+            LOGGER.info("[maintenance] tomb sweep: removed %d tombstone(s) older than %dd and out of window",
+                        swept, sweep_days)
     except Exception:
         LOGGER.exception("[maintenance] tombstone sweep failed")
 
@@ -15661,11 +15662,22 @@ _LOG_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICA
 _LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ (\w+) ")
 
 
-def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
+def _log_line_dt(line: str) -> datetime | None:
+    """Parse a log record's leading ``YYYY-MM-DD HH:MM:SS`` timestamp, or None
+    for a continuation line (traceback etc.)."""
+    if not _LOG_LINE_RE.match(line):
+        return None
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+    except (ValueError, IndexError):
+        return None
+
+
+def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None) -> tuple[list[str], bool]:
     """Return (lines, available). Reads the current lectio.log, keeps records at
-    or above ``min_level`` (continuation lines like tracebacks stay attached to
-    their record), and returns the last ``max_lines``. available=False when file
-    logging isn't configured (no LECTIO_LOG_DIR)."""
+    or above ``min_level`` and (if given) at or after ``since`` — continuation
+    lines like tracebacks stay attached to their record — and returns the last
+    ``max_lines``. available=False when file logging isn't configured."""
     log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
     if not log_dir_str:
         return [], False
@@ -15677,7 +15689,7 @@ def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
         raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return [], True
-    if threshold <= 0:
+    if threshold <= 0 and since is None:
         return raw[-max_lines:], True
     kept: list[str] = []
     include_current = False
@@ -15685,6 +15697,10 @@ def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
         m = _LOG_LINE_RE.match(line)
         if m:
             include_current = _LOG_LEVEL_RANK.get(m.group(1), 0) >= threshold
+            if include_current and since is not None:
+                dt = _log_line_dt(line)
+                if dt is not None and dt < since:
+                    include_current = False
             if include_current:
                 kept.append(line)
         elif include_current:
@@ -15693,13 +15709,27 @@ def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
 
 
 @app.get("/admin/logs")
-def admin_logs(request: Request, lines: int = 200, level: str = "all"):
-    """Tail the instance log for the Admin → Logs tab. Admin-only."""
+def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: str = ""):
+    """Tail the instance log for the Admin → Logs tab. Admin-only.
+
+    ``since`` is an optional local timestamp (``YYYY-MM-DDTHH:MM`` from the
+    datetime-local picker, space-separated also accepted); records before it are
+    dropped. ``lines`` caps the response so a wide window can't dump the whole
+    file."""
     if not _is_web_admin(_current_web_user(request)):
         return Response(status_code=403)
-    max_lines = max(1, min(int(lines), 2000))
+    max_lines = max(1, min(int(lines), 20000))
     min_level = "" if level.lower() == "all" else level
-    log_lines, available = _read_log_tail(max_lines, min_level)
+    since_dt: datetime | None = None
+    since = since.strip()
+    if since:
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                since_dt = datetime.strptime(since, fmt)
+                break
+            except ValueError:
+                continue
+    log_lines, available = _read_log_tail(max_lines, min_level, since_dt)
     return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines)})
 
 
