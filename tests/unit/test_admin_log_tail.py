@@ -93,3 +93,23 @@ def test_since_and_level_combine(tmp_path, monkeypatch):
 def test_log_line_dt_parses_record_not_continuation():
     assert main._log_line_dt("2026-07-09 12:00:02,003 ERROR app: boom") == datetime(2026, 7, 9, 12, 0, 2)
     assert main._log_line_dt('  File "x.py", line 1, in <module>') is None
+
+
+# ── daily-maintenance catch-up scheduling ────────────────────────────────────
+
+def test_maintenance_due_catches_up_after_missed_hour():
+    # Missed the exact hour (restart/deploy near 3am): still due later same day.
+    assert main._maintenance_due(9, 3, "2026-07-17", "2026-07-18") is True
+
+
+def test_maintenance_not_due_before_hour():
+    assert main._maintenance_due(2, 3, "2026-07-17", "2026-07-18") is False
+
+
+def test_maintenance_not_due_if_already_ran_today():
+    assert main._maintenance_due(3, 3, "2026-07-18", "2026-07-18") is False
+    assert main._maintenance_due(23, 3, "2026-07-18", "2026-07-18") is False
+
+
+def test_maintenance_disabled_never_due():
+    assert main._maintenance_due(12, None, "", "2026-07-18") is False

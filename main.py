@@ -14027,10 +14027,46 @@ def _run_global_maintenance() -> None:
             LOGGER.exception("[maintenance] VACUUM %s failed", label)
 
 
+# Instance-wide "maintenance last ran on this date" marker. A file in the data
+# dir (not a per-user DB setting) so the once-a-day decision survives restarts
+# and isn't tied to any tenant — used for the catch-up check below.
+def _maint_marker_path() -> Path:
+    return DATA_DIR / "maintenance_last_run_date"
+
+
+def _maint_last_run_date() -> str:
+    try:
+        return _maint_marker_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _set_maint_last_run_date(date_str: str) -> None:
+    try:
+        _maint_marker_path().write_text(date_str, encoding="utf-8")
+    except OSError:
+        LOGGER.warning("[maintenance] could not persist last-run date", exc_info=True)
+
+
+def _maintenance_due(now_hour: int, maint_hour: int | None, last_run_date: str, today: str) -> bool:
+    """True when daily maintenance should run now: enabled, at or past the
+    configured hour, and not already run today (catch-up if the exact hour was
+    missed)."""
+    if maint_hour is None:
+        return False
+    return now_hour >= maint_hour and last_run_date != today
+
+
 def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     """Thread that fires _run_daily_maintenance() once per day and flushes email
-    batch queues at their configured batch_time each minute."""
-    last_ran_date: str | None = None
+    batch queues at their configured batch_time each minute.
+
+    Catch-up semantics: maintenance runs once per calendar day as soon as the
+    app is alive AT OR AFTER the configured hour and hasn't run today — not only
+    during the exact hour. A restart or deploy near the maintenance hour (or a
+    machine that was asleep) used to skip the whole day; now it runs at the next
+    opportunity. The last-run date is persisted (data-dir marker) so restarts
+    don't re-run the same day."""
     last_batch_check_hhmm: str | None = None
     while not stop_event.wait(30):
         # Flush email batches at their configured batch_time (once per clock
@@ -14045,14 +14081,14 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
                     except Exception:
                         LOGGER.exception("[maintenance] email batch flush failed for user %r", _uid)
 
-        # Daily maintenance once per day at configured hour.
+        # Daily maintenance: once per day, at or after the configured hour.
         maint_hour = get_maintenance_hour()
         if maint_hour is None:
             continue
         now_lt = time.localtime()
         today = time.strftime("%Y-%m-%d")
-        if now_lt.tm_hour == maint_hour and last_ran_date != today:
-            last_ran_date = today
+        if _maintenance_due(now_lt.tm_hour, maint_hour, _maint_last_run_date(), today):
+            _set_maint_last_run_date(today)  # claim the slot before running
             try:
                 _run_daily_maintenance()
             except Exception:
