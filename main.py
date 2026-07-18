@@ -88,7 +88,13 @@ from services.miniflux import MinifluxService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
-LOGGER = logging.getLogger("uvicorn.error")
+# Dedicated app logger. Previously this piggybacked on "uvicorn.error", but
+# uvicorn owns that logger and (depending on startup/rollover timing) can leave
+# it not propagating to our root file handler — silently dropping every app log
+# line ([maintenance], [refresh], …) even though the code ran. "lectio" is our
+# own namespace that nothing else reconfigures, so it always reaches root.
+LOGGER = logging.getLogger("lectio")
+LOGGER.setLevel(logging.INFO)
 
 
 class _ReaderNonFatalParseWarningFilter(logging.Filter):
