@@ -7128,7 +7128,30 @@
           const titleSpan = el.querySelector('.feed-label > span:last-child');
           feedTitles[url] = (titleSpan || el).textContent.trim();
         }
+        // The sidebar only renders feed links for expanded folders (and none at
+        // all in Saved mode), so feed-scoped rules showed raw URLs. Fill the
+        // gaps from the server's title map once it has loaded.
+        if (hlServerFeedTitles) {
+          for (const [url, title] of Object.entries(hlServerFeedTitles)) {
+            if (!(url in feedTitles)) feedTitles[url] = title;
+          }
+        }
         return { folderNames, feedTitles };
+      }
+
+      let hlServerFeedTitles = null;
+      let _hlFeedTitlesFetchStarted = false;
+      function hlLoadServerFeedTitles() {
+        if (_hlFeedTitlesFetchStarted) return;
+        _hlFeedTitlesFetchStarted = true;
+        fetch('/api/folder-feeds', { credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(data => {
+            hlServerFeedTitles = {};
+            for (const f of (data.feeds || [])) hlServerFeedTitles[f.url] = f.title;
+            hlRenderRules();
+          })
+          .catch(() => { _hlFeedTitlesFetchStarted = false; });
       }
 
       const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
@@ -7525,6 +7548,7 @@
       function hlRenderRules() {
         const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
+        hlLoadServerFeedTitles();  // async; re-renders once titles arrive
         listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
         hlActiveDryRun = null;
         hlActiveHistPanel = null;
@@ -7665,7 +7689,8 @@
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = (ruleType === 'youtube_playlist' && !rule.keyword) ? 'all videos' : rule.keyword;
+            badge.textContent = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
+              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
             row.appendChild(badge);
 
             if (rule.is_regex) {
@@ -8969,8 +8994,8 @@
           }
 
           const pattern = patInput.value.trim();
-          // youtube_playlist, instapaper, and quire allow an empty keyword (all in scope).
-          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire') { patInput.focus(); return; }
+          // youtube_playlist, instapaper, quire, and save_article allow an empty keyword (all in scope).
+          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire' && ruleType !== 'save_article') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
@@ -8987,10 +9012,13 @@
           const webhookFormat = webhookFormatSel.value || 'generic';
           const webhookBatch = (webhookFormat !== 'ifttt' && webhookBatchCheck.checked) ? 1 : 0;
           let scope, scopeId;
-          if (!folderId)                  { scope = 'global'; scopeId = ''; }
-          else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
-          else if (selectedFeeds.length === 1) { scope = 'feed';   scopeId = selectedFeeds[0]; }
-          else                            { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
+          // Explicit feed picks always win — the picker can now select feeds
+          // without a folder (server-backed search), and silently discarding
+          // them made the rule global.
+          if (selectedFeeds.length === 1)      { scope = 'feed';   scopeId = selectedFeeds[0]; }
+          else if (selectedFeeds.length >= 2)  { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
+          else if (folderId)                   { scope = 'folder'; scopeId = folderId; }
+          else                                 { scope = 'global'; scopeId = ''; }
           const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,

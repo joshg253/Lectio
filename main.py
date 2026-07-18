@@ -17788,6 +17788,10 @@ def add_highlight_route(
             return JSONResponse({"error": "connect Quire first"}, status_code=400)
         if not quire_project_oid():
             return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
+    elif type == "save_article":
+        # Keyword is optional (blank = star every new entry in scope), matching
+        # the other save-out rules (instapaper/quire/youtube_playlist).
+        pass
     elif type == "tag_filter":
         # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
         _req, _good, _exc = parse_tag_filter_spec(keyword)
