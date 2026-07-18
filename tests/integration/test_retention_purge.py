@@ -118,18 +118,43 @@ def test_nightly_maintenance_applies_folder_retention(configured):
         assert _exists(reader, "unread")
 
 
-def test_tombstone_sweep_drops_only_old_tombstones(configured):
+def test_tombstone_sweep_drops_only_old_out_of_window_tombstones(configured):
     old_ts = (datetime.now() - timedelta(days=120)).isoformat()
     fresh_ts = datetime.now().isoformat()
     with main.get_meta_connection() as conn:
-        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'old', ?)",
-                     (FEED, old_ts))
-        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'fresh', ?)",
-                     (FEED, fresh_ts))
+        for eid, ts in (("old-gone", old_ts), ("old-in-window", old_ts), ("fresh", fresh_ts)):
+            conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+                         (FEED, eid, ts))
+        # The feed's last parse still carries 'old-in-window' — a quiet channel
+        # serving the same posts for years. Its tombstone must survive any age.
+        conn.execute("INSERT INTO feed_seen_window (feed_url, entry_id) VALUES (?, 'old-in-window')", (FEED,))
+        conn.execute("INSERT INTO feed_seen_window (feed_url, entry_id) VALUES (?, 'current-post')", (FEED,))
     main._daily_maintenance_for_user()
     with main.get_meta_connection() as conn:
         remaining = {r[0] for r in conn.execute("SELECT entry_id FROM deleted_entries WHERE feed_url = ?", (FEED,))}
-    assert remaining == {"fresh"}  # default 90-day sweep dropped only the old one
+    assert remaining == {"fresh", "old-in-window"}  # only aged + out-of-window swept
+
+
+def test_tombstone_sweep_keeps_everything_for_unknown_windows(configured):
+    """A feed with no recorded window (never parsed since the upgrade, or a
+    quiet 304-forever feed) keeps ALL its tombstones regardless of age."""
+    old_ts = (datetime.now() - timedelta(days=400)).isoformat()
+    with main.get_meta_connection() as conn:
+        conn.execute("INSERT INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, 'ancient', ?)",
+                     (FEED, old_ts))
+    main._daily_maintenance_for_user()
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT 1 FROM deleted_entries WHERE entry_id = 'ancient'").fetchone()
+
+
+def test_parser_records_feed_window(configured):
+    """The sanitizing parser reports each parse's entry ids through the window
+    sink, replacing the previous recording wholesale."""
+    main._store_feed_window(FEED, ["e1", "e2"])
+    main._store_feed_window(FEED, ["e2", "e3"])
+    with main.get_meta_connection() as conn:
+        rows = {r[0] for r in conn.execute("SELECT entry_id FROM feed_seen_window WHERE feed_url = ?", (FEED,))}
+    assert rows == {"e2", "e3"}
 
 
 def test_tombstone_sweep_default_and_disable(configured, monkeypatch):

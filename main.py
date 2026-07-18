@@ -3238,6 +3238,20 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE folders ADD COLUMN retention_days INTEGER DEFAULT NULL")
         except Exception:
             pass
+        # The entry ids each feed served in its most recent parse. Tomb
+        # sweeping refuses to drop tombstones still present here: a quiet
+        # YouTube channel serves the same 15 videos for years, and sweeping
+        # their tombstones would resurrect all of them on the channel's next
+        # upload (the reparse re-ingests the whole window).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_seen_window (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
         # Tombstone age for the nightly sweep. Pre-existing rows (and rows
         # written by old code during a rolling deploy) are backfilled to "now"
         # so they age out one sweep-window from the upgrade, not immediately.
@@ -7435,7 +7449,23 @@ from services.feed_tags import FeedTagService
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
 # feed parser hands raw tag data to this service via the sink below.
 feed_tag_service = FeedTagService(get_meta_connection=get_meta_connection)
+def _store_feed_window(feed_url: str, entry_ids: list[str]) -> None:
+    """Replace the recorded window (entry ids in the latest parse) for a feed.
+    Called from the sanitizing parser inside reader's update, under the
+    refreshing user's tenancy context."""
+    try:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM feed_seen_window WHERE feed_url = ?", (feed_url,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO feed_seen_window (feed_url, entry_id) VALUES (?, ?)",
+                [(feed_url, eid) for eid in entry_ids],
+            )
+    except Exception:  # noqa: BLE001 — never fail a parse over window bookkeeping
+        LOGGER.warning("[feed-window] store failed for %s", feed_url, exc_info=True)
+
+
 reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
+reader_sanitize.set_feed_window_sink(_store_feed_window)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
@@ -13842,8 +13872,22 @@ def _daily_maintenance_for_user() -> None:
         if sweep_days > 0:
             cutoff = (datetime.now() - timedelta(days=sweep_days)).isoformat()
             with get_meta_connection() as conn:
+                # Only sweep tombstones whose entry has left the publisher's
+                # last-known window — and only for feeds whose window we have
+                # actually recorded (unknown window = keep, conservatively).
+                # Age alone is NOT safe: a quiet YouTube channel 304s for
+                # months while still carrying the same 15 videos, and its next
+                # upload reparses the whole window.
                 swept = conn.execute(
-                    "DELETE FROM deleted_entries WHERE created_at IS NOT NULL AND created_at < ?",
+                    """
+                    DELETE FROM deleted_entries
+                    WHERE created_at IS NOT NULL AND created_at < ?
+                      AND EXISTS (SELECT 1 FROM feed_seen_window w
+                                  WHERE w.feed_url = deleted_entries.feed_url)
+                      AND NOT EXISTS (SELECT 1 FROM feed_seen_window w2
+                                      WHERE w2.feed_url = deleted_entries.feed_url
+                                        AND w2.entry_id = deleted_entries.entry_id)
+                    """,
                     (cutoff,),
                 ).rowcount
             if swept:

@@ -97,7 +97,7 @@
           <label class="fld">Feed history max age (days)
             <input type="number" id="adm-fetch-history-max-age" min="1" value="{{ fetch_history_max_age_days }}" placeholder="30" />
           </label>
-          <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries; after this many days the entry has left every feed window and the tombstone is swept. 0 keeps them forever.">Tomb sweeping (days, 0 = never)
+          <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries. A tombstone is swept once it is this old AND its entry has left the publisher's last-known feed window (quiet feeds keep serving old posts, so age alone is never trusted). 0 keeps them forever.">Tomb sweeping (days, 0 = never)
             <input type="number" id="adm-tombstone-sweep" min="0" value="{{ tombstone_sweep_days }}" placeholder="90" />
           </label>
         </div>
