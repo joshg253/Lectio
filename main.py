@@ -23632,6 +23632,28 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 
+@app.get("/api/folder-feeds")
+def api_folder_feeds(folder_id: str = Query("")):
+    """Feeds (url + display title) for the automation editor's feed picker.
+
+    Empty/non-numeric folder_id returns every feed. Server-backed on purpose:
+    the picker used to scrape the sidebar's feed links, which don't exist at
+    all in Saved mode — typing showed no feeds."""
+    titles = get_feed_title_map()
+    with get_meta_connection() as conn:
+        if folder_id.strip().lstrip("-").isdigit():
+            urls = get_folder_feed_urls(conn, int(folder_id))
+        else:
+            urls = get_all_feed_urls(conn)
+    feeds = [
+        {"url": u, "title": titles.get(u, u)}
+        for u in urls
+        if not saved_articles_service.is_saved_articles_feed(u)
+    ]
+    feeds.sort(key=lambda f: f["title"].lower())
+    return JSONResponse({"feeds": feeds})
+
+
 @app.get("/api/unread-counts")
 def api_unread_counts() -> JSONResponse:
     """Per-feed and per-folder unread counts plus the all-feeds total.

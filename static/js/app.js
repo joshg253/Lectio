@@ -7535,7 +7535,7 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'quire'];
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
         const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
@@ -8311,21 +8311,39 @@
           : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
           : []
         );
-        let folderFeeds = [];                  // [{url,title}] for the current folder
+        let folderFeeds = [];                  // [{url,title}] for the current folder (or all feeds)
         const feedTitleByUrl = new Map();
-        function loadFolderFeeds(folderId) {
+        let _feedLoadSeq = 0;
+        async function loadFolderFeeds(folderId) {
           folderFeeds = [];
           feedTitleByUrl.clear();
-          if (!folderId) return;
-          for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
-            const url = el.getAttribute('data-feed-url');
-            if (url && !feedTitleByUrl.has(url)) {
-              const title = el.textContent.trim();
-              folderFeeds.push({ url, title });
-              feedTitleByUrl.set(url, title);
+          const seq = ++_feedLoadSeq;
+          // Server-backed: the sidebar renders no feed links at all in Saved
+          // mode (and collapsed folders may be missing), so DOM scraping came
+          // up empty. Empty folderId = search across all feeds.
+          try {
+            const resp = await fetch('/api/folder-feeds?folder_id=' + encodeURIComponent(folderId || ''), { credentials: 'same-origin' });
+            const data = await resp.json();
+            if (seq !== _feedLoadSeq) return;  // a newer folder selection won
+            for (const f of (data.feeds || [])) {
+              if (!feedTitleByUrl.has(f.url)) {
+                folderFeeds.push({ url: f.url, title: f.title });
+                feedTitleByUrl.set(f.url, f.title);
+              }
             }
+          } catch (_e) {
+            for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId || '')}"]`)) {
+              const url = el.getAttribute('data-feed-url');
+              if (url && !feedTitleByUrl.has(url)) {
+                const title = el.textContent.trim();
+                folderFeeds.push({ url, title });
+                feedTitleByUrl.set(url, title);
+              }
+            }
+            folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
           }
-          folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
+          renderFeedChips();
+          if (document.activeElement === feedSearch) renderFeedDrop();
         }
         function getSelectedFeeds() { return [...selectedFeedUrls]; }
 
@@ -8372,8 +8390,7 @@
         function renderFeedDrop() {
           const q = feedSearch.value.trim().toLowerCase();
           feedDrop.innerHTML = '';
-          if (!folderSel.value) { feedDrop.hidden = true; return; }
-          const avail = folderFeeds.filter(f => !selectedFeedUrls.has(f.url) && (!q || f.title.toLowerCase().includes(q)));
+          const avail = folderFeeds.filter(f => !selectedFeedUrls.has(f.url) && (!q || f.title.toLowerCase().includes(q) || f.url.toLowerCase().includes(q)));
           if (!avail.length) { feedDrop.hidden = true; return; }
           for (const f of avail.slice(0, 50)) {
             const opt = document.createElement('div');

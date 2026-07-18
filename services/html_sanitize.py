@@ -85,6 +85,14 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x20]")
 # author's px faithfully; raise it (e.g. 1.15) to enlarge all math (re-ingest to apply).
 _STYLE_HEIGHT_PX_RE = re.compile(r"height\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
 _MATH_SCALE = 1.0
+# General img size lift: feeds often size images ONLY via inline style (e.g.
+# NewsBlur's 18px glyph icons, style="width:18px;height:18px"). The style strip
+# would leave them rendering at intrinsic/column size, so px values are lifted
+# onto the real width/height attributes first. The lookbehind keeps max-width /
+# min-width / line-height from matching; %/em/vw sizes can't map to attributes
+# and are left to the article CSS.
+_STYLE_IMG_WIDTH_PX_RE = re.compile(r"(?<![-\w])width\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
+_STYLE_IMG_HEIGHT_PX_RE = re.compile(r"(?<![-\w])height\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
 # Feeds sometimes embed HTML as entity-escaped text inside element text nodes
 # (e.g. &lt;em&gt;Title&lt;/em&gt; stored as literal "<em>Title</em>" in the
 # NavigableString). Strip these from non-code contexts to prevent raw tag names
@@ -286,11 +294,24 @@ def sanitize_html(content: str) -> str:
             _promote_math_height(img, str(obj.attrs.get("style", "")))
             obj.replace_with(img)
 
-    # Pre-existing math <img> (PNG inline formulas, older display math) carry their
-    # true height inline too; lift it before the generic style-strip loop runs.
+    # Lift style-only px sizes onto real width/height attributes before the
+    # generic style-strip loop runs. Math <img> (PNG inline formulas, older
+    # display math) keep their dedicated scaled height lift.
     for img in soup.find_all("img"):
+        style_value = str(img.attrs.get("style", ""))
+        if not style_value:
+            continue
         if _is_math_img(img):
-            _promote_math_height(img, str(img.attrs.get("style", "")))
+            _promote_math_height(img, style_value)
+            continue
+        if not img.attrs.get("width"):
+            m = _STYLE_IMG_WIDTH_PX_RE.search(style_value)
+            if m:
+                img.attrs["width"] = str(max(1, round(float(m.group(1)))))
+        if not img.attrs.get("height"):
+            m = _STYLE_IMG_HEIGHT_PX_RE.search(style_value)
+            if m:
+                img.attrs["height"] = str(max(1, round(float(m.group(1)))))
 
     for tag in soup.find_all(True):
         if tag.parent is None:
