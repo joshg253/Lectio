@@ -70,6 +70,10 @@
     .adm-log-output .lvl-error,
     .adm-log-output .lvl-critical { color: var(--danger, #d2544a); }
     .adm-log-output .log-ts { opacity: .55; }
+    .adm-log-output .log-tag { color: var(--accent, #3a7abf); font-weight: 600; }
+    /* Keep the tag readable when the whole line is an error/warning color. */
+    .adm-log-output .lvl-error .log-tag,
+    .adm-log-output .lvl-critical .log-tag { color: inherit; text-decoration: underline; }
   </style>
 </head>
 <body class="account-page">
@@ -407,6 +411,10 @@
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
       }
 
+      // Highlight bracketed subsystem tags like [maintenance] / [refresh] /
+      // [deviantart] so they stand out. Runs on already-escaped text.
+      const tagify = (escaped) => escaped.replace(/\[([a-z][a-z0-9 _-]*)\]/gi, '<span class="log-tag">[$1]</span>');
+
       function renderLogLines(lines) {
         // Colorize by level; continuation lines (tracebacks) inherit the class
         // of the record they belong to.
@@ -417,7 +425,7 @@
             const lvl = m[2].toLowerCase();
             currentClass = (lvl === 'debug' || lvl === 'warning' || lvl === 'error' || lvl === 'critical')
               ? `lvl-${lvl}` : '';
-            const rest = esc(line.slice(m[0].length));
+            const rest = tagify(esc(line.slice(m[0].length)));
             return `<span class="${currentClass}"><span class="log-ts">${esc(m[1])}</span> ${esc(m[2])} ${rest}</span>`;
           }
           return `<span class="${currentClass}">${esc(line)}</span>`;

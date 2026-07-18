@@ -238,7 +238,7 @@ def _da_conn_with_feeds(feed_ids):
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE deviantart_feeds (id TEXT PRIMARY KEY, username TEXT,"
-        " feed_title TEXT, created_at TEXT, last_synced_at TEXT)"
+        " feed_title TEXT, created_at TEXT, last_synced_at TEXT, source TEXT DEFAULT 'gallery')"
     )
     conn.execute(
         "CREATE TABLE deviantart_entries (id TEXT PRIMARY KEY, deviantart_feed_id TEXT,"
@@ -246,7 +246,9 @@ def _da_conn_with_feeds(feed_ids):
         " UNIQUE(deviantart_feed_id, deviationid))"
     )
     for fid in feed_ids:
-        conn.execute("INSERT INTO deviantart_feeds VALUES (?, 'u', 't', 'now', NULL)", (fid,))
+        # last_synced_at NULL → never synced → always due (see _da_resync_due).
+        conn.execute("INSERT INTO deviantart_feeds (id, username, feed_title, created_at,"
+                     " last_synced_at, source) VALUES (?, 'u', 't', 'now', NULL, 'gallery')", (fid,))
     return conn
 
 
@@ -457,3 +459,38 @@ def test_fetch_and_store_missing_tags_survives_rate_limit():
     # Nothing marked checked — the lookup retries on a later cycle.
     row = conn.execute("SELECT COUNT(*) FROM deviantart_entries WHERE tags_fetched_at IS NOT NULL").fetchone()
     assert row[0] == 0
+
+
+# ── activity-weighted resync scheduling ──────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+_NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+
+
+def _iso(days_ago):
+    return (_NOW - timedelta(days=days_ago)).isoformat()
+
+
+def test_resync_watch_stream_always_due():
+    assert da._da_resync_due("watch", _iso(0), None, _NOW) is True
+
+
+def test_resync_never_synced_always_due():
+    assert da._da_resync_due("gallery", None, _iso(1), _NOW) is True
+
+
+def test_resync_active_artist_due_after_an_hour():
+    # posted 5 days ago (active tier = hourly); synced 2h ago → due, 10m ago → not.
+    assert da._da_resync_due("gallery", (_NOW - timedelta(hours=2)).isoformat(), _iso(5), _NOW) is True
+    assert da._da_resync_due("gallery", (_NOW - timedelta(minutes=10)).isoformat(), _iso(5), _NOW) is False
+
+
+def test_resync_dormant_artist_only_weekly():
+    # last posted ~8 years ago (dormant = weekly). Synced 2 days ago → NOT due;
+    # 8 days ago → due. This is the whole point: corpses don't burn the budget.
+    synced_2d = (_NOW - timedelta(days=2)).isoformat()
+    synced_8d = (_NOW - timedelta(days=8)).isoformat()
+    old_post = _iso(365 * 8)
+    assert da._da_resync_due("gallery", synced_2d, old_post, _NOW) is False
+    assert da._da_resync_due("gallery", synced_8d, old_post, _NOW) is True

@@ -4672,17 +4672,30 @@
         return;
       }
       feedPropChangeUrlSave.disabled = true;
-      feedPropChangeUrlStatus.textContent = 'Saving…';
-      try {
+      const submitChangeUrl = async (force) => {
+        feedPropChangeUrlStatus.textContent = force ? 'Changing…' : 'Checking feed…';
         const body = new URLSearchParams({ old_url: oldUrl, new_url: newUrl });
+        if (force) body.set('force', '1');
         const resp = await fetch('/feeds/change-url', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
-        const json = await resp.json();
+        return { resp, json: await resp.json() };
+      };
+      try {
+        let { resp, json } = await submitChangeUrl(false);
+        // 422 needs_confirm: URL didn't validate as a feed — offer to force
+        // (auth-walled / bot-walled feeds Lectio can't fetch are still valid).
+        if (resp.status === 422 && json.needs_confirm) {
+          feedPropChangeUrlStatus.textContent = '';
+          if (!confirm(json.error)) { feedPropChangeUrlSave.disabled = false; return; }
+          ({ resp, json } = await submitChangeUrl(true));
+        }
         if (!json.ok) throw new Error(json.error || 'Change failed');
         feedPropChangeUrlStatus.textContent = '';
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
         if (feedPropChangeUrlBtn) feedPropChangeUrlBtn.hidden = false;
-        // Reload properties for the new URL
-        window.location.assign(`/?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(window.location.search)), list_feed_url: newUrl })}`);
+        // Navigate to the RESOLVED url (probe may have followed a redirect or
+        // discovered the feed on a pasted page URL).
+        const finalUrl = json.new_url || newUrl;
+        window.location.assign(`/?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(window.location.search)), list_feed_url: finalUrl })}`);
       } catch (err) {
         feedPropChangeUrlStatus.textContent = `Error: ${err.message}`;
       } finally {

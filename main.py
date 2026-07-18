@@ -20653,14 +20653,41 @@ def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
 
 
 @app.post("/feeds/change-url")
-def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
-    """Change the URL of a feed, migrating all associated data."""
+def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), force: int = Form(0)):
+    """Change the URL of a feed, migrating all associated data.
+
+    Unless ``force`` is set, the new URL is validated like Add Feed: it's
+    probed, and if it's a real feed (or a page that advertises exactly the
+    feed we want) the resolved feed URL is used. A URL that doesn't validate
+    returns needs_confirm so the UI can offer 'Change anyway' — feeds behind
+    auth or bot-walls that Lectio can't fetch are still allowed on override."""
     new_url = new_url.strip()
+    if new_url and "://" not in new_url:
+        new_url = "https://" + new_url  # schemeless paste, like Add Feed
     parsed = urlparse(new_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return JSONResponse({"ok": False, "error": "Invalid URL — must be http or https."}, status_code=400)
     if new_url == old_url:
         return JSONResponse({"ok": False, "error": "New URL is the same as the current URL."}, status_code=400)
+
+    # Validate/resolve the target (skipped on force). Deliberately does NOT fall
+    # back to a Page Feed — Change URL is for swapping one real feed for another.
+    if not force:
+        from services.feed_discovery import probe_url as _probe_url
+        result = _probe_url(new_url)
+        feeds = result.get("feeds") or []
+        if result.get("status") in ("feed", "feeds") and feeds:
+            new_url = str(feeds[0]["url"])  # resolved feed (post-redirect / discovered)
+        else:
+            return JSONResponse(
+                {"ok": False, "needs_confirm": True,
+                 "error": (result.get("message") or "That URL doesn't look like a feed.")
+                          + " Change anyway?",
+                 "attempted_url": new_url},
+                status_code=422,
+            )
+        if new_url == old_url:
+            return JSONResponse({"ok": False, "error": "That resolves to the feed's current URL."}, status_code=400)
 
     try:
         with get_reader() as reader:
