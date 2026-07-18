@@ -133,15 +133,12 @@
         <details class="hamburger-menu app-menu topbar-menu topbar-overflow-menu folders-pane-menu">
           <summary class="topbar-icon-btn topbar-overflow-btn" title="Menu" aria-label="Main menu"><img id="menu-avatar-img" class="menu-avatar-img" src="{{ profile_avatar_url }}" alt="" /></summary>
           <div class="menu-popover anchor-left">
-            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
-            <div class="menu-item menu-theme-row" role="group" aria-label="Theme">
-              <button type="button" class="menu-theme-btn" data-menu-theme="dark" title="Dark theme" aria-label="Dark theme"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span><span class="menu-theme-label">Dark</span></button>
-              <button type="button" class="menu-theme-btn" data-menu-theme="light" title="Light theme" aria-label="Light theme"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span><span class="menu-theme-label">Light</span></button>
-              <a class="menu-theme-btn" href="/read?scope=feeds" title="e-ink Read Mode" aria-label="e-ink Read Mode"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span><span class="menu-theme-label">eInk</span></a>
+            <div class="menu-item menu-theme-row" role="group" aria-label="Create">
+              <button type="button" id="menu-add-feed-btn" class="menu-theme-btn" title="Add a feed" aria-label="Add a feed"><span class="material-symbols-rounded" aria-hidden="true">rss_feed</span><span class="menu-theme-label">Add Feed</span></button>
+              <button type="button" id="menu-save-article-btn" class="menu-theme-btn" title="Save an article to read later" aria-label="Save an article to read later"><span class="material-symbols-rounded" aria-hidden="true">bookmark_add</span><span class="menu-theme-label">Save Article</span></button>
             </div>
+            <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <hr class="menu-divider" />
-            <button type="button" id="menu-add-feed-btn" class="menu-item">+ Add Feed</button>
-            <button type="button" id="menu-save-article-btn" class="menu-item">+ Save Article</button>
             <div class="flyout-item">
               <div class="flyout-trigger menu-item"><span class="flyout-label">Auto Refresh: {% if auto_refresh_enabled %}{{ (auto_refresh_minutes|string) + 'm' if auto_refresh_minutes < 60 else (auto_refresh_minutes // 60)|string + 'h' }}{% else %}Off{% endif %}</span><span class="flyout-arrow material-symbols-rounded" aria-hidden="true">chevron_right</span></div>
               <div class="flyout-panel">
@@ -155,10 +152,14 @@
                 </form>
               </div>
             </div>
-            <hr class="menu-divider" />
-            <button type="button" class="menu-item" data-toggle-panel="global-note-modal" title="Note" aria-label="Note"><span class="material-symbols-rounded" aria-hidden="true">sticky_note_2</span> Note</button>
             <button type="button" id="folders-unread-toggle" class="menu-item folders-unread-toggle" title="Show only folders with unread posts" aria-label="Show only folders with unread posts" aria-pressed="false"><span class="material-symbols-rounded" aria-hidden="true">filter_alt</span> Unread only</button>
             <hr class="menu-divider" />
+            <div class="menu-item menu-theme-row" role="group" aria-label="Theme">
+              <button type="button" class="menu-theme-btn" data-menu-theme="dark" title="Dark theme" aria-label="Dark theme"><span class="material-symbols-rounded" aria-hidden="true">dark_mode</span><span class="menu-theme-label">Dark</span></button>
+              <button type="button" class="menu-theme-btn" data-menu-theme="light" title="Light theme" aria-label="Light theme"><span class="material-symbols-rounded" aria-hidden="true">light_mode</span><span class="menu-theme-label">Light</span></button>
+              <a class="menu-theme-btn" href="/read?scope=feeds" title="e-ink Read Mode" aria-label="e-ink Read Mode"><span class="material-symbols-rounded" aria-hidden="true">chrome_reader_mode</span><span class="menu-theme-label">eInk</span></a>
+            </div>
+            <button type="button" id="menu-settings-btn" class="menu-item"><span class="material-symbols-rounded" aria-hidden="true">settings</span> Settings</button>
             {% if is_admin %}
             <a class="menu-item" href="/administration"><span class="material-symbols-rounded" aria-hidden="true">admin_panel_settings</span> Administration</a>
             {% endif %}
@@ -241,6 +242,21 @@
                   <span class="name">All</span>
                   {% set _saved_total = saved_counts_by_folder.get(root_folder_row.id, 0) %}
                   {% if _saved_total %}<span class="count">{{ _saved_total }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
+            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
+               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
+            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
+                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
+                >
+                  <span class="name">Inbox</span>
+                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
                 </a>
               </div>
             </div>
@@ -2025,8 +2041,29 @@
           <div class="feeds-dedup-controls">
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
+            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
             <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
+            <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
+          </div>
+          <div id="purge-old-panel" hidden>
+            <p class="action-modal-label">Delete posts older than a date from the selected folders. Starred and manually tagged posts are never deleted.</p>
+            <div class="purge-old-controls">
+              <select id="purge-folders" multiple size="6" class="feed-prop-strategy-select" aria-label="Folders to purge">
+                {% for opt in folder_options if opt.depth > 0 %}
+                <option value="{{ opt.id }}">{{ opt.name }}</option>
+                {% endfor %}
+              </select>
+              <div class="purge-old-opts">
+                <label>Older than <input type="date" id="purge-before" class="feed-prop-title-input" style="width:auto"></label>
+                <label class="dedup-rescue-label"><input type="checkbox" id="purge-include-unread"> Also delete unread posts</label>
+                <div class="dedup-inline-actions">
+                  <button type="button" id="purge-preview-btn" class="settings-secondary-btn">Preview</button>
+                  <button type="button" id="purge-run-btn" class="danger" disabled>Purge</button>
+                </div>
+                <p id="purge-result" class="action-modal-hint"></p>
+              </div>
+            </div>
           </div>
           <div id="multi-folder-results" hidden>
             <p class="action-modal-label multi-folder-intro"></p>
@@ -2053,6 +2090,19 @@
                 Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
               </label>
               <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
+            </div>
+          </div>
+          <div id="saved-dedup-results" hidden>
+            <p class="action-modal-label saved-dedup-intro"></p>
+            <div class="saved-dedup-confirmed-list"></div>
+            <div class="saved-dedup-possible-section" hidden>
+              <p class="action-modal-label saved-dedup-possible-intro"></p>
+              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <div class="saved-dedup-possible-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and kept copies switch to live ones">Check all URLs</button>
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
             </div>
           </div>
         </div>
@@ -2256,6 +2306,7 @@
     <div class="action-modal-panel feed-properties-panel" role="dialog" aria-modal="true" aria-labelledby="feed-properties-title">
       <div class="feed-properties-header-row">
         <h3 id="feed-properties-title" class="action-modal-title">Feed Properties</h3>
+        <a id="feed-prop-view-posts" href="#" class="feed-prop-inline-btn feed-prop-view-posts-btn" hidden title="View this feed's posts in the reader"><span class="material-symbols-rounded" aria-hidden="true">list_alt</span> View posts</a>
         <button type="button" id="feed-properties-close" class="feed-properties-close" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
       </div>
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
@@ -2539,6 +2590,19 @@
             <option value="1440">Once a day</option>
           </select>
           <span id="folder-prop-cadence-status" class="feed-prop-inline-status"></span>
+        </dd>
+        <dt>Delete after read</dt>
+        <dd>
+          <select id="folder-prop-retention" class="feed-prop-strategy-select" style="width:auto" title="Nightly maintenance deletes read posts this long after you read them. Starred and tagged posts are never deleted.">
+            <option value="0">Keep forever</option>
+            <option value="1">1 day after read</option>
+            <option value="3">3 days after read</option>
+            <option value="7">1 week after read</option>
+            <option value="14">2 weeks after read</option>
+            <option value="30">30 days after read</option>
+            <option value="90">90 days after read</option>
+          </select>
+          <span id="folder-prop-retention-status" class="feed-prop-inline-status"></span>
         </dd>
       </dl>
       <div id="folder-prop-top-feeds-wrap" hidden>

@@ -9,6 +9,7 @@
     <div class="problem-feed-row">
       <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
       <div class="problem-feed-actions">
+        <a class="problem-feed-action" href="/?folder_id={{ row.folder_id if row.folder_id is not none else selected_folder_id }}&list_feed_url={{ row.feed_url | urlencode }}&read_filter=all" title="View this feed's posts in the reader"><span class="material-symbols-rounded" aria-hidden="true">list_alt</span></a>
         <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
         <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id if row.folder_id is not none else selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
       </div>

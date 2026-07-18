@@ -42,7 +42,7 @@ def _dummy_meta_conn() -> sqlite3.Connection:
 def _build_feed_mark_read_app(monkeypatch, marked: int = 3) -> FastAPI:
     app = FastAPI()
     app.post("/feeds/mark-read")(main.mark_feed_as_read)
-    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: marked)
+    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: (marked, "2026-07-17T00:00:00" if marked else None))
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "unread_counts_cache", {})
     return app
@@ -100,7 +100,7 @@ def _build_folder_mark_read_app(monkeypatch, marked: int = 7) -> FastAPI:
     app.post("/folders/mark-read")(main.mark_folder_as_read)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_conn)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _fid: {"https://a.com/f", "https://b.com/f"})
-    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: marked)
+    monkeypatch.setattr(main, "mark_feeds_as_read", lambda _feed_urls: (marked, "2026-07-17T00:00:00" if marked else None))
     monkeypatch.setattr(main, "unread_counts_cache", {})
     return app
 

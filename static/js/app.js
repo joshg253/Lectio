@@ -741,6 +741,319 @@
     const _mfEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // ── Saved Articles duplicate scan ──────────────────────────────────────
+    const SAVED_DEDUP_GROUP_CAP = 200;
+
+    const savedDedupGroupHtml = (g, preselect) => {
+      const rows = g.entries.map((e, i) => {
+        const keeper = preselect && i === 0;
+        const badges =
+          `<span class="saved-dedup-badge${e.read ? '' : ' saved-dedup-badge--unread'}">${e.read ? 'read' : 'unread'}</span>` +
+          (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
+        const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
+        return `<label class="dedup-pair-row saved-dedup-row">` +
+          `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
+          ` data-has-content="${e.has_content ? '1' : '0'}"${preselect && !keeper ? ' checked' : ''}>` +
+          `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> <span class="saved-dedup-row-badges">${badges}</span>${date}` +
+          `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
+          `</label>`;
+      }).join('');
+      const reasons = (g.reasons || []).join(', ');
+      return `<div class="dedup-pair saved-dedup-group">` +
+        `<div class="saved-dedup-group-head">` +
+        `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
+        `<span class="saved-dedup-group-btns">` +
+        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and the kept copy switches to a live one">Check URLs</button>` +
+        `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
+        `</span></div>` +
+        rows + `</div>`;
+    };
+
+    const _sdHost = (link) => { try { return new URL(link).hostname; } catch (_e) { return link; } };
+
+    const _sdUrlBadge = (r) => {
+      const b = document.createElement('span');
+      b.className = 'saved-dedup-badge saved-dedup-url-badge';
+      if (r.dead) {
+        b.classList.add('saved-dedup-badge--dead');
+        b.textContent = `dead (${r.status})`;
+      } else if (r.alive) {
+        b.classList.add('saved-dedup-badge--alive');
+        b.textContent = r.status === 200 ? 'alive' : `alive (${r.status})`;
+      } else {
+        b.textContent = r.status ? `HTTP ${r.status}` : (r.error || 'unreachable');
+        b.title = 'Inconclusive — bot-wall or network hiccup, not proof the page is gone';
+      }
+      return b;
+    };
+
+    // Flip the group's selection to keep a live copy — only when every
+    // currently-kept row turned out dead, and never at the cost of deleting
+    // the only copy with stored content.
+    const _sdFlipKeeper = (group, byId) => {
+      if (!group.closest('.saved-dedup-confirmed-list')) return;
+      const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => {
+        const cb = row.querySelector('.saved-dedup-check');
+        return { row, cb, r: byId.get(cb.dataset.entryId), hasContent: cb.dataset.hasContent === '1' };
+      });
+      const kept = info.filter(i => !i.cb.checked);
+      if (!kept.length || !kept.every(i => i.r && i.r.dead)) return;
+      const candidate = info.find(i => i.r && i.r.alive);  // rows are in keep-priority order
+      if (!candidate) return;
+      if (!candidate.hasContent && info.some(i => i.hasContent)) return;  // human call
+      for (const i of info) {
+        i.cb.checked = i !== candidate && !!(i.r && (i.r.alive || i.r.dead));
+        const tag = i.row.querySelector('.dedup-tag');
+        tag.textContent = i === candidate ? 'keep' : '';
+        tag.classList.toggle('keep-tag', i === candidate);
+      }
+    };
+
+    const _sdCheckGroupUrls = async (group) => {
+      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      const resp = await fetch('/saved/duplicates/check-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: ids }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const byId = new Map((data.results || []).map(r => [r.entry_id, r]));
+      for (const row of group.querySelectorAll('.saved-dedup-row')) {
+        const cb = row.querySelector('.saved-dedup-check');
+        const r = byId.get(cb.dataset.entryId);
+        row.querySelector('.saved-dedup-url-badge')?.remove();
+        if (r) row.querySelector('.saved-dedup-row-badges').appendChild(_sdUrlBadge(r));
+      }
+      // Two copies redirecting to the same final URL = proof of a dupe.
+      const finals = (data.results || []).filter(r => r.alive && r.final_url).map(r => r.final_url.replace(/\/$/, ''));
+      if (finals.length > 1 && new Set(finals).size < finals.length && !group.querySelector('.saved-dedup-same-dest')) {
+        const s = document.createElement('span');
+        s.className = 'saved-dedup-badge saved-dedup-badge--alive saved-dedup-same-dest';
+        s.textContent = 'same destination';
+        s.title = 'These URLs redirect to the same page';
+        group.querySelector('.saved-dedup-reasons').after(s);
+      }
+      _sdFlipKeeper(group, byId);
+    };
+
+    document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
+      const checkBtn = ev.target.closest('.saved-dedup-check-urls-btn');
+      if (checkBtn) {
+        const group = checkBtn.closest('.saved-dedup-group');
+        checkBtn.disabled = true;
+        checkBtn.textContent = 'Checking…';
+        try {
+          await _sdCheckGroupUrls(group);
+          checkBtn.textContent = 'Re-check';
+        } catch (err) {
+          checkBtn.textContent = 'Check URLs';
+          alert('URL check failed: ' + err);
+        }
+        checkBtn.disabled = false;
+        return;
+      }
+      const btn = ev.target.closest('.saved-dedup-compare-btn');
+      if (!btn) return;
+      const group = btn.closest('.saved-dedup-group');
+      const existing = group.querySelector('.saved-dedup-compare');
+      if (existing) { existing.remove(); btn.textContent = 'Compare'; return; }
+      const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
+      btn.disabled = true;
+      let data;
+      try {
+        const resp = await fetch('/saved/duplicates/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entry_ids: ids }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        btn.disabled = false;
+        alert('Compare failed: ' + err);
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = 'Hide';
+      const pane = document.createElement('div');
+      pane.className = 'saved-dedup-compare';
+      pane.innerHTML = (data.previews || []).map(p => {
+        const truncated = p.chars > p.text.length;
+        return `<div class="saved-dedup-compare-col">` +
+          `<div class="saved-dedup-compare-head">${_mfEscape(_sdHost(p.link))}` +
+          `${p.published ? ' · ' + _mfEscape(String(p.published).slice(0, 10)) : ''} · ${p.words} words</div>` +
+          `<div class="saved-dedup-compare-text">${p.text ? _mfEscape(p.text) + (truncated ? '…' : '') : '<em>no stored content</em>'}</div>` +
+          `</div>`;
+      }).join('');
+      group.appendChild(pane);
+    });
+
+    const savedDedupListHtml = (groups, preselect) =>
+      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, preselect)).join('') +
+      (groups.length > SAVED_DEDUP_GROUP_CAP
+        ? `<p class="muted">Showing the first ${SAVED_DEDUP_GROUP_CAP} of ${groups.length} groups — re-run the scan after deleting these.</p>`
+        : '');
+
+    document.getElementById('saved-dedup-btn')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-dedup-results');
+      const intro = results.querySelector('.saved-dedup-intro');
+      const confirmedList = results.querySelector('.saved-dedup-confirmed-list');
+      const possibleSection = results.querySelector('.saved-dedup-possible-section');
+      const possibleList = results.querySelector('.saved-dedup-possible-list');
+      const okBtn = document.getElementById('saved-dedup-ok');
+      let data;
+      try {
+        const resp = await fetch('/saved/duplicates');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        alert('Saved duplicate scan failed: ' + err);
+        return;
+      }
+      const confirmed = data.confirmed || [];
+      const possible = data.possible || [];
+      results.hidden = false;
+      const checkAllBtn = document.getElementById('saved-dedup-checkall');
+
+      if (confirmed.length === 0 && possible.length === 0) {
+        intro.textContent = `No duplicate saved articles found (${data.scanned} scanned).`;
+        confirmedList.innerHTML = '';
+        possibleSection.hidden = true;
+        okBtn.hidden = true;
+        if (checkAllBtn) checkAllBtn.hidden = true;
+        return;
+      }
+      okBtn.hidden = false;
+      if (checkAllBtn) checkAllBtn.hidden = false;
+      if (confirmed.length > 0) {
+        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the copy with content, preferring https, then oldest:`;
+        confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
+      } else {
+        intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;
+        confirmedList.innerHTML = '';
+      }
+      if (possible.length > 0) {
+        possibleSection.hidden = false;
+        possibleSection.querySelector('.saved-dedup-possible-intro').textContent =
+          `${possible.length} possible duplicate group(s) — same title or same extracted content under different URLs:`;
+        possibleList.innerHTML = savedDedupListHtml(possible, false);
+      } else {
+        possibleSection.hidden = true;
+      }
+    });
+
+    // ── Purge old posts utility ────────────────────────────────────────────
+    document.getElementById('purge-old-btn')?.addEventListener('click', () => {
+      const panel = document.getElementById('purge-old-panel');
+      panel.hidden = !panel.hidden;
+    });
+
+    const _purgeParams = () => {
+      const folderIds = [...document.getElementById('purge-folders').selectedOptions].map(o => o.value);
+      const before = document.getElementById('purge-before').value;
+      return {
+        folder_ids: folderIds,
+        before,
+        include_unread: document.getElementById('purge-include-unread').checked,
+      };
+    };
+
+    const _purgePost = async (dryRun) => {
+      const params = _purgeParams();
+      if (!params.folder_ids.length) throw new Error('Select at least one folder.');
+      if (!params.before) throw new Error('Pick a cutoff date.');
+      const resp = await fetch('/entries/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...params, dry_run: dryRun }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data.count;
+    };
+
+    document.getElementById('purge-preview-btn')?.addEventListener('click', async () => {
+      const result = document.getElementById('purge-result');
+      const runBtn = document.getElementById('purge-run-btn');
+      try {
+        result.textContent = 'Counting…';
+        const count = await _purgePost(true);
+        result.textContent = count
+          ? `${count} post(s) would be deleted (starred/tagged posts excluded).`
+          : 'Nothing matches — no posts older than that date (or all are starred/tagged).';
+        runBtn.disabled = count === 0;
+      } catch (err) {
+        result.textContent = String(err.message || err);
+        runBtn.disabled = true;
+      }
+    });
+
+    document.getElementById('purge-run-btn')?.addEventListener('click', async () => {
+      const result = document.getElementById('purge-result');
+      const runBtn = document.getElementById('purge-run-btn');
+      if (!confirm('Permanently delete these posts? This cannot be undone.')) return;
+      runBtn.disabled = true;
+      try {
+        result.textContent = 'Purging…';
+        const count = await _purgePost(false);
+        result.textContent = `Deleted ${count} post(s).`;
+      } catch (err) {
+        result.textContent = String(err.message || err);
+      }
+    });
+
+    let _sdCheckAllRunning = false;
+    let _sdCheckAllStop = false;
+    document.getElementById('saved-dedup-checkall')?.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      if (_sdCheckAllRunning) { _sdCheckAllStop = true; return; }
+      const groups = [...document.getElementById('saved-dedup-results').querySelectorAll('.saved-dedup-group')];
+      _sdCheckAllRunning = true;
+      _sdCheckAllStop = false;
+      let failures = 0;
+      for (let i = 0; i < groups.length; i++) {
+        if (_sdCheckAllStop) break;
+        btn.textContent = `Checking ${i + 1}/${groups.length}… (click to stop)`;
+        groups[i].scrollIntoView({ block: 'nearest' });
+        try {
+          await _sdCheckGroupUrls(groups[i]);
+        } catch (_err) {
+          if (++failures >= 3) { alert('URL checking keeps failing — stopped.'); break; }
+        }
+        // Pacing between groups — stay a polite client even over 200+ groups.
+        await new Promise(r => setTimeout(r, 400));
+      }
+      _sdCheckAllRunning = false;
+      btn.textContent = 'Check all URLs';
+    });
+
+    document.getElementById('saved-dedup-ok')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-dedup-results');
+      const ids = [...results.querySelectorAll('.saved-dedup-check:checked')].map(cb => cb.dataset.entryId);
+      if (ids.length === 0) { alert('Nothing selected.'); return; }
+      if (!confirm(`Permanently delete ${ids.length} saved article(s)? This cannot be undone.`)) return;
+      let data;
+      try {
+        const resp = await fetch('/saved/deduplicate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entry_ids: ids }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        alert('Delete failed: ' + err);
+        return;
+      }
+      alert(data.errors
+        ? `Deleted ${data.deleted} — ${data.errors} failed, see server logs.`
+        : `Deleted ${data.deleted} duplicate saved article(s).`);
+      results.hidden = true;
+      window.location.reload();
+    });
+
     document.getElementById('multi-folder-btn')?.addEventListener('click', async () => {
       const results = document.getElementById('multi-folder-results');
       const intro = results?.querySelector('.multi-folder-intro');
@@ -2936,6 +3249,18 @@
       if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
       setFeedPropText(feedPropXml, feedUrl);
       if (feedPropXmlOpen) { feedPropXmlOpen.href = safeHttpUrl(feedUrl) || '#'; feedPropXmlOpen.hidden = !feedUrl; }
+      // "View posts" — open this feed's list in the reader. Prefer the sidebar
+      // link's folder id (the id the reader expects, root for uncategorized);
+      // refined below once /feeds/properties returns folder_ids. -1 renders the
+      // uncategorized view, so the button is always usable.
+      const feedPropViewPosts = document.getElementById('feed-prop-view-posts');
+      const setViewPostsHref = (folderId) => {
+        if (!feedPropViewPosts) return;
+        feedPropViewPosts.href = `/?folder_id=${encodeURIComponent(folderId)}&list_feed_url=${encodeURIComponent(feedUrl)}&read_filter=all`;
+        feedPropViewPosts.hidden = false;
+      };
+      const _sidebarFolderId = document.querySelector(`.feed-link[data-feed-url="${CSS.escape(feedUrl)}"]`)?.dataset.folderId;
+      setViewPostsHref(_sidebarFolderId ?? '-1');
       setFeedPropText(feedPropHealth, '-');
       setFeedPropText(feedPropHealthDetail, '-');
       setFeedPropText(feedPropTotal, '-');
@@ -3072,6 +3397,7 @@
           feedPropFolderSelect.value = String(currentFolderId);
           feedPropFolderSelect.dataset.feedUrl = feedUrl;
           feedPropFolderSelect.dataset.currentFolderId = String(currentFolderId);
+          setViewPostsHref(String(currentFolderId));
         }
         if (feedPropFolderStatus) feedPropFolderStatus.textContent = '';
 
@@ -3728,6 +4054,15 @@
         }
         const cadenceStatus = document.getElementById('folder-prop-cadence-status');
         if (cadenceStatus) cadenceStatus.textContent = '';
+        const retentionSel = document.getElementById('folder-prop-retention');
+        if (retentionSel) {
+          retentionSel.dataset.folderId = String(folderId);
+          const retention = data.retention_days || 0;
+          const rMatch = Array.from(retentionSel.options).find(o => parseInt(o.value) === retention);
+          retentionSel.value = rMatch ? String(retention) : '0';
+        }
+        const retentionStatus = document.getElementById('folder-prop-retention-status');
+        if (retentionStatus) retentionStatus.textContent = '';
 
         const total = data.total_articles ?? 0;
         const unread = data.unread_articles ?? 0;
@@ -3740,6 +4075,14 @@
             badge.className = 'folder-prop-unread-badge';
             badge.textContent = ` (${unread.toLocaleString()} unread)`;
             totalEl.appendChild(badge);
+          }
+          const deleted = data.deleted_articles ?? 0;
+          if (deleted > 0) {
+            const dBadge = document.createElement('span');
+            dBadge.className = 'folder-prop-unread-badge';
+            dBadge.textContent = ` (${deleted.toLocaleString()} deleted)`;
+            dBadge.title = 'Tombstoned posts from retention, purge, or manual deletes — ages out with tomb sweeping';
+            totalEl.appendChild(dBadge);
           }
         }
 
@@ -6021,18 +6364,59 @@
       };
       if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
       try {
-        await fetch(form.action, {
+        const resp = await fetch(form.action, {
           method: 'POST',
           credentials: 'same-origin',
           headers,
           body: body.toString(),
         });
+        const data = await resp.json();
+        if (data && data.undo_token && data.marked > 0) {
+          showUndoMarkReadToast(data.marked, data.undo_token);
+        }
       } catch (_err) {
         // Network error — UI already updated optimistically, silently ignore.
       }
       // After any bulk mark-read, refresh sidebar counts from the server so that
       // off-screen entries (not in the current post list) are reflected correctly.
       _refreshSidebarCounts();
+    }
+
+    // Undo toast for bulk mark-as-read: the server stamps each batch with one
+    // shared read_at timestamp and hands it back as the undo token.
+    function showUndoMarkReadToast(marked, undoToken) {
+      document.getElementById('toast-message')?.remove();
+      const toast = document.createElement('div');
+      toast.id = 'toast-message';
+      toast.className = 'toast-message';
+      toast.textContent = `Marked ${marked} post${marked === 1 ? '' : 's'} read. `;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = 'Undo';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const resp = await fetch('/entries/undo-mark-read', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: new URLSearchParams({ read_at: undoToken }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          window.location.reload();
+        } catch (err) {
+          toast.remove();
+          alert('Undo failed: ' + (err.message || err));
+        }
+      });
+      toast.appendChild(btn);
+      document.body.appendChild(toast);
+      window.setTimeout(() => {
+        toast.classList.add('fade-out');
+        window.setTimeout(() => toast.remove(), 500);
+      }, 8000);
     }
 
     // Set a badge to an absolute value (adjustCountBadge handles creation/removal).
@@ -6744,7 +7128,30 @@
           const titleSpan = el.querySelector('.feed-label > span:last-child');
           feedTitles[url] = (titleSpan || el).textContent.trim();
         }
+        // The sidebar only renders feed links for expanded folders (and none at
+        // all in Saved mode), so feed-scoped rules showed raw URLs. Fill the
+        // gaps from the server's title map once it has loaded.
+        if (hlServerFeedTitles) {
+          for (const [url, title] of Object.entries(hlServerFeedTitles)) {
+            if (!(url in feedTitles)) feedTitles[url] = title;
+          }
+        }
         return { folderNames, feedTitles };
+      }
+
+      let hlServerFeedTitles = null;
+      let _hlFeedTitlesFetchStarted = false;
+      function hlLoadServerFeedTitles() {
+        if (_hlFeedTitlesFetchStarted) return;
+        _hlFeedTitlesFetchStarted = true;
+        fetch('/api/folder-feeds', { credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(data => {
+            hlServerFeedTitles = {};
+            for (const f of (data.feeds || [])) hlServerFeedTitles[f.url] = f.title;
+            hlRenderRules();
+          })
+          .catch(() => { _hlFeedTitlesFetchStarted = false; });
       }
 
       const _hlCmpModes = ['slug', 'title', 'both', 'fuzzy'];
@@ -7141,6 +7548,7 @@
       function hlRenderRules() {
         const listEl = document.getElementById('hl-rules-list');
         if (!listEl) return;
+        hlLoadServerFeedTitles();  // async; re-renders once titles arrive
         listEl.querySelectorAll('.hl-rule-row, .hl-empty, .hl-rule-dryrun-panel, .hl-rule-hist-panel, .hl-section-label').forEach(el => el.remove());
         hlActiveDryRun = null;
         hlActiveHistPanel = null;
@@ -7151,8 +7559,8 @@
           listEl.appendChild(empty);
           return;
         }
-        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'quire'];
-        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', quire: 'Add to Quire' };
+        const TYPE_ORDER = ['highlight', 'mark_as_read', 'tag_filter', 'deduplicate', 'email_article', 'webhook', 'youtube_playlist', 'instapaper', 'save_article', 'quire'];
+        const TYPE_LABELS = { highlight: 'Highlight', mark_as_read: 'Mark as Read', tag_filter: 'Tag Filter', deduplicate: 'Deduplicate', email_article: 'Email Article', webhook: 'Webhook', youtube_playlist: 'Add to YT Playlist', instapaper: 'Save to Instapaper', save_article: 'Save/Star Article', quire: 'Add to Quire' };
         for (const sectionType of TYPE_ORDER) {
           const sectionRules = hlRules.map((r, i) => ({ r, i })).filter(({ r }) => (r.type || 'highlight') === sectionType);
           if (sectionRules.length === 0) continue;
@@ -7281,7 +7689,8 @@
             badge.className = ruleType === 'highlight'
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
-            badge.textContent = (ruleType === 'youtube_playlist' && !rule.keyword) ? 'all videos' : rule.keyword;
+            badge.textContent = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
+              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
             row.appendChild(badge);
 
             if (rule.is_regex) {
@@ -7829,7 +8238,7 @@
         // Type
         const typeSel = document.createElement('select');
         typeSel.className = 'hl-draft-select hl-type-select';
-        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['tag_filter','Tag Filter'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['quire','Add to Quire'],['deduplicate','Deduplicate']]) {
+        for (const [val, label] of [['highlight','Highlight'],['mark_as_read','Mark as Read'],['tag_filter','Tag Filter'],['email_article','Email Article'],['webhook','Webhook'],['youtube_playlist','Add to YT Playlist'],['instapaper','Save to Instapaper'],['save_article','Save/Star Article'],['quire','Add to Quire'],['deduplicate','Deduplicate']]) {
           if (val === 'email_article' && !window.EMAIL_CONFIGURED) continue;
           // YouTube playlist rule needs a connected account; hide the option until
           // connected (unless editing an existing rule of this type).
@@ -7927,21 +8336,39 @@
           : prefill.scope === 'feeds' ? String(prefill.scope_id || '').split('\n').map(s => s.trim()).filter(Boolean)
           : []
         );
-        let folderFeeds = [];                  // [{url,title}] for the current folder
+        let folderFeeds = [];                  // [{url,title}] for the current folder (or all feeds)
         const feedTitleByUrl = new Map();
-        function loadFolderFeeds(folderId) {
+        let _feedLoadSeq = 0;
+        async function loadFolderFeeds(folderId) {
           folderFeeds = [];
           feedTitleByUrl.clear();
-          if (!folderId) return;
-          for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId)}"]`)) {
-            const url = el.getAttribute('data-feed-url');
-            if (url && !feedTitleByUrl.has(url)) {
-              const title = el.textContent.trim();
-              folderFeeds.push({ url, title });
-              feedTitleByUrl.set(url, title);
+          const seq = ++_feedLoadSeq;
+          // Server-backed: the sidebar renders no feed links at all in Saved
+          // mode (and collapsed folders may be missing), so DOM scraping came
+          // up empty. Empty folderId = search across all feeds.
+          try {
+            const resp = await fetch('/api/folder-feeds?folder_id=' + encodeURIComponent(folderId || ''), { credentials: 'same-origin' });
+            const data = await resp.json();
+            if (seq !== _feedLoadSeq) return;  // a newer folder selection won
+            for (const f of (data.feeds || [])) {
+              if (!feedTitleByUrl.has(f.url)) {
+                folderFeeds.push({ url: f.url, title: f.title });
+                feedTitleByUrl.set(f.url, f.title);
+              }
             }
+          } catch (_e) {
+            for (const el of document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(folderId || '')}"]`)) {
+              const url = el.getAttribute('data-feed-url');
+              if (url && !feedTitleByUrl.has(url)) {
+                const title = el.textContent.trim();
+                folderFeeds.push({ url, title });
+                feedTitleByUrl.set(url, title);
+              }
+            }
+            folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
           }
-          folderFeeds.sort((a, b) => a.title.localeCompare(b.title));
+          renderFeedChips();
+          if (document.activeElement === feedSearch) renderFeedDrop();
         }
         function getSelectedFeeds() { return [...selectedFeedUrls]; }
 
@@ -7988,8 +8415,7 @@
         function renderFeedDrop() {
           const q = feedSearch.value.trim().toLowerCase();
           feedDrop.innerHTML = '';
-          if (!folderSel.value) { feedDrop.hidden = true; return; }
-          const avail = folderFeeds.filter(f => !selectedFeedUrls.has(f.url) && (!q || f.title.toLowerCase().includes(q)));
+          const avail = folderFeeds.filter(f => !selectedFeedUrls.has(f.url) && (!q || f.title.toLowerCase().includes(q) || f.url.toLowerCase().includes(q)));
           if (!avail.length) { feedDrop.hidden = true; return; }
           for (const f of avail.slice(0, 50)) {
             const opt = document.createElement('div');
@@ -8568,8 +8994,8 @@
           }
 
           const pattern = patInput.value.trim();
-          // youtube_playlist, instapaper, and quire allow an empty keyword (all in scope).
-          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire') { patInput.focus(); return; }
+          // youtube_playlist, instapaper, quire, and save_article allow an empty keyword (all in scope).
+          if (!pattern && ruleType !== 'youtube_playlist' && ruleType !== 'instapaper' && ruleType !== 'quire' && ruleType !== 'save_article') { patInput.focus(); return; }
           if (ruleType === 'email_article' && !contactSel.value) { contactSel.focus(); return; }
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
@@ -8586,10 +9012,13 @@
           const webhookFormat = webhookFormatSel.value || 'generic';
           const webhookBatch = (webhookFormat !== 'ifttt' && webhookBatchCheck.checked) ? 1 : 0;
           let scope, scopeId;
-          if (!folderId)                  { scope = 'global'; scopeId = ''; }
-          else if (selectedFeeds.length === 0) { scope = 'folder'; scopeId = folderId; }
-          else if (selectedFeeds.length === 1) { scope = 'feed';   scopeId = selectedFeeds[0]; }
-          else                            { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
+          // Explicit feed picks always win — the picker can now select feeds
+          // without a folder (server-backed search), and silently discarding
+          // them made the rule global.
+          if (selectedFeeds.length === 1)      { scope = 'feed';   scopeId = selectedFeeds[0]; }
+          else if (selectedFeeds.length >= 2)  { scope = 'feeds';  scopeId = selectedFeeds.join('\n'); }
+          else if (folderId)                   { scope = 'folder'; scopeId = folderId; }
+          else                                 { scope = 'global'; scopeId = ''; }
           const ytPlOpt = ytPlSel.options[ytPlSel.selectedIndex];
           await onSave({ scope, scope_id: scopeId, keyword: pattern, color, is_regex: isRegex,
                          type: ruleType, search_in: searchIn, delivery,
@@ -9787,6 +10216,23 @@
         // Keep the inline Feeds-tab cadence dropdown in sync.
         const inlineSel = document.querySelector(`.settings-folder-cadence-select[data-folder-id="${folderId}"]`);
         if (inlineSel) { inlineSel.value = sel.value; inlineSel.dataset.prevValue = sel.value; }
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    document.getElementById('folder-prop-retention')?.addEventListener('change', async (e) => {
+      const sel = e.target;
+      const folderId = sel.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-retention-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, retention_days: sel.value });
+        const resp = await fetch('/folders/retention', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
       } catch (err) {
         if (status) status.textContent = `Error: ${err.message}`;
       }
@@ -11772,9 +12218,20 @@
         msgEl.hidden = !text;
       }
 
-      function schedule(url) {
+      // Schemeless paste (www.example.com, example.com/feed) — assume https.
+      // Anything that doesn't yet look like a hostname stays pending silently
+      // (the user is still typing).
+      function normalizeInput(url) {
+        if (!url) return '';
+        if (url.includes('://')) return url;
+        if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:[/:?#]|$)/i.test(url)) return 'https://' + url;
+        return '';
+      }
+
+      function schedule(rawUrl) {
         clearTimeout(checkTimer);
-        if (!url || !url.includes('://')) {
+        const url = normalizeInput(rawUrl);
+        if (!url) {
           setMsg(''); submitBtn.disabled = true;
           pickEl.hidden = true; pfSection.hidden = true; selectedFeedUrl = null;
           return;

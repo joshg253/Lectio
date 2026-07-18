@@ -10,6 +10,7 @@
     window.__lectioTheme = (window.localStorage.getItem('lectio-theme') || 'dark');
     document.write(`<link rel="stylesheet" href="/static/themes/${window.__lectioTheme}.css?v={{ static_asset_version }}" />`);
   </script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0..1" />
   <link rel="stylesheet" href="/static/style.css?v={{ static_asset_version }}" />
   <style>
     body.account-page { height: auto; min-height: 100vh; overflow-y: auto; }
@@ -27,6 +28,9 @@
     .account-users { width: 100%; border-collapse: collapse; margin: .5rem 0; }
     .account-users th, .account-users td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid rgba(127,127,127,.25); }
     .account-hint { font-size: .82rem; opacity: .75; margin: .25rem 0; }
+    /* Group descriptions sit between the heading and the field grid — give the
+       fields a bit of air below the text. */
+    h3 + .account-hint { margin-bottom: .65rem; }
     .account-users button.danger { color: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
     .account-users td > div form { margin: 0; }
     /* tabs */
@@ -39,6 +43,17 @@
     .adm-panel { display: none; }
     .adm-panel.active { display: block; }
     .tuning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem; }
+    /* Inputs pin to the cell bottom so a label that wraps to two lines can't
+       push its field out of alignment with the rest of the row. */
+    .tuning-grid .fld input, .tuning-grid .fld select { margin-top: auto; }
+    /* Credential pairs (ID + secret) are longer than tuning numbers — wider columns. */
+    .keys-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+    .adm-icon-btn { background: none; border: none; padding: .1rem; cursor: pointer; color: inherit;
+                    opacity: .65; vertical-align: middle; line-height: 1; }
+    .adm-icon-btn:hover { opacity: 1; }
+    .adm-icon-btn .material-symbols-rounded { font-size: 1.1rem; }
+    .adm-icon-btn.danger { color: var(--danger, #c0392b); }
+    .adm-user-actions { display: flex; gap: .15rem; align-items: center; }
     .adm-logs-controls { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .5rem; }
     .adm-log-output { max-height: 60vh; overflow: auto; background: rgba(127,127,127,.08);
                       border: 1px solid var(--line, #ccc); border-radius: 6px; padding: .6rem .75rem;
@@ -70,28 +85,11 @@
         <h2>Instance settings</h2>
         <p class="account-hint">Shared across the whole instance. Changes apply immediately after Save.</p>
 
-        <h3>Maintenance</h3>
-        <label class="fld">Hour (0–23, server local time)
-          <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
-        </label>
-        {% if maintenance_last %}<p class="account-hint">Last ran: {{ maintenance_last }}</p>{% endif %}
-
-        <h3>Image cache</h3>
-        <label class="fld">Retention (days, 0 = keep forever)
-          <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
-        </label>
-        <label class="fld">Max dimension (longest side, px; 0 = store originals)
-          <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
-        </label>
-        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries are evicted in daily maintenance if not viewed within the retention window; images larger than the max dimension are downscaled before storing.</p>
-
-        <h3>Tuning</h3>
+        <h3>Maintenance &amp; cleanup</h3>
+        <p class="account-hint">Runs nightly at the set hour (server local time): prunes feed fetch history, applies per-folder retention, sweeps tombstones, and evicts the image cache.{% if maintenance_last %} Last ran: {{ maintenance_last }}.{% endif %}</p>
         <div class="tuning-grid">
-          <label class="fld">Login max failures
-            <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
-          </label>
-          <label class="fld">Lockout window (seconds)
-            <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
+          <label class="fld">Maintenance hour (0–23)
+            <input type="number" id="adm-maint-hour" min="0" max="23" value="{{ maintenance_hour }}" placeholder="3" />
           </label>
           <label class="fld">Feed history keep (rows/feed)
             <input type="number" id="adm-fetch-history-keep" min="1" value="{{ fetch_history_keep }}" placeholder="50" />
@@ -99,15 +97,46 @@
           <label class="fld">Feed history max age (days)
             <input type="number" id="adm-fetch-history-max-age" min="1" value="{{ fetch_history_max_age_days }}" placeholder="30" />
           </label>
+          <label class="fld" title="Deleted-post tombstones stop refreshes from resurrecting purged entries. A tombstone is swept once it is this old AND its entry has left the publisher's last-known feed window (quiet feeds keep serving old posts, so age alone is never trusted). 0 keeps them forever.">Tomb sweeping (days, 0 = never)
+            <input type="number" id="adm-tombstone-sweep" min="0" value="{{ tombstone_sweep_days }}" placeholder="90" />
+          </label>
+        </div>
+        <div style="margin:.25rem 0 .75rem">
+          <button type="button" id="adm-run-maint">Run maintenance now</button>
+        </div>
+
+        <h3>Image cache</h3>
+        <p class="account-hint">The <code>/api/img</code> proxy caches fetched images. Entries not viewed within the retention window are evicted nightly; larger images are downscaled to the max dimension before storing.</p>
+        <div class="tuning-grid">
+          <label class="fld">Retention (days, 0 = keep forever)
+            <input type="number" id="adm-img-cache-days" min="0" value="{{ img_cache_days }}" placeholder="90" />
+          </label>
+          <label class="fld">Max dimension (px, 0 = originals)
+            <input type="number" id="adm-img-cache-max-dim" min="0" value="{{ img_cache_max_dim }}" placeholder="3840" />
+          </label>
+        </div>
+
+        <h3>Security</h3>
+        <p class="account-hint">Repeated failed logins lock the account out for the window.</p>
+        <div class="tuning-grid">
+          <label class="fld">Login max failures
+            <input type="number" id="adm-login-max-failures" min="1" value="{{ login_max_failures }}" placeholder="5" />
+          </label>
+          <label class="fld">Lockout window (seconds)
+            <input type="number" id="adm-login-window-seconds" min="60" value="{{ login_window_seconds }}" placeholder="300" />
+          </label>
+        </div>
+
+        <h3>New users</h3>
+        <p class="account-hint">Seeds the auto-refresh setting for newly created users.</p>
+        <div class="tuning-grid">
           <label class="fld">Default auto-refresh (min, 0 = off)
             <input type="number" id="adm-instance-auto-refresh" min="0" value="{{ instance_auto_refresh }}" placeholder="60" />
           </label>
         </div>
-        <p class="account-hint">Login lockout and feed history are enforced at maintenance time. Default auto-refresh seeds new-user settings.</p>
 
-        <div style="display:flex; gap:.5rem; margin-top:.75rem">
+        <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
-          <button type="button" id="adm-run-maint">Run maintenance now</button>
         </div>
       </section>
     </div>
@@ -119,40 +148,52 @@
         <p class="account-hint">Instance-wide credentials. The email key sends on behalf of the whole instance; the OAuth apps are a shared fallback for users who haven't set their own (a user's own credentials always take priority).</p>
 
         <h3>Email (Resend)</h3>
-        <label class="fld">API key
-          <input type="password" id="adm-resend-key" autocomplete="new-password"
-                 placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
-        </label>
-        <label class="fld">From address
-          <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
-        </label>
         <p class="account-hint">One sending account for the instance (only a verified domain can send).</p>
+        <div class="tuning-grid keys-grid">
+          <label class="fld">API key
+            <input type="password" id="adm-resend-key" autocomplete="new-password"
+                   placeholder="{{ resend_key_masked if resend_key_set else 're_…' }}" />
+          </label>
+          <label class="fld">From address
+            <input type="email" id="adm-email-from" value="{{ email_from }}" placeholder="lectio@yourdomain.com" />
+          </label>
+        </div>
 
-        <h3>Shared OAuth apps (optional)</h3>
-        <p class="account-hint"><strong>YouTube:</strong> Register at <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>. Add <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
-        <label class="fld">YouTube OAuth Client ID
-          <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
-        </label>
-        <label class="fld">YouTube OAuth Client Secret
-          <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
-        </label>
-        <p class="account-hint"><strong>Pinterest:</strong> Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a>. Add <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
-        <label class="fld">Pinterest OAuth Client ID
-          <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
-        </label>
-        <label class="fld">Pinterest OAuth Client Secret
-          <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
-        </label>
-        <p class="account-hint"><strong>Reddit:</strong> Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a>. Add <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
-        <label class="fld">Reddit OAuth Client ID
-          <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
-        </label>
-        <label class="fld">Reddit OAuth Client Secret
-          <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
-                 placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
-        </label>
+        <h3>YouTube OAuth</h3>
+        <p class="account-hint">Register at the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> with <code>{{ public_url }}/youtube/oauth/callback</code> as an authorized redirect URI.</p>
+        <div class="tuning-grid keys-grid">
+          <label class="fld">Client ID
+            <input type="text" id="adm-yt-oauth-client-id" value="{{ shared_yt_oauth_client_id }}" placeholder="166660….apps.googleusercontent.com" autocomplete="off" />
+          </label>
+          <label class="fld">Client secret
+            <input type="password" id="adm-yt-oauth-client-secret" autocomplete="new-password"
+                   placeholder="{{ shared_yt_oauth_client_secret_masked if shared_yt_oauth_client_secret_set else 'GOCSPX-…' }}" />
+          </label>
+        </div>
+
+        <h3>Pinterest OAuth</h3>
+        <p class="account-hint">Register at <a href="https://developers.pinterest.com/apps/" target="_blank" rel="noopener">Pinterest Developers</a> with <code>{{ public_url }}/integrations/pinterest/oauth/callback</code> as a redirect URI.</p>
+        <div class="tuning-grid keys-grid">
+          <label class="fld">Client ID
+            <input type="text" id="adm-pinterest-oauth-client-id" value="{{ shared_pinterest_oauth_client_id }}" placeholder="your app ID" autocomplete="off" />
+          </label>
+          <label class="fld">Client secret
+            <input type="password" id="adm-pinterest-oauth-client-secret" autocomplete="new-password"
+                   placeholder="{{ shared_pinterest_oauth_client_secret_masked if shared_pinterest_oauth_client_secret_set else 'your client secret' }}" />
+          </label>
+        </div>
+
+        <h3>Reddit OAuth</h3>
+        <p class="account-hint">Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
+        <div class="tuning-grid keys-grid">
+          <label class="fld">Client ID
+            <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
+          </label>
+          <label class="fld">Client secret
+            <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
+                   placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
+          </label>
+        </div>
 
         <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
@@ -170,35 +211,29 @@
           <tbody>
           {% for u in users %}
             <tr>
-              <td>{{ u.username }}{% if u.disabled %} <em>(disabled)</em>{% endif %}</td>
+              <td>{{ u.username }}{% if u.disabled %} <em>(disabled)</em>{% endif %}
+                <button type="button" class="adm-icon-btn" data-user-act="rename" data-user-id="{{ u.user_id }}" data-username="{{ u.username }}" title="Rename (login name only — data and tokens unaffected)" aria-label="Rename {{ u.username }}"><span class="material-symbols-rounded" aria-hidden="true">edit</span></button>
+              </td>
               <td>{{ 'yes' if u.is_admin else '' }}</td>
               <td>{{ u.last_active }}</td>
               <td>{{ u.feed_count }}</td>
               <td>{{ u.db_human }}</td>
               <td>
-                {% if u.user_id != user_id %}
-                <div style="display:flex;gap:.4rem;align-items:center">
-                  <form method="post" action="/admin/users/disable" style="margin:0">
-                    {{ csrf_input(request) | safe }}
-                    <input type="hidden" name="user_id" value="{{ u.user_id }}" />
-                    <input type="hidden" name="disabled" value="{{ 0 if u.disabled else 1 }}" />
-                    <button type="submit">{{ 'Enable' if u.disabled else 'Disable' }}</button>
-                  </form>
-                  <form method="post" action="/admin/users/delete" style="margin:0"
-                        onsubmit="return confirm('Permanently delete {{ u.username }} and ALL their feeds, folders, and saved articles? This cannot be undone.');">
-                    {{ csrf_input(request) | safe }}
-                    <input type="hidden" name="user_id" value="{{ u.user_id }}" />
-                    <button type="submit" class="danger">Delete</button>
-                  </form>
+                <div class="adm-user-actions">
+                  <button type="button" class="adm-icon-btn" data-user-act="vacuum" data-user-id="{{ u.user_id }}" data-username="{{ u.username }}" title="Vacuum DBs (reclaim space after purges; runs in background)" aria-label="Vacuum {{ u.username }}'s databases"><span class="material-symbols-rounded" aria-hidden="true">cleaning_services</span></button>
+                  {% if u.user_id != user_id %}
+                  <button type="button" class="adm-icon-btn" data-user-act="resetpw" data-user-id="{{ u.user_id }}" data-username="{{ u.username }}" title="Reset password" aria-label="Reset {{ u.username }}'s password"><span class="material-symbols-rounded" aria-hidden="true">key</span></button>
+                  <button type="button" class="adm-icon-btn" data-user-act="disable" data-user-id="{{ u.user_id }}" data-username="{{ u.username }}" data-disabled="{{ 1 if u.disabled else 0 }}" title="{{ 'Enable' if u.disabled else 'Disable' }}" aria-label="{{ 'Enable' if u.disabled else 'Disable' }} {{ u.username }}"><span class="material-symbols-rounded" aria-hidden="true">{{ 'person' if u.disabled else 'person_off' }}</span></button>
+                  <button type="button" class="adm-icon-btn danger" data-user-act="delete" data-user-id="{{ u.user_id }}" data-username="{{ u.username }}" title="Delete user and ALL their data" aria-label="Delete {{ u.username }}"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                  {% endif %}
                 </div>
-                {% else %}<span>—</span>{% endif %}
               </td>
             </tr>
           {% endfor %}
           </tbody>
         </table>
 
-        <h2>Create user</h2>
+        <h3>Create user</h3>
         <form method="post" action="/admin/users/create">
           {{ csrf_input(request) | safe }}
           <input type="text" name="username" placeholder="username" minlength="4" maxlength="10" required />
@@ -206,52 +241,7 @@
           <label><input type="checkbox" name="is_admin" value="1" /> admin</label>
           <button type="submit">Create user</button>
         </form>
-
-        <h2>Reset a user's password</h2>
-        <form method="post" action="/admin/users/reset-password">
-          {{ csrf_input(request) | safe }}
-          <select name="user_id">
-            {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
-          </select>
-          <input type="password" name="new_password" placeholder="New password" autocomplete="new-password" required />
-          <button type="submit">Reset password</button>
-        </form>
-
-        <h2>Rename a user</h2>
-        <p class="account-hint">Changes the login name only — data, folders, and API tokens are keyed to a stable internal id and are unaffected.</p>
-        <form method="post" action="/admin/users/rename">
-          {{ csrf_input(request) | safe }}
-          <select name="user_id">
-            {% for u in users %}<option value="{{ u.user_id }}">{{ u.username }}</option>{% endfor %}
-          </select>
-          <input type="text" name="new_username" placeholder="New username" required />
-          <button type="submit">Rename</button>
-        </form>
-      </section>
-
-      <section class="account-section">
-        <h2>My account</h2>
-        <h3>Change password</h3>
-        <form method="post" action="/account/password">
-          {{ csrf_input(request) | safe }}
-          <label class="fld">Current password
-            <input type="password" name="current_password" autocomplete="current-password" required />
-          </label>
-          <label class="fld">New password
-            <input type="password" name="new_password" autocomplete="new-password" required minlength="6" />
-          </label>
-          <label class="fld">Confirm
-            <input type="password" name="confirm_password" autocomplete="new-password" required />
-          </label>
-          <button type="submit">Change password</button>
-        </form>
-
-        <h3>API token</h3>
-        <p class="account-hint">Used for GReader and Fever clients. Treat like a password.</p>
-        <form method="post" action="/account/api-token/regenerate">
-          {{ csrf_input(request) | safe }}
-          <button type="submit">Regenerate token</button>
-        </form>
+        <p class="account-hint">Password changes and API tokens for your own account live in Lectio's Settings → Account.</p>
       </section>
     </div>
 
@@ -321,6 +311,7 @@
           shared_pinterest_oauth_client_id: $('adm-pinterest-oauth-client-id')?.value.trim() || '',
           fetch_history_keep: $('adm-fetch-history-keep')?.value.trim() || '',
           fetch_history_max_age_days: $('adm-fetch-history-max-age')?.value.trim() || '',
+          tombstone_sweep_days: $('adm-tombstone-sweep')?.value.trim() || '',
           login_max_failures: $('adm-login-max-failures')?.value.trim() || '',
           login_window_seconds: $('adm-login-window-seconds')?.value.trim() || '',
           default_auto_refresh_minutes: $('adm-instance-auto-refresh')?.value.trim() || '',
@@ -343,6 +334,55 @@
       $('adm-run-maint')?.addEventListener('click', async () => {
         try { await post('/settings/maintenance/run-now'); toast('Maintenance started.'); }
         catch { toast('Failed to start maintenance.'); }
+      });
+
+      // ── Users table glyph actions ─────────────────────────────
+      async function postForm(url, fields) {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': CSRF },
+          credentials: 'same-origin',
+          body: new URLSearchParams(fields).toString(),
+        });
+        if (!r.ok) throw new Error('failed');
+        return r;
+      }
+
+      document.addEventListener('click', async (ev) => {
+        const btn = ev.target.closest('[data-user-act]');
+        if (!btn) return;
+        const act = btn.dataset.userAct;
+        const userId = btn.dataset.userId;
+        const username = btn.dataset.username;
+        try {
+          if (act === 'rename') {
+            const name = prompt(`New login name for ${username} (data and tokens are unaffected):`, username);
+            if (!name || name === username) return;
+            await postForm('/admin/users/rename', { user_id: userId, new_username: name.trim() });
+            location.reload();
+          } else if (act === 'resetpw') {
+            const pw = prompt(`New password for ${username} (min 6 characters):`);
+            if (!pw) return;
+            if (pw.length < 6) { toast('Password too short.'); return; }
+            await postForm('/admin/users/reset-password', { user_id: userId, new_password: pw });
+            toast(`Password reset for ${username}.`);
+          } else if (act === 'disable') {
+            const disabling = btn.dataset.disabled !== '1';
+            if (disabling && !confirm(`Disable ${username}? They will be signed out and unable to log in.`)) return;
+            await postForm('/admin/users/disable', { user_id: userId, disabled: disabling ? '1' : '0' });
+            location.reload();
+          } else if (act === 'delete') {
+            if (!confirm(`Permanently delete ${username} and ALL their feeds, folders, and saved articles? This cannot be undone.`)) return;
+            if (prompt(`Type the username to confirm deletion:`) !== username) { toast('Deletion cancelled.'); return; }
+            await postForm('/admin/users/delete', { user_id: userId });
+            location.reload();
+          } else if (act === 'vacuum') {
+            await postForm('/admin/users/vacuum', { user_id: userId });
+            toast(`Vacuum started for ${username} — DB sizes update after it finishes (check Logs).`);
+          }
+        } catch {
+          toast(`Action failed for ${username}.`);
+        }
       });
 
       // ── Logs tab ──────────────────────────────────────────────

@@ -421,6 +421,7 @@ SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_KEEP = "fetch_history_keep"
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
+SETTING_TOMBSTONE_SWEEP_DAYS = "tombstone_sweep_days"
 SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
 SETTING_LOGIN_WINDOW_SECONDS = "login_window_seconds"
 SETTING_DEFAULT_AUTO_REFRESH_MINUTES = "default_auto_refresh_minutes"
@@ -775,6 +776,13 @@ def get_fetch_history_keep() -> int:
 
 def get_fetch_history_max_age_days() -> int:
     return int(get_instance_setting(SETTING_FETCH_HISTORY_MAX_AGE_DAYS) or 30)
+
+
+def get_tombstone_sweep_days() -> int:
+    """Age (days) after which deleted-entry tombstones are swept by nightly
+    maintenance; 0 disables sweeping. By then the entry has long left the
+    publisher's feed window, so a refresh can no longer resurrect it."""
+    return int(get_instance_setting(SETTING_TOMBSTONE_SWEEP_DAYS) or 90)
 
 
 def get_login_max_failures() -> int:
@@ -3224,6 +3232,40 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE folders ADD COLUMN cadence_minutes INTEGER DEFAULT NULL")
         except Exception:
             pass
+        # Per-folder retention: delete read posts N days after they were read
+        # (NULL/0 = keep forever). Applied by the nightly maintenance prune.
+        try:
+            conn.execute("ALTER TABLE folders ADD COLUMN retention_days INTEGER DEFAULT NULL")
+        except Exception:
+            pass
+        # The entry ids each feed served in its most recent parse. Tomb
+        # sweeping refuses to drop tombstones still present here: a quiet
+        # YouTube channel serves the same 15 videos for years, and sweeping
+        # their tombstones would resurrect all of them on the channel's next
+        # upload (the reparse re-ingests the whole window).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_seen_window (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                PRIMARY KEY (feed_url, entry_id)
+            )
+            """
+        )
+        # Tombstone age for the nightly sweep. Pre-existing rows (and rows
+        # written by old code during a rolling deploy) are backfilled to "now"
+        # so they age out one sweep-window from the upgrade, not immediately.
+        try:
+            conn.execute("ALTER TABLE deleted_entries ADD COLUMN created_at TIMESTAMP DEFAULT NULL")
+        except Exception:
+            pass
+        try:
+            conn.execute(
+                "UPDATE deleted_entries SET created_at = ? WHERE created_at IS NULL",
+                (datetime.now().isoformat(),),
+            )
+        except Exception:
+            pass
         # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
         # separate from read/unread and from the star itself. NOT the offline
         # "starred archive" (archived_entry) — this is a read-later done-state.
@@ -4076,7 +4118,7 @@ _HIGHLIGHT_VALID_COLORS = frozenset({'yellow', 'green', 'blue', 'pink', 'orange'
 _HIGHLIGHT_VALID_SCOPES = frozenset({'global', 'folder', 'feed', 'feeds'})
 
 
-_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter"}
+_HIGHLIGHT_VALID_TYPES = {"highlight", "mark_as_read", "email_article", "deduplicate", "webhook", "youtube_playlist", "instapaper", "quire", "tag_filter", "save_article"}
 _HIGHLIGHT_VALID_SEARCH_IN = {"title", "body", "both"}
 _HIGHLIGHT_VALID_DELIVERY = {"immediately", "batch"}
 _DEDUP_VALID_MATCH_METHODS = {"slug", "title", "both", "fuzzy", "safe"}
@@ -4953,9 +4995,16 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     slug_idx:  dict = _dd(list)
     title_idx: dict = _dd(list)
     body_idx:  dict = _dd(list)
+    guid_idx:  dict = _dd(list)
     by_feed:   dict = _dd(list)
 
     for r in records:
+        # Identical GUID in two different feeds is the publisher's own statement
+        # that it's the same item (e.g. slickdeals search feeds all carry
+        # guid=thread URL while varying the link) — sufficient evidence alone.
+        # Length guard keeps degenerate ids ("1", "42") from cross-matching.
+        if len(r["entry_id"]) >= 8:
+            guid_idx[r["entry_id"]].append(r)
         if r["slug"]:
             slug_idx[r["slug"]].append(r)
         if r["ntitle"] and len(r["ntitle"].split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS:
@@ -4968,6 +5017,7 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
     slug_pairs  = _index_to_pairs(slug_idx)
     title_pairs = _index_to_pairs(title_idx)
     body_pairs  = _index_to_pairs(body_idx)
+    guid_pairs  = _index_to_pairs(guid_idx)
 
     link_feed: dict[str, str] = {r["link"]: r["feed_url"] for r in records if r["link"]}
     cand_pairs: set[tuple[str, str]] = set()
@@ -4994,16 +5044,19 @@ def _safe_dedup_find_pairs(records: list[dict]) -> dict[tuple[str, str], list[st
                     if sim_b >= _SAFE_DEDUP_BODY_FUZZY_THRESH:
                         body_fuzzy_pairs.add(_mk_pair(a, b))
 
-    all_pairs = slug_pairs | title_pairs | fuzzy_pairs | body_pairs | body_fuzzy_pairs
+    all_pairs = slug_pairs | title_pairs | fuzzy_pairs | body_pairs | body_fuzzy_pairs | guid_pairs
     pair_modes: dict[tuple[str, str], list[str]] = {}
     for pk in all_pairs:
         modes: list[str] = []
+        if pk in guid_pairs:        modes.append("guid")
         if pk in slug_pairs:        modes.append("slug")
         if pk in title_pairs:       modes.append("title")
         if pk in fuzzy_pairs:       modes.append("fuzzy_near")
         if pk in body_pairs:        modes.append("body")
         if pk in body_fuzzy_pairs:  modes.append("body_fuzzy")
-        if frozenset(modes) in _SAFE_DEDUP_COMBOS:
+        # A shared GUID is accepted on its own; everything else needs a
+        # corroborated combo from _SAFE_DEDUP_COMBOS.
+        if "guid" in modes or frozenset(modes) in _SAFE_DEDUP_COMBOS:
             pair_modes[pk] = modes
     return pair_modes
 
@@ -6101,6 +6154,12 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
       Same article syndicated to two feeds (e.g. blog + planet aggregator).
       Keeps the oldest copy across feeds, marks the rest read.
 
+    Saved Articles (lectio:saved) are excluded from both passes: a saved copy
+    shares its link with the source feed's entry, and suppressing it here would
+    silently mark the saved copy read and bury it in the read-later backlog.
+    Duplicates *within* Saved are handled by the user-driven /saved/duplicates
+    scan instead.
+
     Returns total entries suppressed.
     """
     from datetime import datetime
@@ -6113,6 +6172,8 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     # ── Pass 1: per-feed slug + title+date dedup ──────────────────────────────
     for feed in reader.get_feeds():
         feed_url = str(feed.url)
+        if saved_articles_service.is_saved_articles_feed(feed_url):
+            continue
         try:
             slug_entries: dict[str, list] = {}
             title_entries: dict[str, list] = {}
@@ -6161,6 +6222,8 @@ def _cleanup_intra_feed_slug_dupes(reader, conn) -> int:
     try:
         link_entries: dict[str, list] = {}
         for entry in reader.get_entries(read=False):
+            if saved_articles_service.is_saved_articles_feed(str(entry.feed_url)):
+                continue
             if not entry.link:
                 continue
             canon = normalize_entry_link_for_dedupe(entry.link)
@@ -6363,6 +6426,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         # Webhook rules likewise fire after mark_as_read/dedup.
         _run_webhook_rules_after_refresh(refreshed_feed_urls)
         _run_instapaper_rules_after_refresh(refreshed_feed_urls)
+        _run_save_article_rules_after_refresh(refreshed_feed_urls)
         _run_quire_rules_after_refresh(refreshed_feed_urls)
         # YouTube auto-add-to-playlist rules (after mark_as_read so a "mark read after
         # add" doesn't fight an earlier rule).
@@ -6760,6 +6824,93 @@ def _run_instapaper_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 LOGGER.exception("[instapaper-auto] error processing rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[instapaper-auto] error in _run_instapaper_rules_after_refresh")
+
+
+_SAVE_ARTICLE_AUTO_PER_RUN_CAP = 50  # archive worker fan-out bound
+_SAVE_ARTICLE_INBOX_TAG = "inbox"
+
+
+def _run_save_article_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
+    """Star matching freshly-refreshed entries into the Saved backlog and tag
+    them 'inbox' (the Lectio-native counterpart of the Instapaper rule).
+
+    Idempotent per entry: an already-starred entry is skipped, so re-refreshes
+    never re-tag something the user already filed out of the Inbox. Bounded by
+    the 15-min added cutoff and a per-run cap like the other save-out rules."""
+    if not refreshed_feed_urls:
+        return
+    try:
+        from datetime import timedelta, timezone as _tz
+        cutoff = datetime.now(_tz.utc) - timedelta(minutes=15)
+
+        with get_meta_connection() as conn:
+            all_rules = get_highlight_keywords(conn)
+            folder_ids_needed = {
+                int(r["scope_id"]) for r in all_rules
+                if r.get("enabled") and r["scope"] == "folder" and str(r.get("scope_id", "")).isdigit()
+            }
+            folder_feed_map: dict[int, set[str]] = {
+                fid: get_folder_feed_urls(conn, fid) for fid in folder_ids_needed
+            }
+
+        rules = [r for r in all_rules if r.get("enabled") and r.get("type") == "save_article"]
+        if not rules:
+            return
+
+        saved = 0
+        now_str = datetime.now().isoformat()
+        for rule in rules:
+            try:
+                scope = str(rule.get("scope", ""))
+                scope_id = str(rule.get("scope_id") or "")
+                keyword = str(rule.get("keyword", ""))
+                is_regex = bool(rule.get("is_regex"))
+                search_in = str(rule.get("search_in") or "title")
+                with get_reader() as reader:
+                    feed_title_cache: dict[str, str] = {}
+                    for feed_url in refreshed_feed_urls:
+                        _folder_set = folder_feed_map.get(int(scope_id)) if (scope == "folder" and str(scope_id).isdigit()) else None
+                        if not feed_in_rule_scope(scope, scope_id, feed_url, _folder_set):
+                            continue
+                        for entry in reader.get_entries(feed=feed_url):
+                            if saved >= _SAVE_ARTICLE_AUTO_PER_RUN_CAP:
+                                break
+                            added = getattr(entry, "added", None)
+                            if not added or added < cutoff:
+                                continue
+                            # Empty keyword = save every new entry in scope.
+                            if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
+                                continue
+                            fu = str(entry.feed_url or "")
+                            eid = str(entry.id)
+                            result = _star_entry_for_current_user(fu, eid)
+                            if not result.get("ok") or result.get("duplicate"):
+                                continue  # missing, or already in Saved — don't re-tag
+                            saved += 1
+                            try:
+                                existing = get_manual_tags_for_entry(fu, eid)
+                                if _SAVE_ARTICLE_INBOX_TAG not in existing:
+                                    set_manual_tags_for_entry(
+                                        fu, eid, " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG])
+                                    )
+                            except Exception:  # noqa: BLE001 — star landed; tag is best-effort
+                                LOGGER.warning("[save-article-auto] inbox tag failed for %s", eid)
+                            if fu not in feed_title_cache:
+                                try:
+                                    feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
+                                except Exception:
+                                    feed_title_cache[fu] = fu
+                            with get_meta_connection() as conn:
+                                _log_auto_run(conn, now_str, "save_article", scope, scope_id, keyword, {
+                                    "count": 1,
+                                    "entries": [{"feed_url": fu, "entry_id": eid,
+                                                 "title": str(entry.title or ""), "link": str(entry.link or ""),
+                                                 "feed_title": feed_title_cache.get(fu, fu)}],
+                                })
+            except Exception:
+                LOGGER.exception("[save-article-auto] error processing rule %s/%s", scope, keyword)
+    except Exception:
+        LOGGER.exception("[save-article-auto] error in _run_save_article_rules_after_refresh")
 
 
 # Cap a run well under the Free-tier 50/min so an automation burst never trips the
@@ -7298,7 +7449,23 @@ from services.feed_tags import FeedTagService
 # Feed-provided entry tags (<category>) captured at ingest: the sanitizing
 # feed parser hands raw tag data to this service via the sink below.
 feed_tag_service = FeedTagService(get_meta_connection=get_meta_connection)
+def _store_feed_window(feed_url: str, entry_ids: list[str]) -> None:
+    """Replace the recorded window (entry ids in the latest parse) for a feed.
+    Called from the sanitizing parser inside reader's update, under the
+    refreshing user's tenancy context."""
+    try:
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM feed_seen_window WHERE feed_url = ?", (feed_url,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO feed_seen_window (feed_url, entry_id) VALUES (?, ?)",
+                [(feed_url, eid) for eid in entry_ids],
+            )
+    except Exception:  # noqa: BLE001 — never fail a parse over window bookkeeping
+        LOGGER.warning("[feed-window] store failed for %s", feed_url, exc_info=True)
+
+
 reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
+reader_sanitize.set_feed_window_sink(_store_feed_window)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
@@ -7728,6 +7895,7 @@ _AUTOMATION_TYPE_LABELS = {
     "webhook": "Webhook",
     "youtube_playlist": "Add to YT playlist",
     "instapaper": "Save to Instapaper",
+    "save_article": "Save/Star article",
     "quire": "Add to Quire",
     "tag_filter": "Tag filter",
 }
@@ -7756,6 +7924,8 @@ def _automation_rule_detail(rule: dict) -> str:
         return f"POST · {fmt} · matches {search_in}"
     if rule_type == "instapaper":
         return f"save · matches {search_in}"
+    if rule_type == "save_article":
+        return f"star + inbox tag · matches {search_in}"
     if rule_type == "youtube_playlist":
         parts = ["→ " + (str(rule.get("yt_playlist_title") or "") or "playlist")]
         kw = str(rule.get("keyword") or "").strip()
@@ -8042,7 +8212,7 @@ def get_folder_properties(folder_id: int) -> dict:
     with get_meta_connection() as conn:
         folder_row = conn.execute(
             """
-            SELECT f.id, f.name, f.cadence_minutes,
+            SELECT f.id, f.name, f.cadence_minutes, f.retention_days,
                 CASE WHEN f.parent_id IS NULL THEN f.name
                      ELSE root.name || ' / ' || f.name END AS path
             FROM folders f
@@ -8057,6 +8227,16 @@ def get_folder_properties(folder_id: int) -> dict:
 
         feed_urls = get_folder_feed_urls(conn, folder_id)
         feed_count = len(feed_urls)
+        # Deleted = tombstoned posts (retention/purge/manual delete). Tombstones
+        # age out with the tomb-sweeping window, so this reads as "deleted
+        # recently", which is the useful number.
+        deleted_articles = 0
+        if feed_urls:
+            _ph = ",".join("?" * len(feed_urls))
+            deleted_articles = int(conn.execute(
+                f"SELECT COUNT(*) FROM deleted_entries WHERE feed_url IN ({_ph})",
+                sorted(feed_urls),
+            ).fetchone()[0])
 
     if not feed_urls:
         return {
@@ -8065,6 +8245,8 @@ def get_folder_properties(folder_id: int) -> dict:
             "name": folder_row["name"],
             "path": folder_row["path"],
             "cadence_minutes": folder_row["cadence_minutes"],
+            "retention_days": folder_row["retention_days"],
+            "deleted_articles": 0,
             "feed_count": 0,
             "total_articles": 0,
             "unread_articles": 0,
@@ -8134,6 +8316,8 @@ def get_folder_properties(folder_id: int) -> dict:
         "name": folder_row["name"],
         "path": folder_row["path"],
         "cadence_minutes": folder_row["cadence_minutes"],
+        "retention_days": folder_row["retention_days"],
+        "deleted_articles": deleted_articles,
         "feed_count": feed_count,
         "total_articles": total_articles,
         "unread_articles": unread_articles,
@@ -9733,6 +9917,12 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
     which sees past paywalls/bot-walls the server can't fetch through."""
+    # Readability's clean_attributes strips width/height/style from its output
+    # entirely, so style-only-sized images (NewsBlur's 18px glyph icons) blow
+    # up to column width. Lift style px sizes onto attributes, capture every
+    # image's size from the raw page, and reapply after extraction.
+    raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    _img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url
     summary = doc.summary(html_partial=True)
@@ -9759,6 +9949,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             fallback = _bs4_content_fallback(raw_html)
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
+    article_html = html_sanitize.reapply_img_sizes(article_html, _img_sizes, base_url=source_url)
     article_html = _dedupe_readability_images(article_html)
     article_html = _strip_bandcamp_track_signature(article_html)
     # Resolve any remaining relative src/href (esp. the BS4 fallback path,
@@ -12475,9 +12666,12 @@ def entry_pane(
     )
 
 
-def mark_feeds_as_read(feed_urls: set[str]) -> int:
+def mark_feeds_as_read(feed_urls: set[str]) -> tuple[int, str | None]:
+    """Mark every unread entry in *feed_urls* read. Returns (count, batch
+    timestamp). The whole batch shares one read_at stamp, which doubles as the
+    undo token for /entries/undo-mark-read."""
     if not feed_urls:
-        return 0
+        return 0, None
 
     to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
@@ -12486,6 +12680,7 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
                 reader.mark_entry_as_read((entry.feed_url, entry.id))
                 to_sync.append((entry.feed_url, entry.id))
 
+    when = None
     if to_sync:
         when = datetime.now().isoformat()
         with get_meta_connection() as conn:
@@ -12497,7 +12692,7 @@ def mark_feeds_as_read(feed_urls: set[str]) -> int:
                 """,
                 [(fu, eid, when) for fu, eid in to_sync],
             )
-    return len(to_sync)
+    return len(to_sync), when
 
 
 def _is_youtube_host(host: str) -> bool:
@@ -13646,6 +13841,60 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] fetch-history prune failed")
 
+    # 1c. Per-folder retention: delete read posts N days after they were read
+    # (folders.retention_days; starred/tagged posts and Saved Articles are
+    # always protected — see _prune_entries).
+    try:
+        with get_meta_connection() as conn:
+            folder_rows = conn.execute(
+                "SELECT id, name, retention_days FROM folders WHERE retention_days > 0"
+            ).fetchall()
+            retention_folder_feeds = {
+                int(r["id"]): sorted(get_folder_feed_urls(conn, int(r["id"]))) for r in folder_rows
+            }
+        for row in folder_rows:
+            feeds = retention_folder_feeds.get(int(row["id"])) or []
+            if not feeds:
+                continue
+            days = int(row["retention_days"])
+            deleted = _prune_entries(list(feeds), read_cutoff=datetime.now() - timedelta(days=days))
+            if deleted:
+                LOGGER.info("[maintenance] retention: deleted %d read posts (>%dd after read) from folder %s",
+                            deleted, days, row["name"])
+    except Exception:
+        LOGGER.exception("[maintenance] retention prune failed")
+
+    # 1d. Tomb sweeping: drop deleted-entry tombstones older than the instance
+    # setting (default 90 days, 0 = keep forever). By then the entries have
+    # left every publisher's feed window, so resurrection is no longer a risk.
+    try:
+        sweep_days = get_tombstone_sweep_days()
+        if sweep_days > 0:
+            cutoff = (datetime.now() - timedelta(days=sweep_days)).isoformat()
+            with get_meta_connection() as conn:
+                # Only sweep tombstones whose entry has left the publisher's
+                # last-known window — and only for feeds whose window we have
+                # actually recorded (unknown window = keep, conservatively).
+                # Age alone is NOT safe: a quiet YouTube channel 304s for
+                # months while still carrying the same 15 videos, and its next
+                # upload reparses the whole window.
+                swept = conn.execute(
+                    """
+                    DELETE FROM deleted_entries
+                    WHERE created_at IS NOT NULL AND created_at < ?
+                      AND EXISTS (SELECT 1 FROM feed_seen_window w
+                                  WHERE w.feed_url = deleted_entries.feed_url)
+                      AND NOT EXISTS (SELECT 1 FROM feed_seen_window w2
+                                      WHERE w2.feed_url = deleted_entries.feed_url
+                                        AND w2.entry_id = deleted_entries.entry_id)
+                    """,
+                    (cutoff,),
+                ).rowcount
+            if swept:
+                LOGGER.info("[maintenance] swept %d tombstones older than %dd", swept, sweep_days)
+    except Exception:
+        LOGGER.exception("[maintenance] tombstone sweep failed")
+
     # 2. Purge orphaned meta DB rows (feeds that no longer exist in the reader).
     try:
         with get_reader() as reader:
@@ -13684,6 +13933,9 @@ def _daily_maintenance_for_user() -> None:
                 continue
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
+            # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
+            # app's pooled connections holding the DB open it lingers otherwise.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
@@ -13765,6 +14017,9 @@ def _run_global_maintenance() -> None:
         try:
             conn = sqlite3.connect(str(path))
             conn.execute("VACUUM")
+            # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
+            # app's pooled connections holding the DB open it lingers otherwise.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
@@ -15161,6 +15416,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             # Instance tuning
             "fetch_history_keep": get_fetch_history_keep(),
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
             "login_window_seconds": get_login_window_seconds(),
             "instance_auto_refresh": get_instance_default_auto_refresh(),
@@ -15352,6 +15608,52 @@ async def admin_rename_user(request: Request):
     except ValueError:
         return _account_redirect(error="Invalid username — use 1–64 letters, digits, _ or -.")
     return _account_redirect(msg=f"Renamed {old_username!r} to {new_username!r} (data and tokens unchanged).")
+
+
+@app.post("/admin/users/vacuum")
+async def admin_vacuum_user(request: Request):
+    """Admin action: VACUUM one user's reader/meta/starred DBs in the background.
+
+    Nightly maintenance vacuums meta/starred but skips the reader DB (the big
+    one); this reclaims space after a large purge or unsubscribe spree. A DB
+    busy with another writer just logs and skips — the nightly pass retries."""
+    if user_store is None:
+        return Response(status_code=404)
+    admin = _current_web_user(request)
+    if not _is_web_admin(admin):
+        return Response(status_code=403)
+    form = await request.form()
+    target_id = str(form.get("user_id") or "")
+    if user_store.get_by_id(target_id) is None:
+        return JSONResponse({"ok": False, "error": "No such user."}, status_code=404)
+
+    def _vacuum() -> None:
+        for label, path in [
+            ("reader", tenancy.reader_db_path()),
+            ("meta", tenancy.meta_db_path()),
+            ("starred-archive", tenancy.starred_archive_db_path()),
+        ]:
+            try:
+                p = Path(path)
+                if not p.exists():
+                    continue
+                before = _dir_bytes(p)
+                conn = sqlite3.connect(str(p), timeout=30)
+                conn.execute("VACUUM")
+                # In WAL mode the vacuum copies the whole rebuilt DB through the
+                # -wal file, which then lingers at ~DB size while the app's
+                # pooled connections keep the DB open — making the total LARGER
+                # than before. Fold it back and truncate to zero.
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.close()
+                LOGGER.info("[admin-vacuum] %s %s: %.1f MB -> %.1f MB (incl. sidecars)",
+                            target_id, label, before / 1048576, _dir_bytes(p) / 1048576)
+            except Exception:
+                LOGGER.exception("[admin-vacuum] %s %s failed", target_id, label)
+
+    threading.Thread(target=_run_in_user_context, args=(target_id, _vacuum),
+                     daemon=True, name=f"admin-vacuum-{target_id[:12]}").start()
+    return JSONResponse({"ok": True, "started": True})
 
 
 # Log levels ranked so the Logs tab's filter can select a minimum severity.
@@ -16516,7 +16818,12 @@ def starred_asset(asset_hash: str) -> Response:
 @app.get("/feeds/discover")
 def discover_feed_route(url: str = Query(...)):
     from services.feed_discovery import probe_url as _probe_url
-    return JSONResponse(_probe_url(url.strip()))
+    url = url.strip()
+    if url and "://" not in url:
+        # Schemeless paste (www.example.com) — assume https rather than letting
+        # the SSRF guard reject it with a misleading "private target" message.
+        url = "https://" + url
+    return JSONResponse(_probe_url(url))
 
 
 def _guid_type(ids: list[str]) -> str:
@@ -17086,6 +17393,24 @@ def set_folder_cadence(folder_id: int = Form(...), cadence_minutes: str = Form(.
     return JSONResponse({"ok": True, "cadence_minutes": minutes if minutes > 0 else None})
 
 
+@app.post("/folders/retention")
+def set_folder_retention(folder_id: int = Form(...), retention_days: str = Form(...)):
+    """Set or clear the per-folder retention (delete read posts N days after
+    read, applied by the nightly maintenance; 0 = keep forever)."""
+    try:
+        days = int(retention_days)
+        if days < 0:
+            raise ValueError
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "retention_days must be a non-negative integer"}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute(
+            "UPDATE folders SET retention_days = ? WHERE id = ?",
+            (days if days > 0 else None, folder_id),
+        )
+    return JSONResponse({"ok": True, "retention_days": days if days > 0 else None})
+
+
 _VALID_MANUAL_STRATEGIES = {"auto", "inline", "og_scrape", "media_rss", "enclosure", "none", "webcomic", "artwork"}
 
 
@@ -17514,6 +17839,10 @@ def add_highlight_route(
             return JSONResponse({"error": "connect Quire first"}, status_code=400)
         if not quire_project_oid():
             return JSONResponse({"error": "pick a Quire destination project in Settings first"}, status_code=400)
+    elif type == "save_article":
+        # Keyword is optional (blank = star every new entry in scope), matching
+        # the other save-out rules (instapaper/quire/youtube_playlist).
+        pass
     elif type == "tag_filter":
         # keyword holds the +include/-exclude spec; it must yield >=1 valid tag.
         _req, _good, _exc = parse_tag_filter_spec(keyword)
@@ -17635,14 +17964,16 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist", "instapaper"):
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist",
+                      "instapaper", "quire", "save_article"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
             _is_yt = type == "youtube_playlist"
-            # youtube_playlist and instapaper treat a blank keyword as "all in scope".
+            # The save-out rules (yt/instapaper/quire/save_article) treat a blank
+            # keyword as "all in scope".
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(_is_yt or type == "instapaper"),
+                                      match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
                                       exclude_shorts=(_is_yt and not yt_include_shorts),
                                       min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
                                       max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))
@@ -17740,7 +18071,12 @@ def rules_run_now_route(
     with get_meta_connection() as conn:
         if type == "deduplicate":
             match_method = keyword if keyword in _DEDUP_VALID_MATCH_METHODS else "slug"
+            # User-triggered Run Now sweeps the whole unread backlog. The default
+            # 500-per-feed sample (right for post-refresh runs, where fresh dupes
+            # are always in the newest slice) misses older duplicates entirely on
+            # high-volume feeds — e.g. entries restored to unread days later.
             result = _run_now_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
+                                    max_per_feed=10000,
                                     exclude_scope_ids=exclude_scope_ids)
         elif type == "mark_as_read":
             result = _run_now_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in)
@@ -19865,6 +20201,7 @@ def get_all_settings():
         "public_url": LECTIO_PUBLIC_URL,
         "fetch_history_keep": get_fetch_history_keep(),
         "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+        "tombstone_sweep_days": get_tombstone_sweep_days(),
         "login_max_failures": get_login_max_failures(),
         "login_window_seconds": get_login_window_seconds(),
         "instance_auto_refresh": get_instance_default_auto_refresh(),
@@ -19923,6 +20260,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         "email_contacts", EMAIL_TO_SETTING_KEY,
@@ -19937,6 +20275,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_ID, SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID, SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_FETCH_HISTORY_KEEP, SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES, SETTING_LOGIN_WINDOW_SECONDS,
         SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
         SETTING_INOREADER_EXPORT_DIR,
@@ -20439,9 +20778,112 @@ def feed_curation_count_route(feed_url: str = Query(...)):
     return JSONResponse(counts)
 
 
-@app.post("/entries/delete")
-def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
-    """Hard-delete a single entry (spam, corrupted post) and tombstone it.
+_PRUNE_DELETE_BATCH = 500
+
+
+def _parse_stored_dt(value) -> datetime | None:
+    """Parse reader's naive-UTC 'YYYY-MM-DD HH:MM:SS[.ffffff]' or an ISO-'T'
+    string from the meta DB. Returns None when absent/unparseable."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _prune_entries(
+    feed_urls: list[str],
+    *,
+    read_cutoff: datetime | None = None,
+    published_cutoff: datetime | None = None,
+    include_unread: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Bulk-delete old posts from *feed_urls* (retention + Purge utility core).
+
+    Selection: with read_cutoff, read entries whose read time (meta read_at,
+    falling back to reader's read_modified) is older; with published_cutoff,
+    entries whose effective date (published/updated/added) is older — read
+    only unless include_unread. Always protected: starred/saved entries,
+    manually tagged entries, and the Saved Articles feed itself.
+
+    Deletes are tombstoned (deleted_entries) so a refresh can't resurrect
+    copies still inside the publisher's feed window. Returns the count
+    (deleted, or matching when dry_run)."""
+    feed_urls = [u for u in feed_urls if not saved_articles_service.is_saved_articles_feed(u)]
+    if not feed_urls or (read_cutoff is None and published_cutoff is None):
+        return 0
+
+    placeholders = ",".join("?" * len(feed_urls))
+    with get_meta_connection() as conn:
+        starred = {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+        read_at_map = {
+            (str(r[0]), str(r[1])): _parse_stored_dt(r[2])
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id, read_at FROM entry_read_state WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+
+    to_delete: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        rows = reader._storage.get_db().execute(
+            # Manually tagged entries are user-curated — never prune them.
+            f"""SELECT e.feed, e.id, e.read, e.read_modified, e.published, e.updated, e.first_updated
+                FROM entries e
+                WHERE e.feed IN ({placeholders})
+                  AND NOT EXISTS (SELECT 1 FROM entry_tags t
+                                  WHERE t.feed = e.feed AND t.id = e.id
+                                    AND t.key LIKE '{MANUAL_TAG_KEY_PREFIX}%')""",
+            feed_urls,
+        ).fetchall()
+
+        for feed, eid, read, read_modified, published, updated, first_updated in rows:
+            pair = (str(feed), str(eid))
+            if pair in starred:
+                continue
+            if read_cutoff is not None:
+                if not read:
+                    continue
+                read_time = read_at_map.get(pair) or _parse_stored_dt(read_modified)
+                if read_time is None or read_time >= read_cutoff:
+                    continue
+            if published_cutoff is not None:
+                if not read and not include_unread:
+                    continue
+                effective = (_parse_stored_dt(published) or _parse_stored_dt(updated)
+                             or _parse_stored_dt(first_updated))
+                if effective is None or effective >= published_cutoff:
+                    continue
+            to_delete.append(pair)
+
+        if dry_run or not to_delete:
+            return len(to_delete)
+
+        for i in range(0, len(to_delete), _PRUNE_DELETE_BATCH):
+            batch = to_delete[i:i + _PRUNE_DELETE_BATCH]
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+                    [(fu, eid, datetime.now().isoformat()) for fu, eid in batch])
+                conn.executemany(
+                    "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
+            reader._storage.delete_entries(batch)
+
+    invalidate_unread_counts_cache()
+    return len(to_delete)
+
+
+def _hard_delete_entry(reader, feed_url: str, entry_id: str, entry) -> None:
+    """Tombstone and hard-delete one entry (shared by /entries/delete and
+    /saved/deduplicate).
 
     reader.delete_entry only covers user-added entries; feed-provided ones go
     through the storage-level delete (the same API reader's own entry_dedupe
@@ -20449,24 +20891,30 @@ def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
     entry while it's still in the publisher's feed window — the refresh service
     purges tombstoned entries after each update.
     """
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+            (feed_url, entry_id, datetime.now().isoformat()),
+        )
+        conn.execute(
+            "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+    if getattr(entry, "added_by", "") == "user":
+        reader.delete_entry((feed_url, entry_id), missing_ok=True)
+    else:
+        reader._storage.delete_entries([(feed_url, entry_id)])
+
+
+@app.post("/entries/delete")
+def delete_entry_route(feed_url: str = Form(...), entry_id: str = Form(...)):
+    """Hard-delete a single entry (spam, corrupted post) and tombstone it."""
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if entry is None:
             return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
-        with get_meta_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
-                (feed_url, entry_id),
-            )
-            conn.execute(
-                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            )
         try:
-            if getattr(entry, "added_by", "") == "user":
-                reader.delete_entry((feed_url, entry_id), missing_ok=True)
-            else:
-                reader._storage.delete_entries([(feed_url, entry_id)])
+            _hard_delete_entry(reader, feed_url, entry_id, entry)
         except Exception:  # noqa: BLE001
             LOGGER.exception("[delete-entry] failed for %s in %s", entry_id, feed_url)
             return JSONResponse({"ok": False, "error": "Delete failed — see server logs."}, status_code=500)
@@ -20959,6 +21407,328 @@ async def deduplicate_feeds(request: Request):
     return JSONResponse({"removed": removed, "count": len(removed), "upgraded": upgraded, "upgraded_count": len(upgraded), "rescued_count": rescued_count})
 
 
+# ── Saved Articles duplicate scan ─────────────────────────────────────────────
+
+_SAVED_DUP_BODY_HEAD_CHARS = 400
+_SAVED_DUP_BODY_SQL_CHARS = 2000
+
+
+def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[dict]]:
+    """Union-find over shared signal values: records that share any non-empty
+    value for any of *keys* end up in the same group. Returns groups of 2+."""
+    parent = list(range(len(records)))
+
+    def _find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first_seen: dict[tuple[str, str], int] = {}
+    for i, r in enumerate(records):
+        for key in keys:
+            val = r[key]
+            if not val:
+                continue
+            bucket = (key, val)
+            if bucket in first_seen:
+                ri, rj = _find(first_seen[bucket]), _find(i)
+                if ri != rj:
+                    parent[rj] = ri
+            else:
+                first_seen[bucket] = i
+
+    groups: dict[int, list[dict]] = {}
+    for i, r in enumerate(records):
+        groups.setdefault(_find(i), []).append(r)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _saved_dup_reasons(group: list[dict], checks: list[tuple[str, str]]) -> list[str]:
+    reasons = []
+    for field, label in checks:
+        vals = [r[field] for r in group if r[field]]
+        if len(vals) != len(set(vals)):
+            reasons.append(label)
+    return reasons
+
+
+@app.get("/saved/duplicates")
+def get_saved_duplicates():
+    """Report likely duplicate articles within Saved Articles (lectio:saved).
+
+    Saved entries are keyed by their normalized URL, so re-saving the same URL
+    can't duplicate — dupes are the same article saved under *different* URLs
+    (amp/www/tracking-param variants, or an Instapaper import overlapping
+    earlier saves). Two confidence tiers:
+
+      confirmed — same canonical link or same URL slug.
+      possible  — same normalized title, or same extracted-body prefix (catches
+                  a re-save after the publisher fixed both the title and URL).
+
+    Entries in each group are ordered keep-first (has extracted content, then
+    oldest save). Read-only — the client posts the copies to remove to
+    /saved/deduplicate.
+    """
+    import html as _html
+
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    with get_reader() as reader:
+        if reader.get_feed(saved_url, None) is None:
+            return JSONResponse({"confirmed": [], "possible": [], "scanned": 0})
+        # Direct storage read: reader.get_entries() would materialize every
+        # saved article's full extracted body; only a short prefix is needed.
+        rows = reader._storage.get_db().execute(
+            "SELECT id, link, title, published, read,"
+            " substr(json_extract(content, '$[0].value'), 1, ?)"
+            " FROM entries WHERE feed = ?",
+            (_SAVED_DUP_BODY_SQL_CHARS, saved_url),
+        ).fetchall()
+
+    records: list[dict] = []
+    for entry_id, link, title, published, read, body_head in rows:
+        link = str(link or entry_id)
+        body = ""
+        if body_head:
+            body = _SAFE_DEDUP_TAG_RE.sub(" ", body_head)
+            body = _html.unescape(body)
+            body = " ".join(body.split())[:_SAVED_DUP_BODY_HEAD_CHARS].lower()
+        ntitle = normalize_entry_title_for_dedupe(title)
+        records.append({
+            "entry_id": str(entry_id),
+            "link": link,
+            "title": str(title or ""),
+            "published": str(published or ""),
+            "read": bool(read),
+            "has_content": body_head is not None,
+            "_canon": normalize_entry_link_for_dedupe(link),
+            "_slug": _safe_dedup_entry_slug(link),
+            "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
+            "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
+        })
+
+    def _keep_order(r: dict):
+        # Keeper first: prefer a copy with extracted content, then https over
+        # http, then the oldest dated save (undated copies come from failed
+        # extractions — keep last).
+        return (not r["has_content"], not r["link"].startswith("https:"),
+                not r["published"], r["published"])
+
+    def _emit(groups: list[list[dict]], checks: list[tuple[str, str]]) -> list[dict]:
+        out = []
+        for group in groups:
+            group.sort(key=_keep_order)
+            out.append({
+                "reasons": _saved_dup_reasons(group, checks),
+                "entries": [
+                    {k: r[k] for k in ("entry_id", "link", "title", "published", "read", "has_content")}
+                    for r in group
+                ],
+            })
+        out.sort(key=lambda g: (g["entries"][0]["title"] or "").lower())
+        return out
+
+    confirmed_groups = _saved_dup_groups(records, ("_canon", "_slug"))
+    confirmed_member: dict[str, int] = {}
+    for gi, group in enumerate(confirmed_groups):
+        for r in group:
+            confirmed_member[r["entry_id"]] = gi
+
+    possible_groups = []
+    for group in _saved_dup_groups(records, ("_ntitle", "_body")):
+        # Skip groups the confirmed tier already covers entirely (distinct
+        # negative sentinels keep two non-members from looking like a match).
+        gids = {confirmed_member.get(r["entry_id"], -1 - i) for i, r in enumerate(group)}
+        if len(gids) == 1 and next(iter(gids)) >= 0:
+            continue
+        possible_groups.append(group)
+
+    return JSONResponse({
+        "confirmed": _emit(confirmed_groups, [("_canon", "same URL"), ("_slug", "same slug")]),
+        "possible": _emit(possible_groups, [("_ntitle", "same title"), ("_body", "same content")]),
+        "scanned": len(records),
+    })
+
+
+_SAVED_DUP_PREVIEW_CHARS = 1500
+_SAVED_DUP_PREVIEW_MAX_IDS = 12
+
+
+@app.post("/saved/duplicates/preview")
+async def preview_saved_duplicates(request: Request):
+    """Side-by-side compare support for the Saved duplicate scan: return a
+    plain-text preview of each requested saved article's stored content so a
+    'possible' match can be judged before anything is deleted.
+
+    Body (JSON): {"entry_ids": [...]} — one group's ids (capped). Unknown ids
+    are skipped."""
+    import html as _html
+
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e][:_SAVED_DUP_PREVIEW_MAX_IDS]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    previews: list[dict] = []
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        for entry_id in entry_ids:
+            row = db.execute(
+                "SELECT title, link, published, json_extract(content, '$[0].value')"
+                " FROM entries WHERE feed = ? AND id = ?",
+                (saved_url, entry_id),
+            ).fetchone()
+            if row is None:
+                continue
+            title, link, published, raw = row
+            text = ""
+            if raw:
+                text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
+                text = " ".join(_html.unescape(text).split())
+            previews.append({
+                "entry_id": entry_id,
+                "title": str(title or ""),
+                "link": str(link or entry_id),
+                "published": str(published or ""),
+                "chars": len(text),
+                "words": len(text.split()),
+                "text": text[:_SAVED_DUP_PREVIEW_CHARS],
+            })
+    return JSONResponse({"previews": previews})
+
+
+_SAVED_DUP_CHECK_TIMEOUT = 8.0
+_SAVED_DUP_CHECK_PAUSE = 0.3  # between requests in one group — usually same host
+
+
+def _check_saved_url(url: str) -> dict:
+    """Liveness probe for one saved article URL. Honest UA, SSRF-guarded,
+    redirects followed with per-hop validation. Never raises.
+
+    Classification is deliberately conservative: only 404/410 count as dead
+    (the keeper auto-flip acts on it); 403/429/5xx are bot-walls or hiccups,
+    not proof the page is gone. A HEAD failure is retried once as a GET —
+    some servers reject or mishandle HEAD but serve the page fine."""
+    headers = {"User-Agent": LECTIO_HONEST_USER_AGENT}
+    status: int | None = None
+    final_url = url
+    try:
+        resp = url_guard.safe_head_follow(url, timeout=_SAVED_DUP_CHECK_TIMEOUT, headers=headers)
+        status, final_url = resp.status_code, str(resp.url)
+        if status >= 400:
+            with url_guard.build_client(timeout=_SAVED_DUP_CHECK_TIMEOUT, headers=headers) as client:
+                resp = url_guard.safe_get(client, url)
+            status, final_url = resp.status_code, str(resp.url)
+    except url_guard.UnsafeURLError:
+        return {"status": None, "alive": False, "dead": False, "final_url": url, "error": "unsafe URL"}
+    except Exception as exc:  # noqa: BLE001 — DNS failure, timeout, TLS, ...
+        return {"status": None, "alive": False, "dead": False, "final_url": url,
+                "error": type(exc).__name__}
+    return {
+        "status": status,
+        "alive": status < 400,
+        "dead": status in (404, 410),
+        "final_url": final_url,
+        "error": None,
+    }
+
+
+@app.post("/saved/duplicates/check-urls")
+async def check_saved_duplicate_urls(request: Request):
+    """Probe one duplicate group's URLs for liveness (dead-link detection).
+
+    Body (JSON): {"entry_ids": [...]} — one group's ids (capped). Sequential
+    with a small pause (the copies usually share a host); the client is
+    responsible for pacing across groups."""
+    from starlette.concurrency import run_in_threadpool
+
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e][:_SAVED_DUP_PREVIEW_MAX_IDS]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    targets: list[tuple[str, str]] = []
+    with get_reader() as reader:
+        for entry_id in entry_ids:
+            entry = reader.get_entry((saved_url, entry_id), None)
+            if entry is not None:
+                targets.append((entry_id, str(entry.link or entry_id)))
+
+    def _probe_all() -> list[dict]:
+        results = []
+        for i, (entry_id, link) in enumerate(targets):
+            if i:
+                time.sleep(_SAVED_DUP_CHECK_PAUSE)
+            results.append({"entry_id": entry_id, "link": link, **_check_saved_url(link)})
+        return results
+
+    return JSONResponse({"results": await run_in_threadpool(_probe_all)})
+
+
+@app.post("/entries/purge")
+async def purge_old_entries(request: Request):
+    """Purge utility (Settings → Feeds → Utilities): delete posts older than a
+    date from the selected folders.
+
+    Body (JSON): {"folder_ids": [..], "before": "YYYY-MM-DD",
+                  "include_unread": bool, "dry_run": bool}
+    dry_run returns the matching count without deleting. Protections are
+    _prune_entries': starred/saved posts, manually tagged posts, and the
+    Saved Articles feed are never touched."""
+    body = await request.json()
+    try:
+        folder_ids = [int(f) for f in body.get("folder_ids", [])]
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Bad folder_ids."}, status_code=400)
+    try:
+        cutoff = datetime.fromisoformat(str(body.get("before", "")))
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Bad 'before' date."}, status_code=400)
+    if not folder_ids:
+        return JSONResponse({"ok": False, "error": "No folders selected."}, status_code=400)
+    include_unread = bool(body.get("include_unread", False))
+    dry_run = bool(body.get("dry_run", False))
+
+    feed_urls: set[str] = set()
+    with get_meta_connection() as conn:
+        for fid in folder_ids:
+            feed_urls |= get_folder_feed_urls(conn, fid)
+    count = _prune_entries(
+        sorted(feed_urls),
+        published_cutoff=cutoff,
+        include_unread=include_unread,
+        dry_run=dry_run,
+    )
+    if not dry_run and count:
+        LOGGER.info("[purge] deleted %d posts older than %s from folders %s (unread=%s)",
+                    count, cutoff.date(), folder_ids, include_unread)
+    return JSONResponse({"ok": True, "count": count, "dry_run": dry_run})
+
+
+@app.post("/saved/deduplicate")
+async def deduplicate_saved(request: Request):
+    """Hard-delete the selected duplicate copies from Saved Articles.
+
+    Body (JSON): {"entry_ids": [...]} — ids of the copies to remove (a saved
+    entry's id is its normalized article URL). Each one is tombstoned and
+    deleted exactly like /entries/delete."""
+    body = await request.json()
+    entry_ids = [str(e) for e in body.get("entry_ids", []) if e]
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    deleted = 0
+    errors = 0
+    with get_reader() as reader:
+        for entry_id in entry_ids:
+            entry = reader.get_entry((saved_url, entry_id), None)
+            if entry is None:
+                continue
+            try:
+                _hard_delete_entry(reader, saved_url, entry_id, entry)
+                deleted += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[saved-dedup] delete failed for %s", entry_id)
+                errors += 1
+    if deleted:
+        invalidate_unread_counts_cache()
+    return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
+
+
 @app.get("/feeds/multi-folder")
 def get_multi_folder_feeds():
     """Report feeds that belong to more than one folder.
@@ -21170,14 +21940,14 @@ def mark_folder_as_read(
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
-    marked_count = mark_feeds_as_read(feed_urls)
+    marked_count, undo_token = mark_feeds_as_read(feed_urls)
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
         unread_counts_cache.clear()
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
@@ -21210,7 +21980,7 @@ def bulk_feed_action(
                 enable_feed(u)
                 count += 1
         elif action == "mark-read":
-            count = mark_feeds_as_read(set(urls))
+            count, _ = mark_feeds_as_read(set(urls))
             invalidate_unread_counts_cache()
         elif action == "refresh":
             feed_refresh_service.update_feeds(urls, enhance=False)
@@ -21263,7 +22033,7 @@ def mark_feed_as_read(
     resume_read_filter: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
-    marked_count = mark_feeds_as_read({feed_url})
+    marked_count, undo_token = mark_feeds_as_read({feed_url})
     with unread_counts_cache_lock:
         global _unread_counts_generation
         _unread_counts_generation += 1
@@ -21277,7 +22047,7 @@ def mark_feed_as_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_fmr)
     message = "All posts already read." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=(
             f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
@@ -22106,6 +22876,7 @@ def mark_entries_older_than_read(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     marked_count = 0
+    undo_token = None
     to_sync: list[tuple[str, str]] = []
     with get_reader() as reader:
         for fu in filtered_feed_urls:
@@ -22129,7 +22900,7 @@ def mark_entries_older_than_read(
                 marked_count += 1
 
     if to_sync:
-        when = datetime.now().isoformat()
+        when = undo_token = datetime.now().isoformat()
         with get_meta_connection() as conn:
             conn.executemany(
                 """
@@ -22152,11 +22923,52 @@ def mark_entries_older_than_read(
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=_nrf_mot)
     message = "No unread posts older than that." if marked_count == 0 else f"Marked {marked_count} posts as read."
     if is_async_action_request(request, "lectio-mark-read"):
-        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message})
+        return JSONResponse({"ok": True, "marked": marked_count, "max_age_days": max_age_days, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
         status_code=303,
     )
+
+
+_UNDO_MARK_READ_WINDOW = timedelta(minutes=15)
+
+
+@app.post("/entries/undo-mark-read")
+def undo_mark_read(read_at: str = Form(...)):
+    """Undo a bulk mark-as-read (the toast's Undo button).
+
+    Every bulk mark stamps its whole batch with one shared entry_read_state
+    read_at value; that timestamp is the undo token. Restores exactly that
+    batch to unread — reads before or after it are untouched. Tokens older
+    than the undo window are refused: this is a just-pressed-the-wrong-button
+    escape hatch, not history."""
+    try:
+        stamped = datetime.fromisoformat(read_at)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Bad undo token."}, status_code=400)
+    if datetime.now() - stamped > _UNDO_MARK_READ_WINDOW:
+        return JSONResponse({"ok": False, "error": "The undo window has passed."}, status_code=410)
+
+    with get_meta_connection() as conn:
+        pairs = conn.execute(
+            "SELECT feed_url, entry_id FROM entry_read_state WHERE read_at = ?", (read_at,)
+        ).fetchall()
+    if not pairs:
+        return JSONResponse({"ok": False, "error": "Nothing to undo."}, status_code=404)
+
+    restored = 0
+    with get_reader() as reader:
+        for feed_url, entry_id in pairs:
+            try:
+                reader.mark_entry_as_unread((str(feed_url), str(entry_id)))
+                restored += 1
+            except Exception:  # noqa: BLE001 — entry may have been deleted since
+                LOGGER.debug("[undo-mark-read] could not restore %s in %s", entry_id, feed_url)
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM entry_read_state WHERE read_at = ?", (read_at,))
+    invalidate_unread_counts_cache()
+    LOGGER.info("[undo-mark-read] restored %d of %d entries from batch %s", restored, len(pairs), read_at)
+    return JSONResponse({"ok": True, "restored": restored})
 
 
 @app.post("/entries/mark-newer-than-unread")
@@ -22875,6 +23687,28 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
             bits.append(f"{summary['tagged']} tagged")
         msg = "Instapaper import: " + ", ".join(bits) + ". Article text is being fetched in the background."
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
+
+
+@app.get("/api/folder-feeds")
+def api_folder_feeds(folder_id: str = Query("")):
+    """Feeds (url + display title) for the automation editor's feed picker.
+
+    Empty/non-numeric folder_id returns every feed. Server-backed on purpose:
+    the picker used to scrape the sidebar's feed links, which don't exist at
+    all in Saved mode — typing showed no feeds."""
+    titles = get_feed_title_map()
+    with get_meta_connection() as conn:
+        if folder_id.strip().lstrip("-").isdigit():
+            urls = get_folder_feed_urls(conn, int(folder_id))
+        else:
+            urls = get_all_feed_urls(conn)
+    feeds = [
+        {"url": u, "title": titles.get(u, u)}
+        for u in urls
+        if not saved_articles_service.is_saved_articles_feed(u)
+    ]
+    feeds.sort(key=lambda f: f["title"].lower())
+    return JSONResponse({"feeds": feeds})
 
 
 @app.get("/api/unread-counts")

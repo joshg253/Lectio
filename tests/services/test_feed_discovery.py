@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls, rewrite_known_site_url
+from services.feed_discovery import _ct_is_feed, _parse_attrs, discover_feed_urls, probe_url, rewrite_known_site_url
 
 
 class TestCtIsFeed:
@@ -51,10 +51,17 @@ class TestParseAttrs:
 def _mock_response(url: str, ct: str, text: str = "", status: int = 200) -> MagicMock:
     resp = MagicMock()
     resp.is_success = status < 400
+    resp.status_code = status
     resp.url = url
     resp.headers = {"content-type": ct}
     resp.text = text
+    resp.content = text.encode()
     return resp
+
+
+def _head_alive(url, **_kwargs):
+    """HEAD stub for tests where advertised links should validate as live."""
+    return _mock_response(str(url), "application/rss+xml")
 
 
 class TestDiscoverFeedUrls:
@@ -70,7 +77,8 @@ class TestDiscoverFeedUrls:
             '</head></html>'
         )
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            result = discover_feed_urls("https://example.com/")
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
     def test_html_page_with_atom_link(self):
@@ -78,13 +86,15 @@ class TestDiscoverFeedUrls:
             '<link type="application/atom+xml" rel="alternate" href="https://feeds.example.com/atom" />'
         )
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            result = discover_feed_urls("https://example.com/")
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://example.com/")
         assert result == ["https://feeds.example.com/atom"]
 
     def test_html_page_relative_href_resolved(self):
         html = '<link rel="alternate" type="application/rss+xml" href="../rss.xml" />'
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/blog/", "text/html", html)):
-            result = discover_feed_urls("https://example.com/blog/")
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://example.com/blog/")
         assert result == ["https://example.com/rss.xml"]
 
     def test_html_no_link_tags_probes_common_paths(self):
@@ -130,7 +140,8 @@ class TestDiscoverFeedUrls:
             '<link rel="alternate" type="application/atom+xml" href="/feed.xml" />'
         )
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            result = discover_feed_urls("https://example.com/")
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
     def test_declaration_order_preserved(self):
@@ -140,7 +151,8 @@ class TestDiscoverFeedUrls:
             '<link rel="alternate" type="application/rss+xml" href="/rss.xml" />'
         )
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", html)):
-            result = discover_feed_urls("https://example.com/")
+            with patch("services.feed_discovery._guarded_head", side_effect=_head_alive):
+                result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/atom.xml", "https://example.com/rss.xml"]
 
     def test_subdir_path_relative_probing(self):
@@ -179,6 +191,86 @@ class TestDiscoverFeedUrls:
             with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/blog")
         assert result == [feed_url]
+
+
+class TestDeadAdvertisedFallback:
+    """A stale <link rel="alternate"> (feed moved, tag left behind — the
+    dropmark.com case: /rss is dead, the feed lives at /feed.xml) must not
+    beat a working conventional path."""
+
+    # Padded past probe_url's small-HTML bot-challenge heuristic (512 bytes).
+    HTML = ('<html><head>'
+            '<link rel="alternate" type="application/rss+xml" href="/rss" title="Blog (RSS)" />'
+            '</head><body>' + '<p>real page content</p>' * 30 + '</body></html>')
+
+    @staticmethod
+    def _head(alive_paths):
+        def fake_head(url, **_kwargs):
+            for path, ct in alive_paths.items():
+                if url == f"https://example.com{path}":
+                    return _mock_response(url, ct)
+            return _mock_response(url, "text/html", status=404)
+        return fake_head
+
+    def test_discover_falls_back_to_common_path(self):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({"/feed.xml": "application/xml"})):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/feed.xml"]
+
+    def test_discover_keeps_dead_link_when_no_alternative(self):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]  # last resort — unchanged behavior
+
+    def test_probe_url_falls_back_to_common_path(self):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({"/feed.xml": "application/xml"})):
+                result = probe_url("https://example.com/")
+        assert result["status"] == "feed"
+        assert result["feeds"] == [{"url": "https://example.com/feed.xml", "title": None}]
+
+    def test_probe_url_keeps_dead_link_when_no_alternative(self):
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
+                result = probe_url("https://example.com/")
+        assert result["status"] == "feed"
+        assert result["feeds"][0]["url"] == "https://example.com/rss"
+
+    def test_probe_url_dead_direct_paste_falls_back(self):
+        """Pasting the dead advertised URL itself (dropmark.com/rss) probes the
+        origin's conventional paths instead of stopping at the HTTP error."""
+        dead = _mock_response("https://example.com/rss", "text/html", "<html>404-ish</html>", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=dead):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({"/feed.xml": "application/xml"})):
+                result = probe_url("https://example.com/rss")
+        assert result["status"] == "feed"
+        assert result["feeds"] == [{"url": "https://example.com/feed.xml", "title": None}]
+
+    def test_probe_url_dead_direct_paste_no_alternative_errors(self):
+        dead = _mock_response("https://example.com/rss", "text/html", "<html>404-ish</html>", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=dead):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
+                result = probe_url("https://example.com/rss")
+        assert result["status"] == "error"
+        assert "HTTP 403" in result["message"]
+
+    def test_head_hostile_405_keeps_advertised_link(self):
+        def fake_head(url, **_kwargs):
+            return _mock_response(url, "text/html", status=405)
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
+
+    def test_head_error_keeps_advertised_link(self):
+        def fake_head(url, **_kwargs):
+            raise Exception("connection reset")
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
 
 
 class TestPinboardRewrite:

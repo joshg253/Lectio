@@ -95,6 +95,52 @@ def test_install_swaps_default_parser():
             assert isinstance(p, SanitizingFeedparserParser)
 
 
+def test_style_px_sizes_lift_onto_img_attributes():
+    """Feeds that size images only via inline style (NewsBlur's 18px glyph
+    icons) must keep those sizes as real attributes after the style strip —
+    otherwise the icons render at intrinsic/column size."""
+    from services.html_sanitize import sanitize_html
+
+    out = sanitize_html(
+        '<img src="https://x.test/icon.svg" '
+        'style="width: 18px;height: 18px;vertical-align: -3px;margin-right: 8px;" />'
+    )
+    assert 'width="18"' in out and 'height="18"' in out
+    assert "style=" not in out
+
+    # max-width/line-height must NOT be mistaken for width/height.
+    out = sanitize_html('<img src="https://x.test/a.png" style="max-width: 300px;line-height: 20px;">')
+    assert "width=" not in out and "height=" not in out
+
+    # Percent sizes can't map to attributes — left to the article CSS.
+    out = sanitize_html('<img src="https://x.test/b.png" style="width: 100%;">')
+    assert "width=" not in out
+
+    # Explicit attributes always win over style values.
+    out = sanitize_html('<img src="https://x.test/c.png" width="640" style="width: 18px;">')
+    assert 'width="640"' in out
+
+
+def test_readability_keeps_style_sized_glyphs():
+    """readability's clean_attributes strips width/height/style from its output,
+    so sizes are captured from the raw page and reapplied post-extraction —
+    otherwise NewsBlur-style 18px inline icons render at column width."""
+    import main
+
+    body = "<p>" + "Genuine readable article content here. " * 40 + "</p>"
+    raw = ('<html><body><article>' + body +
+           '<p><img src="/assets/feed-icon-star.svg" style="width: 18px;height: 18px;"> Saved Stories</p>'
+           '</article></body></html>')
+    _title, article = main.extract_readability_article(raw, "https://blog.example.test/post/")
+    assert 'width="18"' in article and 'height="18"' in article
+
+
+def test_img_align_attribute_survives():
+    from services.html_sanitize import sanitize_html
+    out = sanitize_html('<img src="https://x.test/a.png" align="right">')
+    assert 'align="right"' in out
+
+
 def test_table_align_attribute_survives():
     """Legacy align on table cells is presentational layout some feeds still
     rely on (Old New Thing centers spanning before/after rows with

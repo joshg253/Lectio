@@ -44,6 +44,28 @@ def set_entry_tag_sink(sink) -> None:
     _entry_tag_sink = sink
 
 
+# Injected sink for the feed's current window: fn(feed_url, [entry_ids]).
+# Records which entries the publisher is still serving, so tomb sweeping never
+# drops a tombstone whose entry could be re-ingested (a quiet YouTube channel
+# serves the same 15 videos for years).
+_feed_window_sink = None
+
+
+def set_feed_window_sink(sink) -> None:
+    global _feed_window_sink
+    _feed_window_sink = sink
+
+
+def _record_feed_window(url, entries) -> None:
+    sink = _feed_window_sink
+    if sink is None:
+        return
+    try:
+        sink(url, [str(e.id) for e in entries if getattr(e, "id", None)])
+    except Exception:  # a window write must never fail a feed parse
+        LOGGER.warning("feed window capture failed for %s", url, exc_info=True)
+
+
 def _collect_entry_tags(url, result, entries) -> None:
     sink = _entry_tag_sink
     if sink is None:
@@ -100,8 +122,10 @@ class SanitizingFeedparserParser(FeedparserParser):
             response_headers=headers or {},
         )
         feed, entries = _process_feed(url, result)
+        entries = [_sanitize_entry(e) for e in entries]
         _collect_entry_tags(url, result, entries)
-        return feed, [_sanitize_entry(e) for e in entries]
+        _record_feed_window(url, entries)
+        return feed, entries
 
 
 def install(reader) -> None:
