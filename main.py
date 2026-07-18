@@ -17913,14 +17913,16 @@ def rules_dry_run_route(
                 custom = {u.strip() for u in feed_urls.split(",") if u.strip()}
             result = _dry_run_dedup(conn, scope, scope_id, match_method, max(1, dedup_window_hours),
                                     exclude_scope_ids=exclude_scope_ids, custom_feed_urls=custom)
-        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist", "instapaper"):
+        elif type in ("highlight", "mark_as_read", "email_article", "webhook", "youtube_playlist",
+                      "instapaper", "quire", "save_article"):
             # youtube_playlist's keyword is an optional filter — a blank keyword
             # previews every entry in scope (all videos); Shorts are excluded unless
             # the rule opts in, matching what the rule would actually add.
             _is_yt = type == "youtube_playlist"
-            # youtube_playlist and instapaper treat a blank keyword as "all in scope".
+            # The save-out rules (yt/instapaper/quire/save_article) treat a blank
+            # keyword as "all in scope".
             result = _dry_run_pattern(conn, scope, scope_id, keyword, bool(is_regex), search_in,
-                                      match_all_if_empty=(_is_yt or type == "instapaper"),
+                                      match_all_if_empty=(_is_yt or type in ("instapaper", "quire", "save_article")),
                                       exclude_shorts=(_is_yt and not yt_include_shorts),
                                       min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
                                       max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0))

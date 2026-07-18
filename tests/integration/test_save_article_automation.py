@@ -98,6 +98,23 @@ def test_rule_ignores_entries_older_than_cutoff(configured, monkeypatch):
     assert not _is_starred("e-match")
 
 
+def test_dry_run_supports_save_article_with_blank_keyword(configured):
+    """The rule editor's Test button — save_article was missing from the
+    dry-run type allowlist ('unknown rule type'); blank keyword = all in scope."""
+    from fastapi.testclient import TestClient
+
+    with main.get_reader() as reader:
+        _seed(reader)
+    app = FastAPI()
+    app.get("/rules/dry-run")(main.rules_dry_run_route)
+    with TestClient(app) as c:
+        r = c.get("/rules/dry-run", params={"type": "save_article", "scope": "feed",
+                                            "scope_id": FEED, "keyword": ""})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True and data["total_matches"] == 2
+
+
 def test_run_now_dedup_sweeps_full_backlog(configured, monkeypatch):
     """User-triggered Run Now must not use the 500-per-feed refresh sample —
     older duplicates (e.g. entries restored to unread) live outside it."""
