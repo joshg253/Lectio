@@ -268,6 +268,9 @@
           <label class="fld">Since
             <input type="datetime-local" id="adm-log-since" step="60" />
           </label>
+          <label class="fld">Until
+            <input type="datetime-local" id="adm-log-until" step="60" title="Leave blank for now" />
+          </label>
           <label class="fld">Level
             <select id="adm-log-level">
               <option value="all" selected>All</option>
@@ -437,10 +440,12 @@
         const status = $('adm-log-status');
         const level = $('adm-log-level')?.value || 'all';
         const since = $('adm-log-since')?.value || '';
+        const until = $('adm-log-until')?.value || '';
         if (status) status.textContent = 'Loading…';
         try {
           const params = new URLSearchParams({ level });
           if (since) params.set('since', since);
+          if (until) params.set('until', until);
           const r = await fetch(`/admin/logs?${params.toString()}`, { credentials: 'same-origin' });
           const d = await r.json();
           if (!d.available) {
@@ -449,26 +454,32 @@
             return;
           }
           out.innerHTML = renderLogLines(d.lines || []);
-          const scope = since ? `since ${since.replace('T', ' ')}` : 'most recent';
-          status.textContent = `${d.count} line${d.count === 1 ? '' : 's'} (${scope}).`;
+          const range = since && until ? `${since.replace('T', ' ')} → ${until.replace('T', ' ')}`
+            : since ? `since ${since.replace('T', ' ')}`
+            : until ? `until ${until.replace('T', ' ')}`
+            : 'most recent';
+          const cap = d.truncated ? ' — capped; narrow the range to see older lines' : '';
+          status.textContent = `${d.count} line${d.count === 1 ? '' : 's'} (${range})${cap}.`;
           out.scrollTop = out.scrollHeight;
         } catch {
           if (status) status.textContent = 'Failed to load logs.';
         }
       }
 
-      // Presets set "Since" to N minutes ago and reload.
+      // Presets set "Since" to N minutes ago, clear "Until" (= now), and reload.
       document.querySelectorAll('.adm-log-preset').forEach(btn => {
         btn.addEventListener('click', () => {
           const mins = parseInt(btn.dataset.mins, 10) || 60;
           const sinceInput = $('adm-log-since');
           if (sinceInput) sinceInput.value = toLocalInput(new Date(Date.now() - mins * 60000));
+          if ($('adm-log-until')) $('adm-log-until').value = '';
           loadLogs();
         });
       });
       $('adm-log-refresh')?.addEventListener('click', loadLogs);
       $('adm-log-level')?.addEventListener('change', loadLogs);
       $('adm-log-since')?.addEventListener('change', loadLogs);
+      $('adm-log-until')?.addEventListener('change', loadLogs);
       $('adm-log-wrap')?.addEventListener('change', (e) => {
         $('adm-log-output')?.classList.toggle('wrap', e.target.checked);
       });

@@ -15715,64 +15715,85 @@ def _log_line_dt(line: str) -> datetime | None:
         return None
 
 
-def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None) -> tuple[list[str], bool]:
-    """Return (lines, available). Reads the current lectio.log, keeps records at
-    or above ``min_level`` and (if given) at or after ``since`` — continuation
-    lines like tracebacks stay attached to their record — and returns the last
-    ``max_lines``. available=False when file logging isn't configured."""
+def _parse_local_ts(value: str) -> tuple[datetime | None, bool]:
+    """Parse a datetime-local / space-separated timestamp. Returns
+    (dt, had_seconds); dt is None if unparseable."""
+    value = (value or "").strip()
+    if not value:
+        return None, False
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt), True
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt), False
+        except ValueError:
+            pass
+    return None, False
+
+
+def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None,
+                   until: datetime | None = None) -> tuple[list[str], bool, bool]:
+    """Return (lines, available, truncated). Reads the current lectio.log, keeps
+    records at or above ``min_level`` and within [``since``, ``until``] —
+    continuation lines like tracebacks stay attached to their record — and
+    returns the last ``max_lines`` of the match. ``truncated`` is True when the
+    cap dropped older matching records. available=False when file logging isn't
+    configured."""
     log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
     if not log_dir_str:
-        return [], False
+        return [], False, False
     path = Path(log_dir_str) / "lectio.log"
     if not path.exists():
-        return [], True
+        return [], True, False
     threshold = _LOG_LEVEL_RANK.get(min_level.upper(), 0)
     try:
         raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return [], True
-    if threshold <= 0 and since is None:
-        return raw[-max_lines:], True
+        return [], True, False
+    if threshold <= 0 and since is None and until is None:
+        return raw[-max_lines:], True, len(raw) > max_lines
     kept: list[str] = []
     include_current = False
     for line in raw:
         m = _LOG_LINE_RE.match(line)
         if m:
             include_current = _LOG_LEVEL_RANK.get(m.group(1), 0) >= threshold
-            if include_current and since is not None:
+            if include_current and (since is not None or until is not None):
                 dt = _log_line_dt(line)
-                if dt is not None and dt < since:
+                if dt is not None and ((since is not None and dt < since)
+                                       or (until is not None and dt > until)):
                     include_current = False
             if include_current:
                 kept.append(line)
         elif include_current:
             kept.append(line)  # continuation (traceback etc.) of an included record
-    return kept[-max_lines:], True
+    return kept[-max_lines:], True, len(kept) > max_lines
 
 
 @app.get("/admin/logs")
-def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: str = ""):
+def admin_logs(request: Request, lines: int = 5000, level: str = "all",
+               since: str = "", until: str = ""):
     """Tail the instance log for the Admin → Logs tab. Admin-only.
 
-    ``since`` is an optional local timestamp (``YYYY-MM-DDTHH:MM`` from the
-    datetime-local picker, space-separated also accepted); records before it are
-    dropped. ``lines`` caps the response so a wide window can't dump the whole
-    file."""
+    ``since``/``until`` are optional local timestamps (``YYYY-MM-DDTHH:MM`` from
+    the datetime-local pickers) bounding the window; records outside it are
+    dropped. ``until`` is inclusive of its minute. ``lines`` caps the response
+    (tail of the window) so a wide range can't dump the whole file; ``truncated``
+    flags when the cap dropped older matches so the UI can suggest narrowing."""
     if not _is_web_admin(_current_web_user(request)):
         return Response(status_code=403)
     max_lines = max(1, min(int(lines), 20000))
     min_level = "" if level.lower() == "all" else level
-    since_dt: datetime | None = None
-    since = since.strip()
-    if since:
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-            try:
-                since_dt = datetime.strptime(since, fmt)
-                break
-            except ValueError:
-                continue
-    log_lines, available = _read_log_tail(max_lines, min_level, since_dt)
-    return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines)})
+    since_dt, _ = _parse_local_ts(since)
+    until_dt, until_had_secs = _parse_local_ts(until)
+    if until_dt is not None and not until_had_secs:
+        until_dt = until_dt.replace(second=59)  # minute-precision picker → inclusive
+    log_lines, available, truncated = _read_log_tail(max_lines, min_level, since_dt, until_dt)
+    return JSONResponse({"available": available, "lines": log_lines,
+                         "count": len(log_lines), "truncated": truncated})
 
 
 @app.get("/")
