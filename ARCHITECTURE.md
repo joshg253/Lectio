@@ -791,6 +791,44 @@ hidden in Feeds mode when it's the only unfoldered feed) but stays in the
 Uncategorized *view* set, so the Saved sublist's Uncategorized folder reaches
 its entries.
 
+### Tag-as-keep — the unified Kept view
+
+Tag and Star are the two **keep** axes: a post is kept (offline-archived and
+never auto-pruned) whenever it's starred **or** manually tagged. Tag is the
+"keep forever" axis, Star the lightweight "to-do". The archive
+(`archived_entry`, keyed on `(feed_url, entry_id)`) is independent of the
+`saved_entries` star table, so tagging can enqueue a capture without a star row.
+
+- **Enqueue on tag.** `set_manual_tags_for_entry` enqueues an archive when a tag
+  is added and enqueues a removal when the **last** tag is removed *and* the
+  entry isn't starred. `delete_manual_tag_everywhere` applies the same
+  last-tag-and-unstarred release per entry. The star toggle's off-branch is
+  likewise guarded — it only releases the archive when the entry carries no
+  manual tag. The shared guard is `_entry_should_keep_archive` (= starred OR
+  has ≥1 manual tag); dropping one axis never wipes an archive the other needs.
+- **Kept view.** The Saved-mode entry list (`list_entries_for_feeds` with
+  `star_only=1`) filters on **star OR tag**: alongside `saved_entries_set` it
+  loads a `tagged_entries_set` (one `entry_tags LIKE` scan over the view's
+  feeds), unions them into `kept_entries_set`, and both the point-lookup fast
+  path and the membership filter use that union. `saved_entries_set` still drives
+  the per-row `saved` flag. `get_saved_counts_by_folder` /
+  `get_saved_unread_count` count the union too.
+- **Kept-but-unsubscribed feeds.** `reader` requires a feed to exist for its
+  entries, so unsubscribing a feed that carries curation defaults to a **keep**
+  mode (`keep_entries=1` on `/feeds/unsubscribe`, the default radio in the
+  curation dialog): it deletes the `folder_feeds` rows, `disable_feed`s the feed,
+  records it in the new meta table **`kept_feeds`**, and force-flushes pending
+  captures — but does **not** `purge_orphaned_feed`, so the reader feed, its
+  entries, tags, and stars survive. Kept feeds are hidden from the tree by
+  excluding them at the source: `get_all_reader_feed_urls()` subtracts
+  `get_kept_feed_urls()` by default (so All Feeds, Uncategorized, and counts drop
+  them), while the Saved/Kept view passes `include_kept=True`/unions the kept set
+  back so their curated items stay browsable **grouped under their original feed
+  name**. Re-subscribing (`add_feed_to_folder`) clears the `kept_feeds` row and
+  re-enables updates; a later full delete (`purge_orphaned_feed`) drops it.
+  `kept_feeds` is created in `ensure_meta_schema` (covered by the startup
+  per-user migration, so existing tenants don't 500).
+
 ## Read Mode — e-ink reading app (`GET /read`)
 
 A standalone, distraction-free reading *app* for the saved/starred backlog, built
