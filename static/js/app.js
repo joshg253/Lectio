@@ -433,6 +433,24 @@
 
       if (panel.classList.contains('action-modal')) {
         panel.removeAttribute('hidden');
+        // The Global Note is shared state edited from any browser/tab. Pull the
+        // latest on open so a change made elsewhere shows without a page reload,
+        // but never clobber an in-progress unsaved edit (only overwrite when the
+        // textarea still matches what was last loaded/rendered).
+        if (panelId === 'global-note-modal') {
+          const ta = document.getElementById('global-note-text');
+          if (ta) {
+            const before = ta.value;
+            fetch('/settings/global-note', { credentials: 'same-origin', headers: { 'X-Requested-With': 'lectio-global-note-load' } })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((d) => {
+                if (d && typeof d.note_text === 'string' && ta.value === before) {
+                  ta.value = d.note_text;
+                }
+              })
+              .catch(() => { /* stale value is harmless */ });
+          }
+        }
       } else {
         const willShow = panel.hasAttribute('hidden');
 
@@ -1882,6 +1900,7 @@
     const postDeleteButton = document.getElementById('ctx-post-delete');
     const postEditDateButton = document.getElementById('ctx-post-edit-date');
     const postEditTitleButton = document.getElementById('ctx-post-edit-title');
+    const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -2408,6 +2427,9 @@
 
         const parser = new DOMParser();
         const doc = parser.parseFromString(htmlText, 'text/html');
+        // Keep the tab/back-history title in sync with the folder/feed/entry view.
+        const _scopeTitle = doc.querySelector('title')?.textContent;
+        if (_scopeTitle) document.title = _scopeTitle;
         const nextPostsPane = doc.querySelector('.pane-posts');
         const nextEntryPane = doc.querySelector('.pane-entry');
         const currentPostsPane = document.querySelector('.pane-posts');
@@ -2632,6 +2654,31 @@
       menu.appendChild(newItem);
     }
 
+    // Cap portrait (taller-than-wide) article images to the configured width so
+    // tall images (e.g. Standard Ebooks book covers) don't render huge; wide
+    // images keep the base max-width:100% rule. 0/unset disables.
+    function applyPortraitImageCap(root) {
+      const cap = parseInt(window.PORTRAIT_IMG_MAX_WIDTH, 10);
+      if (!root || !Number.isFinite(cap) || cap <= 0) return;
+      const imgs = root.querySelectorAll(
+        '.entry-content img, .entry-readability-content img, .entry-lead-image, .entry-readability-lead-image'
+      );
+      imgs.forEach((img) => {
+        if (img.dataset.portraitCapChecked) return;
+        const decide = () => {
+          if (img.dataset.portraitCapChecked) return;
+          if (!img.naturalWidth || !img.naturalHeight) return;
+          img.dataset.portraitCapChecked = '1';
+          if (img.naturalHeight > img.naturalWidth) {
+            // min() keeps it responsive on narrow screens (never exceeds container).
+            img.style.maxWidth = `min(${cap}px, 100%)`;
+          }
+        };
+        if (img.complete) decide();
+        else img.addEventListener('load', decide, { once: true });
+      });
+    }
+
     function enhanceYoutubeEmbeds(root) {
       if (!root) return;
       const iframes = root.querySelectorAll('iframe[src*="/embed/"]');
@@ -2751,6 +2798,12 @@
           return;
         }
 
+        // Sync the tab/back-history title from the freshly-rendered page so the
+        // browser Back list shows the article/feed context, not a stale "Lectio".
+        // Set before pushState below, which snapshots document.title.
+        const nextTitle = doc.querySelector('title')?.textContent;
+        if (nextTitle) document.title = nextTitle;
+
         currentPane.replaceWith(nextPane);
         paneSwapped = true;
         // Each post-swap step runs isolated: one throwing binder must not
@@ -2766,6 +2819,7 @@
           () => bindEntryTagInteractions(),
           () => bindPostListInteractions(),
           () => { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(nextPane); },
+          () => applyPortraitImageCap(nextPane),
           () => { if (typeof window.bindSwipeGestures === 'function') window.bindSwipeGestures(); },
           () => { if (typeof applyHighlights === 'function') applyHighlights(); },
           () => markActivePostByUrl(url),
@@ -5541,6 +5595,7 @@
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postRefetchButton, contextPostFeedUrl === 'lectio:saved' && Boolean(contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -5812,6 +5867,7 @@
 
     bindEntryPaneInteractions();
     try { if (_ytAccountFeaturesEnabled) enhanceYoutubeEmbeds(document.querySelector('.pane-entry')); } catch (e) {}
+    try { applyPortraitImageCap(document.querySelector('.pane-entry')); } catch (e) {}
 
     function bindPostListInteractions() {
       for (const postMainLink of document.querySelectorAll('.post-main-link')) {
@@ -5893,6 +5949,7 @@
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postRefetchButton, contextPostFeedUrl === 'lectio:saved' && Boolean(contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
@@ -6895,6 +6952,30 @@
         row?.remove();
       } catch (_) {
         window.alert('Delete failed.');
+      }
+    });
+
+    postRefetchButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      if (typeof showToastMessage === 'function') showToastMessage('Re-fetching content…');
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) { window.alert(data.error || 'Re-fetch failed.'); return; }
+        if (typeof showToastMessage === 'function') showToastMessage('Content re-fetched.');
+        // If this entry is currently open, re-render the pane to show the fresh copy.
+        const cur = new URL(window.location.href);
+        if (cur.searchParams.get('entry_id') === entryId && typeof loadEntryPaneWithoutFullRefresh === 'function') {
+          loadEntryPaneWithoutFullRefresh(window.location.href, false).catch(() => {});
+        }
+      } catch (_) {
+        window.alert('Re-fetch failed.');
       }
     });
 
@@ -9308,6 +9389,8 @@
           tzEl.value = d.tz_display || '';
           tzEl.placeholder = d.tz_default ? `${d.tz_default} (server default)` : 'Server default';
         }
+        const pwEl = document.getElementById('sett-portrait-img-width');
+        if (pwEl && d.portrait_img_max_width != null) pwEl.value = String(d.portrait_img_max_width);
         v('sett-maint-hour', d.maintenance_hour);
         const maintLast = document.getElementById('sett-maint-last');
         if (maintLast) {
@@ -9649,6 +9732,7 @@
             profile_name: g('sett-profile-name'),
             profile_email: g('sett-profile-email'),
             tz_display: g('sett-tz-display'),
+            portrait_img_max_width: g('sett-portrait-img-width'),
           };
         } else if (scope === 'profile') {
           payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };
@@ -11687,6 +11771,7 @@
         const isSameScopeAsCurrentDom = normalizedCurrent === normalizedActive;
         const scopeStateNoReload = Boolean(state.lectioScopePane) && isSameScopeAsCurrentDom;
         if (hasNoScopeQuery || scopeStateNoReload) {
+          if (hasNoScopeQuery) document.title = 'Lectio';  // back to root
           updateScopeActiveState(currentUrl);
           return;
         }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="csrf-token" content="{{ csrf_token_for(request) }}" />
-  <title>Lectio</title>
+  <title>{{ page_title or 'Lectio' }}</title>
   <script>
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
@@ -24,6 +24,7 @@
     window.YT_SYNC_LAST_RESULT = {{ youtube_sync_last_result | tojson }};
     window.SUBSCRIBE_URL = {{ subscribe_url | tojson }};
     window.NO_RSS_URL = {{ no_rss_url | tojson }};
+    window.PORTRAIT_IMG_MAX_WIDTH = {{ portrait_img_max_width | tojson }};
   </script>
   <script>
     // CSRF shim — installs BEFORE any other handler registers.
@@ -1348,6 +1349,7 @@
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
     <button type="button" id="ctx-post-edit-title" class="context-menu-item">Edit title…</button>
+    <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Re-fetch content</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -1695,6 +1697,9 @@
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
           <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="Server default" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
+          <label class="settings-label" for="sett-portrait-img-width">Portrait image max width (px)</label>
+          <input type="number" id="sett-portrait-img-width" class="settings-input" min="0" step="10" placeholder="650" autocomplete="off" />
+          <p class="settings-hint">Caps tall (portrait) article images to this width; wide images stay full-width. 0 disables.</p>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>

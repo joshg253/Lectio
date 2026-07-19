@@ -331,6 +331,7 @@ EMAIL_BCC_SETTING_KEY = "email_bcc_address"
 PROFILE_NAME_SETTING_KEY = "profile_name"
 PROFILE_EMAIL_SETTING_KEY = "profile_email"
 SETTING_TZ_DISPLAY = "tz_display"
+SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
 SETTING_MAINTENANCE_HOUR = "maintenance_hour"
 SETTING_IMG_CACHE_DAYS = "img_cache_days"
 SETTING_IMG_CACHE_MAX_DIM = "img_cache_max_dim"
@@ -531,6 +532,8 @@ def _env_int(name: str, default: int) -> int:
 #   LECTIO_IMG_CACHE_MAX_DIM longest-side px to downscale stored images to (default 3840)
 _ENV_IMG_CACHE_DAYS = _env_int("LECTIO_IMG_CACHE_DAYS", 90)
 _ENV_IMG_CACHE_MAX_DIM = _env_int("LECTIO_IMG_CACHE_MAX_DIM", 3840)
+# Max width (px) for portrait (taller-than-wide) article images; 0 = disabled.
+_ENV_PORTRAIT_IMG_MAX_WIDTH = _env_int("LECTIO_PORTRAIT_IMG_MAX_WIDTH", 650)
 DEBUG_MODE = os.getenv("LECTIO_DEBUG", "0") == "1"
 # Public base URL of this instance (e.g. https://lectio.example.com).
 # Required for WebSub: hubs need a reachable callback URL.  Leave blank to disable WebSub.
@@ -1548,6 +1551,22 @@ def get_maintenance_hour() -> int | None:
         except ValueError:
             pass
     return _ENV_MAINTENANCE_HOUR
+
+
+def get_portrait_img_max_width() -> int:
+    """Max width (px) for portrait (taller-than-wide) images in article bodies;
+    landscape images stay full container width. 0 = disabled. Per-user DB
+    override takes precedence over the env fallback."""
+    with get_meta_connection() as conn:
+        val = get_setting(conn, SETTING_PORTRAIT_IMG_MAX_WIDTH)
+    if val:
+        try:
+            w = int(val)
+            if w >= 0:
+                return w
+        except ValueError:
+            pass
+    return _ENV_PORTRAIT_IMG_MAX_WIDTH
 
 
 def get_img_cache_days() -> int:
@@ -16473,10 +16492,44 @@ def _home_inner(
                     post["read"] = True
                     break
 
+    # Context-aware browser/tab title: "Lectio — <context>" (plain "Lectio" at
+    # root). Rendered into <title>; the client syncs document.title on pane-swap
+    # so the browser Back list gets meaningful, distinct entries.
+    _title_ctx: str | None = None
+    if selected_entry and str(selected_entry.get("title") or "").strip():
+        _title_ctx = str(selected_entry["title"]).strip()
+    elif selected_query:
+        _title_ctx = f"Search: {selected_query}"
+    elif selected_tag:
+        _title_ctx = f"#{selected_tag}"
+    elif selected_feed_url:
+        try:
+            with get_reader() as _tr:
+                _tf = _tr.get_feed(selected_feed_url, None)
+            if _tf is not None:
+                _title_ctx = str(getattr(_tf, "user_title", None) or _tf.title or selected_feed_url)
+        except Exception:  # noqa: BLE001
+            _title_ctx = None
+    elif selected_star_only:
+        _title_ctx = "Saved"
+    elif selected_folder_id == UNCATEGORIZED_FOLDER_ID:
+        _title_ctx = UNCATEGORIZED_FOLDER_NAME
+    elif selected_folder_id and selected_folder_id != root_id:
+        try:
+            _title_ctx = next(
+                (str(r["name"]) for r in folder_rows if int(r["id"]) == int(selected_folder_id)),
+                None,
+            )
+        except Exception:  # noqa: BLE001
+            _title_ctx = None
+    page_title = f"Lectio — {_title_ctx}" if _title_ctx else "Lectio"
+
     # Auto-refresh cadence shown in the menu: the bound user's own value in multi
     # mode (the menu form posts to set *their* setting), the cached global in single.
     _arm = _effective_auto_refresh_minutes()
     _tmpl_ctx = {
+        "page_title": page_title,
+        "portrait_img_max_width": get_portrait_img_max_width(),
         "request": request,
         "folder_rows": folder_rows,
         "root_folder_row": root_folder_row,
@@ -20372,6 +20425,7 @@ def get_all_settings():
         "profile_name": profile_name,
         "profile_email": profile_email,
         "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
+        "portrait_img_max_width": get_portrait_img_max_width(),
         "tz_default": os.environ.get("TZ") or "UTC",
         "maintenance_hour": get_runtime_setting(SETTING_MAINTENANCE_HOUR),
         "maintenance_last_ran_at": maint_last,
@@ -20496,7 +20550,7 @@ async def save_all_settings(request: Request):
                   SETTING_FRESHRSS_PASSWORD, SETTING_TTRSS_PASSWORD}
     _ALLOWED = {
         PROFILE_NAME_SETTING_KEY, PROFILE_EMAIL_SETTING_KEY,
-        SETTING_TZ_DISPLAY, SETTING_MAINTENANCE_HOUR,
+        SETTING_TZ_DISPLAY, SETTING_PORTRAIT_IMG_MAX_WIDTH, SETTING_MAINTENANCE_HOUR,
         SETTING_IMG_CACHE_DAYS, SETTING_IMG_CACHE_MAX_DIM,
         SETTING_YT_API_KEY, SETTING_YT_CHANNEL_ID, SETTING_YT_FOLDER_NAME,
         SETTING_YT_EMBED_ACCOUNT_FEATURES, SETTING_YT_HIDE_SHORTS_GLOBAL, SETTING_YT_QUOTA_CAP,
@@ -22640,6 +22694,38 @@ def toggle_entry_archived(
 # --- Save Article (read-later capture of arbitrary URLs) ---
 
 
+@app.post("/articles/refresh-content")
+async def refresh_saved_article_content(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    """Re-fetch + re-extract a saved article's content, replacing the stored copy
+    and bumping it to the top. Fixes a bad initial capture (e.g. readability
+    grabbed a fragment, or a broken import) without deleting and re-adding.
+    Saved-articles feed only — the entry id there is the source URL."""
+    if not saved_articles_service.is_saved_articles_feed(feed_url):
+        return JSONResponse(
+            {"ok": False, "error": "Re-fetch is only available for saved articles."},
+            status_code=400,
+        )
+    url = saved_articles_service.normalize_article_url(entry_id) or entry_id
+    result = await run_in_threadpool(_save_article_for_current_user, url, None, True)
+    if not result.get("ok"):
+        return JSONResponse(
+            {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+            status_code=400,
+        )
+    return JSONResponse({
+        "ok": True,
+        "refreshed": bool(result.get("refreshed")),
+        "extracted": bool(result.get("extracted")),
+        "title": result.get("title"),
+        "feed_url": feed_url,
+        "entry_id": entry_id,
+    })
+
+
 def _resolve_redirector_url(url: str) -> str:
     """Follow a feed-redirector link (feedproxy/feedburner) to its real
     destination before saving, so the stored article never depends on the
@@ -23375,6 +23461,15 @@ def update_auto_refresh_setting(
         url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}"),
         status_code=303,
     )
+
+
+@app.get("/settings/global-note")
+def get_global_note_setting():
+    """Return the current Global Note so the modal can pull the latest value on
+    open — an edit made in another browser/tab shows without a full page reload."""
+    with get_meta_connection() as conn:
+        note_text = get_setting(conn, GLOBAL_NOTE_SETTING_KEY) or ""
+    return JSONResponse({"ok": True, "note_text": note_text})
 
 
 @app.post("/settings/global-note")
