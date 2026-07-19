@@ -1689,6 +1689,62 @@
 
     // (markProblematicFeedsViewed is now called when the Feeds tab opens in Settings)
 
+    // Failing Feeds: filter chips by fail category (blocked/404/DNS/…), built
+    // from the rendered rows so labels/counts always match what's shown.
+    function setupFailingFeedFilter() {
+      const bar = document.querySelector('[data-problem-feed-filter]');
+      const panel = document.querySelector('[data-problem-panel="failing"]');
+      if (!bar || !panel || bar.dataset.built) return;
+      const items = Array.from(panel.querySelectorAll('.problem-feed-item'));
+      if (!items.length) return;
+      bar.dataset.built = '1';
+
+      const counts = new Map();      // category -> count
+      const labels = new Map();      // category -> label text
+      items.forEach((li) => {
+        const cat = li.getAttribute('data-category') || 'other';
+        counts.set(cat, (counts.get(cat) || 0) + 1);
+        if (!labels.has(cat)) {
+          labels.set(cat, li.querySelector('.problem-feed-cat')?.textContent?.trim() || cat);
+        }
+      });
+      // Most-common category first so the biggest bucket is easy to reach.
+      const ordered = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      const emptyMsg = panel.querySelector('.problem-feed-empty-filtered');
+
+      const mkChip = (cat, text, n) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'problem-feed-filter-chip';
+        b.dataset.filterCat = cat;
+        b.setAttribute('role', 'tab');
+        b.textContent = n == null ? text : `${text} (${n})`;
+        return b;
+      };
+      bar.appendChild(mkChip('all', 'All', items.length));
+      ordered.forEach(([cat, n]) => bar.appendChild(mkChip(cat, labels.get(cat), n)));
+
+      function apply(cat) {
+        let shown = 0;
+        items.forEach((li) => {
+          const match = cat === 'all' || li.getAttribute('data-category') === cat;
+          li.hidden = !match;
+          if (match) shown += 1;
+        });
+        bar.querySelectorAll('.problem-feed-filter-chip').forEach((c) => {
+          c.classList.toggle('active', c.dataset.filterCat === cat);
+          c.setAttribute('aria-selected', c.dataset.filterCat === cat ? 'true' : 'false');
+        });
+        if (emptyMsg) emptyMsg.hidden = shown !== 0;
+      }
+      bar.addEventListener('click', (e) => {
+        const chip = e.target.closest('.problem-feed-filter-chip');
+        if (chip) apply(chip.dataset.filterCat);
+      });
+      apply('all');
+    }
+    setupFailingFeedFilter();
+
     const panes = document.querySelector('.panes');
     const rootStyle = document.documentElement.style;
     const RESIZER_SIZE = 8;

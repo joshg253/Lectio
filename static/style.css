@@ -667,6 +667,49 @@ body[data-single-mode="1"] #folders-collapse-btn {
   margin-top: 0.22rem;
   font-size: 0.78rem;
 }
+
+/* Failing Feeds category filter chips */
+.problem-feed-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.6rem;
+}
+.problem-feed-filter-chip {
+  font: inherit;
+  font-size: 0.76rem;
+  padding: 0.18rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.problem-feed-filter-chip:hover { border-color: var(--accent, #4a90d9); }
+.problem-feed-filter-chip.active {
+  background: var(--accent, #4a90d9);
+  border-color: var(--accent, #4a90d9);
+  color: #fff;
+}
+
+/* Per-row category badge; color hints at recovery action (green=alive-blocked,
+   amber=moved/format, red=gone). Uses colored borders so it works in both themes. */
+.problem-feed-cat {
+  font-weight: 600;
+  padding: 0 0.35rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--line);
+}
+.problem-feed-cat--blocked,
+.problem-feed-cat--rate_limited,
+.problem-feed-cat--auth { color: #2e7d32; border-color: #2e7d3255; }
+.problem-feed-cat--not_found,
+.problem-feed-cat--not_feed,
+.problem-feed-cat--tls,
+.problem-feed-cat--timeout { color: #b26a00; border-color: #b26a0055; }
+.problem-feed-cat--dns,
+.problem-feed-cat--gone { color: #c62828; border-color: #c6282855; }
 .problem-feed-section-divider {
   font-size: 0.75rem;
   font-weight: 700;

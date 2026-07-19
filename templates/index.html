@@ -1964,9 +1964,10 @@
           <div class="feeds-tab-panel" data-feeds-panel="failing" hidden>
             <div data-problem-panel="failing">
               {% if failing_feeds %}
+              <div class="problem-feed-filter" data-problem-feed-filter role="tablist" aria-label="Filter failing feeds by cause"></div>
               <ul class="problem-feed-list">
                 {% for row in failing_feeds %}
-                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}" data-category="{{ row.category }}">
                   <div class="problem-feed-row">
                     <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
                     <div class="problem-feed-actions">
@@ -1976,6 +1977,7 @@
                     </div>
                   </div>
                   <div class="problem-feed-meta">
+                    <span class="problem-feed-cat problem-feed-cat--{{ row.category }}">{{ row.category_label }}</span>
                     <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                     {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
                   </div>
@@ -1983,6 +1985,7 @@
                 </li>
                 {% endfor %}
               </ul>
+              <p class="muted problem-feed-empty-filtered" hidden>No failing feeds in this category.</p>
               {% else %}
               <p class="muted">No failing feeds right now.</p>
               {% endif %}
