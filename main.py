@@ -2058,14 +2058,22 @@ async def lifespan(app: FastAPI):
         ).start()
 
     # Daily Maintenance loop — runs once per day at the configured maintenance hour.
+    # Gated by the same kill switch as the other daemons: the loop is a persistent
+    # thread that ticks every 30s doing per-user DB writes (email-batch flush, and
+    # a full maintenance run when due). Under the test suite (which sets
+    # LECTIO_DISABLE_STARTUP_BACKFILL=1) it would otherwise keep running for the
+    # rest of the pytest process once any TestClient test triggered the lifespan,
+    # racing later tests' fresh-DB setup as an intermittent "database is locked".
+    # Tests that need maintenance behavior call _run_daily_maintenance() directly.
     maint_stop_event = threading.Event()
     app.state.maint_stop_event = maint_stop_event
-    threading.Thread(
-        target=_daily_maintenance_loop,
-        args=(maint_stop_event,),
-        daemon=True,
-        name="daily-maintenance",
-    ).start()
+    if not backfill_disabled:
+        threading.Thread(
+            target=_daily_maintenance_loop,
+            args=(maint_stop_event,),
+            daemon=True,
+            name="daily-maintenance",
+        ).start()
 
     # In debug mode, auto-subscribe dev feeds to the _Lectio folder.
     if DEBUG_MODE:
