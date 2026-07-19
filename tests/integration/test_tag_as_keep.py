@@ -8,6 +8,8 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import main
 from services import tenancy
@@ -106,6 +108,45 @@ def test_clearing_tags_on_starred_entry_keeps_archive(reader_with_entries, archi
     main.set_manual_tags_for_entry(FEED, "e0", "temp")
     main.set_manual_tags_for_entry(FEED, "e0", "")  # untag, but still starred
     assert removed == []  # star is still a keep signal
+
+
+def _unstar_via_route(feed_url: str, entry_id: str):
+    """POST an unstar through the real toggle_entry_saved handler (mounted on a
+    bare app so no lifespan/auth/background threads run), exercising the star-off
+    keep-guard branch symmetrically with the tag paths above."""
+    app = FastAPI()
+    app.post("/entries/saved")(main.toggle_entry_saved)
+    with TestClient(app) as client:
+        return client.post(
+            "/entries/saved",
+            data={"folder_id": 0, "feed_url": feed_url, "entry_id": entry_id, "saved": 0},
+            headers={"X-Requested-With": "lectio-post-save-toggle"},
+        )
+
+
+def test_star_off_keeps_archive_when_still_tagged(reader_with_entries, archive_spy):
+    archived, removed = archive_spy
+    _star(FEED, "e0")
+    main.set_manual_tags_for_entry(FEED, "e0", "keepme")
+    archived.clear()
+    removed.clear()
+
+    resp = _unstar_via_route(FEED, "e0")
+
+    assert resp.status_code == 200
+    assert main._entry_is_starred(FEED, "e0") is False   # star cleared
+    assert (FEED, "e0") not in removed                    # tag still keeps the archive
+
+
+def test_star_off_releases_archive_when_untagged(reader_with_entries, archive_spy):
+    archived, removed = archive_spy
+    _star(FEED, "e1")
+    removed.clear()
+
+    resp = _unstar_via_route(FEED, "e1")
+
+    assert resp.status_code == 200
+    assert (FEED, "e1") in removed                        # no keep signal left → released
 
 
 def test_should_keep_archive_truth_table(reader_with_entries):
