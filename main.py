@@ -88,7 +88,13 @@ from services.miniflux import MinifluxService
 from services.youtube_sync import sync_youtube_folder
 
 BASE_DIR = Path(__file__).resolve().parent
-LOGGER = logging.getLogger("uvicorn.error")
+# Dedicated app logger. Previously this piggybacked on "uvicorn.error", but
+# uvicorn owns that logger and (depending on startup/rollover timing) can leave
+# it not propagating to our root file handler — silently dropping every app log
+# line ([maintenance], [refresh], …) even though the code ran. "lectio" is our
+# own namespace that nothing else reconfigures, so it always reaches root.
+LOGGER = logging.getLogger("lectio")
+LOGGER.setLevel(logging.INFO)
 
 
 class _ReaderNonFatalParseWarningFilter(logging.Filter):
@@ -13858,9 +13864,10 @@ def _daily_maintenance_for_user() -> None:
                 continue
             days = int(row["retention_days"])
             deleted = _prune_entries(list(feeds), read_cutoff=datetime.now() - timedelta(days=days))
-            if deleted:
-                LOGGER.info("[maintenance] retention: deleted %d read posts (>%dd after read) from folder %s",
-                            deleted, days, row["name"])
+            # Always log (even 0) so a run is auditable — "nothing happened" and
+            # "never ran" look identical otherwise.
+            LOGGER.info("[maintenance] retention: deleted %d read post(s) (>%dd after read) from folder %s",
+                        deleted, days, row["name"])
     except Exception:
         LOGGER.exception("[maintenance] retention prune failed")
 
@@ -13890,8 +13897,8 @@ def _daily_maintenance_for_user() -> None:
                     """,
                     (cutoff,),
                 ).rowcount
-            if swept:
-                LOGGER.info("[maintenance] swept %d tombstones older than %dd", swept, sweep_days)
+            LOGGER.info("[maintenance] tomb sweep: removed %d tombstone(s) older than %dd and out of window",
+                        swept, sweep_days)
     except Exception:
         LOGGER.exception("[maintenance] tombstone sweep failed")
 
@@ -14026,10 +14033,46 @@ def _run_global_maintenance() -> None:
             LOGGER.exception("[maintenance] VACUUM %s failed", label)
 
 
+# Instance-wide "maintenance last ran on this date" marker. A file in the data
+# dir (not a per-user DB setting) so the once-a-day decision survives restarts
+# and isn't tied to any tenant — used for the catch-up check below.
+def _maint_marker_path() -> Path:
+    return DATA_DIR / "maintenance_last_run_date"
+
+
+def _maint_last_run_date() -> str:
+    try:
+        return _maint_marker_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _set_maint_last_run_date(date_str: str) -> None:
+    try:
+        _maint_marker_path().write_text(date_str, encoding="utf-8")
+    except OSError:
+        LOGGER.warning("[maintenance] could not persist last-run date", exc_info=True)
+
+
+def _maintenance_due(now_hour: int, maint_hour: int | None, last_run_date: str, today: str) -> bool:
+    """True when daily maintenance should run now: enabled, at or past the
+    configured hour, and not already run today (catch-up if the exact hour was
+    missed)."""
+    if maint_hour is None:
+        return False
+    return now_hour >= maint_hour and last_run_date != today
+
+
 def _daily_maintenance_loop(stop_event: threading.Event) -> None:
     """Thread that fires _run_daily_maintenance() once per day and flushes email
-    batch queues at their configured batch_time each minute."""
-    last_ran_date: str | None = None
+    batch queues at their configured batch_time each minute.
+
+    Catch-up semantics: maintenance runs once per calendar day as soon as the
+    app is alive AT OR AFTER the configured hour and hasn't run today — not only
+    during the exact hour. A restart or deploy near the maintenance hour (or a
+    machine that was asleep) used to skip the whole day; now it runs at the next
+    opportunity. The last-run date is persisted (data-dir marker) so restarts
+    don't re-run the same day."""
     last_batch_check_hhmm: str | None = None
     while not stop_event.wait(30):
         # Flush email batches at their configured batch_time (once per clock
@@ -14044,14 +14087,14 @@ def _daily_maintenance_loop(stop_event: threading.Event) -> None:
                     except Exception:
                         LOGGER.exception("[maintenance] email batch flush failed for user %r", _uid)
 
-        # Daily maintenance once per day at configured hour.
+        # Daily maintenance: once per day, at or after the configured hour.
         maint_hour = get_maintenance_hour()
         if maint_hour is None:
             continue
         now_lt = time.localtime()
         today = time.strftime("%Y-%m-%d")
-        if now_lt.tm_hour == maint_hour and last_ran_date != today:
-            last_ran_date = today
+        if _maintenance_due(now_lt.tm_hour, maint_hour, _maint_last_run_date(), today):
+            _set_maint_last_run_date(today)  # claim the slot before running
             try:
                 _run_daily_maintenance()
             except Exception:
@@ -15661,46 +15704,102 @@ _LOG_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICA
 _LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ (\w+) ")
 
 
-def _read_log_tail(max_lines: int, min_level: str) -> tuple[list[str], bool]:
-    """Return (lines, available). Reads the current lectio.log, keeps records at
-    or above ``min_level`` (continuation lines like tracebacks stay attached to
-    their record), and returns the last ``max_lines``. available=False when file
-    logging isn't configured (no LECTIO_LOG_DIR)."""
+def _log_line_dt(line: str) -> datetime | None:
+    """Parse a log record's leading ``YYYY-MM-DD HH:MM:SS`` timestamp, or None
+    for a continuation line (traceback etc.)."""
+    if not _LOG_LINE_RE.match(line):
+        return None
+    try:
+        return datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_local_ts(value: str) -> tuple[datetime | None, bool]:
+    """Parse a datetime-local / space-separated timestamp. Returns
+    (dt, had_seconds); dt is None if unparseable."""
+    value = (value or "").strip()
+    if not value:
+        return None, False
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt), True
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(value, fmt), False
+        except ValueError:
+            pass
+    return None, False
+
+
+def _read_log_tail(max_lines: int, min_level: str, since: datetime | None = None,
+                   until: datetime | None = None) -> tuple[list[str], bool, bool]:
+    """Return (lines, available, truncated). Reads the current lectio.log, keeps
+    records at or above ``min_level`` and within [``since``, ``until``] —
+    continuation lines like tracebacks stay attached to their record — and
+    returns the last ``max_lines`` of the match. ``truncated`` is True when the
+    cap dropped older matching records. available=False when file logging isn't
+    configured."""
     log_dir_str = os.getenv("LECTIO_LOG_DIR", "").strip()
     if not log_dir_str:
-        return [], False
+        return [], False, False
     path = Path(log_dir_str) / "lectio.log"
     if not path.exists():
-        return [], True
+        return [], True, False
     threshold = _LOG_LEVEL_RANK.get(min_level.upper(), 0)
     try:
         raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return [], True
-    if threshold <= 0:
-        return raw[-max_lines:], True
+        return [], True, False
+    if threshold <= 0 and since is None and until is None:
+        return raw[-max_lines:], True, len(raw) > max_lines
     kept: list[str] = []
     include_current = False
     for line in raw:
         m = _LOG_LINE_RE.match(line)
         if m:
             include_current = _LOG_LEVEL_RANK.get(m.group(1), 0) >= threshold
+            if include_current and (since is not None or until is not None):
+                dt = _log_line_dt(line)
+                if dt is not None and ((since is not None and dt < since)
+                                       or (until is not None and dt > until)):
+                    include_current = False
             if include_current:
                 kept.append(line)
         elif include_current:
             kept.append(line)  # continuation (traceback etc.) of an included record
-    return kept[-max_lines:], True
+    return kept[-max_lines:], True, len(kept) > max_lines
 
 
 @app.get("/admin/logs")
-def admin_logs(request: Request, lines: int = 200, level: str = "all"):
-    """Tail the instance log for the Admin → Logs tab. Admin-only."""
+def admin_logs(request: Request, lines: int = 5000, level: str = "all",
+               since: str = "", until: str = ""):
+    """Tail the instance log for the Admin → Logs tab. Admin-only.
+
+    ``since``/``until`` are optional timestamps (``YYYY-MM-DDTHH:MM`` from the
+    datetime-local pickers) bounding the window; records outside it are dropped.
+    They are interpreted in the SERVER's local timezone — the same frame the log
+    file's own timestamps are written in — so the window lines up with what's in
+    the file. (The pickers send the admin's browser-local time; on the normal
+    self-hosted setup the admin and server share a timezone. A cross-timezone
+    admin would see the window shifted by the offset — acceptable for this
+    single-instance tool.) ``until`` is inclusive of its minute. ``lines`` caps
+    the response (tail of the window) so a wide range can't dump the whole file;
+    ``truncated`` flags when the cap dropped older matches so the UI can suggest
+    narrowing."""
     if not _is_web_admin(_current_web_user(request)):
         return Response(status_code=403)
-    max_lines = max(1, min(int(lines), 2000))
+    max_lines = max(1, min(int(lines), 20000))
     min_level = "" if level.lower() == "all" else level
-    log_lines, available = _read_log_tail(max_lines, min_level)
-    return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines)})
+    since_dt, _ = _parse_local_ts(since)
+    until_dt, until_had_secs = _parse_local_ts(until)
+    if until_dt is not None and not until_had_secs:
+        until_dt = until_dt.replace(second=59)  # minute-precision picker → inclusive
+    log_lines, available, truncated = _read_log_tail(max_lines, min_level, since_dt, until_dt)
+    return JSONResponse({"available": available, "lines": log_lines,
+                         "count": len(log_lines), "truncated": truncated})
 
 
 @app.get("/")
@@ -20581,14 +20680,41 @@ def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
 
 
 @app.post("/feeds/change-url")
-def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...)):
-    """Change the URL of a feed, migrating all associated data."""
+def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), force: int = Form(0)):
+    """Change the URL of a feed, migrating all associated data.
+
+    Unless ``force`` is set, the new URL is validated like Add Feed: it's
+    probed, and if it's a real feed (or a page that advertises exactly the
+    feed we want) the resolved feed URL is used. A URL that doesn't validate
+    returns needs_confirm so the UI can offer 'Change anyway' — feeds behind
+    auth or bot-walls that Lectio can't fetch are still allowed on override."""
     new_url = new_url.strip()
+    if new_url and "://" not in new_url:
+        new_url = "https://" + new_url  # schemeless paste, like Add Feed
     parsed = urlparse(new_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return JSONResponse({"ok": False, "error": "Invalid URL — must be http or https."}, status_code=400)
     if new_url == old_url:
         return JSONResponse({"ok": False, "error": "New URL is the same as the current URL."}, status_code=400)
+
+    # Validate/resolve the target (skipped on force). Deliberately does NOT fall
+    # back to a Page Feed — Change URL is for swapping one real feed for another.
+    if not force:
+        from services.feed_discovery import probe_url as _probe_url
+        result = _probe_url(new_url)
+        feeds = result.get("feeds") or []
+        if result.get("status") in ("feed", "feeds") and feeds:
+            new_url = str(feeds[0]["url"])  # resolved feed (post-redirect / discovered)
+        else:
+            return JSONResponse(
+                {"ok": False, "needs_confirm": True,
+                 "error": (result.get("message") or "That URL doesn't look like a feed.")
+                          + " Change anyway?",
+                 "attempted_url": new_url},
+                status_code=422,
+            )
+        if new_url == old_url:
+            return JSONResponse({"ok": False, "error": "That resolves to the feed's current URL."}, status_code=400)
 
     try:
         with get_reader() as reader:

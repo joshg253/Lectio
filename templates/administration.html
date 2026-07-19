@@ -55,10 +55,25 @@
     .adm-icon-btn.danger { color: var(--danger, #c0392b); }
     .adm-user-actions { display: flex; gap: .15rem; align-items: center; }
     .adm-logs-controls { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .5rem; }
-    .adm-log-output { max-height: 60vh; overflow: auto; background: rgba(127,127,127,.08);
+    .adm-log-presets { display: flex; gap: .25rem; align-items: center; }
+    .adm-log-preset { padding: .3rem .55rem; font-size: .8rem; cursor: pointer; }
+    .adm-log-wrap-lbl { display: flex; align-items: center; gap: .3rem; font-size: .85rem; white-space: nowrap; }
+    .adm-log-output { max-height: 62vh; overflow: auto; background: rgba(127,127,127,.08);
                       border: 1px solid var(--line, #ccc); border-radius: 6px; padding: .6rem .75rem;
                       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem;
-                      line-height: 1.35; white-space: pre-wrap; word-break: break-word; margin: 0; }
+                      line-height: 1.4; white-space: pre; margin: 0; }
+    .adm-log-output.wrap { white-space: pre-wrap; word-break: break-word; }
+    /* Per-level colorization. Continuation lines (tracebacks) inherit their
+       record's class so a stack trace stays red under its ERROR. */
+    .adm-log-output .lvl-debug    { color: var(--muted, #8a8a8a); }
+    .adm-log-output .lvl-warning  { color: #c9931f; }
+    .adm-log-output .lvl-error,
+    .adm-log-output .lvl-critical { color: var(--danger, #d2544a); }
+    .adm-log-output .log-ts { opacity: .55; }
+    .adm-log-output .log-tag { color: var(--accent, #3a7abf); font-weight: 600; }
+    /* Keep the tag readable when the whole line is an error/warning color. */
+    .adm-log-output .lvl-error .log-tag,
+    .adm-log-output .lvl-critical .log-tag { color: inherit; text-decoration: underline; }
   </style>
 </head>
 <body class="account-page">
@@ -250,14 +265,11 @@
       <section class="account-section">
         <h2>Logs</h2>
         <div class="adm-logs-controls">
-          <label class="fld">Lines
-            <select id="adm-log-lines">
-              <option value="100">100</option>
-              <option value="200" selected>200</option>
-              <option value="500">500</option>
-              <option value="1000">1000</option>
-              <option value="2000">2000</option>
-            </select>
+          <label class="fld">Since
+            <input type="datetime-local" id="adm-log-since" step="60" />
+          </label>
+          <label class="fld">Until
+            <input type="datetime-local" id="adm-log-until" step="60" title="Leave blank for now" />
           </label>
           <label class="fld">Level
             <select id="adm-log-level">
@@ -267,6 +279,13 @@
               <option value="error">Error only</option>
             </select>
           </label>
+          <div class="adm-log-presets">
+            <button type="button" class="adm-log-preset" data-mins="15">15m</button>
+            <button type="button" class="adm-log-preset" data-mins="60">1h</button>
+            <button type="button" class="adm-log-preset" data-mins="360">6h</button>
+            <button type="button" class="adm-log-preset" data-mins="1440">1d</button>
+          </div>
+          <label class="adm-log-wrap-lbl"><input type="checkbox" id="adm-log-wrap" /> Wrap</label>
           <button type="button" id="adm-log-refresh">↻ Refresh</button>
         </div>
         <p id="adm-log-status" class="account-hint"></p>
@@ -386,35 +405,94 @@
       });
 
       // ── Logs tab ──────────────────────────────────────────────
+      const LOG_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+) (DEBUG|INFO|WARNING|ERROR|CRITICAL) /;
+      const esc = (s) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+      // Format a Date as the value a datetime-local input expects (local time).
+      function toLocalInput(d) {
+        const p = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      }
+
+      // Highlight bracketed subsystem tags like [maintenance] / [refresh] /
+      // [deviantart] so they stand out. Runs on already-escaped text.
+      const tagify = (escaped) => escaped.replace(/\[([a-z][a-z0-9 _-]*)\]/gi, '<span class="log-tag">[$1]</span>');
+
+      function renderLogLines(lines) {
+        // Colorize by level; continuation lines (tracebacks) inherit the class
+        // of the record they belong to.
+        let currentClass = '';
+        return lines.map(line => {
+          const m = LOG_LINE_RE.exec(line);
+          if (m) {
+            const lvl = m[2].toLowerCase();
+            currentClass = (lvl === 'debug' || lvl === 'warning' || lvl === 'error' || lvl === 'critical')
+              ? `lvl-${lvl}` : '';
+            const rest = tagify(esc(line.slice(m[0].length)));
+            return `<span class="${currentClass}"><span class="log-ts">${esc(m[1])}</span> ${esc(m[2])} ${rest}</span>`;
+          }
+          return `<span class="${currentClass}">${esc(line)}</span>`;
+        }).join('\n');
+      }
+
       async function loadLogs() {
         const out = $('adm-log-output');
         const status = $('adm-log-status');
-        const lines = $('adm-log-lines')?.value || '200';
         const level = $('adm-log-level')?.value || 'all';
+        const since = $('adm-log-since')?.value || '';
+        const until = $('adm-log-until')?.value || '';
         if (status) status.textContent = 'Loading…';
         try {
-          const r = await fetch(`/admin/logs?lines=${encodeURIComponent(lines)}&level=${encodeURIComponent(level)}`,
-                                { credentials: 'same-origin' });
+          const params = new URLSearchParams({ level });
+          if (since) params.set('since', since);
+          if (until) params.set('until', until);
+          const r = await fetch(`/admin/logs?${params.toString()}`, { credentials: 'same-origin' });
           const d = await r.json();
           if (!d.available) {
-            out.textContent = '';
+            out.innerHTML = '';
             status.textContent = 'File logging is not enabled (set LECTIO_LOG_DIR).';
             return;
           }
-          out.textContent = (d.lines || []).join('\n');
-          status.textContent = `${d.count} line${d.count === 1 ? '' : 's'}.`;
+          out.innerHTML = renderLogLines(d.lines || []);
+          const range = since && until ? `${since.replace('T', ' ')} → ${until.replace('T', ' ')}`
+            : since ? `since ${since.replace('T', ' ')}`
+            : until ? `until ${until.replace('T', ' ')}`
+            : 'most recent';
+          const cap = d.truncated ? ' — capped; narrow the range to see older lines' : '';
+          status.textContent = `${d.count} line${d.count === 1 ? '' : 's'} (${range})${cap}.`;
           out.scrollTop = out.scrollHeight;
         } catch {
           if (status) status.textContent = 'Failed to load logs.';
         }
       }
+
+      // Presets set "Since" to N minutes ago, clear "Until" (= now), and reload.
+      document.querySelectorAll('.adm-log-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mins = parseInt(btn.dataset.mins, 10) || 60;
+          const sinceInput = $('adm-log-since');
+          if (sinceInput) sinceInput.value = toLocalInput(new Date(Date.now() - mins * 60000));
+          if ($('adm-log-until')) $('adm-log-until').value = '';
+          loadLogs();
+        });
+      });
       $('adm-log-refresh')?.addEventListener('click', loadLogs);
-      $('adm-log-lines')?.addEventListener('change', loadLogs);
       $('adm-log-level')?.addEventListener('change', loadLogs);
-      // Lazy-load logs the first time the Logs tab is opened.
+      $('adm-log-since')?.addEventListener('change', loadLogs);
+      $('adm-log-until')?.addEventListener('change', loadLogs);
+      $('adm-log-wrap')?.addEventListener('change', (e) => {
+        $('adm-log-output')?.classList.toggle('wrap', e.target.checked);
+      });
+      // Lazy-load logs the first time the Logs tab is opened; default to the
+      // last hour so the view isn't the whole file.
       let _logsLoaded = false;
       document.querySelector('.adm-tab[data-panel="panel-logs"]')?.addEventListener('click', () => {
-        if (!_logsLoaded) { _logsLoaded = true; loadLogs(); }
+        if (!_logsLoaded) {
+          _logsLoaded = true;
+          const sinceInput = $('adm-log-since');
+          if (sinceInput && !sinceInput.value) sinceInput.value = toLocalInput(new Date(Date.now() - 3600000));
+          loadLogs();
+        }
       });
     })();
   </script>

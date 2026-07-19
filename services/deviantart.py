@@ -592,19 +592,69 @@ def refresh_deviantart_feed_by_id(conn: sqlite3.Connection, feed_id: str, client
     return added
 
 
+# Activity-weighted resync intervals (hours): how long a feed may go between
+# syncs, keyed by how recently the artist last posted. A watch-list dominated
+# by long-dormant artists (many last posted years ago) otherwise spends the
+# whole per-user rate budget re-checking corpses on a flat round-robin, so
+# active artists refresh slowly. Dormant feeds are checked rarely; the combined
+# "watch" stream is always due.
+_DA_RESYNC_INTERVAL_HOURS = (
+    (30, 1),        # posted within 30 days  → at most hourly
+    (180, 6),       # within ~6 months        → every 6h
+    (730, 48),      # within ~2 years         → every 2 days
+    (99999, 168),   # older / unknown-old     → weekly
+)
+_DA_NEVER_POSTED_INTERVAL_HOURS = 72  # empty feed: might start posting; check every 3d
+
+
+def _da_resync_due(source: str, last_synced_at: str | None, newest_post_at: str | None,
+                   now: datetime) -> bool:
+    """True if a feed should be refreshed this cycle. The combined watch stream
+    and never-synced feeds are always due; otherwise the allowed gap scales with
+    how recently the artist posted (active → often, dormant → weekly)."""
+    if source == "watch" or not last_synced_at:
+        return True
+    try:
+        last = datetime.fromisoformat(last_synced_at)
+    except ValueError:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    if newest_post_at:
+        try:
+            post = datetime.fromisoformat(newest_post_at)
+            if post.tzinfo is None:
+                post = post.replace(tzinfo=timezone.utc)
+            post_age_days = max(0.0, (now - post).total_seconds() / 86400)
+            interval_h = next(h for cap, h in _DA_RESYNC_INTERVAL_HOURS if post_age_days <= cap)
+        except (ValueError, StopIteration):
+            interval_h = _DA_RESYNC_INTERVAL_HOURS[-1][1]
+    else:
+        interval_h = _DA_NEVER_POSTED_INTERVAL_HOURS
+    return (now - last).total_seconds() >= interval_h * 3600
+
+
 def refresh_all_deviantart_feeds(conn: sqlite3.Connection, client_id: str, client_secret: str,
                                  access_token: str = "", max_feeds: int = 40) -> None:
-    """Refresh DeviantArt feeds, oldest-synced first, capped at `max_feeds` per call.
+    """Refresh DeviantArt feeds due for a resync, oldest-synced first, capped at
+    `max_feeds` per call.
 
-    The cap (round-robin via last_synced_at) keeps a large watch-list folder from
-    blowing through DeviantArt's per-user rate limit on every scheduler tick.
-    Stops early and quietly if the quota is hit. `max_feeds<=0` means no cap.
+    "Due" is activity-weighted (see _da_resync_due): active artists are eligible
+    hourly, dormant ones only weekly, so a watch-list full of years-dormant
+    artists no longer burns the whole per-user rate budget re-checking them and
+    starving the active ones. Stops early and quietly if the quota is hit.
+    `max_feeds<=0` means no cap.
     """
     try:
-        query = "SELECT id FROM deviantart_feeds ORDER BY last_synced_at ASC"
-        if max_feeds and max_feeds > 0:
-            query += f" LIMIT {int(max_feeds)}"
-        rows = conn.execute(query).fetchall()
+        rows = conn.execute(
+            """
+            SELECT f.id, f.source, f.last_synced_at,
+                   (SELECT MAX(e.published_at) FROM deviantart_entries e
+                    WHERE e.deviantart_feed_id = f.id) AS newest_post_at
+            FROM deviantart_feeds f
+            ORDER BY f.last_synced_at ASC
+            """
+        ).fetchall()
     except Exception:
         return  # table may not exist in some test envs
     if not rows:
@@ -612,11 +662,20 @@ def refresh_all_deviantart_feeds(conn: sqlite3.Connection, client_id: str, clien
     if not access_token and not (client_id and client_secret):
         LOGGER.info("[deviantart] %d feed(s) but no credentials configured; skipping refresh", len(rows))
         return
-    for row in rows:
+    now = datetime.now(timezone.utc)
+    due = [
+        r for r in rows
+        if _da_resync_due(_feed_source(r), r["last_synced_at"], r["newest_post_at"], now)
+    ]
+    if max_feeds and max_feeds > 0:
+        due = due[:max_feeds]
+    if not due:
+        return
+    for row in due:
         try:
             refresh_deviantart_feed_by_id(conn, str(row["id"]), client_id, client_secret, access_token=access_token)
         except DeviantArtRateLimited:
-            LOGGER.info("[deviantart] refresh hit rate limit; stopping this cycle")
+            LOGGER.info("[deviantart] refresh hit rate limit; stopping this cycle (%d were due)", len(due))
             return
         except Exception:
             LOGGER.exception("[deviantart] error refreshing feed %s", row["id"])
