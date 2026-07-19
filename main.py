@@ -15778,11 +15778,17 @@ def admin_logs(request: Request, lines: int = 5000, level: str = "all",
                since: str = "", until: str = ""):
     """Tail the instance log for the Admin → Logs tab. Admin-only.
 
-    ``since``/``until`` are optional local timestamps (``YYYY-MM-DDTHH:MM`` from
-    the datetime-local pickers) bounding the window; records outside it are
-    dropped. ``until`` is inclusive of its minute. ``lines`` caps the response
-    (tail of the window) so a wide range can't dump the whole file; ``truncated``
-    flags when the cap dropped older matches so the UI can suggest narrowing."""
+    ``since``/``until`` are optional timestamps (``YYYY-MM-DDTHH:MM`` from the
+    datetime-local pickers) bounding the window; records outside it are dropped.
+    They are interpreted in the SERVER's local timezone — the same frame the log
+    file's own timestamps are written in — so the window lines up with what's in
+    the file. (The pickers send the admin's browser-local time; on the normal
+    self-hosted setup the admin and server share a timezone. A cross-timezone
+    admin would see the window shifted by the offset — acceptable for this
+    single-instance tool.) ``until`` is inclusive of its minute. ``lines`` caps
+    the response (tail of the window) so a wide range can't dump the whole file;
+    ``truncated`` flags when the cap dropped older matches so the UI can suggest
+    narrowing."""
     if not _is_web_admin(_current_web_user(request)):
         return Response(status_code=403)
     max_lines = max(1, min(int(lines), 20000))
