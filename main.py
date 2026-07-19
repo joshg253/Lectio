@@ -7866,6 +7866,41 @@ def invalidate_has_manual_tags_cache() -> None:
         _has_manual_tags_cache.clear()
 
 
+def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of every manually-tagged entry — the "tag" half of the
+    Kept view's star-OR-tag set. When *feed_urls* is given, restrict to those feeds
+    (chunked to stay under SQLite's variable limit); None scans the whole library.
+
+    Reads reader's ``entry_tags`` directly over a short-lived connection: it lives
+    in reader's DB (not the meta DB), reader's high-level API has no bulk tag-key
+    scan, and this mirrors the existing raw-connection reads in this module
+    (``feed_site_map``, ``_sorted_star_key_window``). Shared by the Kept view list,
+    per-folder counts, and the sidebar badge so the three stay consistent."""
+    keys: set[tuple[str, str]] = set()
+    like = f"{MANUAL_TAG_KEY_PREFIX}%"
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            if feed_urls is None:
+                for row in conn.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
+                    keys.add((str(row[0]), str(row[1])))
+            else:
+                feed_list = list(feed_urls)
+                for i in range(0, len(feed_list), 900):
+                    chunk = feed_list[i:i + 900]
+                    ph = ",".join("?" for _ in chunk)
+                    for row in conn.execute(
+                        f"SELECT feed, id FROM entry_tags WHERE key LIKE ? AND feed IN ({ph})",
+                        [like, *chunk],
+                    ):
+                        keys.add((str(row[0]), str(row[1])))
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
+    return keys
+
+
 def invalidate_tag_counts_cache() -> None:
     with tag_counts_cache_lock:
         tag_counts_cache.clear()
@@ -10318,25 +10353,7 @@ def list_entries_for_feeds(
     # Tag-as-keep: the Saved view is now a unified "Kept" view showing entries
     # that are starred OR manually tagged. Load the tagged keys for the view's
     # feeds so the star fast path and filter can treat tags as a keep signal too.
-    tagged_entries_set: set[tuple[str, str]] = set()
-    if normalized_star_only:
-        try:
-            _tconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-            try:
-                _tlist = list(feed_urls)
-                for _i in range(0, len(_tlist), 900):
-                    _chunk = _tlist[_i:_i + 900]
-                    _ph = ",".join("?" for _ in _chunk)
-                    for _row in _tconn.execute(
-                        f"SELECT feed, id FROM entry_tags "
-                        f"WHERE key LIKE ? AND feed IN ({_ph})",
-                        [f"{MANUAL_TAG_KEY_PREFIX}%", *_chunk],
-                    ).fetchall():
-                        tagged_entries_set.add((str(_row[0]), str(_row[1])))
-            finally:
-                _tconn.close()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("kept view: tagged-key load failed: %s", exc)
+    tagged_entries_set = get_tagged_entry_keys(set(feed_urls)) if normalized_star_only else set()
     # Keys kept by either axis (star or tag) — drives the Kept view's fast path
     # and membership filter. `saved_entries_set` stays star-only (the `saved` flag).
     kept_entries_set = saved_entries_set | tagged_entries_set
@@ -10794,19 +10811,13 @@ def get_saved_unread_count() -> int:
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
             saved_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
+    for feed, eid in get_tagged_entry_keys():  # union the tag axis in
+        saved_by_feed.setdefault(feed, set()).add(eid)
     if not saved_by_feed:
-        # Fall through: there may still be tagged-but-unstarred entries below.
-        saved_by_feed = {}
+        return 0
     count = 0
     with get_reader() as reader:
         db = reader._storage.get_db()
-        for row in db.execute(
-            "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
-            (f"{MANUAL_TAG_KEY_PREFIX}%",),
-        ).fetchall():
-            saved_by_feed.setdefault(str(row[0]), set()).add(str(row[1]))
-        if not saved_by_feed:
-            return 0
         for feed_url, ids in saved_by_feed.items():
             ids_list = list(ids)
             for i in range(0, len(ids_list), 900):
@@ -10825,22 +10836,19 @@ def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> d
     sidebar sublist (the Kept view defaults to All, so totals — the whole backlog
     — are the meaningful number, unlike the unread badges on the feeds tree)."""
     # Union starred and tagged keys so the badge matches what the Kept view shows.
+    # Only the folders' own feeds matter, so constrain the tag scan to them rather
+    # than scanning the whole entry_tags table.
+    relevant_feeds: set[str] = set()
+    for urls in folder_feed_urls_by_id.values():
+        relevant_feeds |= urls
     kept_by_feed: dict[str, set[str]] = {}
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
-            kept_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
-    try:
-        _kc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
-        try:
-            for _row in _kc.execute(
-                "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
-                (f"{MANUAL_TAG_KEY_PREFIX}%",),
-            ).fetchall():
-                kept_by_feed.setdefault(str(_row[0]), set()).add(str(_row[1]))
-        finally:
-            _kc.close()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("saved counts: tagged-key load failed: %s", exc)
+            feed = str(row["feed_url"])
+            if feed in relevant_feeds:
+                kept_by_feed.setdefault(feed, set()).add(str(row["entry_id"]))
+    for feed, eid in get_tagged_entry_keys(relevant_feeds):
+        kept_by_feed.setdefault(feed, set()).add(eid)
     if not kept_by_feed:
         return {}
     counts: dict[int, int] = {}
