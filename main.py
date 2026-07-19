@@ -3357,6 +3357,18 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Feeds unsubscribed-but-retained for their curation (starred/tagged
+        # entries). Kept feeds are hidden from the feed tree / All Feeds /
+        # Uncategorized and have updates disabled, but their reader feed and
+        # entries survive so the Saved/Kept view can still browse them per feed.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kept_feeds (
+                feed_url TEXT PRIMARY KEY,
+                kept_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS browser_ua_feeds (
@@ -4481,19 +4493,41 @@ def get_all_feed_urls(conn: sqlite3.Connection) -> set[str]:
     return {str(r["feed_url"]) for r in rows}
 
 
-def get_all_reader_feed_urls() -> set[str]:
+def get_kept_feed_urls(conn: sqlite3.Connection | None = None) -> set[str]:
+    """Feeds unsubscribed-but-retained for their curation (see kept_feeds table).
+
+    They still exist in reader (so their starred/tagged entries and tags survive)
+    but are hidden from the feed tree, All Feeds, Uncategorized, and counts — only
+    the Saved/Kept view surfaces them, grouped under their original feed name.
+    """
+    if conn is not None:
+        rows = conn.execute("SELECT feed_url FROM kept_feeds").fetchall()
+        return {str(r["feed_url"]) for r in rows}
+    with get_meta_connection() as own:
+        rows = own.execute("SELECT feed_url FROM kept_feeds").fetchall()
+        return {str(r["feed_url"]) for r in rows}
+
+
+def get_all_reader_feed_urls(include_kept: bool = False) -> set[str]:
     """Return every feed URL the reader is subscribed to.
 
     Unlike get_all_feed_urls (which reads folder_feeds), this covers feeds that
     were never assigned to a folder — the source set for the virtual
     "Uncategorized" folder. Read straight from the reader DB to stay O(feeds)
     without materializing full feed objects.
+
+    Kept feeds (unsubscribed-but-retained for curation) are excluded by default
+    so they don't resurface in the tree / All Feeds / Uncategorized / counts. The
+    Saved/Kept view passes include_kept=True to browse them.
     """
     conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
     try:
-        return {str(r[0]) for r in conn.execute("SELECT url FROM feeds")}
+        urls = {str(r[0]) for r in conn.execute("SELECT url FROM feeds")}
     finally:
         conn.close()
+    if not include_kept:
+        urls -= get_kept_feed_urls()
+    return urls
 
 
 # A "feeds" rule scope targets an explicit set of feeds (not a whole folder). Its
@@ -7579,9 +7613,32 @@ def get_manual_tags_for_resource(reader, resource_id: tuple[str, str]) -> list[s
     return sorted(set(tags))
 
 
+def _entry_is_starred(feed_url: str, entry_id: str) -> bool:
+    """True if the entry has a saved_entries (star) row."""
+    with get_meta_connection() as conn:
+        return conn.execute(
+            "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone() is not None
+
+
+def _entry_should_keep_archive(feed_url: str, entry_id: str) -> bool:
+    """Whether an entry's offline archive must be retained.
+
+    Since the tag-as-keep flip, both Star and Tag are keep signals: an archive is
+    kept iff the entry is starred OR carries at least one manual tag. The star-off
+    and last-tag-removal paths consult this before enqueuing an archive removal so
+    dropping one axis never wipes an archive the other axis still needs.
+    """
+    if _entry_is_starred(feed_url, entry_id):
+        return True
+    return bool(get_manual_tags_for_entry(feed_url, entry_id))
+
+
 def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None) -> list[str]:
     next_tags = parse_manual_hashtags(raw_tags)
 
+    added_any = False
     with get_reader() as reader:
         entry = reader.get_entry((feed_url, entry_id), None)
         if not entry:
@@ -7598,12 +7655,25 @@ def set_manual_tags_for_entry(feed_url: str, entry_id: str, raw_tags: str | None
         for added in next_tags:
             if added in existing_set:
                 continue
+            added_any = True
             # Use presence-only tag (no JSON value) to avoid type issues
             # with reader.set_tag's typed `value` parameter.
             reader.set_tag(resource_id, f"{MANUAL_TAG_KEY_PREFIX}{added}")
 
     invalidate_has_manual_tags_cache()
     invalidate_tag_counts_cache()
+
+    # Tag is now a keep-forever signal: capture the whole entry offline when a tag
+    # is added, and release the archive when the last tag is removed and the entry
+    # isn't starred. Mirrors the star toggle's archive lifecycle.
+    try:
+        if added_any:
+            starred_archive_service.enqueue_archive(feed_url, entry_id)
+        elif not next_tags and not _entry_is_starred(feed_url, entry_id):
+            starred_archive_service.enqueue_removal(feed_url, entry_id)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("tag archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+
     return next_tags
 
 
@@ -7625,6 +7695,15 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
             try:
                 reader.delete_tag(entry.resource_id, key)
                 removed += 1
+                # Tag-as-keep: releasing the last tag on an unstarred entry
+                # releases its offline archive too.
+                feed_url, entry_id = entry.resource_id
+                if (not get_manual_tags_for_resource(reader, entry.resource_id)
+                        and not _entry_is_starred(feed_url, entry_id)):
+                    try:
+                        starred_archive_service.enqueue_removal(feed_url, entry_id)
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("tag archive removal failed for %s/%s: %s", feed_url, entry_id, exc)
             except Exception:
                 # Keep going so one bad entry doesn't abort the whole cleanup,
                 # but log it so the failure is diagnosable.
@@ -10236,6 +10315,32 @@ def list_entries_for_feeds(
                     except Exception:
                         continue
 
+    # Tag-as-keep: the Saved view is now a unified "Kept" view showing entries
+    # that are starred OR manually tagged. Load the tagged keys for the view's
+    # feeds so the star fast path and filter can treat tags as a keep signal too.
+    tagged_entries_set: set[tuple[str, str]] = set()
+    if normalized_star_only:
+        try:
+            _tconn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+            try:
+                _tlist = list(feed_urls)
+                for _i in range(0, len(_tlist), 900):
+                    _chunk = _tlist[_i:_i + 900]
+                    _ph = ",".join("?" for _ in _chunk)
+                    for _row in _tconn.execute(
+                        f"SELECT feed, id FROM entry_tags "
+                        f"WHERE key LIKE ? AND feed IN ({_ph})",
+                        [f"{MANUAL_TAG_KEY_PREFIX}%", *_chunk],
+                    ).fetchall():
+                        tagged_entries_set.add((str(_row[0]), str(_row[1])))
+            finally:
+                _tconn.close()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("kept view: tagged-key load failed: %s", exc)
+    # Keys kept by either axis (star or tag) — drives the Kept view's fast path
+    # and membership filter. `saved_entries_set` stays star-only (the `saved` flag).
+    kept_entries_set = saved_entries_set | tagged_entries_set
+
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
         # actual site domain rather than the feed host (e.g. hnrss.org).
@@ -10283,19 +10388,19 @@ def list_entries_for_feeds(
                 if e is not None:
                     all_feed_entries.append(e)
         elif normalized_star_only:
-            # Star fast path (same reasoning as the tag fix above): starred
-            # entries are sparse and often OLD — imported stars sit far past
+            # Kept fast path (same reasoning as the tag fix above): kept
+            # entries are sparse and often OLD — imported stars/tags sit far past
             # any newest-N fetch window, so windowed-scan-then-post-filter
-            # shows nothing. saved_entries_set is already restricted to the
-            # view's feeds; point-lookup exactly those keys instead.
-            star_keys: Iterable[tuple[str, str]] = saved_entries_set
-            if len(saved_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
-                # Big backlog: hydrating every saved key costs seconds (6k
+            # shows nothing. kept_entries_set (star OR tag) is already restricted
+            # to the view's feeds; point-lookup exactly those keys instead.
+            star_keys: Iterable[tuple[str, str]] = kept_entries_set
+            if len(kept_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
+                # Big backlog: hydrating every kept key costs seconds (6k
                 # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
                 # the raw keys and hydrate only the visible window. Skipped for
                 # tag/search, which post-filter and need the whole set.
                 star_keys = _sorted_star_key_window(
-                    saved_entries_set,
+                    kept_entries_set,
                     sort_by=normalized_sort_by,
                     sort_dir=normalized_sort_dir,
                     reader_read_filter=reader_read_filter,
@@ -10466,7 +10571,8 @@ def list_entries_for_feeds(
                 manual_tags_for_record = get_manual_tags_for_resource(reader, entry.resource_id)
                 if normalized_selected_tag not in manual_tags_for_record:
                     continue
-            if normalized_star_only and not is_saved:
+            # Kept view keeps anything starred OR tagged (the unified keep axis).
+            if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
                 continue
             # Unread composes with star_only (Saved view narrowed to unread);
             # history stays exclusive with starred (it sorts by read time).
@@ -10681,41 +10787,65 @@ def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
 
 
 def get_saved_unread_count() -> int:
-    """Unread count across all starred/saved entries, for the sidebar's Saved
-    Articles badge. Starred sets are small (hundreds), so a per-feed IN query
+    """Unread count across all kept (starred OR tagged) entries, for the sidebar's
+    Saved Articles badge. Kept sets are small (hundreds), so a per-feed IN query
     against reader's entries table is cheap."""
-    saved_by_feed: dict[str, list[str]] = {}
+    saved_by_feed: dict[str, set[str]] = {}
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
-            saved_by_feed.setdefault(row["feed_url"], []).append(row["entry_id"])
+            saved_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
     if not saved_by_feed:
-        return 0
+        # Fall through: there may still be tagged-but-unstarred entries below.
+        saved_by_feed = {}
     count = 0
     with get_reader() as reader:
         db = reader._storage.get_db()
+        for row in db.execute(
+            "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
+            (f"{MANUAL_TAG_KEY_PREFIX}%",),
+        ).fetchall():
+            saved_by_feed.setdefault(str(row[0]), set()).add(str(row[1]))
+        if not saved_by_feed:
+            return 0
         for feed_url, ids in saved_by_feed.items():
-            placeholders = ",".join("?" for _ in ids)
-            row = db.execute(
-                f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({placeholders})",
-                (feed_url, *ids),
-            ).fetchone()
-            count += int(row[0] or 0)
+            ids_list = list(ids)
+            for i in range(0, len(ids_list), 900):
+                chunk = ids_list[i:i + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                row = db.execute(
+                    f"SELECT COUNT(*) FROM entries WHERE feed = ? AND read = 0 AND id IN ({placeholders})",
+                    (feed_url, *chunk),
+                ).fetchone()
+                count += int(row[0] or 0)
     return count
 
 
 def get_saved_counts_by_folder(folder_feed_urls_by_id: dict[int, set[str]]) -> dict[int, int]:
-    """Total starred/saved entries per folder, for the Saved Articles sidebar
-    sublist (the Saved view defaults to All, so totals — the whole backlog —
-    are the meaningful number, unlike the unread badges on the feeds tree)."""
-    saved_by_feed: dict[str, int] = {}
+    """Total kept (starred OR tagged) entries per folder, for the Saved Articles
+    sidebar sublist (the Kept view defaults to All, so totals — the whole backlog
+    — are the meaningful number, unlike the unread badges on the feeds tree)."""
+    # Union starred and tagged keys so the badge matches what the Kept view shows.
+    kept_by_feed: dict[str, set[str]] = {}
     with get_meta_connection() as conn:
-        for row in conn.execute("SELECT feed_url, COUNT(*) AS n FROM saved_entries GROUP BY feed_url"):
-            saved_by_feed[str(row["feed_url"])] = int(row["n"])
-    if not saved_by_feed:
+        for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
+            kept_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
+    try:
+        _kc = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            for _row in _kc.execute(
+                "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
+                (f"{MANUAL_TAG_KEY_PREFIX}%",),
+            ).fetchall():
+                kept_by_feed.setdefault(str(_row[0]), set()).add(str(_row[1]))
+        finally:
+            _kc.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("saved counts: tagged-key load failed: %s", exc)
+    if not kept_by_feed:
         return {}
     counts: dict[int, int] = {}
     for folder_id, urls in folder_feed_urls_by_id.items():
-        total = sum(n for feed, n in saved_by_feed.items() if feed in urls)
+        total = sum(len(ids) for feed, ids in kept_by_feed.items() if feed in urls)
         if total:
             counts[folder_id] = total
     return counts
@@ -12940,6 +13070,11 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
     # posts list, which reads as "added but missing".
     enable_feed(feed_url)
 
+    # Re-subscribing a kept-but-unsubscribed feed clears its kept state so it
+    # rejoins the tree/All Feeds instead of staying hidden in the Kept view.
+    with get_meta_connection() as conn:
+        conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
+
     with get_meta_connection() as conn:
         # Root ("All Feeds") is treated the same as Uncategorized: a feed placed
         # there is stored folderless (no folder_feeds row) rather than pinned to
@@ -13351,6 +13486,12 @@ def purge_orphaned_feed(
         feed_tag_service.delete_for_feed(feed_url)
     except Exception:  # noqa: BLE001
         LOGGER.warning("[purge] entry_feed_tags cleanup failed for %s", feed_url)
+
+    # Drop any kept-feed marker (a kept feed that's now being fully removed).
+    try:
+        conn.execute("DELETE FROM kept_feeds WHERE feed_url = ?", (feed_url,))
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("[purge] kept_feeds cleanup failed for %s", feed_url)
 
     # Step 4 — WebSub unsubscribe (best-effort; websub_service may be None).
     if websub_service:
@@ -16203,6 +16344,11 @@ def _home_inner(
         if (list_feed_url or selected_star_only)
         else filtered_feed_urls - disabled_feed_urls
     )
+    # The Kept view browses kept-but-unsubscribed feeds too: they're hidden from
+    # the tree/All Feeds but their starred/tagged entries (with real tags) still
+    # live in reader, so add them to the scan scope when in the saved/kept view.
+    if selected_star_only:
+        entry_feed_urls = entry_feed_urls | get_kept_feed_urls()
     posts = list_entries_for_feeds(
         entry_feed_urls,
         limit=limit,
@@ -20817,12 +20963,14 @@ def unsubscribe_feed(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     migrate_curation_to: str | None = Form(default=None),
+    keep_entries: str = Form(default=""),
 ):
     normalized_read_filter = normalize_read_filter(read_filter)
     sort_query_s = build_sort_query(sort_by, sort_dir)
     star_only_query = build_star_only_query(star_only)
     resume_read_filter_query = build_resume_read_filter_query(resume_read_filter, active_read_filter=normalized_read_filter)
     read_filter_query_s = build_read_filter_query(read_filter)
+    keep = normalize_star_only(keep_entries)  # reuse the truthy-form parser
 
     ok = True
     message = "Feed unsubscribed."
@@ -20838,19 +20986,37 @@ def unsubscribe_feed(
             ).fetchone()
 
         if not still_used:
-            # When a target feed is given, migrate this feed's tags/stars onto it
-            # (synthesizing entries) instead of archiving the stars — so curation
-            # isn't lost on unsubscribe.
-            _migrate_to = (migrate_curation_to or "").strip() or None
-            if _migrate_to == feed_url:
-                _migrate_to = None  # can't migrate onto itself
-            with get_reader() as reader:
+            if keep:
+                # Keep-but-unsubscribe: retain the reader feed + its curated
+                # (starred/tagged) entries so they stay browsable per-feed in the
+                # Saved/Kept view. Just hide it from the tree and stop updates.
                 with get_meta_connection() as conn:
-                    purge_orphaned_feed(
-                        reader, conn, feed_url,
-                        archive_pending=_migrate_to is None,
-                        migrate_curation_to=_migrate_to,
+                    conn.execute(
+                        "INSERT OR IGNORE INTO kept_feeds (feed_url) VALUES (?)",
+                        (feed_url,),
                     )
+                disable_feed(feed_url)
+                # Flush any pending captures so content survives if the feed is
+                # ever fully removed later.
+                try:
+                    starred_archive_service.force_archive_pending_for_feed(feed_url)
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning("[keep] force-archive failed for %s: %s", feed_url, exc)
+                message = "Feed unsubscribed; curated posts kept."
+            else:
+                # When a target feed is given, migrate this feed's tags/stars onto it
+                # (synthesizing entries) instead of archiving the stars — so curation
+                # isn't lost on unsubscribe.
+                _migrate_to = (migrate_curation_to or "").strip() or None
+                if _migrate_to == feed_url:
+                    _migrate_to = None  # can't migrate onto itself
+                with get_reader() as reader:
+                    with get_meta_connection() as conn:
+                        purge_orphaned_feed(
+                            reader, conn, feed_url,
+                            archive_pending=_migrate_to is None,
+                            migrate_curation_to=_migrate_to,
+                        )
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
@@ -22412,7 +22578,9 @@ def toggle_entry_saved(
     try:
         if saved:
             starred_archive_service.enqueue_archive(feed_url, entry_id)
-        else:
+        elif not get_manual_tags_for_entry(feed_url, entry_id):
+            # Only release the archive when no keep signal remains — a manually
+            # tagged entry keeps its capture even after it's unstarred.
             starred_archive_service.enqueue_removal(feed_url, entry_id)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)

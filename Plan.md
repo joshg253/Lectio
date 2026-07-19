@@ -5,7 +5,25 @@ this file only tracks what's still open.
 
 ## Now
 
-(nothing — CodeQL triage completed and verified 2026-07-08: the code-scanning
+### Tag-as-keep — post-merge migration (Part C, not yet run)
+
+The semantics flip shipped: **tagging now keeps + full-archives** a post (same
+offline capture as starring), an archive is retained while a post is starred OR
+tagged, the Saved view is a unified **Kept** view (star OR tag, per-feed browse),
+and unsubscribing a curated feed defaults to **keeping** it (hidden from the tree
+via the new `kept_feeds` table, still browsable in Saved). Remaining follow-up —
+a standalone throttled script (`scripts/migrate_tag_as_keep.py`, still to write)
+to run once against live data after deploy:
+
+1. **Retro-archive** every existing manually-tagged entry with no `complete`
+   archive row (`enqueue_archive`, per-user via tenancy context) — ~1,432 tagged
+   + more across live feeds seed pending captures for the worker.
+2. **Wayback backfill** the genuinely-empty curated posts (<300 chars stored,
+   ~89 in dead feeds): closest Archive.org snapshot → readability-extract → fill
+   reader `entries.content` in reader's JSON shape (`[{"value":html,...}]`),
+   throttled + honest UA, skip on no snapshot.
+
+(nothing else — CodeQL triage completed and verified 2026-07-08: the code-scanning
 board is at **zero open alerts**. The fixes merged in PR #114 auto-closed their
 alerts; the `_safe_next`-guarded login redirect re-flagged once post-merge
 (alert 152) and was dismissed — the stock query can't model a

@@ -1265,7 +1265,8 @@
       <p id="unsub-migrate-body" class="action-modal-hint"></p>
       <div id="unsub-migrate-curation" hidden>
         <p id="unsub-migrate-curation-note" class="afd-msg afd-msg--warn"></p>
-        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" checked />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-keep" value="keep" checked /> Keep curated posts (hide the feed but keep its starred/tagged items — browse them in Saved)</label>
+        <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-skip" value="skip" />Just unsubscribe (unmoved stars are archived; tags are lost)</label>
         <label class="action-modal-label"><input type="radio" name="unsub-migrate-choice" id="unsub-migrate-move" value="move" /> Move items to another feed:</label>
         <div id="unsub-migrate-move-panel" hidden>
           <input id="unsub-migrate-target" class="action-modal-input" list="unsub-migrate-candidates" placeholder="Type to search feeds…" autocomplete="off" />

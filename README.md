@@ -57,6 +57,11 @@ The short version:
   (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
   add-to-Quire rules; scoped to all feeds, a folder, a feed, or a
   multi-selected set; run history shows exactly what each run touched.
+- **Keep vs. to-do** — **tagging a post keeps it forever**: it triggers a full
+  offline capture (page + images) so tagged posts survive a dead feed, while
+  **starring** is the lightweight "needs dealing with" marker. A post is kept
+  (never auto-pruned, archived offline) whenever it's starred **or** tagged; the
+  unified **Saved** view browses everything kept, filterable per feed and per tag.
 - **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
   sheets), or a browser extension that ships the rendered page past paywalls;
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
@@ -72,8 +77,10 @@ The short version:
   stale autodiscovery links and schemeless input), Page Feeds for feedless
   sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
   recovery, per-folder refresh cadence, feed compare, fetch history,
-  duplicate-feed scanning, and curation-preserving unsubscribe/combine/move.
-  Per-post fixes: delete (tombstoned), edit date, edit title.
+  duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —
+  unsubscribing a feed that has starred/tagged posts defaults to **keeping**
+  them: the feed leaves the tree but its curated items stay browsable per feed
+  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can

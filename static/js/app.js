@@ -4273,6 +4273,7 @@
     async function unsubscribeFeedRequest(feedUrl, folderId, opts = {}) {
       const body = new URLSearchParams({ folder_id: folderId, feed_url: feedUrl });
       if (opts.migrateCurationTo) body.set('migrate_curation_to', opts.migrateCurationTo);
+      if (opts.keepEntries) body.set('keep_entries', '1');
       const resp = await fetch('/feeds/unsubscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-unsubscribe' },
@@ -4375,7 +4376,7 @@
         const parts = [];
         if (counts.stars) parts.push(`${counts.stars} starred`);
         if (counts.tagged) parts.push(`${counts.tagged} tagged`);
-        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}. Move them onto another feed so they aren't lost?`;
+        noteEl.textContent = `This feed has ${parts.join(' and ')} item${(counts.stars + counts.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
         // Filterable typeahead: datalist option label -> feed url. Titles can
         // repeat, so disambiguate duplicate labels with a short host hint.
         targetList.innerHTML = '';
@@ -4396,10 +4397,13 @@
           const o = document.createElement('option'); o.value = uniq; targetList.appendChild(o);
         });
         targetSel._labelToUrl = labelToUrl;
-        // "Just unsubscribe" is the default so the dialog opens clean (no list);
-        // picking "Move items" reveals the picker + item list.
+        // "Keep curated posts" is the default when a feed carries curation — it
+        // retains the starred/tagged items (browsable in Saved) instead of losing
+        // tags. The dialog opens clean (no list); "Move items" reveals the picker.
+        const keepRadio = document.getElementById('unsub-migrate-keep');
         const skipRadio = document.getElementById('unsub-migrate-skip');
-        if (skipRadio) skipRadio.checked = true;
+        if (keepRadio) keepRadio.checked = true;
+        if (skipRadio) skipRadio.checked = false;
         moveRadio.checked = false;
         moveRadio.disabled = candidates.length === 0;
         curationEl.hidden = false;
@@ -4453,7 +4457,7 @@
             if (dc.stars) parts.push(`${dc.stars} starred`);
             if (dc.tagged) parts.push(`${dc.tagged} tagged`);
             if (parts.length) {
-              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}. Move them onto another feed so they aren't lost?`;
+              noteEl.textContent = `This feed has ${parts.join(' and ')} item${(dc.stars + dc.tagged) === 1 ? '' : 's'}. They'll be kept and browsable in Saved (default), or move them onto another feed.`;
             } else {
               noteEl.textContent = 'All curated items have been moved — nothing left to lose.';
             }
@@ -4562,6 +4566,7 @@
         async function onConfirm() {
           let migrateTo = null;
           let moveSubset = null;
+          const keepEntries = hasCuration && currentChoice() === 'keep';
           if (hasCuration && currentChoice() === 'move') {
             migrateTo = (targetSel._labelToUrl && targetSel._labelToUrl.get(targetSel.value)) || null;
             if (!migrateTo) { window.alert('Pick a feed to move the items to, or choose "Just unsubscribe".'); return; }
@@ -4593,7 +4598,7 @@
             }
           }
           cleanup();
-          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo }); resolve(true); }
+          try { await unsubscribeFeedRequest(feedUrl, folderId, { ...opts, migrateCurationTo: migrateTo, keepEntries }); resolve(true); }
           catch (err) { window.alert(`Unsubscribe failed: ${err}`); resolve(false); }
         }
         function onCancel() { cleanup(); resolve(false); }
