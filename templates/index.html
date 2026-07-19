@@ -2279,9 +2279,8 @@
           <dt>Image cache</dt><dd id="stat-img-cache-summary">—</dd>
           <dt>Reader DB</dt><dd id="stat-reader-db-size">—</dd>
           <dt>Meta DB</dt><dd id="stat-meta-db-size">—</dd>
-          {% if youtube_sync_last_at %}
-          <dt>YT sync</dt><dd>{{ youtube_sync_last_at }}<br><small>{{ youtube_sync_last_result }}</small></dd>
-          {% endif %}
+          <dt class="stat-yt-sync-row"{% if not youtube_sync_last_at %} hidden{% endif %}>YT sync</dt>
+          <dd class="stat-yt-sync-row"{% if not youtube_sync_last_at %} hidden{% endif %}><span id="stat-yt-sync-at">{{ youtube_sync_last_at }}</span><br><small id="stat-yt-sync-result">{{ youtube_sync_last_result }}</small></dd>
         </dl>
       </div>
 

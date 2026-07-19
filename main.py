@@ -13591,9 +13591,10 @@ def _run_youtube_sync(folder_id: int | None = None) -> dict:
         remove_feed=remove_feed_from_folder,
     )
 
-    # Record last-sync time and summary for display in the UI.
-    from datetime import datetime
-    now_iso = datetime.now().strftime("%Y-%m-%d %H:%M %Z")
+    # Record last-sync time and summary for display in the UI. Use time.strftime
+    # (local time with a real %Z) — datetime.now() is naive, so its %Z renders
+    # empty and the timestamp shows without a zone unlike the other stats.
+    now_iso = time.strftime("%Y-%m-%d %H:%M %Z")
     if result["error"]:
         last_result = f"Error: {result['error']}"
     else:
@@ -24361,6 +24362,11 @@ def get_stats():
         root_id = get_root_folder_id(conn)
         folder_count = conn.execute("SELECT COUNT(*) FROM folders WHERE id != ?", (root_id,)).fetchone()[0]
         saved_count = conn.execute("SELECT COUNT(*) FROM saved_entries").fetchone()[0]
+        # Served fresh so the Stats tab reflects the latest (e.g. 3am) sync
+        # without a full page reload — the rest of the grid already refreshes
+        # here, but the YT-sync line used to be baked into the initial render.
+        youtube_sync_last_at = get_setting(conn, YOUTUBE_SYNC_LAST_AT_KEY) or ""
+        youtube_sync_last_result = get_setting(conn, YOUTUBE_SYNC_LAST_RESULT_KEY) or ""
 
     with get_reader() as reader:
         counts = reader.get_entry_counts()
@@ -24412,6 +24418,8 @@ def get_stats():
             "starred_archive_failed": archive_stats["failed"],
             "starred_archive_pending_removal": archive_stats["pending_removal"],
             "starred_archive_asset_count": archive_stats["asset_count"],
+            "youtube_sync_last_at": youtube_sync_last_at,
+            "youtube_sync_last_result": youtube_sync_last_result,
         }
     )
 

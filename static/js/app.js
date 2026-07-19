@@ -517,6 +517,13 @@
         document.getElementById('stat-img-cache-summary').textContent = `${imgCacheCount} (${formatBytes(data.img_cache_db_bytes || 0)})`;
         document.getElementById('stat-reader-db-size').textContent = formatBytes(data.reader_db_bytes);
         document.getElementById('stat-meta-db-size').textContent = formatBytes(data.meta_db_bytes);
+        // YT sync line refreshes with the rest of the grid (it used to be baked
+        // into the initial page render, so a 3am sync only showed after reload).
+        const ytAt = document.getElementById('stat-yt-sync-at');
+        const ytRes = document.getElementById('stat-yt-sync-result');
+        if (ytAt) ytAt.textContent = data.youtube_sync_last_at || '';
+        if (ytRes) ytRes.textContent = data.youtube_sync_last_result || '';
+        document.querySelectorAll('.stat-yt-sync-row').forEach(el => { el.hidden = !data.youtube_sync_last_at; });
       } catch (_e) {
         for (const id of statIds) {
           const el = document.getElementById(id);
