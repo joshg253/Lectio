@@ -22756,7 +22756,8 @@ async def refresh_saved_article_content(
         "extracted": bool(result.get("extracted")),
         "title": result.get("title"),
         "feed_url": feed_url,
-        "entry_id": entry_id,
+        "entry_id": entry_id,   # stored key
+        "url": url,             # normalized source URL that was re-fetched
     })
 
 

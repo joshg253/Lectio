@@ -2027,6 +2027,7 @@
     // Sentinel folder id for a feed that belongs to no folder (an Uncategorized
     // orphan). Real folder ids are >= 1; the Uncategorized virtual folder is -1.
     const ORPHAN_FOLDER_ID = 0;
+    const SAVED_FEED_URL = 'lectio:saved';  // the synthetic Saved Articles feed
     const feedPropReparseBtn = document.getElementById('feed-prop-reparse-btn');
     const feedPropReparseStatus = document.getElementById('feed-prop-reparse-status');
     const feedPropBrowserUaRow = document.getElementById('feed-prop-browser-ua-row');
@@ -5651,7 +5652,7 @@
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, contextPostFeedUrl === 'lectio:saved' && Boolean(contextPostEntryId));
+          setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -6005,7 +6006,7 @@
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, contextPostFeedUrl === 'lectio:saved' && Boolean(contextPostEntryId));
+            setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
