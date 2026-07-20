@@ -10841,6 +10841,86 @@
         return;
       }
 
+      const deadTrigger = event.target.closest('[data-problem-feed-mark-dead]');
+      if (deadTrigger) {
+        event.preventDefault();
+        const url = deadTrigger.getAttribute('data-feed-url');
+        if (!url) return;
+        const modal = document.getElementById('problematic-feeds-modal');
+        const failingPanel = modal?.querySelector('[data-problem-panel="failing"]');
+        const nrPanel = modal?.querySelector('[data-problem-panel="needs-replacement"]');
+        const li = deadTrigger.closest('.problem-feed-item');
+        deadTrigger.disabled = true;
+        problemFeedAckRequest(url, '/settings/problematic-feeds/mark-dead', 'lectio-problem-feed-mark-dead')
+          .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+          .then(() => {
+            if (li && nrPanel) {
+              // Swap the mark-dead button into an undo (back-to-Failing) button.
+              deadTrigger.setAttribute('data-problem-feed-unmark-dead', '');
+              deadTrigger.removeAttribute('data-problem-feed-mark-dead');
+              deadTrigger.title = 'Back to Failing (re-enable fetching)';
+              deadTrigger.setAttribute('aria-label', 'Back to Failing');
+              const icon = deadTrigger.querySelector('.material-symbols-rounded');
+              if (icon) icon.textContent = 'undo';
+              deadTrigger.disabled = false;
+              const divider = nrPanel.previousElementSibling;
+              if (divider?.classList.contains('problem-feed-section-divider')) divider.removeAttribute('hidden');
+              let nrList = nrPanel.querySelector('.problem-feed-list');
+              if (!nrList) {
+                nrList = document.createElement('ul');
+                nrList.className = 'problem-feed-list';
+                nrPanel.appendChild(nrList);
+              }
+              nrList.appendChild(li);
+              ensureEmptyMessage(failingPanel, 'No failing feeds right now.');
+              if (modal) updateProblemTabCount('failing', -1);
+            }
+          })
+          .catch(() => { deadTrigger.disabled = false; });
+        return;
+      }
+
+      const unmarkDeadTrigger = event.target.closest('[data-problem-feed-unmark-dead]');
+      if (unmarkDeadTrigger) {
+        event.preventDefault();
+        const url = unmarkDeadTrigger.getAttribute('data-feed-url');
+        if (!url) return;
+        const modal = document.getElementById('problematic-feeds-modal');
+        const failingPanel = modal?.querySelector('[data-problem-panel="failing"]');
+        const nrPanel = modal?.querySelector('[data-problem-panel="needs-replacement"]');
+        const li = unmarkDeadTrigger.closest('.problem-feed-item');
+        unmarkDeadTrigger.disabled = true;
+        problemFeedAckRequest(url, '/settings/problematic-feeds/unmark-dead', 'lectio-problem-feed-unmark-dead')
+          .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+          .then(() => {
+            if (li && failingPanel) {
+              unmarkDeadTrigger.setAttribute('data-problem-feed-mark-dead', '');
+              unmarkDeadTrigger.removeAttribute('data-problem-feed-unmark-dead');
+              unmarkDeadTrigger.title = 'Dead — needs a replacement (stop fetching; keep saved/tagged posts)';
+              unmarkDeadTrigger.setAttribute('aria-label', 'Dead — needs replacement');
+              const icon = unmarkDeadTrigger.querySelector('.material-symbols-rounded');
+              if (icon) icon.textContent = 'heart_broken';
+              unmarkDeadTrigger.disabled = false;
+              let failingList = failingPanel.querySelector('.problem-feed-list');
+              if (!failingList) {
+                failingList = document.createElement('ul');
+                failingList.className = 'problem-feed-list';
+                const emptyMsg = failingPanel.querySelector('.muted');
+                if (emptyMsg) emptyMsg.replaceWith(failingList);
+                else failingPanel.insertBefore(failingList, failingPanel.firstChild);
+              }
+              failingList.appendChild(li);
+              if (!nrPanel?.querySelector('.problem-feed-item')) {
+                const divider = nrPanel?.previousElementSibling;
+                if (divider?.classList.contains('problem-feed-section-divider')) divider.setAttribute('hidden', '');
+              }
+              if (modal) updateProblemTabCount('failing', 1);
+            }
+          })
+          .catch(() => { unmarkDeadTrigger.disabled = false; });
+        return;
+      }
+
       const unsubTrigger = event.target.closest('[data-problem-feed-unsubscribe]');
       if (unsubTrigger) {
         event.preventDefault();

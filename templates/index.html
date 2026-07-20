@@ -1916,8 +1916,10 @@
 
       <!-- Feeds tab -->
       <div id="settings-tab-feeds" class="settings-tab-panel" hidden>
-        {% set failing_feeds = problematic_feeds | selectattr("acknowledged_at", "none") | list %}
-        {% set acked_feeds = problematic_feeds | rejectattr("acknowledged_at", "none") | list %}
+        {% set needs_replacement_feeds = problematic_feeds | selectattr("needs_replacement") | list %}
+        {% set _active_problem_feeds = problematic_feeds | rejectattr("needs_replacement") | list %}
+        {% set failing_feeds = _active_problem_feeds | selectattr("acknowledged_at", "none") | list %}
+        {% set acked_feeds = _active_problem_feeds | rejectattr("acknowledged_at", "none") | list %}
         <div class="feeds-tab-bar" role="tablist">
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
@@ -1972,7 +1974,8 @@
                     <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
                     <div class="problem-feed-actions">
                       <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
-                      <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Mark as checked OK" aria-label="Mark as checked OK"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Working — they're just blocking us (mute; stays on ~daily retry)" aria-label="Mute — feed is fine"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                      <button type="button" class="problem-feed-action" data-problem-feed-mark-dead data-feed-url="{{ row.feed_url }}" title="Dead — needs a replacement (stop fetching; keep saved/tagged posts)" aria-label="Dead — needs replacement"><span class="material-symbols-rounded" aria-hidden="true">heart_broken</span></button>
                       <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
                     </div>
                   </div>
@@ -2007,6 +2010,31 @@
                   <div class="problem-feed-meta">
                     <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                     {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+                  </div>
+                  {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% endif %}
+            </div>
+            <div class="problem-feed-section-divider" {% if not needs_replacement_feeds %}hidden{% endif %} data-needs-replacement-divider>Needs replacement</div>
+            <div data-problem-panel="needs-replacement">
+              {% if needs_replacement_feeds %}
+              <ul class="problem-feed-list">
+                {% for row in needs_replacement_feeds %}
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                  <div class="problem-feed-row">
+                    <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+                    <div class="problem-feed-actions">
+                      <button type="button" class="problem-feed-action" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="Find a replacement (Change feed URL in properties)" aria-label="Find replacement"><span class="material-symbols-rounded" aria-hidden="true">published_with_changes</span></button>
+                      <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                      <button type="button" class="problem-feed-action" data-problem-feed-unmark-dead data-feed-url="{{ row.feed_url }}" title="Back to Failing (re-enable fetching)" aria-label="Back to Failing"><span class="material-symbols-rounded" aria-hidden="true">undo</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                    </div>
+                  </div>
+                  <div class="problem-feed-meta">
+                    <span class="problem-feed-cat problem-feed-cat--{{ row.category }}">{{ row.category_label }}</span>
+                    <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                   </div>
                   {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
                 </li>
