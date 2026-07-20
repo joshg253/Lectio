@@ -5,23 +5,26 @@ this file only tracks what's still open.
 
 ## Now
 
-### Tag-as-keep — post-merge migration (Part C, not yet run)
+### Tag-as-keep — post-merge migration (Part C, deferred; dry-run done)
 
-The semantics flip shipped: **tagging now keeps + full-archives** a post (same
-offline capture as starring), an archive is retained while a post is starred OR
-tagged, the Saved view is a unified **Kept** view (star OR tag, per-feed browse),
-and unsubscribing a curated feed defaults to **keeping** it (hidden from the tree
-via the new `kept_feeds` table, still browsable in Saved). Remaining follow-up —
-a standalone throttled script (`scripts/migrate_tag_as_keep.py`, still to write)
-to run once against live data after deploy:
+The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
+while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
+The backfill script (`scripts/migrate_tag_as_keep.py`) is **written** and its
+`--dry-run` has run against live data; the real (write) run is **deferred pending
+manual failing-feed triage** (Josh wants to find replacements for dead feeds
+first — the PR #151 category filter + "Needs replacement" worklist are the tools).
 
-1. **Retro-archive** every existing manually-tagged entry with no `complete`
-   archive row (`enqueue_archive`, per-user via tenancy context) — ~1,432 tagged
-   + more across live feeds seed pending captures for the worker.
-2. **Wayback backfill** the genuinely-empty curated posts (<300 chars stored,
-   ~89 in dead feeds): closest Archive.org snapshot → readability-extract → fill
-   reader `entries.content` in reader's JSON shape (`[{"value":html,...}]`),
-   throttled + honest UA, skip on no snapshot.
+Two passes (`--scope dead-unsub` default, YouTube always excluded):
+1. **Retro-archive** every tagged entry with no `complete` archive row
+   (`enqueue_archive`, per-user). Dry-run: **~3,596** dead/unsub candidates
+   (~15k across the whole library at `--scope all`).
+2. **Wayback backfill** empty curated posts (<300 chars): closest Archive.org
+   snapshot → readability-extract → fill reader `entries.content` (JSON shape).
+   Dry-run: **~1,101** dead/unsub candidates, concentrated in a few feeds
+   (CodeProject 541, etc.). Refine before running: many are newsletters/digests
+   (no full article to recover) or 403 bot-walls where the *site* is alive (the
+   archive worker's live page-fetch beats Wayback). Order: retro-archive first,
+   then Wayback only the DNS-dead residual.
 
 (nothing else — CodeQL triage completed and verified 2026-07-08: the code-scanning
 board is at **zero open alerts**. The fixes merged in PR #114 auto-closed their
@@ -92,6 +95,33 @@ Make Lectio usable as a read-it-later app.
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
   saved instead of unread (if unread proves the wrong default).
+
+### Inoreader replacement — bot-walled feeds (the last blocker)
+
+Josh is close to fully replacing Inoreader with Lectio. The remaining concern is
+**bot-blocking**: feeds Inoreader can fetch but Lectio can't. Publishers allowlist
+known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches from the VPS IP with
+an honest UA and gets 403'd (the 🟢 "blocked" bucket in the Failing Feeds filter —
+isocpp 752, libhunt newsletters, etc.). Good-citizen policy forbids spoofing Ino's
+UA or evading IP blocks; Lectio already auto-escalates to browser-UA on refusal
+(`browser_ua_feeds`), which recovers some 403s but not IP/aggregator-only blocks.
+
+Both next steps reuse the **existing** `services/inoreader.py` (OAuth +
+`get_subscriptions` + `get_stream_contents`):
+
+1. **Comparison report** (highest-leverage, read-only) — cross-reference the user's
+   Inoreader subscriptions vs Lectio feeds and flag three sets: (a) in-Ino-with-
+   recent-items but failing-in-Lectio = the "Ino can, we can't" risk set; (b) in
+   Ino not in Lectio; (c) in Lectio not in Ino. Turns "safe to drop Ino?" into a
+   concrete checklist.
+2. **Inoreader as fetch-proxy** (durable follow-on; legitimate — Ino *is* the
+   subscriber, not evasion) — a per-feed "fetch via Inoreader" toggle that pulls
+   items from Ino's `stream/contents` API instead of the origin, for the dozen-ish
+   stubborn bot-walled feeds. Keep Ino connected as a quiet backend, not the reader.
+
+Migration sequence: connect Ino → run comparison → proxy the only-Ino feeds → let
+the annual Ino plan lapse (annual SaaS rarely prorates a refund; worth asking but
+plan to ride it out).
 
 ### Full-content fetch at ingest for body-less feeds
 
