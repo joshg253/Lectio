@@ -123,8 +123,11 @@ class FeedRefreshService:
             (limit,),
         ).fetchall()
 
+        labels = dict(self.FAILURE_CATEGORIES)
         result: list[dict[str, object]] = []
         for row in rows:
+            last_error = str(row["last_error"] or "")
+            category = self.categorize_failure(last_error)
             result.append(
                 {
                     "feed_url": str(row["feed_url"]),
@@ -132,12 +135,57 @@ class FeedRefreshService:
                     "next_retry_at": float(row["next_retry_at"]) if row["next_retry_at"] is not None else None,
                     "last_failure_at": float(row["last_failure_at"]) if row["last_failure_at"] is not None else None,
                     "next_retry_display": self.format_retry_epoch_for_ui(row["next_retry_at"]),
-                    "last_error": str(row["last_error"] or ""),
+                    "last_error": last_error,
+                    "category": category,
+                    "category_label": labels.get(category, "Other"),
                     "folder_id": int(row["folder_id"]) if row["folder_id"] is not None else None,
                     "acknowledged_at": float(row["acknowledged_at"]) if row["acknowledged_at"] is not None else None,
                 }
             )
         return result
+
+    # Fail categories for the Failing Feeds filter. Ordered most-specific first;
+    # matched against the stored (already-humanized) last_error text, and robust
+    # to a few raw reader phrasings too. Key -> label.
+    FAILURE_CATEGORIES: tuple[tuple[str, str], ...] = (
+        ("blocked", "Blocked (403)"),
+        ("rate_limited", "Rate-limited (429)"),
+        ("auth", "Auth required (401)"),
+        ("gone", "Gone (410)"),
+        ("not_found", "Not found (404)"),
+        ("dns", "Host unreachable (DNS)"),
+        ("tls", "TLS/cert error"),
+        ("timeout", "Timed out"),
+        ("not_feed", "Not a valid feed"),
+        ("other", "Other"),
+    )
+
+    @staticmethod
+    def categorize_failure(last_error: str | None) -> str:
+        """Bucket a stored last_error into a FAILURE_CATEGORIES key so the
+        Failing Feeds list can filter by cause (alive-but-blocked vs moved vs
+        truly gone). Deterministic; shared with the tag-as-keep backfill triage."""
+        e = (last_error or "").lower()
+        if "403" in e or "forbidden" in e:
+            return "blocked"
+        if "429" in e or "rate-limit" in e or "too many requests" in e:
+            return "rate_limited"
+        if "401" in e or "unauthorized" in e or "requires authentication" in e:
+            return "auth"
+        if "410" in e or "gone" in e:
+            return "gone"
+        if "404" in e or "not found" in e:
+            return "not_found"
+        if "dns" in e or "resolve the feed host" in e or "name resolution" in e or "name or service not known" in e:
+            return "dns"
+        if "tls" in e or "ssl" in e or "certificate" in e:
+            return "tls"
+        if "timed out" in e or "timeout" in e:
+            return "timeout"
+        if ("html" in e or "parsed as a valid rss" in e or "unknown feed type" in e
+                or "no parser" in e or "parseerror" in e or "not a feed" in e):
+            return "not_feed"
+        return "other"
 
     def humanize_feed_exception(self, last_exception: object) -> str:
         raw_detail = str(getattr(last_exception, "value_str", None) or str(last_exception))

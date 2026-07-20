@@ -51,7 +51,9 @@ The short version:
   and a **persistent audio player** bar that keeps playing as you navigate.
 - **Lead images** — per-feed extraction strategies with side-by-side
   comparison, smart crop/fit tuning, caption sourcing, junk-image rejection,
-  and full-resolution webcomic panels.
+  and full-resolution webcomic panels. A configurable **portrait-image max
+  width** (Settings → Appearance) keeps tall images from dominating the pane
+  while wide images stay full-width.
 - **Automation** — highlight, mark-as-read, tag-filter, deduplicate,
   email-article, outbound-webhook, save-to-Instapaper, **save/star-article**
   (auto-saves into a pinned Saved **Inbox**), add-to-YouTube-playlist, and
@@ -67,8 +69,9 @@ The short version:
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
   `/read` (paginated, Supernote-friendly). A **Scan Saved for duplicates**
   utility (with side-by-side Compare and dead-link checking) cleans up
-  same-article-different-URL saves; an **Instapaper CSV import** brings your
-  whole library over with tags and archive state.
+  same-article-different-URL saves; **Re-fetch content** re-extracts a saved
+  article in place to repair a bad initial capture; an **Instapaper CSV import**
+  brings your whole library over with tags and archive state.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).

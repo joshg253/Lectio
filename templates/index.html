@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="csrf-token" content="{{ csrf_token_for(request) }}" />
-  <title>Lectio</title>
+  <title>{{ page_title or 'Lectio' }}</title>
   <script>
     window.CURRENT_SORT_BY = "{{ selected_sort_by }}";
     window.STATIC_ASSET_VERSION = "{{ static_asset_version }}";
@@ -24,6 +24,7 @@
     window.YT_SYNC_LAST_RESULT = {{ youtube_sync_last_result | tojson }};
     window.SUBSCRIBE_URL = {{ subscribe_url | tojson }};
     window.NO_RSS_URL = {{ no_rss_url | tojson }};
+    window.PORTRAIT_IMG_MAX_WIDTH = {{ portrait_img_max_width | tojson }};
   </script>
   <script>
     // CSRF shim — installs BEFORE any other handler registers.
@@ -1348,6 +1349,7 @@
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
     <button type="button" id="ctx-post-edit-title" class="context-menu-item">Edit title…</button>
+    <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Re-fetch content</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
   </div>
@@ -1695,6 +1697,9 @@
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
           <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="Server default" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
+          <label class="settings-label" for="sett-portrait-img-width">Portrait image max width (px)</label>
+          <input type="number" id="sett-portrait-img-width" class="settings-input" min="0" step="10" placeholder="650" autocomplete="off" />
+          <p class="settings-hint">Caps tall (portrait) article images to this width; wide images stay full-width. 0 disables.</p>
         </div>
         <div class="settings-actions">
           <button type="button" class="settings-save-btn" data-settings-save="account">Save</button>
@@ -1911,8 +1916,10 @@
 
       <!-- Feeds tab -->
       <div id="settings-tab-feeds" class="settings-tab-panel" hidden>
-        {% set failing_feeds = problematic_feeds | selectattr("acknowledged_at", "none") | list %}
-        {% set acked_feeds = problematic_feeds | rejectattr("acknowledged_at", "none") | list %}
+        {% set needs_replacement_feeds = problematic_feeds | selectattr("needs_replacement") | list %}
+        {% set _active_problem_feeds = problematic_feeds | rejectattr("needs_replacement") | list %}
+        {% set failing_feeds = _active_problem_feeds | selectattr("acknowledged_at", "none") | list %}
+        {% set acked_feeds = _active_problem_feeds | rejectattr("acknowledged_at", "none") | list %}
         <div class="feeds-tab-bar" role="tablist">
           <button type="button" class="feeds-tab-btn feeds-tab-btn--active" data-feeds-view="folders" role="tab" aria-selected="true">Folders</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
@@ -1959,18 +1966,21 @@
           <div class="feeds-tab-panel" data-feeds-panel="failing" hidden>
             <div data-problem-panel="failing">
               {% if failing_feeds %}
+              <div class="problem-feed-filter" data-problem-feed-filter role="tablist" aria-label="Filter failing feeds by cause"></div>
               <ul class="problem-feed-list">
                 {% for row in failing_feeds %}
-                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}" data-category="{{ row.category }}">
                   <div class="problem-feed-row">
                     <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
                     <div class="problem-feed-actions">
                       <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
-                      <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Mark as checked OK" aria-label="Mark as checked OK"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-ack" data-problem-feed-ack data-feed-url="{{ row.feed_url }}" title="Working — they're just blocking us (mute; stays on ~daily retry)" aria-label="Mute — feed is fine"><span class="material-symbols-rounded" aria-hidden="true">check_circle</span></button>
+                      <button type="button" class="problem-feed-action" data-problem-feed-mark-dead data-feed-url="{{ row.feed_url }}" title="Dead — needs a replacement (stop fetching; keep saved/tagged posts)" aria-label="Dead — needs replacement"><span class="material-symbols-rounded" aria-hidden="true">heart_broken</span></button>
                       <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
                     </div>
                   </div>
                   <div class="problem-feed-meta">
+                    <span class="problem-feed-cat problem-feed-cat--{{ row.category }}">{{ row.category_label }}</span>
                     <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                     {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
                   </div>
@@ -1978,6 +1988,7 @@
                 </li>
                 {% endfor %}
               </ul>
+              <p class="muted problem-feed-empty-filtered" hidden>No failing feeds in this category.</p>
               {% else %}
               <p class="muted">No failing feeds right now.</p>
               {% endif %}
@@ -1999,6 +2010,31 @@
                   <div class="problem-feed-meta">
                     <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                     {% if row.next_retry_display %}<span>Retry: {{ row.next_retry_display }}</span>{% endif %}
+                  </div>
+                  {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+              {% endif %}
+            </div>
+            <div class="problem-feed-section-divider" {% if not needs_replacement_feeds %}hidden{% endif %} data-needs-replacement-divider>Needs replacement</div>
+            <div data-problem-panel="needs-replacement">
+              {% if needs_replacement_feeds %}
+              <ul class="problem-feed-list">
+                {% for row in needs_replacement_feeds %}
+                <li class="problem-feed-item" data-feed-url="{{ row.feed_url }}">
+                  <div class="problem-feed-row">
+                    <button type="button" class="problem-feed-link" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="{{ row.feed_url }}">{{ row.feed_title }}</button>
+                    <div class="problem-feed-actions">
+                      <button type="button" class="problem-feed-action" data-problem-feed-properties data-feed-url="{{ row.feed_url }}" title="Find a replacement (Change feed URL in properties)" aria-label="Find replacement"><span class="material-symbols-rounded" aria-hidden="true">published_with_changes</span></button>
+                      <a class="problem-feed-action" href="{{ row.feed_url }}" target="_blank" rel="noopener noreferrer" title="Open feed URL"><span class="material-symbols-rounded" aria-hidden="true">open_in_new</span></a>
+                      <button type="button" class="problem-feed-action" data-problem-feed-unmark-dead data-feed-url="{{ row.feed_url }}" title="Back to Failing (re-enable fetching)" aria-label="Back to Failing"><span class="material-symbols-rounded" aria-hidden="true">undo</span></button>
+                      <button type="button" class="problem-feed-action problem-feed-action-danger" data-problem-feed-unsubscribe data-feed-url="{{ row.feed_url }}" data-folder-id="{{ row.folder_id or selected_folder_id }}" title="Unsubscribe" aria-label="Unsubscribe"><span class="material-symbols-rounded" aria-hidden="true">delete</span></button>
+                    </div>
+                  </div>
+                  <div class="problem-feed-meta">
+                    <span class="problem-feed-cat problem-feed-cat--{{ row.category }}">{{ row.category_label }}</span>
+                    <span>{{ row.consecutive_failures }} failure{{ 's' if row.consecutive_failures != 1 else '' }}</span>
                   </div>
                   {% if row.last_error %}<div class="problem-feed-error">{{ row.last_error }}</div>{% endif %}
                 </li>
