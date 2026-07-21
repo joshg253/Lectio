@@ -22,8 +22,8 @@ runway at ~$5.83/month, so the Ino chain (#10) is **scheduled work, not urgent**
 start ~Dec 2026, leaving ~3 months to validate before renewal. The motivation is
 consolidation and ownership, not cost.
 
-**Measured 2026-07-21 (read-only against live data) — the three numbers driving
-the epic's shape:**
+**Measured 2026-07-21 (read-only against live data) — the numbers driving the
+epic's shape:**
 
 | finding | number | item |
 |---|---|---|
