@@ -4917,11 +4917,33 @@ def entry_effective_date(entry) -> datetime | None:
     return entry.published or entry.updated or entry.added
 
 
+_DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+
+
 def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
+    """Canonical comparison key for an article link.
+
+    The scheme and a leading ``www.`` are folded away: http/https and
+    www/non-www are the same article, and keeping them apart pushed real
+    duplicates into the saved scan's weaker "possible" tier whenever the URL
+    slug was too generic for `_safe_dedup_entry_slug` to rescue the pair
+    (``/index.html``, hyphen-free stubs). Only the host is lowercased — paths
+    are case-sensitive.
+
+    The result is a comparison key, not a URL: never fetch or display it.
+    """
     if not link:
         return None
-    normalized_link = str(link).split("#")[0].rstrip("/")
-    return normalized_link or None
+    normalized_link = str(link).split("#")[0].strip().rstrip("/")
+    if not normalized_link:
+        return None
+    # Protocol-relative links fold the same way a scheme'd one does.
+    stripped = _DEDUPE_SCHEME_RE.sub("", normalized_link).removeprefix("//")
+    host, sep, rest = stripped.partition("/")
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return f"{host}{sep}{rest}" or None
 
 
 def normalize_entry_title_for_dedupe(title: str | None) -> str:

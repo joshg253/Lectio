@@ -49,27 +49,50 @@ single workflow you're actively using, the pieces reinforce each other, and
 shipping them separately means re-opening the same code five times. Full per-item
 detail under "Saved / Tags / dupe-scan friction" in Later.
 
-**1a — correctness + safety (do first; hours).** Two bugs that belong in one change,
-because fixing either alone leaves the workflow wrong.
+**1a — correctness + safety. DONE 2026-07-21.** Both halves shipped together; the
+scope changed on contact with the data, so the corrections are recorded here.
 
-- **http/https produce separate saved entries.** `normalize_article_url`
-  ([services/saved_articles.py:40](services/saved_articles.py#L40)) preserves the
-  scheme and saved entries are keyed by that value, so both variants of one article
-  become two entries — new pairs accrue daily. `normalize_entry_link_for_dedupe`
-  ([main.py:4920](main.py#L4920)) then also keeps the scheme, so the scan's "same
-  URL" tier can't rejoin them. Fix **both** layers (fold scheme, almost certainly
-  `www.`), plus a one-off merge for existing pairs — normalization alone stops the
-  bleeding but won't heal what's there.
-- **The confirmed tier pre-arms deletion.** It renders with `preselect = true`
-  ([static/js/app.js:957](static/js/app.js#L957)): row 0 is "keep" and *every other
-  copy is pre-checked*, with a one-click "Check All" beside it. Change to
-  auto-select **only** 404 items, and select **none** when every item in a group is
-  404. (The possible tier already correctly preselects nothing.)
+- **Scheme/`www` folding — done in the dedupe key only.**
+  `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920)) now folds the
+  scheme and a leading `www.` (host lowercased, paths left case-sensitive), which
+  reaches all four consumers at once: the Saved scan's confirmed tier, the
+  render-time list collapse, the cross-feed cleanup pass, and the curation
+  migration on feed removal.
+  - **`normalize_article_url` was deliberately left alone.** The Plan called for
+    fixing both layers, but that one is the stored entry id *and* link. Rewriting
+    it would touch up to 780 `http://` saved entries, some on genuinely http-only
+    hosts, to fix a class with **zero live instances** — see below. The stored URL
+    stays as saved; only the comparison key folds.
+  - **The one-off merge was dropped: there was nothing to merge.** Measured
+    2026-07-21 — **zero** http/https or www twins remain *inside* `lectio:saved`
+    (Josh had already cleared them by hand). "New pairs accrue daily" was a
+    code-derived prediction, not visible in the data. Across the whole starred
+    set the fold gains only 8 groups / 10 copies out of 448.
+  - **The real payoff is the tier, not the count.** The confirmed tier's other
+    key, the URL slug, is discarded when generic (`/index.html`, blocklisted, or
+    hyphen-free and short — [main.py:4996](main.py#L4996)). So twins split by that
+    rule: 5 were rescued into *confirmed* by their slug, 4 had no usable slug and
+    fell to *possible*, where nothing is preselected and each needs a hand
+    judgment. That is the bug Josh hit ("I removed a bunch of http/https dupes,
+    but they appear under the maybe dupes"). Folding gives every twin a
+    confirmed-tier key. It also merges the 5 http `romhacking.net` rows into the
+    existing 239-copy homepage-link false positive — no worse, same known footgun.
+  - Side effect worth knowing: the keep-order's "prefer https" tiebreak now
+    actually engages, since twins finally group.
+- **The confirmed tier no longer pre-arms deletion.** Nothing renders checked in
+  either tier. `savedDedupGroupHtml`'s flag is now `showKeeper` — it only labels
+  the copy the keep-order would keep. Selection is armed solely by probe evidence:
+  `_sdApplySelection` (replacing `_sdFlipKeeper`) checks a copy only when its URL
+  came back 404/410. Alive, bot-walled, timed-out, and unchecked copies stay
+  unselected, so an inconclusive probe can never queue a delete. Two groups
+  deliberately select nothing: one where *every* copy is dead (link rot, not
+  duplication), and the sole copy still holding stored content. The possible tier
+  never auto-arms at all.
+  - **Correction to the original note:** the "Check All" button beside it is
+    *"Check all URLs"* — it runs the throttled liveness probe, not a select-all.
+    The danger was only the pre-checked boxes, and those are gone.
 
-These interlock: today's keeper heuristic claims to "prefer https," but with
-http/https variants rarely grouped in the first place that preference seldom
-engages — so the pre-armed default is picking winners on a signal that isn't
-working. Ship them together.
+Covered by `tests/unit/test_entry_dedupe_key.py` (17 cases).
 
 **1b — make repeat sessions bearable.** Only one item here isn't cosmetic:
 
@@ -478,9 +501,14 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
 
-**Bugs** — *promoted to Now #1a*
+**Bugs** — *promoted to Now #1a; both dupe-scan bugs SHIPPED 2026-07-21, see there
+for what actually changed and why the `normalize_article_url` half was dropped.*
 
-- **`http://` and `https://` count as different URLs in the Saved dupe scan.**
+- ~~**`http://` and `https://` count as different URLs in the Saved dupe scan.**~~
+  **DONE.** The analysis below was right about the mechanism — the slug tier
+  rescues only twins whose slug clears the guards — and that is exactly the split
+  the data showed (5 rescued, 4 fell to "possible"). The "deeper cause" half was
+  **not** built: zero twins remained inside `lectio:saved` to merge.
   Confirmed: `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920))
   strips only the fragment and trailing slash — the scheme survives, so the
   `_canon` ("same URL") tier never matches an http/https pair. They *may* still
@@ -513,8 +541,10 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 - **More obvious per-item status** — e.g. a 404 rendered in red rather than
   neutral text (URL status already comes from `/saved/duplicates/check-urls`,
   [main.py:22031](main.py#L22031)).
-- **Change the auto-select rule** — *promoted to Now #1a* (shipped with the
-  http/https fix, not with the rest of this UX batch). Auto-select *only* 404
+- ~~**Change the auto-select rule**~~ — **DONE 2026-07-21** (shipped with the
+  http/https fix, not with the rest of this UX batch). One correction to the
+  note below: "Check All" is *"Check all URLs"*, the liveness probe — not a
+  select-all. Auto-select *only* 404
   items; if every item in a group is 404, select none (never auto-arm a delete
   that removes the whole group). Current behavior confirmed 2026-07-21: the
   confirmed tier renders with `preselect = true`

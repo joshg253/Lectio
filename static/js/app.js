@@ -769,16 +769,20 @@
     // ── Saved Articles duplicate scan ──────────────────────────────────────
     const SAVED_DEDUP_GROUP_CAP = 200;
 
-    const savedDedupGroupHtml = (g, preselect) => {
+    // Nothing is ever pre-checked: a scan result is a claim, not evidence, and
+    // a pre-armed "Check All" beside it turns one stray click into a bulk
+    // delete. Selection is armed only by a URL probe (see _sdApplySelection).
+    // `showKeeper` just labels the copy the keep-order would keep.
+    const savedDedupGroupHtml = (g, showKeeper) => {
       const rows = g.entries.map((e, i) => {
-        const keeper = preselect && i === 0;
+        const keeper = showKeeper && i === 0;
         const badges =
           `<span class="saved-dedup-badge${e.read ? '' : ' saved-dedup-badge--unread'}">${e.read ? 'read' : 'unread'}</span>` +
           (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
         const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
         return `<label class="dedup-pair-row saved-dedup-row">` +
           `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
-          ` data-has-content="${e.has_content ? '1' : '0'}"${preselect && !keeper ? ' checked' : ''}>` +
+          ` data-has-content="${e.has_content ? '1' : '0'}">` +
           `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
           `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> <span class="saved-dedup-row-badges">${badges}</span>${date}` +
           `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
@@ -789,7 +793,7 @@
         `<div class="saved-dedup-group-head">` +
         `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
         `<span class="saved-dedup-group-btns">` +
-        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and the kept copy switches to a live one">Check URLs</button>` +
+        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check URLs</button>` +
         `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
         `</span></div>` +
         rows + `</div>`;
@@ -813,25 +817,34 @@
       return b;
     };
 
-    // Flip the group's selection to keep a live copy — only when every
-    // currently-kept row turned out dead, and never at the cost of deleting
-    // the only copy with stored content.
-    const _sdFlipKeeper = (group, byId) => {
+    // Arm the group's selection from probe evidence: a copy is selected only
+    // when its URL came back dead (404/410). Everything else — alive,
+    // bot-walled, timed out, never checked — stays unselected, so an
+    // inconclusive probe can never queue a delete.
+    //
+    // Two groups deliberately select nothing: one where *every* copy is dead
+    // (link rot, not duplication — deleting all of them loses the article
+    // entirely), and the sole copy that still has stored content, which stays
+    // selectable only by hand even when its URL is gone.
+    // The possible tier never auto-arms at all; it is too weak a signal.
+    const _sdApplySelection = (group, byId) => {
       if (!group.closest('.saved-dedup-confirmed-list')) return;
       const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => {
         const cb = row.querySelector('.saved-dedup-check');
-        return { row, cb, r: byId.get(cb.dataset.entryId), hasContent: cb.dataset.hasContent === '1' };
+        return { row, cb, dead: !!(byId.get(cb.dataset.entryId) || {}).dead,
+                 hasContent: cb.dataset.hasContent === '1' };
       });
-      const kept = info.filter(i => !i.cb.checked);
-      if (!kept.length || !kept.every(i => i.r && i.r.dead)) return;
-      const candidate = info.find(i => i.r && i.r.alive);  // rows are in keep-priority order
-      if (!candidate) return;
-      if (!candidate.hasContent && info.some(i => i.hasContent)) return;  // human call
+      const allDead = info.every(i => i.dead);
+      const withContent = info.filter(i => i.hasContent);
+      const soleContent = withContent.length === 1 ? withContent[0] : null;
+      for (const i of info) i.cb.checked = i.dead && !allDead && i !== soleContent;
+      // The keep tag always names the first copy that will actually survive.
+      const keeper = info.find(i => !i.cb.checked);
       for (const i of info) {
-        i.cb.checked = i !== candidate && !!(i.r && (i.r.alive || i.r.dead));
         const tag = i.row.querySelector('.dedup-tag');
-        tag.textContent = i === candidate ? 'keep' : '';
-        tag.classList.toggle('keep-tag', i === candidate);
+        if (!tag) continue;
+        tag.textContent = i === keeper ? 'keep' : '';
+        tag.classList.toggle('keep-tag', i === keeper);
       }
     };
 
@@ -860,7 +873,7 @@
         s.title = 'These URLs redirect to the same page';
         group.querySelector('.saved-dedup-reasons').after(s);
       }
-      _sdFlipKeeper(group, byId);
+      _sdApplySelection(group, byId);
     };
 
     document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
@@ -915,8 +928,8 @@
       group.appendChild(pane);
     });
 
-    const savedDedupListHtml = (groups, preselect) =>
-      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, preselect)).join('') +
+    const savedDedupListHtml = (groups, showKeeper) =>
+      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, showKeeper)).join('') +
       (groups.length > SAVED_DEDUP_GROUP_CAP
         ? `<p class="muted">Showing the first ${SAVED_DEDUP_GROUP_CAP} of ${groups.length} groups — re-run the scan after deleting these.</p>`
         : '');
@@ -953,7 +966,7 @@
       okBtn.hidden = false;
       if (checkAllBtn) checkAllBtn.hidden = false;
       if (confirmed.length > 0) {
-        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the copy with content, preferring https, then oldest:`;
+        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — nothing is selected yet. "keep" marks the copy the scan would keep (has content, then https, then oldest); run Check URLs to select copies whose links are dead:`;
         confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
       } else {
         intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;

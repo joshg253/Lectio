@@ -69,7 +69,9 @@ The short version:
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
   `/read` (paginated, Supernote-friendly). A **Scan Saved for duplicates**
   utility (with side-by-side Compare and dead-link checking) cleans up
-  same-article-different-URL saves; **Re-fetch content** re-extracts a saved
+  same-article-different-URL saves — it never pre-selects anything, and only
+  **Check URLs** arms a copy for deletion, and only when that copy's link is
+  provably dead; **Re-fetch content** re-extracts a saved
   article in place to repair a bad initial capture; an **Instapaper CSV import**
   brings your whole library over with tags and archive state.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old

@@ -687,7 +687,9 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 **Intra-feed and cross-feed cleanup** (`_cleanup_intra_feed_slug_dupes`, runs at startup and after each refresh cycle): two-pass retroactive cleanup for duplicates that slipped through before suppression was in place or before Deduplicate rules ran.
 - Pass 1: within each feed, keep the oldest entry per slug and per title+date; mark newer copies read.
-- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe` (canonical URL after stripping tracking params); keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe`; keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+
+`normalize_entry_link_for_dedupe` is the single canonical link key, shared by this pass, the render-time list collapse (`build_entry_dedupe_key`), the curation migration on feed removal, and the Saved duplicate scan's "confirmed" tier. It drops the fragment and trailing slash, then **folds the scheme and a leading `www.`**, lowercasing only the host — paths stay case-sensitive. The fold matters because the Saved scan's other confirmed-tier key, the URL slug, is deliberately discarded when it is generic (`/index.html`, blocklisted, or hyphen-free and short); before the fold, an http/https or www/non-www twin with such a URL had no confirmed-tier key at all and fell through to the weaker "possible" tier, where it needed a hand judgment. The result is a comparison key, not a URL — it has no scheme and is never fetched or displayed.
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
