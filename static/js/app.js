@@ -1061,18 +1061,29 @@
       // Feed titles are often deliberately unlike their URLs, so the URL is the
       // only way to be sure which feed you're filing into — surface it on hover
       // for each option and on the closed select.
+      //
+      // Two candidates can also carry the *same* title (a site's feed and its
+      // variant, or a blog and its companion channel), which made the choice
+      // impossible to make from the dropdown alone. When a title is shared, put
+      // the URL in the label itself so the options are never indistinguishable.
+      const titleCounts = {};
+      for (const x of c.candidates) titleCounts[x.title] = (titleCounts[x.title] || 0) + 1;
+      const optLabel = (x) => titleCounts[x.title] > 1 ? `${x.title} — ${x.feed_url}` : x.title;
       const opts = c.candidates.map(x =>
         `<option value="${_mfEscape(x.feed_url)}" title="${_mfEscape(x.feed_url)}"` +
         `${x.feed_url === c.target_feed_url ? ' selected' : ''}>` +
-        `${_mfEscape(x.title)} (${x.support})</option>`).join('');
-      // Why a host isn't pre-checked matters more than the fact that it isn't.
+        `${_mfEscape(optLabel(x))} (${x.support})</option>`).join('');
+      // Nothing is ever pre-checked — this files thousands of rows, and the plan
+      // is worked through in passes. The badge says how much to trust each row
+      // so the strong ones are still easy to pick out by eye.
       let note = '';
       if (!c.target_feed_url) note = '<span class="saved-dedup-badge">no subscribed feed for this host</span>';
       else if (c.ambiguous) note = `<span class="saved-dedup-badge">${c.candidates.length} candidate feeds — pick one</span>`;
       else if (!c.confident) note = `<span class="saved-dedup-badge">weak match — only ${c.support} post(s) from this host</span>`;
+      else note = `<span class="saved-dedup-badge saved-dedup-badge--alive">strong match — ${c.support} posts from this host</span>`;
       return `<label class="dedup-pair-row saved-autofile-row">` +
         `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
-        ` id="${id}"${c.confident ? ' checked' : ''}${c.target_feed_url ? '' : ' disabled'}>` +
+        ` id="${id}"${c.target_feed_url ? '' : ' disabled'}>` +
         `<span class="saved-autofile-count">${c.count}</span>` +
         `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note}` +
         (c.candidates.length
@@ -1108,8 +1119,8 @@
         return;
       }
       intro.textContent =
-        `${t.articles} saved article(s) across ${t.hosts} host(s). ` +
-        `${t.confident_articles} on ${t.confident_hosts} host(s) have a confident match and are pre-checked; ` +
+        `${t.articles} saved article(s) across ${t.hosts} host(s) — nothing is selected. ` +
+        `${t.confident_articles} on ${t.confident_hosts} host(s) are a strong match; ` +
         `${t.low_support_articles} weak, ${t.ambiguous_articles} ambiguous, ${t.unmatched_articles} with no subscribed feed.`;
       list.innerHTML = plan.map(_afRow).join('');
       okBtn.hidden = false;

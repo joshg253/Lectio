@@ -350,7 +350,15 @@ scan re-read husks. The saved source is now hard-deleted via the shared
 `_hard_delete_entry`. Verified on a copy of live data: filing 11 articles took
 `lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
 
-**Two refinements from Josh reviewing the first build:**
+**Refinements from Josh working the list:**
+- **Nothing is pre-checked.** The intended workflow is passes — file a chunk,
+  re-scan, continue — so `confident` now drives a *label* ("strong match — N
+  posts from this host"), not a selection. Same rule as the dupe dialog.
+- **Same-titled candidates are disambiguated in the option label.** Josh hit
+  dropdowns whose entries "looked identical"; when two candidate feeds for one
+  host share a title, the URL is folded into the label rather than left to the
+  hover title, which is unreachable on touch/e-ink anyway. Hosts whose candidate
+  titles are unique keep the clean label.
 - **YouTube feeds are never valid targets** (`_autofile_excluded_targets`,
   enforced on preview *and* apply). A saved page is never really a video-channel
   post, and channels often share a name with the blog they accompany — with only
