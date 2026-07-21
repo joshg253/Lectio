@@ -147,9 +147,40 @@ title if a refresh re-ingests the entry, and `_replace_entry_content` checks
 - **Red 404 status**, **collapsible Confirmed/Possible sections**, **resizable
   dialog** — cheap, all in the same dialog, do them in one pass while you're there.
 
-**1c — same area, independent.** The **Saved search button does nothing**.
-Reproduce first to confirm the surface; Read Mode's form is the prime suspect (no
-submit button, no JS, and it drops the selected node on submit).
+**1c — Saved search. DONE 2026-07-21.** The button was never the problem, and
+neither was Read Mode: **the search took ~19 seconds**, which is
+indistinguishable from doing nothing. Reproduced end-to-end against a copy of
+the live library (133,765 entries, FTS index rebuilt so the numbers are honest).
+
+Root cause: the kept branch in `list_entries_for_feeds` runs *ahead* of the
+generic `elif search_terms` fast path, so the Saved view was the one place a
+search took no fast path at all — it hydrated all ~11k kept keys via
+`reader.get_entry` and filtered in Python. `_filter_star_keys_by_search` now
+narrows the keys in SQL first (same technique as `_sorted_star_key_window`) and
+only the survivors are hydrated.
+
+| query | before | after |
+|---|---|---|
+| Saved, no query | 1.09s | 1.05s |
+| Saved `q=python` | 18.94s | 1.51s |
+| Saved `q=coffee` | 18.25s (28 posts) | 1.52s (**406 posts**) |
+
+**A dead end worth not repeating: do not route this through reader's FTS index.**
+`search_entries` builds a highlighted snippet per result — ~7.8ms/row, 76s for
+one common term — so the FTS version measured *worse* (97s) than the scan it
+replaced. That same cost is why a **Feeds-view** search still takes ~10s; it sits
+on `_search_entries_fts` and is now the slowest search surface left. Open item.
+
+The `coffee` jump (28 → 406 posts) is the second half: Saved search previously
+matched only metadata, never the article text, so a phrase from inside a saved
+article returned nothing after a 19s wait. The SQL haystack now includes the
+stored content (~60ms extra). Content is matched as raw HTML, so a markup-ish
+term ("span", "http") matches nearly everything — stripping tags needs a
+plain-text column maintained at ingest, deferred until a real search is hurt.
+
+Covered by `tests/integration/test_star_key_search_filter.py` (10 cases:
+field coverage, body matching, AND-ing, LIKE-wildcard escaping, >999-variable
+chunking, and the fall-back-to-Python path).
 
 ### 2. Saved capture quality — a raw / full-page save mode
 

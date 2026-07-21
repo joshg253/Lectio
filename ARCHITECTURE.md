@@ -833,6 +833,28 @@ never auto-pruned) whenever it's starred **or** manually tagged. Tag is the
   `kept_feeds` is created in `ensure_meta_schema` (covered by the startup
   per-user migration, so existing tenants don't 500).
 
+**Searching the Kept view.** The kept branch in `list_entries_for_feeds` runs
+*ahead* of the generic `elif search_terms` fast path, so for a long time this was
+the one view where a search took no fast path at all: it hydrated every kept key
+via `reader.get_entry` and filtered in Python — ~11k lookups, measured at ~19s
+per search on a real library, which reads as a search box that does nothing.
+`_filter_star_keys_by_search` now narrows the keys in SQL first (the same
+keys-joined-against-`entries` technique as `_sorted_star_key_window`), so only
+the survivors are hydrated: ~1.2s for the same queries.
+
+reader's own FTS index is deliberately **not** used for this. `search_entries`
+builds a highlighted snippet per result, measured at ~7.8ms/row — 76s for one
+common term across 133k entries — so routing the kept view through it was *worse*
+than the scan it replaced (97s end to end). The same cost is why a Feeds-view
+search still takes ~10s; that path is a separate, known target. The SQL predicate
+covers title, resolved feed title, feed URL, link, author, summary **and the
+stored content**, so a Saved search reaches the article's text — the point of a
+read-later archive. Content is matched as stored (raw HTML), so a markup-ish term
+matches nearly everything; stripping tags would need a plain-text column
+maintained at ingest, which isn't worth a schema change yet. On any SQL error the
+helper returns `None` and the caller keeps the full key set and post-filters in
+Python, so a failure degrades to the old behavior instead of showing no posts.
+
 ## Read Mode — e-ink reading app (`GET /read`)
 
 A standalone, distraction-free reading *app* for the saved/starred backlog, built

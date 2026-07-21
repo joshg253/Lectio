@@ -10300,6 +10300,74 @@ def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], read
         return None
 
 
+def _filter_star_keys_by_search(
+    keys: set[tuple[str, str]], search_terms: list[str]
+) -> set[tuple[str, str]] | None:
+    """Narrow kept keys to those matching every search term, in SQL. None on
+    any error → caller keeps the full set and post-filters in Python.
+
+    Same technique as `_sorted_star_key_window`, for the same reason: joining
+    the keys against the entries table is milliseconds where hydrating them via
+    reader.get_entry is seconds. reader's own FTS index is deliberately *not*
+    used here — `search_entries` builds a highlighted snippet per result, which
+    measured at ~7.8ms/row (76s for one common term), so it costs far more than
+    the scan it would replace.
+
+    The predicate covers the Python haystack's fields (title, resolved feed
+    title, link, author, summary) and adds the stored content, so a Saved
+    search reaches the text of the article rather than only its metadata —
+    the point of a read-later archive, and cheap here (~60ms over 11k keys)
+    because it never leaves SQLite. Entry titles corrected via
+    /entries/set-title are written into reader's own title column, so overrides
+    are covered.
+
+    Content is matched as stored, i.e. raw HTML, so a markup-ish term ("span",
+    "http") matches nearly everything. Stripping tags would need a plain-text
+    column maintained at ingest; not worth a schema change until a real search
+    is hurt by it.
+    """
+    if not search_terms:
+        return keys
+    # LIKE wildcards in a user's search term are literals, not patterns.
+    def _lit(term: str) -> str:
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    haystack = (
+        "lower(COALESCE(e.title,'') || ' ' || COALESCE(f.user_title, f.title, '')"
+        " || ' ' || COALESCE(e.feed,'') || ' ' || COALESCE(e.link,'')"
+        " || ' ' || COALESCE(e.author,'') || ' ' || COALESCE(e.summary,'')"
+        " || ' ' || COALESCE(e.content,''))"
+    )
+    term_sql = " AND ".join(f"{haystack} LIKE ? ESCAPE '\\'" for _ in search_terms)
+    term_params = [f"%{_lit(t)}%" for t in search_terms]
+
+    matched: set[tuple[str, str]] = set()
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            key_list = list(keys)
+            # 2 bound vars per key; stay under SQLite's 999-variable limit.
+            for i in range(0, len(key_list), 450):
+                chunk = key_list[i:i + 450]
+                values = ",".join("(?,?)" for _ in chunk)
+                params = [v for pair in chunk for v in pair] + term_params
+                rows = conn.execute(
+                    f"WITH k(feed, id) AS (VALUES {values}) "
+                    f"SELECT e.feed, e.id FROM entries e "
+                    f"JOIN k ON e.feed = k.feed AND e.id = k.id "
+                    f"LEFT JOIN feeds f ON f.url = e.feed "
+                    f"WHERE {term_sql}",
+                    params,
+                ).fetchall()
+                matched.update((str(r[0]), str(r[1])) for r in rows)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("star key search query failed, post-filtering in Python: %s", exc)
+        return None
+    return matched
+
+
 def _sorted_star_key_window(
     keys: set[tuple[str, str]],
     *,
@@ -10484,13 +10552,24 @@ def list_entries_for_feeds(
             # shows nothing. kept_entries_set (star OR tag) is already restricted
             # to the view's feeds; point-lookup exactly those keys instead.
             star_keys: Iterable[tuple[str, str]] = kept_entries_set
-            if len(kept_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
+            if search_terms:
+                # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
+                # `elif search_terms` fast path below, so the Saved view was the
+                # one place a search never took a fast path at all: it hydrated
+                # every kept key and filtered in Python — ~11k get_entry calls,
+                # measured at 28s per search on a real library, which reads as a
+                # search box that does nothing.
+                matched_keys = _filter_star_keys_by_search(kept_entries_set, search_terms)
+                if matched_keys is not None:
+                    star_keys = matched_keys
+                    search_terms = []  # already matched in SQL
+            if len(star_keys) > fetch_limit and not search_terms and not normalized_selected_tag:
                 # Big backlog: hydrating every kept key costs seconds (6k
                 # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
                 # the raw keys and hydrate only the visible window. Skipped for
                 # tag/search, which post-filter and need the whole set.
                 star_keys = _sorted_star_key_window(
-                    kept_entries_set,
+                    star_keys,
                     sort_by=normalized_sort_by,
                     sort_dir=normalized_sort_dir,
                     reader_read_filter=reader_read_filter,
