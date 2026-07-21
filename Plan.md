@@ -16,13 +16,15 @@ What actually has a clock is smaller and closer:
 - **Saved-dupe bugs (#1) compound daily.** Every day unfixed, more duplicate entries
   accrue at save time, and the dupe dialog keeps arriving with deletes pre-armed.
   Hours of work.
-- **Part C's retro-archive pass (#2) has a decay clock.** It captures content from
+- **Part C's retro-archive pass (#3) has a decay clock.** It captures content from
   dead and unsubscribed feeds; every month deferred, more of that content stops
-  being recoverable. It does **not** need the failing-feed triage (see #2) — that
+  being recoverable. It does **not** need the failing-feed triage (see #3) — that
   gate only ever applied to the Wayback pass.
+- **Saved capture quality (#2) is actively blocking you**, not decaying — but it's
+  hours of work and unblocks a workflow you're mid-way through, so it goes early.
 
 So: fix the friction you hit daily, capture the content that's rotting, then start
-the Ino migration on schedule. Everything below #4 is genuinely deferrable.
+the Ino migration on schedule. Everything below #5 is genuinely deferrable.
 
 ### 1. Saved dedup workflow — correctness, safety, then UX (one project)
 
@@ -65,7 +67,44 @@ working. Ship them together.
 Reproduce first to confirm the surface; Read Mode's form is the prime suspect (no
 submit button, no JS, and it drops the selected node on submit).
 
-### 2. Tag-as-keep — Part C: run pass 1 now, defer pass 2
+### 2. Saved capture quality — a raw / full-page save mode
+
+**Every save path funnels through readability, so there is currently no way to get
+a fuller copy of a page it handles badly.** Verified 2026-07-21 against Josh's
+example, `https://schacon.github.io/git/everyday.html`:
+
+| | chars |
+|---|---|
+| page body text | 11,658 |
+| readability extracted | **786** (~6.7%) |
+
+It doesn't just under-extract — it picks the *wrong node*, returning a single
+`<pre>` shell-session block instead of the prose. The page is a DocBook-style
+export: 84 `<p>` scattered across 68 `<div>`, no `<article>`/`<section>`, and 13
+`<pre>`. Readability scores containers by paragraph density, so one big `<pre>`
+wins while the actual prose stays split across sibling divs that each score low.
+
+Why none of the existing escape hatches help — all three call the same
+`extract_readability_article`, so they are deterministic re-runs of the same
+failure:
+
+- **Re-fetch content** (`/articles/refresh-content`, [main.py:22731](main.py#L22731))
+  → re-fetch + re-extract, same pipeline.
+- **Extension / captured-DOM save** — `_extract_from_capture`
+  ([main.py:23022](main.py#L23022)) runs readability *on the captured DOM*. It
+  helps for JS-rendered or paywalled pages, but for a static document the
+  captured DOM ≈ the fetched HTML, so the result is identical.
+- **Delete and re-save** — saved entries are keyed by normalized URL, so a re-save
+  refreshes the same entry with the same extraction.
+
+So this is a genuine gap, not user error: **add a "save full page (don't extract)"
+option** that sanitizes the whole `<body>` via the existing
+`html_sanitize.sanitize_html` instead of readability-extracting. Wants to be
+reachable both at save time and as a per-entry "re-save without extraction" so
+already-bad captures can be fixed in place. Related to #6 (same pipeline, opposite
+direction: that one *adds* extraction to feeds with no body).
+
+### 3. Tag-as-keep — Part C: run pass 1 now, defer pass 2
 
 The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
 while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
@@ -86,7 +125,7 @@ earlier "wait for triage" framing):
 - **Pass 2, Wayback: keep deferred.** This one genuinely benefits from triage — you
   want to know which feeds are truly dead before spending Archive.org lookups, since
   a live-but-403 site is better served by the archive worker's own page fetch. Gate
-  it on the triage list from #4.
+  it on the triage list from #5.
 
 Caveat when running pass 1: it enqueues ~3,596 archive jobs, each a page fetch
 against mostly-dead hosts, so expect a long slow tail of 404s and watch worker load.
@@ -113,7 +152,7 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
 
-### 3. Small daily-friction items (cheap; slot between the bigger pieces)
+### 4. Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **Tag autocomplete while typing** — auto-list matching existing tags during tag
   entry. Build **one shared control** and use it for both normal per-entry tagging
@@ -122,8 +161,11 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
 - **Batch-align Uncategorized saved items into Feeds** — bulk assignment with
   auto-match by domain instead of one-at-a-time. In-app, not a script (distinct
   from `scripts/categorize_uncategorized.py`, which handles orphan *feeds*).
+- **Set up the four verified firehose tag_filter rules** — config, not code; the
+  engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
+  firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-### 4. Inoreader replacement — the migration (start ~Dec 2026)
+### 5. Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
 ~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
@@ -140,39 +182,39 @@ IP/aggregator-only blocks.
 Both steps reuse the **existing** `services/inoreader.py` (OAuth +
 `get_subscriptions` + `get_stream_contents`).
 
-**4a — Comparison report** (read-only; start here). Cross-reference Inoreader
+**5a — Comparison report** (read-only; start here). Cross-reference Inoreader
 subscriptions vs Lectio feeds and flag three sets:
 
 - **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
-  risk set. This is also the **triage list that gates Part C pass 2 (#2)**, produced
-  mechanically instead of by hand, and it names the feeds that need 4b.
+  risk set. This is also the **triage list that gates Part C pass 2 (#3)**, produced
+  mechanically instead of by hand, and it names the feeds that need 5b.
 - **(b) in Ino, not in Lectio** — subscriptions never migrated.
 - **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
 
 Turns "safe to drop Ino?" into a concrete checklist.
 
-**4b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
+**5b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
 legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
 Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
 the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 4a first and let
+the reader. **Scope depends on how big set (a) turns out to be — run 5a first and let
 the count decide whether this is worth building at all.**
 
-Sequence: connect Ino → comparison report (4a) → triage/replace dead feeds → Part C
-pass 2 (#2) → proxy the only-Ino feeds (4b) → let the plan lapse 2027-03-16 (annual
+Sequence: connect Ino → comparison report (5a) → triage/replace dead feeds → Part C
+pass 2 (#3) → proxy the only-Ino feeds (5b) → let the plan lapse 2027-03-16 (annual
 SaaS rarely prorates; worth asking, but plan to ride it out).
 
-### 5. Full-content fetch at ingest for body-less feeds
+### 6. Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
 per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with #4: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
+with #5: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
 so it's worth revisiting once the comparison report sizes set (a).
 
-### 6. Page-weight reduction — follow-ups (main work landed 2026-07-15)
+### 7. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -198,7 +240,7 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 
 > **Most of this section was promoted into Now #1**, which treats the dupe cluster
 > as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> Uncategorized batch-align went to Now #3. Everything stays documented here in
+> Uncategorized batch-align went to Now #4. Everything stays documented here in
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
 
@@ -303,6 +345,32 @@ Make Lectio usable as a read-it-later app.
   saved-tag shortcuts under the Saved Articles row, badge counting total
   saved instead of unread (if unread proves the wrong default).
 
+### Single-post pages as first-class entries (the "feed" that is one document)
+
+Josh has several "feeds" that are really **a single standing document** — e.g.
+`https://schacon.github.io/git/everyday.html` (Everyday Git). There's no RSS to
+subscribe to, and the content is a reference doc he wants to keep and re-read, not
+a stream.
+
+Current workaround (his): save as a Saved Article → create a feed → move the entry
+into it. Two things make that unsatisfying, and they're separate problems:
+
+1. **The capture is bad** — that's Now #2 (readability returns 6.7% of this
+   particular page, and the wrong node). Fixing raw/full-page save makes the
+   workaround *work*, and is the cheap immediate win.
+2. **The workflow is a hack** — "save, then manufacture a feed, then move it" is
+   three steps to express "track this one page." A first-class **single-page
+   subscription** would be: add a URL, get a one-entry feed, optionally re-check
+   periodically and bump/re-capture when the page changes (the classic
+   page-monitoring feature other readers ship for RSS-less sites). Natural home is
+   the existing add-feed/discovery path — when discovery finds no feed, offer
+   "track this page" instead of failing.
+
+Do #2's raw-capture fix first regardless; it's small and unblocks the workaround.
+Only build the first-class version if the manual route still chafes afterward —
+the number of such pages is small, so the hack may be good enough once the capture
+is right.
+
 ### DeviantArt watchlist sync — remaining follow-up
 
 Auto-resume + reconcile SHIPPED 2026-07-08 (see ARCHITECTURE "Watch-list sync
@@ -317,8 +385,38 @@ The generic **tag_filter rule** is SHIPPED (rules engine `tag_filter` type;
 see ARCHITECTURE "Feed-provided tag suggestions"): include/exclude feed-tag
 lists per rule, any scope, auto-mark-read after refresh, dry-run/run-now/
 history. Covers MakeUseOf, Lifehacker, How-To-Geek, freeCodeCamp, and other
-tagged-RSS firehoses (candidates to set up: HackerNoon, GamingOnLinux, Rock
-Paper Shotgun, PlayStation Blog — verify each carries `<category>` tags).
+tagged-RSS firehoses.
+
+**The four candidate firehoses are VERIFIED (2026-07-21) — all carry
+`<category>`, so all four are set-up-able today (Now #4, config not code):**
+
+| feed | items | cats/item | distinct | vocabulary |
+|---|---|---|---|---|
+| HackerNoon | 20 | 7.8 | 140 | lowercase-hyphenated slugs |
+| GamingOnLinux | 50 | 5.8 | 81 | Title Case, controlled |
+| Rock Paper Shotgun | 100 | **13.2** | 298 | Title Case platform/genre |
+| PlayStation Blog | 10 | 2.9 | 20 | mostly game/studio names |
+
+Per-feed notes, worth reading before writing rules:
+
+- **Rock Paper Shotgun** is the standout — 13.2 tags/item of genuinely structured
+  platform/genre metadata (`PC` 92/100, `Single Player`, `PS5`, `RPG`,
+  `Third person`, `Shooter`). Precise include/exclude is easy here.
+- **GamingOnLinux** has the cleanest controlled vocabulary (`Steam`, `Proton`,
+  `Steam Deck`, `Native Linux`, `Open Source`, `Indie Game`) — small, stable, high
+  signal.
+- **HackerNoon** has a 140-tag long tail in only 20 items, so *exclude* lists will
+  be endless whack-a-mole — use **include** (`++`) mode. Note the editorial marker
+  `hackernoon-top-story`, which is a ready-made quality filter.
+- **PlayStation Blog** is the weak one: its tags are mostly game titles and studio
+  names rather than topics (`PS5` at 9/10 is the only real topical tag). Tag
+  filtering buys little; deprioritize or use it only to keep `PS5`.
+
+Multi-word tags are **not** a problem, despite the hyphenation note below:
+`parse_tag_filter_spec` ([main.py:5779](main.py#L5779)) splits on **commas, not
+spaces**, and `normalize_tag_value` hyphenates to the stored form — so
+`+Steam Deck, -Xbox Series X/S` can be typed naturally.
+
 Remaining follow-ups:
 
 - **dev.to adapter** stays API-based (its value is language/reaction
@@ -327,10 +425,11 @@ Remaining follow-ups:
   client-side on `tag_list`.
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
-- Multi-word tag entry in rule lists is hyphenated (`windows-11`); consider a
-  tag autocomplete in the rule form fed from entry_feed_tags. See also the
-  broader "autocomplete while typing" request under "Saved / Tags / dupe-scan
-  friction" — build one shared control, not two.
+- Multi-word tags are *stored* hyphenated (`windows-11`) but can be **typed
+  naturally** in rule lists (comma-separated; see the parser note above) — the
+  earlier "must hyphenate" reading was wrong. Still worth a tag autocomplete in
+  the rule form fed from `entry_feed_tags`; see the broader "autocomplete while
+  typing" request now at Now #4 — build one shared control, not two.
 
 ### New subscription missing from feed tree (but posts show)
 
