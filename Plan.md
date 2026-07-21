@@ -99,6 +99,65 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
 
 ## Later
 
+### Saved / Tags / dupe-scan friction (reported 2026-07-21)
+
+User-reported friction on already-shipped surfaces. Deliberately **not** inserted
+into the Now chain, but the two confirmed bugs are small and worth picking off
+opportunistically. Code pointers below were verified 2026-07-21.
+
+**Bugs**
+
+- **`http://` and `https://` count as different URLs in the Saved dupe scan.**
+  Confirmed: `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920))
+  strips only the fragment and trailing slash — the scheme survives, so the
+  `_canon` ("same URL") tier never matches an http/https pair. They *may* still
+  group via the `_slug` tier (`_safe_dedup_entry_slug`,
+  [main.py:4996](main.py#L4996)) since that uses only the last path segment, but
+  only when the slug clears the length/hyphen guards — so short or dateless
+  paths slip through entirely. Fix is to fold the scheme (and almost certainly
+  `www.`) into the canonical form. **Note the deeper cause**: `normalize_article_url`
+  ([services/saved_articles.py:40](services/saved_articles.py#L40)) also preserves
+  the scheme, and saved entries are keyed by that normalized URL — so an http and
+  an https save of one article become two *entries* in the first place. Fixing
+  only the scan hides the symptom; fixing normalization prevents new pairs but
+  does not merge existing ones. Probably want both, plus a one-off merge.
+- **Saved search button does nothing.** Needs repro detail on *which* surface.
+  The main-app toolbar search (`toolbar-search-btn`) *is* wired
+  ([static/js/app.js:12976](static/js/app.js#L12976)). Read Mode's search
+  ([templates/read_mode.html:85](templates/read_mode.html#L85)) is a plain GET
+  form with **no submit button at all** and no JS — it only submits on Enter, and
+  it carries `scope` but not the selected tree node, so a search from inside a
+  node also loses that context. Likeliest culprit; confirm before fixing.
+
+**Saved dupe-scan UX** (all in the dupe dialog)
+
+- **"Not duplicates" action** — needs persistent per-pair suppression so a
+  rejected group stops reappearing on every scan. New storage; the only item
+  here that isn't cosmetic.
+- **Collapse the two Confirmed/Possible sections** — collapsible, so a long
+  confirmed list doesn't bury the possible tier.
+- **Resizable / larger dialog.**
+- **More obvious per-item status** — e.g. a 404 rendered in red rather than
+  neutral text (URL status already comes from `/saved/duplicates/check-urls`,
+  [main.py:22031](main.py#L22031)).
+- **Change the auto-select rule** — auto-select *only* 404 items; if every item
+  in a group is 404, select none (never auto-arm a delete that removes the whole
+  group).
+
+**Saved organization**
+
+- **Batch-align Uncategorized saved items into Feeds** — bulk assignment with
+  auto-match by domain, instead of one-at-a-time. Distinct from the existing
+  `scripts/categorize_uncategorized.py` orphan-*feed* cleanup: this is about
+  saved *articles*, and it should be in-app rather than a script.
+
+**Tags**
+
+- **Autocomplete while typing** — auto-list matching existing tags during tag
+  entry. Broader than the deferred rule-form autocomplete noted under "Tag
+  filtering for firehose feeds"; if built, do it once as a shared control and
+  cover both the rule form and normal per-entry tagging.
+
 ### Instapaper-alternative: reader-only view for saved/starred items
 
 Make Lectio usable as a read-it-later app.
@@ -167,7 +226,9 @@ Remaining follow-ups:
 - freeCodeCamp per-tag Ghost RSS (`/news/tag/<slug>/rss/`) remains a fallback
   if include-list recall from the main feed's window is insufficient.
 - Multi-word tag entry in rule lists is hyphenated (`windows-11`); consider a
-  tag autocomplete in the rule form fed from entry_feed_tags.
+  tag autocomplete in the rule form fed from entry_feed_tags. See also the
+  broader "autocomplete while typing" request under "Saved / Tags / dupe-scan
+  friction" — build one shared control, not two.
 
 ### New subscription missing from feed tree (but posts show)
 
