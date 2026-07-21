@@ -382,10 +382,9 @@ scan re-read husks. The saved source is now hard-deleted via the shared
   saves. Marked hosts stay reviewable in a collapsed section with undo. New meta
   table `autofile_non_feed_hosts`, created in `ensure_meta_schema` so the
   startup per-user migration covers existing tenants.
-  **This is what empties the list:** after Josh's filing pass the remaining
-  backlog was 1,076 articles across 72 hosts, of which **735 across 49 hosts had
-  no feed at all** — 614 of those in just guitarmasterclass.net (463) and
-  guitarchalk.com (151), and 35 more being one-off single-article hosts.
+  (Sized mid-session at 735 no-feed articles across 49 hosts; Josh then
+  subscribed to feeds for the four biggest, so see the end-of-session numbers
+  below for where it landed.)
 - **Filing is batched.** One uncapped call over a big host runs past a minute
   and is cut off in flight: observed live as `POST /saved/autofile → status 0,
   16180ms`, where 278 articles *were* filed but the reply never arrived, so the
@@ -432,12 +431,53 @@ verified with two feeds sharing the title "The Woodshed" (one blog, one channel)
 the channel is absent from the picker, and posting it directly to apply is
 rejected.
 
+**Where it actually ended up (re-measured against live data at end of session
+2026-07-21 — every number above predates the filing and is kept only as the
+reasoning trail):**
+
+| | |
+|---|---|
+| `lectio:saved` entries | **4,334 → 424** |
+| real (kept) saves left | **403 across 65 hosts** |
+| still unmatched | 370 — and **303 of those are guitarplayer.com** |
+| strong match remaining | 6 |
+
+The four big no-feed hosts are **gone from the list entirely**: Josh subscribed
+to real feeds for guitarmasterclass.net, guitarchalk.com, music.tutsplus.com and
+quickreads.net and filed them. What remains is a genuine long tail — 46 hosts
+with no feed, most holding one or two articles.
+
 **Still open in this area:**
+- **guitarplayer.com's 303** are the single biggest remaining item and have no
+  good home: the site's own subscription is a scraped one-article stub (now
+  barred as a target), and probing showed many of its article URLs soft-404.
+  Options are a real guitarplayer feed, "one-off saves", or deletion — Josh's
+  call, not automatable.
 - **Match at import time.** `services/instapaper_import.py` should run the same
   matcher so a future import lands filed instead of piling into Uncategorized.
-- **The 735 with no subscribed feed** (guitarmasterclass.net 463, guitarchalk.com
-  151, …) are saves from sites Josh doesn't subscribe to. Filing can't help;
-  they either stay in Saved or become new subscriptions.
+- **⚠ UNEXPLAINED: 3,593 orphaned star rows on `lectio:saved`** (found
+  2026-07-21 after the filing). `saved_entries` rows whose `lectio:saved` entry
+  no longer exists — every one of a 500-row sample is **tombstoned**, so the
+  entry was removed by the move's source cleanup, but the star row survived.
+  Total star rows went **11,050 → 13,895** across the session, roughly the
+  number of articles filed.
+  - **Not reproducible.** Against a copy of the live DBs, `_move_entry_to_feed`
+    deletes the source star row correctly (3996 → 3995, total flat) and
+    `_hard_delete_entry` cleans its star row too. Both current paths behave.
+  - **The rows are stamped *today*** (2,961 in one UTC hour), so they were
+    *written* during the session, not left behind — a leftover would keep its
+    original `saved_at` (the untouched rows still carry 2019/2020 dates). The
+    only writer that stamps `CURRENT_TIMESTAMP` on a `lectio:saved` star row is
+    `save_article`, and no import or bulk save path appears in the logs.
+  - **Impact is limited but real**: the rows are invisible in the UI (the entry
+    lookup returns nothing) and the articles themselves are correctly filed and
+    starred on their target feeds. They inflate the star count and add work to
+    every Saved-view query.
+  - **Next steps:** a sweep deleting `saved_entries` rows whose entry is gone
+    (bulk delete — needs the go-ahead), plus a defensive idempotent re-DELETE of
+    the source star row *after* the hard delete in `_move_entry_to_feed`, which
+    closes the hole whatever the cause. Don't ship the sweep without first
+    reproducing, or it will just run again next session.
 - **Soft-404s are invisible to the dead-link checker.** Probing 8 guitarplayer
   articles: all returned **200**, but 4 had been redirected to the bare
   `/lessons` index — the article is gone and the site answers 200 for it.
