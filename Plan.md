@@ -6,33 +6,43 @@ this file only tracks what's still open.
 ## Now (priority order)
 
 **Current focus: Saved Articles — finish the read-later app, then get the backlog
-under control.** Items **#1–#6** are that epic, in dependency order: fix what's
-broken, then organize the pile, then finish the Instapaper-clone surface. #7 is
-the daily-polish bucket to slot in whenever. #8 is a single command with a decay
-clock — run it any time, it doesn't queue behind anything. #9–#11 are unrelated
-and genuinely deferrable.
+under control.** Items **#1–#7** are that epic, in dependency order: fix what's
+broken (#1–#2), organize the pile (#3–#6), finish the Instapaper-clone surface
+(#7). **#8** is the daily-polish bucket to slot in whenever. **#9** is a single
+command with a decay clock — run it any time, it doesn't queue behind anything.
+**#10–#12** are unrelated and genuinely deferrable.
+
+**The cleanup order inside #3–#6 matters** and isn't arbitrary: auto-file (#4)
+merges curation between duplicate copies, which changes which entries carry stars
+and tags — so unstarring (#5) and dupe-scanning (#6) must come after it or they
+operate on a set that shifts underneath them. Re-measure between steps.
 
 **Inoreader renews $69.99 on 2027-03-16** — confirmed 2026-07-21, ~8 months of
-runway at ~$5.83/month, so the Ino chain (#9) is **scheduled work, not urgent**:
+runway at ~$5.83/month, so the Ino chain (#10) is **scheduled work, not urgent**:
 start ~Dec 2026, leaving ~3 months to validate before renewal. The motivation is
 consolidation and ownership, not cost.
 
 **Measured 2026-07-21 (read-only against live data) — the three numbers driving
 the epic's shape:**
 
-| finding | number |
-|---|---|
-| saved articles with no feed, but a host matching one you subscribe to | **3,974 of 4,334 (91.7%)** |
-| duplicate groups the *current* scan can see (`lectio:saved` only) | **5** |
-| duplicate groups actually in the Saved **view** (all starred items) | **~490, ~520 extra copies** |
+| finding | number | item |
+|---|---|---|
+| saved articles with no feed, but a host matching one you subscribe to | **3,974 of 4,334 (91.7%)** | #4 |
+| starred items that also carry a tag (star now redundant) | **1,643 (14.9% of starred)** | #5 |
+| duplicate groups the *current* scan can see (`lectio:saved` only) | **5** | #6 |
+| duplicate groups actually in the Saved **view** (all starred items) | **~490, ~520 extra copies** | #6 |
 
-That gap is the headline: **the dupe scan structurally cannot see the dominant
+That last gap is the headline: **the dupe scan structurally cannot see the dominant
 duplicate class.** It scans `feed = 'lectio:saved'` only, but the Saved view shows
 all 11,050 starred items — and 447 of the ~490 duplicate groups are *cross-feed*
-(the same article both URL-saved **and** starred in its real feed). See #5.
+(the same article both URL-saved **and** starred in its real feed). See #6.
+
+Taken together the epic should take the Saved view from 11,050 items to something
+far smaller and actually organized: ~3,974 filed onto real feeds, ~1,643 unstarred
+as already-tagged, ~520 duplicate copies collapsed (with heavy overlap between
+those sets — re-measure rather than adding them up).
 
 ### 1. Saved dedup workflow — correctness, safety, then UX (one project)
-
 
 Treat the whole dupe cluster as **one piece of work**, not six tickets. It's a
 single workflow you're actively using, the pieces reinforce each other, and
@@ -73,9 +83,7 @@ working. Ship them together.
 Reproduce first to confirm the surface; Read Mode's form is the prime suspect (no
 submit button, no JS, and it drops the selected node on submit).
 
-
 ### 2. Saved capture quality — a raw / full-page save mode
-
 
 **Every save path funnels through readability, so there is currently no way to get
 a fuller copy of a page it handles badly.** Verified 2026-07-21 against Josh's
@@ -112,9 +120,7 @@ reachable both at save time and as a per-entry "re-save without extraction" so
 already-bad captures can be fixed in place. Related to #10 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
-
 ### 3. "Filter this view" — client-side list filter, then act on what's shown
-
 
 Josh's framing (2026-07-21) is the right one: **"actual search" vs "filter search"**
 are different tools. Search is a server-side query that changes *what is fetched*;
@@ -175,9 +181,7 @@ that's what #4 automates; use this for the tail and for spot work.
 (The dead `server_posts_total` / `server_posts_sent` plumbing noticed while checking
 this is filed with the other dead-code items under "Code health" in Later.)
 
-
 ### 4. Auto-file Uncategorized saved items into their real feeds
-
 
 **Measured against live data 2026-07-21 — the numbers make this the best
 value-per-effort item on the board.** Josh's read: "tons of Uncategorized Saved
@@ -223,8 +227,63 @@ Note this also supersedes most of the single-post-page workaround (see "Single-p
 pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
 which is exactly what this does.
 
+### 5. Unstar items that carry tags (DB one-off, then a Utilities button)
 
-### 5. Cross-feed duplicate scan — the dupes you can actually feel
+After the tag-as-keep flip a tag *is* a keep signal, so a star on an already-tagged
+item is redundant — it only clutters Saved, which should be the read-later queue.
+Josh's idea: do it at DB level now, add a Utilities button for later upkeep.
+
+**Measured 2026-07-21 — this is safe, and I checked the thing that would have made
+it unsafe:**
+
+| | |
+|---|---|
+| manually tagged entries | 16,686 |
+| starred entries | 11,050 |
+| **starred AND tagged (the affected set)** | **1,643 (14.9% of starred)** |
+| ↳ in `lectio:saved` / in real feeds | 554 / 1,089 |
+
+**The risk I went looking for was read-later tags, and there are none.** Earlier
+notes describe a `#toread` vs `#todo` pattern — buckets *under* a star — and
+blanket-unstarring those would have gutted the read-later queue. All **57** distinct
+tags on the affected set are topical filing tags: `misc` (319), `linux-stuff` (208),
+`c++` (200), `science-+-math` (184), `games-to-play` (97), `python` (85), `guitar`
+(59)… A targeted search for read/todo/later/queue/inbox-ish names returned
+**nothing**. So the affected items are "filed by topic," not "queued to read", and
+unstarring them is exactly the decluttering intended.
+
+**Nothing is lost by unstarring a tagged entry — verified, don't re-derive:**
+
+- **Pruning**: `_prune_entries` ([main.py:21192](main.py#L21192)) protects starred
+  and manually-tagged entries **independently** (tagged excluded in SQL, starred
+  skipped in Python), so the tag alone keeps them.
+- **Archive**: the unstar route ([main.py:22689](main.py#L22689)) only enqueues
+  removal `if not get_manual_tags_for_entry(...)` — a tagged entry keeps its
+  capture. A **raw DB delete bypasses that path entirely**, which here is *safer*,
+  not riskier: no removal is ever enqueued, so archives simply stay.
+
+**Two things a DB-level run must handle** (they're why this shouldn't be a bare
+`DELETE`):
+
+1. **Cache/generation invalidation.** Deleting `saved_entries` rows behind the
+   app's back leaves unread/tag counts stale until restart — and the unread-count
+   cache is generation-guarded, so it won't self-heal. Either run it through the
+   app's own invalidation helpers or restart the container after.
+2. **`archived_at` is on this row.** 371 rows carry Read Mode's archived state;
+   deleting a row discards it. Moot for items leaving Saved, but check the overlap
+   with the affected 1,643 before running rather than after.
+
+**Build it tag-selectable, not blanket.** The distribution is clean today, but
+`games-to-play` (97) and `books` (43) are plausibly aspirational queues Josh may
+want to keep starred. A preview listing counts per tag with opt-out beats an
+all-or-nothing button, and it's what makes the Utilities version safe to re-run
+later when the tag vocabulary has drifted.
+
+**Sequencing:** run this *after* #4 (auto-file), since filing merges curation
+between duplicate copies and changes which entries carry stars and tags. Doing it
+first means operating on a set that #4 will rearrange underneath you.
+
+### 6. Cross-feed duplicate scan — the dupes you can actually feel
 
 **Josh's hunch ("there's gotta be more dupes in there") is correct, and the reason
 the scan disagrees is that it's looking at the wrong set.** Measured 2026-07-21:
@@ -258,7 +317,7 @@ same class of hazard as the pre-armed delete in #1a — be conservative by defau
 entries that no longer exist. Harmless but they inflate counts; worth a sweep
 while in here.
 
-### 6. Finish the Instapaper clone (Read Mode follow-ups)
+### 7. Finish the Instapaper clone (Read Mode follow-ups)
 
 The read-later app shipped across PRs #137–#144 (Save any article, Saved sidebar
 view, Read Mode at `GET /read`). These are the deferred finishing touches, moved up
@@ -280,8 +339,7 @@ Reassess the "pinned saved-tag shortcuts" and "badge counts total instead of
 unread" ideas *after* #4 lands — auto-filing changes what the tree looks like, so
 judging those now would be premature.
 
-### 7. Small daily-friction items (cheap; slot between the bigger pieces)
-
+### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **Tag autocomplete while typing** — auto-list matching existing tags during tag
   entry. Build **one shared control** and use it for both normal per-entry tagging
@@ -294,9 +352,7 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-
-### 8. Tag-as-keep — Part C: run pass 1 now, defer pass 2
-
+### 9. Tag-as-keep — Part C: run pass 1 now, defer pass 2
 
 The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
 while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
@@ -344,9 +400,7 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
 
-
-### 9. Inoreader replacement — the migration (start ~Dec 2026)
-
+### 10. Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
 ~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
@@ -385,9 +439,7 @@ Sequence: connect Ino → comparison report (9a) → triage/replace dead feeds �
 pass 2 (#8) → proxy the only-Ino feeds (9b) → let the plan lapse 2027-03-16 (annual
 SaaS rarely prorates; worth asking, but plan to ride it out).
 
-
-### 10. Full-content fetch at ingest for body-less feeds
-
+### 11. Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
@@ -397,9 +449,7 @@ per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
 with #9: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
 so it's worth revisiting once the comparison report sizes set (a).
 
-
-### 11. Page-weight reduction — follow-ups (main work landed 2026-07-15)
-
+### 12. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -414,9 +464,6 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
   fetch (posts + tree + shells, ~200KB now); a render-splitting/fragment
   endpoint for `.pane-posts`/`.pane-entry` would cut server time further.
 
-
-
-
 ## Later
 
 ### Saved / Tags / dupe-scan friction (reported 2026-07-21)
@@ -426,7 +473,7 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 
 > **Most of this section was promoted into Now #1**, which treats the dupe cluster
 > as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> tag autocomplete went to Now #7 and the Uncategorized batch-align to Now #4
+> tag autocomplete went to Now #8 and the Uncategorized batch-align to Now #4
 > (it measured far bigger than expected). Everything stays documented here in
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
@@ -534,7 +581,7 @@ Make Lectio usable as a read-it-later app.
   **reassess only after Now #4** since auto-filing changes what the tree looks
   like: pinned saved-tag shortcuts under the Saved Articles row, and a badge
   counting total saved instead of unread (if unread proves the wrong default).
-- **The Read Mode follow-ups listed above are now Now #6** ("finish the Instapaper
+- **The Read Mode follow-ups listed above are now Now #7** ("finish the Instapaper
   clone") — they stay documented here for context, but the actionable list and its
   ordering live in Now.
 
@@ -584,7 +631,7 @@ history. Covers MakeUseOf, Lifehacker, How-To-Geek, freeCodeCamp, and other
 tagged-RSS firehoses.
 
 **The four candidate firehoses are VERIFIED (2026-07-21) — all carry
-`<category>`, so all four are set-up-able today (Now #7, config not code):**
+`<category>`, so all four are set-up-able today (Now #8, config not code):**
 
 | feed | items | cats/item | distinct | vocabulary |
 |---|---|---|---|---|
@@ -625,7 +672,7 @@ Remaining follow-ups:
   naturally** in rule lists (comma-separated; see the parser note above) — the
   earlier "must hyphenate" reading was wrong. Still worth a tag autocomplete in
   the rule form fed from `entry_feed_tags`; see the broader "autocomplete while
-  typing" request now at Now #7 — build one shared control, not two.
+  typing" request now at Now #8 — build one shared control, not two.
 
 ### New subscription missing from feed tree (but posts show)
 
@@ -671,7 +718,6 @@ The 9 still in Uncategorized are dead/one-shot/ambiguous (an Instagram post
 URL, a single Vice article, cochaser.com (no entries), WebServicesDir,
 whiskypaint/nolanfa tumblrs, norfolkwinters, crispian-jago, owenyoung
 myfeed) — sort or unsubscribe manually.
-
 
 ### Send-to-destination — remaining candidates
 
@@ -733,13 +779,13 @@ extension keeps working too.
 
 ### Saved-articles dupe scan follow-ups (deferred)
 
-> **Deprioritized 2026-07-21 by the cross-feed measurement (Now #5).** Fuzzy
+> **Deprioritized 2026-07-21 by the cross-feed measurement (Now #6).** Fuzzy
 > matching was the theory for "there must be more dupes"; the measurement says the
 > missing dupes aren't fuzzy, they're **out of scope** — the scan only reads
 > `lectio:saved` while the Saved view shows all starred items, and 447 of ~490
 > real duplicate groups are cross-feed. Within `lectio:saved` the exact tiers find
 > just 5 groups in 4,334 items, so there is little left for fuzzy to catch. Fix the
-> scope first (#5, and #4 which collapses most of them), re-measure, and only then
+> scope first (#6, and #4 which collapses most of them), re-measure, and only then
 > ask whether fuzzy is worth its false-positive risk.
 
 - **Fuzzy title matching in the Saved scan** — `/saved/duplicates` matches on
@@ -763,7 +809,7 @@ nobody references":
   page-weight follow-ups; it's a dead-code item, not a perf one). Confirm nothing
   external uses them, then drop.
 - **The dormant in-app star-mode tree/JS** that the Read Mode hijack bypasses —
-  see Now #6, which lists it as a Read Mode follow-up. Same sweep.
+  see Now #7, which lists it as a Read Mode follow-up. Same sweep.
 
 Other:
 - **Centralize schemeless-URL normalization** (Sourcery, PR #148): the
