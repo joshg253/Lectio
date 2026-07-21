@@ -146,3 +146,52 @@ def test_youtube_feeds_can_be_barred_as_targets():
     )
     assert barred[0]["target_feed_url"] is None
     assert barred[0]["confident"] is False
+
+
+def test_the_sites_own_feed_beats_an_aggregator_with_more_posts():
+    """Hacker News and link blogs carry links to everywhere, so by raw count they
+    can outrank a site's own feed for that site's host — measured on real data,
+    a link blog beat the real feed 23 posts to 11."""
+    own = "https://example.com/feed"
+    aggregator = "https://hnrss.org/newest"
+    plan = build_autofile_plan(
+        [("s1", "https://example.com/a")],
+        _links(aggregator, "example.com", 23) + _links(own, "example.com", 11),
+    )
+    c = plan[0]
+    assert c["target_feed_url"] == own
+    assert c["candidates"][0]["feed_url"] == own
+
+
+def test_off_host_candidates_do_not_make_a_host_ambiguous():
+    """One real feed plus any number of aggregators is not a genuine choice."""
+    own = "https://example.com/feed"
+    plan = build_autofile_plan(
+        [("s1", "https://example.com/a")],
+        _links(own, "example.com", 10)
+        + _links("https://hnrss.org/newest", "example.com", 5)
+        + _links("https://other.test/links", "example.com", 4),
+    )
+    c = plan[0]
+    assert c["ambiguous"] is False
+    assert c["confident"] is True
+
+
+def test_two_on_host_feeds_are_still_ambiguous():
+    plan = build_autofile_plan(
+        [("s1", "https://example.com/a")],
+        _links("https://example.com/feed", "example.com", 10)
+        + _links("https://example.com/feed/atom", "example.com", 8),
+    )
+    assert plan[0]["ambiguous"] is True
+
+
+def test_only_aggregators_still_counts_as_ambiguous():
+    """With no on-host feed at all, competing off-host candidates are a real
+    guess again — nothing distinguishes them."""
+    plan = build_autofile_plan(
+        [("s1", "https://example.com/a")],
+        _links("https://hnrss.org/newest", "example.com", 5)
+        + _links("https://other.test/links", "example.com", 4),
+    )
+    assert plan[0]["ambiguous"] is True

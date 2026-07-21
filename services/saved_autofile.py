@@ -16,8 +16,10 @@ already carries entries whose links are on this host".
 The plan this builds is a *proposal*. Nothing here moves anything; the caller
 presents it for approval per host. Two guards decide what may be auto-approved:
 
-  ambiguous — more than one subscribed feed carries entries on the host, so
-              picking one would be a guess.
+  ambiguous — more than one *on-host* subscribed feed carries entries on the
+              host, so picking one would be a guess. Off-host feeds (aggregators
+              and link blogs, which carry links to everywhere) are ranked below
+              the site's own feed and don't make a choice ambiguous on their own.
   support   — how many of the target feed's own entries are on that host. A
               single supporting entry usually means the "feed" is a scraped
               one-article URL, not the site's real feed; filing hundreds of
@@ -82,9 +84,20 @@ def build_autofile_plan(
     plan: list[dict] = []
     for host, entry_ids in by_host.items():
         candidates = host_feeds.get(host) or Counter()
-        ranked = candidates.most_common()
+        # A feed served from the host itself is the site's own feed. Anything
+        # else carrying links to this host is an aggregator or link blog (Hacker
+        # News showed up as a candidate for 16 different hosts), and by raw
+        # count it can outrank the real thing — one link blog beat a site's own
+        # feed 23 posts to 11. On-host candidates therefore rank first, and
+        # off-host ones never make a choice "ambiguous" when an on-host feed
+        # exists: they aren't competing for the same job.
+        ranked = sorted(
+            candidates.items(),
+            key=lambda kv: (article_host(kv[0]) != host, -kv[1], kv[0]),
+        )
+        on_host = [f for f, _ in ranked if article_host(f) == host]
         target, support = (ranked[0] if ranked else (None, 0))
-        ambiguous = len(ranked) > 1
+        ambiguous = len(on_host) > 1 if on_host else len(ranked) > 1
         plan.append({
             "host": host,
             "count": len(entry_ids),

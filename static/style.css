@@ -5064,6 +5064,18 @@ body[data-keyboard-open="1"] .action-modal-panel {
   font-size: 0.85rem;
 }
 .saved-autofile-row { align-items: flex-start; }
+/* The plan runs to ~180 rows, so the action has to stay reachable without
+   scrolling to the end — and since the selection isn't visible from down here,
+   the button carries the running total. */
+#saved-autofile-results .dedup-inline-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.5rem 0;
+  margin-top: 0.25rem;
+  background: var(--panel, var(--bg, #fff));
+  border-top: 1px solid var(--line);
+}
 /* Feed titles are often deliberately unlike their URLs — show the target URL
    outright, not only on hover. */
 .saved-autofile-url {

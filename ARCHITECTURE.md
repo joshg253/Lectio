@@ -859,10 +859,12 @@ Python, so a failure degrades to the old behavior instead of showing no posts.
 
 Matching is by **article host, not feed-URL host**: a feed's own URL often lives on a different host than the articles it publishes (`rss.beehiiv.com` serving `joanwestenberg.com` posts), so the reliable signal is which subscribed feed already carries entries whose links are on that host. Two guards decide what may be *pre-approved*, and the distinction matters — measured against real data, `guitarworld.com`'s target was backed by 77 of the feed's own entries while `guitarplayer.com`'s only candidate was a scraped single-article URL with **one** supporting entry, and filing 303 articles into it would have been wrong:
 
-- `ambiguous` — more than one subscribed feed carries entries on the host, so picking one would be a guess.
+- `ambiguous` — more than one *on-host* subscribed feed carries entries on the host, so picking one would be a guess.
 - `support` — how many of the target feed's own entries are on that host; below `MIN_SUPPORT` the cluster is shown but not pre-checked.
 
 The service is pure (it takes extracted rows, not a reader) so the guards are testable without a database. The preview is read-only and strips `entry_ids` before sending; apply takes the target from the request rather than recomputing it, so what was approved is exactly what runs.
+
+**Filing is batched, and has to be.** `_move_entry_to_feed` runs at roughly 17 articles/second, so one uncapped call over a large host (1,300+ articles) takes well over a minute and gets cut off in flight — observed live as `POST /saved/autofile → status 0, 16180ms`, where 278 articles really were filed but the reply never arrived, so the UI looked untouched and the articles appeared unmoved. The endpoint therefore caps each call at `_AUTOFILE_BATCH` articles and reports `remaining`; the client loops, showing progress, until nothing is left. A batch that reports work outstanding while moving nothing breaks the loop rather than spinning.
 
 **Nothing in the plan is ever pre-checked.** It files thousands of rows at a time and is meant to be worked in passes — file a batch, re-scan, continue — so the `confident` flag drives a *label* ("strong match — N posts from this host"), never a selection. Same rule as the Saved duplicate dialog: a scan result is a claim, not an instruction.
 

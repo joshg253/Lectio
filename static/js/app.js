@@ -1124,9 +1124,26 @@
         `${t.low_support_articles} weak, ${t.ambiguous_articles} ambiguous, ${t.unmatched_articles} with no subscribed feed.`;
       list.innerHTML = plan.map(_afRow).join('');
       okBtn.hidden = false;
+      _afSyncButton();
     });
 
+    // The action is pinned to the bottom of a long list, so the selection isn't
+    // on screen when you press it — say what's about to happen on the button.
+    const _afSyncButton = () => {
+      const btn = document.getElementById('saved-autofile-ok');
+      if (!btn) return;
+      const rows = [...document.querySelectorAll('.saved-autofile-row')]
+        .filter(r => r.querySelector('.saved-autofile-check')?.checked);
+      const articles = rows.reduce(
+        (n, r) => n + Number(r.querySelector('.saved-autofile-count')?.textContent || 0), 0);
+      btn.textContent = rows.length
+        ? `File ${articles} article(s) from ${rows.length} host(s)`
+        : 'File selected';
+      btn.disabled = !rows.length;
+    };
+
     document.getElementById('saved-autofile-results')?.addEventListener('change', (ev) => {
+      if (ev.target.closest?.('.saved-autofile-check')) { _afSyncButton(); return; }
       // Choosing a feed for a weak/ambiguous host is the approval for it.
       const sel = ev.target.closest?.('.saved-autofile-target');
       if (!sel) return;
@@ -1137,6 +1154,7 @@
       sel.title = sel.value;
       const shown = row?.querySelector('.saved-autofile-url');
       if (shown) shown.textContent = sel.value;
+      _afSyncButton();
     });
 
     document.getElementById('saved-autofile-ok')?.addEventListener('click', async () => {
@@ -1154,25 +1172,35 @@
                    `Stars, tags and read state move with them.`)) return;
       const btn = document.getElementById('saved-autofile-ok');
       btn.disabled = true;
-      btn.textContent = 'Filing…';
-      let data;
-      try {
-        const resp = await fetch('/saved/autofile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hosts }),
-        });
-        data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-      } catch (err) {
-        btn.disabled = false;
-        btn.textContent = 'File selected';
-        alert('Filing failed: ' + err);
-        return;
+      // Filed in batches: one uncapped call over a big host runs past a minute
+      // and gets cut off in flight — the work lands but the reply never
+      // arrives, so the list looks untouched and the articles appear unmoved.
+      let done = 0, failed = 0, guard = 0;
+      for (;;) {
+        btn.textContent = done ? `Filing… ${done}/${total}` : 'Filing…';
+        let data;
+        try {
+          const resp = await fetch('/saved/autofile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hosts }),
+          });
+          data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        } catch (err) {
+          btn.disabled = false;
+          _afSyncButton();
+          alert(`Filing stopped after ${done} article(s): ` + err);
+          document.getElementById('saved-autofile-btn')?.click();
+          return;
+        }
+        done += data.moved || 0;
+        failed += data.failed || 0;
+        // A batch that moves nothing but still reports work left would spin.
+        if (!data.remaining || !data.moved || ++guard > 200) break;
       }
       btn.disabled = false;
-      btn.textContent = 'File selected';
-      alert(`Filed ${data.moved} article(s).` + (data.failed ? ` ${data.failed} failed.` : ''));
+      alert(`Filed ${done} article(s).` + (failed ? ` ${failed} failed.` : ''));
       document.getElementById('saved-autofile-btn')?.click();  // re-scan
     });
 

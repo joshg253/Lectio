@@ -22305,6 +22305,12 @@ async def deduplicate_saved(request: Request):
     return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
 
 
+# Filing runs at roughly 17 articles/second, so ~150 keeps a call near ten
+# seconds — short enough to survive a reverse proxy and to report progress.
+_AUTOFILE_BATCH = 150
+_AUTOFILE_BATCH_MAX = 500
+
+
 def _autofile_excluded_targets(feed_urls: Iterable[str]) -> frozenset[str]:
     """Feeds an unfiled saved article must never be filed into.
 
@@ -22375,11 +22381,17 @@ def preview_saved_autofile():
 async def apply_saved_autofile(request: Request):
     """File the approved hosts' saved articles onto their target feeds.
 
-    Body (JSON): {"hosts": [{"host": ..., "target_feed_url": ...}, ...]} — the
-    target is taken from the request, not recomputed, so what the user approved
-    in the preview is exactly what runs. Each article goes through
-    _move_entry_to_feed, which migrates star/tags/read state and then removes
-    the now-empty saved source.
+    Body (JSON): {"hosts": [{"host": ..., "target_feed_url": ...}, ...],
+                  "limit": int} — the target is taken from the request, not
+    recomputed, so what the user approved in the preview is exactly what runs.
+    Each article goes through _move_entry_to_feed, which migrates star/tags/read
+    state and then removes the now-empty saved source.
+
+    *limit* caps how many articles one call moves, and the response reports what
+    is still outstanding so the client can loop. Filing is ~17 articles/second,
+    so an uncapped run over a big host (1,300+ articles) takes well over a
+    minute and gets cut off by a proxy or the browser mid-flight — the work
+    lands but the caller never learns it did, and the list looks untouched.
     """
     body = await request.json()
     wanted = {
@@ -22390,9 +22402,16 @@ async def apply_saved_autofile(request: Request):
     if not wanted:
         return JSONResponse({"ok": False, "error": "No hosts selected."}, status_code=400)
 
+    try:
+        limit = int(body.get("limit") or _AUTOFILE_BATCH)
+    except (TypeError, ValueError):
+        limit = _AUTOFILE_BATCH
+    limit = max(1, min(limit, _AUTOFILE_BATCH_MAX))
+
     saved_url = saved_articles_service.SAVED_FEED_URL
     moved = 0
     failed = 0
+    remaining = 0
     per_host: dict[str, int] = {}
     with get_reader() as reader, get_meta_connection() as conn:
         known_feeds = {str(f.url) for f in reader.get_feeds()}
@@ -22425,6 +22444,9 @@ async def apply_saved_autofile(request: Request):
             target = wanted.get(host)
             if not target:
                 continue
+            if moved >= limit:
+                remaining += 1      # counted, not moved — the client loops
+                continue
             res = _move_entry_to_feed(reader, conn, saved_url, entry_id, target)
             if res.get("ok"):
                 moved += 1
@@ -22435,10 +22457,10 @@ async def apply_saved_autofile(request: Request):
                                res.get("error"))
     if moved:
         invalidate_unread_counts_cache()
-    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed",
-                moved, len(per_host), failed)
+    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed, %d left",
+                moved, len(per_host), failed, remaining)
     return JSONResponse({"ok": failed == 0, "moved": moved, "failed": failed,
-                         "per_host": per_host})
+                         "remaining": remaining, "per_host": per_host})
 
 
 @app.get("/feeds/multi-folder")

@@ -351,6 +351,23 @@ scan re-read husks. The saved source is now hard-deleted via the shared
 `lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
 
 **Refinements from Josh working the list:**
+- **Filing is batched.** One uncapped call over a big host runs past a minute
+  and is cut off in flight: observed live as `POST /saved/autofile → status 0,
+  16180ms`, where 278 articles *were* filed but the reply never arrived, so the
+  list looked untouched ("I just allegedly filed a bunch, still see them").
+  Each call now caps at `_AUTOFILE_BATCH` and reports `remaining`; the client
+  loops with progress on the button. Verified against a copy of the live
+  library: 1,279 guitarworld articles filed across 9 batched POSTs,
+  `lectio:saved` 4,334 → 2,777, 1,322 stars landing on the target feed.
+- **The action is pinned to the bottom** of the ~180-row list and carries the
+  running total ("File 1279 article(s) from 1 host(s)"), since the selection
+  isn't on screen from down there. Disabled when nothing is selected.
+- **The site's own feed outranks aggregators.** Feeds that link outward (Hacker
+  News, link blogs) became candidates for every host they ever linked to — HN
+  appeared for 16 hosts, and one link blog outranked a site's own feed 23 posts
+  to 11. On-host candidates now rank first, and off-host ones no longer make a
+  host "ambiguous" when a real feed exists. **Ambiguous articles 181 → 28,
+  confident hosts 87 → 103.**
 - **Nothing is pre-checked.** The intended workflow is passes — file a chunk,
   re-scan, continue — so `confident` now drives a *label* ("strong match — N
   posts from this host"), not a selection. Same rule as the dupe dialog.
