@@ -117,17 +117,33 @@ Covered by `tests/unit/test_entry_dedupe_key.py` (22 cases) and verified in a
 browser against a seeded instance: no checkbox pre-checked, "keep" on row 0
 only, title edit persists and leaves the selection alone.
 
-**What's left before the scan is actually finishable:** with the confirmed tier
-clean, the *only* thing still coming back every scan is the possible tier's
-rejects (two datagenetics posts that reuse a title, `Guns-N-Roses-Style` vs
-`Style2`). That is exactly what **"Not duplicates"** persistence in #1b is for —
-it is now the blocking item, not a nice-to-have.
+**The Saved dupe scan is now clean: 0 confirmed, 0 possible** (verified against
+live data 2026-07-21, after Josh used the new inline title editing).
+
+Worth recording *why*, because it changes the priority of "Not duplicates": the
+three residual possible-tier groups matched on **title only** — they were
+different posts whose saved titles had drifted into collision. Correcting the
+titles removed the only signal binding them, so the groups stopped existing
+rather than being suppressed. Inline title editing turned out to be a partial
+substitute for "not duplicates", not just a convenience.
+
+**Partial**, though — it only dissolves *title*-matched groups. A group flagged
+`same content` (body-prefix match) won't respond to a title edit. So **"Not
+duplicates" persistence in #1b is demoted from blocking to worth-having**: build
+it when a body-matched false positive actually shows up, not before.
+
+Also of note: the corrections are durable. `entry_title_overrides` re-pins the
+title if a refresh re-ingests the entry, and `_replace_entry_content` checks
+`title_pinned`, so a later **Re-fetch content** won't undo them.
 
 **1b — make repeat sessions bearable.** Only one item here isn't cosmetic:
 
 - **"Not duplicates"** — persistent per-pair suppression so a rejected group stops
-  reappearing on every scan. Needs new storage. This is what makes dedup a task you
-  can *finish* rather than re-litigate, so it's the one to build if 1b gets cut.
+  reappearing on every scan. Needs new storage (a meta-DB table, so it also needs
+  the startup per-user migration or existing tenants 500). **Demoted 2026-07-21:**
+  the scan now returns nothing at all, and inline title editing dissolves
+  title-matched false positives outright. Build this when a *body*-matched false
+  positive shows up — that's the case a title edit can't fix.
 - **Red 404 status**, **collapsible Confirmed/Possible sections**, **resizable
   dialog** — cheap, all in the same dialog, do them in one pass while you're there.
 
