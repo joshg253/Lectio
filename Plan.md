@@ -3,16 +3,52 @@
 Backlog and staging area for future work. Completed work lives in git history —
 this file only tracks what's still open.
 
-## Now
+## Now (priority order)
 
-### Tag-as-keep — post-merge migration (Part C, deferred; dry-run done)
+The whole **Now** chain flows from **one read-only build**: the Inoreader comparison
+report (#1). It kills a paid annual SaaS, mechanically generates the failing-feed
+triage list that gates Tag-as-keep Part C (#2), and surfaces the exact feeds that
+need the fetch-proxy (#3). Start at the top; the rest unblocks in sequence.
+
+### 1. Inoreader replacement — bot-walled feeds (the last blocker to dropping Ino)
+
+Josh is close to fully replacing Inoreader with Lectio. The remaining concern is
+**bot-blocking**: feeds Inoreader can fetch but Lectio can't. Publishers allowlist
+known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches from the VPS IP with
+an honest UA and gets 403'd (the 🟢 "blocked" bucket in the Failing Feeds filter —
+isocpp 752, libhunt newsletters, etc.). Good-citizen policy forbids spoofing Ino's
+UA or evading IP blocks; Lectio already auto-escalates to browser-UA on refusal
+(`browser_ua_feeds`), which recovers some 403s but not IP/aggregator-only blocks.
+
+**This step is the comparison report only** (the fetch-proxy is #3). Both reuse the
+**existing** `services/inoreader.py` (OAuth + `get_subscriptions` +
+`get_stream_contents`).
+
+**Comparison report** (highest-leverage, read-only — START HERE) — cross-reference
+the user's Inoreader subscriptions vs Lectio feeds and flag three sets:
+
+- **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
+  risk set. **This set IS the failing-feed triage list that gates #2**, produced
+  mechanically instead of by hand, and it names the feeds that need #3.
+- **(b) in Ino, not in Lectio** — subscriptions never migrated.
+- **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
+
+Turns "safe to drop Ino?" into a concrete checklist.
+
+Overall migration sequence: connect Ino → run comparison (#1) → triage/replace dead
+feeds (#2) → proxy the only-Ino feeds (#3) → let the annual Ino plan lapse (annual
+SaaS rarely prorates a refund; worth asking but plan to ride it out).
+
+### 2. Tag-as-keep — Part C write-run (gated on the triage from #1)
 
 The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
 while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
-The backfill script (`scripts/migrate_tag_as_keep.py`) is **written** and its
-`--dry-run` has run against live data; the real (write) run is **deferred pending
-manual failing-feed triage** (Josh wants to find replacements for dead feeds
-first — the PR #151 category filter + "Needs replacement" worklist are the tools).
+The backfill script (`scripts/migrate_tag_as_keep.py`) is **written and committed**,
+and its dry-run has run against live data. Dry-run is the *default*; writes are
+gated behind `--apply`. The real (write) run is **deferred pending manual
+failing-feed triage** (Josh wants to find replacements for dead feeds first). The
+comparison report (#1) now feeds that triage: its "Ino can, we can't" set is the
+"Needs replacement" worklist, alongside the PR #151 category filter.
 
 Two passes (`--scope dead-unsub` default, YouTube always excluded):
 1. **Retro-archive** every tagged entry with no `complete` archive row
@@ -26,15 +62,25 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
 
-(nothing else — CodeQL triage completed and verified 2026-07-08: the code-scanning
-board is at **zero open alerts**. The fixes merged in PR #114 auto-closed their
-alerts; the `_safe_next`-guarded login redirect re-flagged once post-merge
-(alert 152) and was dismissed — the stock query can't model a
-validate-and-return-same-string sanitizer, so any future edit near
-`RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
-rationale.)
+### 3. Inoreader as fetch-proxy (needs the report from #1)
 
-### Page-weight reduction — follow-ups (main work landed 2026-07-15)
+Durable follow-on, and the step that actually lets Ino lapse. Legitimate — Ino *is*
+the subscriber, so this is not evasion: a per-feed "fetch via Inoreader" toggle that
+pulls items from Ino's `stream/contents` API instead of the origin, for the dozen-ish
+stubborn bot-walled feeds surfaced by set (a) of the report. Keep Ino connected as a
+quiet backend, not the reader. Scope depends on how big set (a) actually is — run #1
+first and let the count decide whether this is worth building at all.
+
+### 4. Full-content fetch at ingest for body-less feeds
+
+meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
+description/content element at all; older stored entries have bodies, so this
+is upstream). A per-feed "fetch full content from the source page at ingest"
+option (readability pipeline already exists) would fix such feeds generally —
+per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
+with #1: some "we can't fetch" feeds get fixed here instead of via the Ino proxy.
+
+### 5. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -95,41 +141,6 @@ Make Lectio usable as a read-it-later app.
   (unstar-on-read) flow to mimic Instapaper's read/archive split, pinned
   saved-tag shortcuts under the Saved Articles row, badge counting total
   saved instead of unread (if unread proves the wrong default).
-
-### Inoreader replacement — bot-walled feeds (the last blocker)
-
-Josh is close to fully replacing Inoreader with Lectio. The remaining concern is
-**bot-blocking**: feeds Inoreader can fetch but Lectio can't. Publishers allowlist
-known aggregators (Inoreader/Feedly) by UA/IP; Lectio fetches from the VPS IP with
-an honest UA and gets 403'd (the 🟢 "blocked" bucket in the Failing Feeds filter —
-isocpp 752, libhunt newsletters, etc.). Good-citizen policy forbids spoofing Ino's
-UA or evading IP blocks; Lectio already auto-escalates to browser-UA on refusal
-(`browser_ua_feeds`), which recovers some 403s but not IP/aggregator-only blocks.
-
-Both next steps reuse the **existing** `services/inoreader.py` (OAuth +
-`get_subscriptions` + `get_stream_contents`):
-
-1. **Comparison report** (highest-leverage, read-only) — cross-reference the user's
-   Inoreader subscriptions vs Lectio feeds and flag three sets: (a) in-Ino-with-
-   recent-items but failing-in-Lectio = the "Ino can, we can't" risk set; (b) in
-   Ino not in Lectio; (c) in Lectio not in Ino. Turns "safe to drop Ino?" into a
-   concrete checklist.
-2. **Inoreader as fetch-proxy** (durable follow-on; legitimate — Ino *is* the
-   subscriber, not evasion) — a per-feed "fetch via Inoreader" toggle that pulls
-   items from Ino's `stream/contents` API instead of the origin, for the dozen-ish
-   stubborn bot-walled feeds. Keep Ino connected as a quiet backend, not the reader.
-
-Migration sequence: connect Ino → run comparison → proxy the only-Ino feeds → let
-the annual Ino plan lapse (annual SaaS rarely prorates a refund; worth asking but
-plan to ride it out).
-
-### Full-content fetch at ingest for body-less feeds
-
-meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
-description/content element at all; older stored entries have bodies, so this
-is upstream). A per-feed "fetch full content from the source page at ingest"
-option (readability pipeline already exists) would fix such feeds generally —
-per-feed opt-in in Feed Properties, capped/throttled like enhancement.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
@@ -232,6 +243,10 @@ the entry (the clean-the-page-then-resave workflow).
 
 ### Lectio browser extension (fork of readit-extension)
 
+**Deliberately deprioritized below the Now chain**, despite item 1 being genuinely
+high-value: a fork is a *new codebase* and a real commitment, not a next-up task.
+Pick it up when you're ready to invest, not to fill a gap.
+
 Fork github.com/mahmoudalwadia/readit-extension (MIT-style; MV3, vanilla JS,
 no build step) into a Lectio-branded extension. Motivations, in value order:
 
@@ -328,6 +343,14 @@ extension keeps working too.
 
 ## Known limitations (not bugs)
 
+- **CodeQL: `_safe_next` login redirect will re-flag** — triage completed and
+  verified 2026-07-08; the code-scanning board is at **zero open alerts**. The fixes
+  merged in PR #114 auto-closed their alerts; the `_safe_next`-guarded login redirect
+  re-flagged once post-merge (alert 152) and was dismissed — the stock query can't
+  model a validate-and-return-same-string sanitizer. Any future edit near
+  `RedirectResponse(url=_safe_next(...))` may re-flag; dismiss with the same
+  rationale.
+
 - **Pre-existing date-less entries sort by received time, not true age** — new
   imports backfill a real `published` (Inoreader crawl-time fallback), and the
   Pub-Old/Pub-New window now falls back to `first_updated` so old posts surface
@@ -338,14 +361,15 @@ extension keeps working too.
   one-time backfill that persists the inferred effective date could be added later
   if the ordering of those specific entries ever matters.
 
-- **Reddit OAuth app registration blocked** — Reddit killed free OAuth2 app
-  registration as part of the 2023 API crackdown. The Integrations → Reddit panel
-  and all supporting code (`services/reddit.py`, routes, scheduler hook, submit
-  button) are fully implemented and will work once credentials are available, but
-  Reddit now requires either Devvit (their proprietary in-Reddit app platform, not
-  applicable) or a formal API access request. The old.reddit.com feed switch is the
-  practical mitigation for 429s in the meantime. Revisit if Reddit reopens app
-  registration or the access request is approved.
+- **Reddit OAuth app registration blocked (access request DENIED 2026-07-19)** —
+  Reddit killed free OAuth2 app registration as part of the 2023 API crackdown. The
+  Integrations → Reddit panel and all supporting code (`services/reddit.py`, routes,
+  scheduler hook, submit button) are fully implemented and will work once credentials
+  are available, but Reddit now requires either Devvit (their proprietary in-Reddit
+  app platform, not applicable) or a formal API access request — and that request was
+  **denied**. The old.reddit.com feed switch remains the practical mitigation for
+  429s. Treat native OAuth as closed unless Reddit reopens app registration or reverses
+  the denial; do not re-file speculatively.
 
 - **Hard JS bot-walls** (e.g. seattletimes — HTTP 202 + empty body) — some feeds sit
   behind a challenge that returns success-with-no-body to *any* non-headless client,
