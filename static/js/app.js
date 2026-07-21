@@ -11926,8 +11926,13 @@
       }).catch(() => {});
     });
 
-    const topbarSearchForm = document.querySelector('.posts-search-form');
-    topbarSearchForm?.addEventListener('submit', (event) => {
+    // Delegated for the same reason as the toolbar's buttons: an in-page
+    // navigation replaces the form node, and a listener bound to the old one
+    // would leave Enter falling through to a full page reload.
+    document.addEventListener('submit', (event) => {
+      const topbarSearchForm = event.target instanceof HTMLFormElement
+        ? event.target.closest('.posts-search-form') : null;
+      if (!topbarSearchForm) return;
       event.preventDefault();
 
       const targetUrl = new URL(topbarSearchForm.getAttribute('action') || '/', window.location.origin);
@@ -13059,14 +13064,47 @@
       searchInput.select();
     }
 
-    document.getElementById('toolbar-search-btn')?.addEventListener('click', () => {
-      const row = document.getElementById('toolbar-search-row');
-      if (row?.classList.contains('toolbar-search-hidden')) {
-        openSearchRow();
-        document.getElementById('topbar-search-input')?.focus();
-      } else {
-        closeSearchRow();
+    // Delegated, not bound to the toolbar's own nodes: an in-page navigation
+    // (loadScopePanesWithoutFullRefresh — every sidebar/folder/scope click)
+    // re-renders the toolbar, so a listener attached to #toolbar-search-btn
+    // dies with the node it was bound to. That is how the search button ended
+    // up doing nothing at all after the first in-page nav: no row, no request,
+    // no error. Anything wired to this toolbar has to be delegated.
+    const _syncSearchClear = () => {
+      const input = document.getElementById('topbar-search-input');
+      const clear = document.getElementById('topbar-search-clear');
+      if (!(input instanceof HTMLInputElement) || !clear) return;
+      clear.hidden = !input.value.trim();
+    };
+
+    document.addEventListener('click', (event) => {
+      if (event.target.closest?.('#toolbar-search-btn')) {
+        const row = document.getElementById('toolbar-search-row');
+        if (row?.classList.contains('toolbar-search-hidden')) {
+          openSearchRow();
+          document.getElementById('topbar-search-input')?.focus();
+        } else {
+          closeSearchRow();
+        }
+        return;
       }
+      // Clear returns to the same view without the query; the form's submit
+      // handler drops `q` and restores the pre-search read filter.
+      if (event.target.closest?.('#topbar-search-clear')) {
+        const input = document.getElementById('topbar-search-input');
+        const form = document.querySelector('.posts-search-form');
+        if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return;
+        input.value = '';
+        _syncSearchClear();
+        // The reload re-renders the toolbar with no query, so the row collapses
+        // and the magnifier reopens it — don't focus a node about to be replaced.
+        if (form.requestSubmit) form.requestSubmit();
+        else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      }
+    });
+
+    document.addEventListener('input', (event) => {
+      if (event.target && event.target.id === 'topbar-search-input') _syncSearchClear();
     });
 
     function shouldHandleGlobalShortcut(event) {

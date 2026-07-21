@@ -83,10 +83,15 @@
       <header class="rm-list-header">
         <span class="rm-list-title">{{ selected_label }}</span>
         <form class="rm-search" method="get" action="/read" role="search">
-          {% if scope and scope != 'saved' %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
+          {# Carry the selected node so a search stays inside it. #}
+          {% for f in search_fields %}<input type="hidden" name="{{ f.name }}" value="{{ f.value }}">{% endfor %}
           <input type="search" name="q" value="{{ search_query }}"
                  placeholder="{% if scope == 'feeds' %}Search feeds…{% else %}Search saved…{% endif %}"
                  aria-label="Search articles">
+          <button type="submit" class="rm-search-go" aria-label="Search">Search</button>
+          {% if search_query %}
+          <a class="rm-search-clear" href="{{ read_clear_search_href }}" aria-label="Clear search">Clear</a>
+          {% endif %}
         </form>
       </header>
 

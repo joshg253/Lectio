@@ -328,15 +328,32 @@ body.rm-body {
   border-bottom: 2px solid #000;
 }
 .rm-list-title { font-weight: 700; font-size: 1.1rem; flex: 0 0 auto; }
-.rm-search { flex: 1 1 auto; }
+.rm-search { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; }
 .rm-search input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 34px;
   padding: 0 10px;
   border: 2px solid #000;
   background: #fff;
   color: #000;
   font: inherit;
+}
+/* The form had no submit control at all, so on a stylus/e-ink device with no
+   comfortable Enter key the search was unreachable. Sized for tapping. */
+.rm-search-go,
+.rm-search-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 12px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
 }
 .rm-items { flex: 1 1 auto; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
 .rm-item { border-bottom: 1px solid #000; }

@@ -43,8 +43,9 @@ and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and
 The short version:
 
 - **Fast triage** — three-pane reader, keyboard nav, context menus, manual and
-  feed-provided tags, read history, search (in the Saved view it also matches
-  the saved article's text, not just its title), and a Readability/web-view proxy.
+  feed-provided tags, read history, search (with a Search button and a clear
+  control; in the Saved view it also matches the saved article's text, not just
+  its title), and a Readability/web-view proxy.
   Bulk mark-as-read shows an **Undo** toast that restores exactly that batch.
 - **Rich content** — embeds that actually render (curated trusted-host
   allowlist), inline podcast audio (including audio borrowed from a separate

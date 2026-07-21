@@ -609,6 +609,13 @@
               aria-label="Search posts"
               autocomplete="off"
             />
+            <button type="submit" id="topbar-search-go" class="topbar-search-go" aria-label="Run search">
+              <span class="material-symbols-rounded" aria-hidden="true">search</span>
+            </button>
+            <button type="button" id="topbar-search-clear" class="topbar-search-go topbar-search-clear"
+                    aria-label="Clear search"{% if not selected_query %} hidden{% endif %}>
+              <span class="material-symbols-rounded" aria-hidden="true">close</span>
+            </button>
           </form>
         </div>
       </div>

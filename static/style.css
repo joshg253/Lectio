@@ -1403,11 +1403,34 @@ button:hover, .button-link:hover {
 
 .toolbar-search-row .posts-search-form {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .toolbar-search-row .topbar-search-input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
 }
+
+/* The form has no other affordance — without a visible button the only way to
+   run a search is Enter, which nothing on screen tells you. */
+.topbar-search-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.topbar-search-go:hover { color: var(--fg, inherit); }
+.topbar-search-go .material-symbols-rounded { font-size: 1.1rem; }
+.topbar-search-clear[hidden] { display: none; }
 
 .toolbar-search-hidden {
   display: none;

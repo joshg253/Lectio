@@ -855,6 +855,16 @@ maintained at ingest, which isn't worth a schema change yet. On any SQL error th
 helper returns `None` and the caller keeps the full key set and post-filters in
 Python, so a failure degrades to the old behavior instead of showing no posts.
 
+**Toolbar listeners must be delegated.** `loadScopePanesWithoutFullRefresh`
+(every sidebar/folder/scope click, and the search form itself) re-renders the
+toolbar, replacing its DOM nodes. Any listener attached directly to a
+`#toolbar-*` node at init dies with the node it was bound to — silently, with no
+console error. That is exactly how the search button came to do nothing at all
+after the first in-page navigation, while still working on a direct URL load
+(which is why it survived testing). The search button, its clear control, the
+query input, and the search form's `submit` handler are therefore all delegated
+from `document`. Wire anything new on this toolbar the same way.
+
 ## Read Mode — e-ink reading app (`GET /read`)
 
 A standalone, distraction-free reading *app* for the saved/starred backlog, built

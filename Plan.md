@@ -182,6 +182,40 @@ Covered by `tests/integration/test_star_key_search_filter.py` (10 cases:
 field coverage, body matching, AND-ing, LIKE-wildcard escaping, >999-variable
 chunking, and the fall-back-to-Python path).
 
+**1c-bis — the actual reason Search "did nothing". DONE 2026-07-21.** The perf
+fix above was real but wasn't what Josh was hitting: the log showed his page
+served in 852ms and **not one request carrying `q=`, ever**. Reproduced in a
+browser:
+
+**In-page navigation replaces the toolbar DOM node, killing every listener bound
+to it.** `loadScopePanesWithoutFullRefresh` — the sidebar, folder, scope and
+search-form path — swaps the toolbar, and `#toolbar-search-btn`'s click handler
+was attached to the old node at init. So after the *first* in-page nav, clicking
+Search did literally nothing: no row, no request, no console error. A direct URL
+load worked fine, which is why it never showed up in testing.
+
+Fixed by delegating from `document` instead: the search button, the new clear
+button, the input listener, and the form's `submit` handler (which had the same
+flaw — Enter would silently degrade to a full page reload once the form node was
+replaced). **Anything wired to this toolbar must be delegated**; binding to
+`#toolbar-*` nodes at init is a live trap for the next feature added here.
+
+Shipped alongside, since the surface was already open:
+- **A real submit button** on both the toolbar search and Read Mode's form.
+  Neither had one — Enter was the only trigger and nothing said so. Read Mode's
+  matters most: it's the e-ink/stylus surface, where there may be no comfortable
+  Enter key at all.
+- **A clear (✕) control** on both, appearing once there's a query.
+- **Read Mode search no longer drops the selected node** (the Plan's long-standing
+  note): the form posted only `scope`, so searching from a folder, feed, tag, or
+  Archive silently widened to everything. `_read_mode_search_fields` now carries
+  the node as hidden inputs, and `_read_clear_search_href` returns you to that
+  same node minus the query.
+
+Verified in a browser end to end: search and clear both work *after* an in-page
+nav, Enter still routes in-page rather than reloading, and a search started
+inside Archive stays in Archive.
+
 ### 2. Saved capture quality — a raw / full-page save mode
 
 **Every save path funnels through readability, so there is currently no way to get

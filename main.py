@@ -15150,6 +15150,38 @@ def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
     ]
 
 
+def _read_mode_search_fields(
+    *,
+    scope: str,
+    folder_id: int | None = None,
+    list_feed_url: str | None = None,
+    tag: str | None = None,
+    archived: bool = False,
+) -> list[dict]:
+    """Hidden fields the Read Mode search form must carry to stay inside the
+    node you searched from.
+
+    The form used to post only `scope`, so searching from a folder, feed, tag,
+    or Archive silently threw that selection away and searched everything.
+    """
+    fields = [{"name": "scope", "value": scope}] if scope and scope != "saved" else []
+    if folder_id is not None:
+        fields.append({"name": "folder_id", "value": str(folder_id)})
+    if list_feed_url:
+        fields.append({"name": "list_feed_url", "value": list_feed_url})
+    if tag:
+        fields.append({"name": "tag", "value": tag})
+    if archived:
+        fields.append({"name": "archived", "value": "1"})
+    return fields
+
+
+def _read_clear_search_href(fields: list[dict]) -> str:
+    """Same node, no query — what the Clear control returns you to."""
+    params = urlencode([(f["name"], f["value"]) for f in fields])
+    return "/read" + (f"?{params}" if params else "")
+
+
 def _build_feeds_mode_context(
     request: Request,
     *,
@@ -15236,6 +15268,9 @@ def _build_feeds_mode_context(
                              scope="feeds", list_feed_url=list_feed_url),
     } for it in items]
 
+    _feeds_search_fields = _read_mode_search_fields(
+        scope="feeds", folder_id=folder_id, list_feed_url=list_feed_url, tag=tag,
+    )
     return {
         "scope_tabs": _read_mode_scope_tabs("feeds"),
         "folder_nodes": folder_nodes,
@@ -15245,6 +15280,8 @@ def _build_feeds_mode_context(
         "selected_label": selected_label,
         "node_selected": node_selected,
         "search_query": q or "",
+        "search_fields": _feeds_search_fields,
+        "read_clear_search_href": _read_clear_search_href(_feeds_search_fields),
         "tags_open": bool(tag),
         "scope": "feeds",
         "exit_href": "/?full=1",
@@ -15344,6 +15381,9 @@ def _build_read_mode_context(
                              folder_id=folder_id, tag=tag, archived=archived, q=q),
     } for it in items]
 
+    _saved_search_fields = _read_mode_search_fields(
+        scope="saved", folder_id=folder_id, tag=tag, archived=archived,
+    )
     return {
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
@@ -15357,6 +15397,8 @@ def _build_read_mode_context(
         "selected_label": selected_label,
         "node_selected": node_selected,
         "search_query": q or "",
+        "search_fields": _saved_search_fields,
+        "read_clear_search_href": _read_clear_search_href(_saved_search_fields),
         "tags_open": bool(tag),  # expand the tag list when a tag is selected
         "scope": "saved",
         "exit_href": "/",
