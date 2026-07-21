@@ -24,7 +24,7 @@ What actually has a clock is smaller and closer:
   hours of work and unblocks a workflow you're mid-way through, so it goes early.
 
 So: fix the friction you hit daily, capture the content that's rotting, then start
-the Ino migration on schedule. Everything below #5 is genuinely deferrable.
+the Ino migration on schedule. Everything below #6 is genuinely deferrable.
 
 ### 1. Saved dedup workflow — correctness, safety, then UX (one project)
 
@@ -101,7 +101,7 @@ So this is a genuine gap, not user error: **add a "save full page (don't extract
 option** that sanitizes the whole `<body>` via the existing
 `html_sanitize.sanitize_html` instead of readability-extracting. Wants to be
 reachable both at save time and as a per-entry "re-save without extraction" so
-already-bad captures can be fixed in place. Related to #6 (same pipeline, opposite
+already-bad captures can be fixed in place. Related to #7 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
 ### 3. Tag-as-keep — Part C: run pass 1 now, defer pass 2
@@ -125,7 +125,7 @@ earlier "wait for triage" framing):
 - **Pass 2, Wayback: keep deferred.** This one genuinely benefits from triage — you
   want to know which feeds are truly dead before spending Archive.org lookups, since
   a live-but-403 site is better served by the archive worker's own page fetch. Gate
-  it on the triage list from #5.
+  it on the triage list from #6.
 
 Caveat when running pass 1: it enqueues ~3,596 archive jobs, each a page fetch
 against mostly-dead hosts, so expect a long slow tail of 404s and watch worker load.
@@ -158,14 +158,60 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
   entry. Build **one shared control** and use it for both normal per-entry tagging
   and the rule form (see "Tag filtering for firehose feeds" in Later, which wants
   the same thing fed from `entry_feed_tags`). Don't build two.
-- **Batch-align Uncategorized saved items into Feeds** — bulk assignment with
-  auto-match by domain instead of one-at-a-time. In-app, not a script (distinct
-  from `scripts/categorize_uncategorized.py`, which handles orphan *feeds*).
+- **Batch-align Uncategorized saved items into Feeds** — *promoted out of this
+  list; see Now #5.* Measured 2026-07-21 and it turned out far higher-yield than
+  a "small item."
 - **Set up the four verified firehose tag_filter rules** — config, not code; the
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-### 5. Inoreader replacement — the migration (start ~Dec 2026)
+### 5. Auto-file Uncategorized saved items into their real feeds
+
+**Measured against live data 2026-07-21 — the numbers make this the best
+value-per-effort item on the board.** Josh's read: "tons of Uncategorized Saved
+Items that definitely came from Feeds at some point, but that info is missing."
+Correct, and recoverable from the URL:
+
+| | |
+|---|---|
+| saved articles in `lectio:saved` (the unfiled pile) | **4,334** |
+| exact host match to a subscribed feed | **3,974 (91.7%)** |
+| of those, host maps to >1 feed (ambiguous) | **29 (0.7%)** |
+| no match | 339 (7.8%) |
+
+**Use exact-host matching only.** A registrable-domain (eTLD+1) fallback tier was
+tested and adds just **0.5%** (21 items) while introducing the `.co.uk`-style
+public-suffix problem — not worth it. Strip `www.`, match saved-entry host against
+both the feed URL host and the feed's site `link` host; that's the whole algorithm.
+
+Ambiguity is a non-issue at 0.7%, so a straightforward "review the proposed
+mapping, then apply" flow works — no clever disambiguation UI needed.
+
+**Most of the machinery already exists.** `/entries/move-to-feed-batch`
+([main.py:21440](main.py#L21440)) does batched moves today, `_MOVE_BATCH_CAP` = 500.
+What's missing is only the *auto-match proposal* and a review screen. Two
+behaviors of `_move_entry_to_feed` ([main.py:13327](main.py#L13327)) to know:
+
+- If the target feed no longer holds the article (usual case — it aged out of the
+  feed window, which is *why* it was URL-saved), the entry is **synthesized** into
+  the target. So this works even for long-gone originals.
+- The source entry can't be deleted (reader owns feed entries), so it stays in
+  `lectio:saved` marked read and stripped of star/tags. Functionally invisible,
+  but ~3,974 husks will accumulate — worth a thought re: retention/purge.
+- Per move it may scan the target feed's entries to link-match. At ~4k moves that
+  is not free; batch in chunks and expect it to run for a while.
+
+**Falls out for free: a subscription-discovery signal.** The 339 unmatched are
+concentrated in a handful of hosts Josh clearly reads but doesn't subscribe to —
+`guitarchalk.com` (151), `texasbluesalley.com` (62), `joanwestenberg.com` (46) =
+259 of 339 from three sites. "You've saved 151 articles from this domain and don't
+subscribe" is a strong add-feed prompt, and reuses the existing discovery path.
+
+Note this also supersedes most of the single-post-page workaround (see "Single-post
+pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
+which is exactly what this does.
+
+### 6. Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
 ~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
@@ -182,39 +228,39 @@ IP/aggregator-only blocks.
 Both steps reuse the **existing** `services/inoreader.py` (OAuth +
 `get_subscriptions` + `get_stream_contents`).
 
-**5a — Comparison report** (read-only; start here). Cross-reference Inoreader
+**6a — Comparison report** (read-only; start here). Cross-reference Inoreader
 subscriptions vs Lectio feeds and flag three sets:
 
 - **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
   risk set. This is also the **triage list that gates Part C pass 2 (#3)**, produced
-  mechanically instead of by hand, and it names the feeds that need 5b.
+  mechanically instead of by hand, and it names the feeds that need 6b.
 - **(b) in Ino, not in Lectio** — subscriptions never migrated.
 - **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
 
 Turns "safe to drop Ino?" into a concrete checklist.
 
-**5b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
+**6b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
 legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
 Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
 the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 5a first and let
+the reader. **Scope depends on how big set (a) turns out to be — run 6a first and let
 the count decide whether this is worth building at all.**
 
-Sequence: connect Ino → comparison report (5a) → triage/replace dead feeds → Part C
-pass 2 (#3) → proxy the only-Ino feeds (5b) → let the plan lapse 2027-03-16 (annual
+Sequence: connect Ino → comparison report (6a) → triage/replace dead feeds → Part C
+pass 2 (#3) → proxy the only-Ino feeds (6b) → let the plan lapse 2027-03-16 (annual
 SaaS rarely prorates; worth asking, but plan to ride it out).
 
-### 6. Full-content fetch at ingest for body-less feeds
+### 7. Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
 per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with #5: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
+with #6: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
 so it's worth revisiting once the comparison report sizes set (a).
 
-### 7. Page-weight reduction — follow-ups (main work landed 2026-07-15)
+### 8. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -240,7 +286,8 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 
 > **Most of this section was promoted into Now #1**, which treats the dupe cluster
 > as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> Uncategorized batch-align went to Now #4. Everything stays documented here in
+> tag autocomplete went to Now #4 and the Uncategorized batch-align to Now #5
+> (it measured far bigger than expected). Everything stays documented here in
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
 
@@ -366,10 +413,13 @@ into it. Two things make that unsatisfying, and they're separate problems:
    the existing add-feed/discovery path — when discovery finds no feed, offer
    "track this page" instead of failing.
 
-Do #2's raw-capture fix first regardless; it's small and unblocks the workaround.
-Only build the first-class version if the manual route still chafes afterward —
-the number of such pages is small, so the hack may be good enough once the capture
-is right.
+**Josh's stated preference (2026-07-21) is not a synthetic single-page feed — it's
+to file such pages into an existing, at-least-related real feed.** That's Now #5,
+which does exactly this in bulk. So the first-class single-page subscription is
+mostly *superseded*: build #2's raw-capture fix (makes the content good) and #5's
+auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitoring
+if the "re-check the page for changes" half turns out to be the actual want — that
+part #5 does not cover.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
