@@ -318,7 +318,7 @@ this is filed with the other dead-code items under "Code health" in Later.)
 
 **Shipped:** `services/saved_autofile.py` + `GET /saved/autofile/preview` +
 `POST /saved/autofile`, driven from Settings → Feeds → Utilities → **File saved
-articles**. Nothing moves without per-host approval. Re-measured on live data at
+articles** (the two duplicate scanners moved to their own **Dupes** tab). Nothing moves without per-host approval. Re-measured on live data at
 build time (the Plan's original numbers predate a lot of manual filing):
 
 | | |
@@ -1029,6 +1029,14 @@ extension keeps working too.
   behind after the Instapaper-import cleanup.
 
 ### Code health (deferred — low value, no user impact)
+
+**Flaky test seen 2026-07-21:**
+`tests/integration/test_youtube_playlist_rules.py::test_add_route_accepts_blank_keyword`
+failed once in a full run, then passed in isolation and in two further full
+runs, on a commit that touched only `templates/index.html`. Same family as the
+earlier flaky-CI work (reader `busy_timeout` + startup-backfill gate) and the
+`PytestUnhandledThreadExceptionWarning` noise the suite still emits — a
+background thread racing the test's DB. Not chased; note the run if it recurs.
 
 **Dead code sweep** — do these together in one pass, they're all "delete the thing
 nobody references":

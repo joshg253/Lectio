@@ -1932,6 +1932,7 @@
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="stale" role="tab" aria-selected="false">Stale</button>
+          <button type="button" class="feeds-tab-btn" data-feeds-view="dupes" role="tab" aria-selected="false">Dupes</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Utilities</button>
         </div>
 
@@ -2081,11 +2082,52 @@
           </div>
         </div>
 
+        {# Duplicate scanning lives on its own tab: both scans are long, produce
+           long reviewable lists, and are worked in repeated passes, so they sit
+           badly among the one-shot utilities. #}
+        <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="dupes" hidden>
+          <div class="feeds-dedup-controls">
+            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
+            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
+          </div>
+          <div id="dedup-inline-results" hidden>
+            <p class="action-modal-label dedup-modal-intro"></p>
+            <div class="dedup-modal-list"></div>
+            <div class="dedup-cross-section" hidden>
+              <p class="action-modal-label dedup-cross-intro"></p>
+              <div class="dedup-cross-list"></div>
+            </div>
+            <div class="dedup-upgrade-section" hidden>
+              <p class="action-modal-label dedup-upgrade-intro"></p>
+              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
+              <div class="dedup-upgrade-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
+                <input type="checkbox" id="dedup-rescue-unread" checked>
+                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
+              </label>
+              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
+            </div>
+          </div>
+          <div id="saved-dedup-results" hidden>
+            <p class="action-modal-label saved-dedup-intro"></p>
+            <div class="saved-dedup-confirmed-list"></div>
+            <div class="saved-dedup-possible-section" hidden>
+              <p class="action-modal-label saved-dedup-possible-intro"></p>
+              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <div class="saved-dedup-possible-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
+            </div>
+          </div>
+        </div>
+
         <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="duplicates" hidden>
           <div class="feeds-dedup-controls">
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
-            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn">Scan for duplicates</button>
-            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
             <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
             <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
@@ -2117,45 +2159,12 @@
               <button type="button" id="multi-folder-ok" class="danger" hidden>Keep selected folders</button>
             </div>
           </div>
-          <div id="dedup-inline-results" hidden>
-            <p class="action-modal-label dedup-modal-intro"></p>
-            <div class="dedup-modal-list"></div>
-            <div class="dedup-cross-section" hidden>
-              <p class="action-modal-label dedup-cross-intro"></p>
-              <div class="dedup-cross-list"></div>
-            </div>
-            <div class="dedup-upgrade-section" hidden>
-              <p class="action-modal-label dedup-upgrade-intro"></p>
-              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
-              <div class="dedup-upgrade-list"></div>
-            </div>
-            <div class="dedup-inline-actions">
-              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
-                <input type="checkbox" id="dedup-rescue-unread" checked>
-                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
-              </label>
-              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
-            </div>
-          </div>
           <div id="saved-autofile-results" hidden>
             <p class="action-modal-label saved-autofile-intro"></p>
             <p class="action-modal-hint">Nothing is preselected — check the hosts you want to file. Largest first, and each row says how strong the match is. Filing a batch and re-scanning is the intended way to work through this.</p>
             <div class="saved-autofile-list"></div>
             <div class="dedup-inline-actions">
               <button type="button" id="saved-autofile-ok" class="settings-secondary-btn" hidden>File selected</button>
-            </div>
-          </div>
-          <div id="saved-dedup-results" hidden>
-            <p class="action-modal-label saved-dedup-intro"></p>
-            <div class="saved-dedup-confirmed-list"></div>
-            <div class="saved-dedup-possible-section" hidden>
-              <p class="action-modal-label saved-dedup-possible-intro"></p>
-              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
-              <div class="saved-dedup-possible-list"></div>
-            </div>
-            <div class="dedup-inline-actions">
-              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
-              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
             </div>
           </div>
         </div>
