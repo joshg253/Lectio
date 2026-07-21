@@ -1081,10 +1081,11 @@
       else if (c.ambiguous) note = `<span class="saved-dedup-badge">${c.candidates.length} candidate feeds — pick one</span>`;
       else if (!c.confident) note = `<span class="saved-dedup-badge">weak match — only ${c.support} post(s) from this host</span>`;
       else note = `<span class="saved-dedup-badge saved-dedup-badge--alive">strong match — ${c.support} posts from this host</span>`;
-      // "Not a feed" settles a host for good: its saves are genuine one-off
-      // captures, so without this they reappear unresolved on every pass.
+      // Two different decisions, so two distinct labels: this one settles the
+      // *host* (its saves are genuine one-off captures and no feed will ever
+      // match), while "not a feed" below bars a *subscription* as a target.
       const notFeed = `<button type="button" class="saved-autofile-notfeed" ` +
-        `data-host="${_mfEscape(c.host)}" title="These are one-off saved articles, not posts from a feed — stop listing this host">not a feed</button>`;
+        `data-host="${_mfEscape(c.host)}" title="These are one-off saved articles, not posts from a feed — stop listing this host">one-off saves</button>`;
       return `<label class="dedup-pair-row saved-autofile-row">` +
         `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
         ` id="${id}"${c.target_feed_url ? '' : ' disabled'}>` +
@@ -1093,6 +1094,11 @@
         (c.candidates.length
           ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
             ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
+            // Some subscriptions are a single article URL that got added as a
+            // feed: right host, plausible title, completely wrong destination.
+            `<button type="button" class="saved-autofile-notfeed saved-autofile-badfeed"` +
+            ` data-feed="${_mfEscape(c.target_feed_url || '')}"` +
+            ` title="This subscription isn't really a feed — never offer it as a destination">not a feed</button>` +
             `<span class="saved-autofile-url">${_mfEscape(c.target_feed_url || '')}</span>`
           : '') +
         `</span></label>`;
@@ -1127,12 +1133,12 @@
         `${t.confident_articles} on ${t.confident_hosts} host(s) are a strong match; ` +
         `${t.low_support_articles} weak, ${t.ambiguous_articles} ambiguous, ${t.unmatched_articles} with no subscribed feed.` +
         (t.non_feed_hosts
-          ? ` ${t.non_feed_articles} article(s) on ${t.non_feed_hosts} host(s) are marked "not a feed" and hidden.`
+          ? ` ${t.non_feed_articles} article(s) on ${t.non_feed_hosts} host(s) are settled as one-off saves and hidden.`
           : '');
       const nf = data.non_feed || [];
       list.innerHTML = plan.map(_afRow).join('') +
         (nf.length
-          ? `<details class="saved-autofile-nonfeed"><summary>${nf.length} host(s) marked "not a feed" — one-off saves, not feed posts</summary>` +
+          ? `<details class="saved-autofile-nonfeed"><summary>${nf.length} host(s) settled as one-off saves — not feed posts</summary>` +
             nf.map(x => `<div class="saved-autofile-nfrow"><span class="saved-autofile-count">${x.count}</span> ` +
               `<span class="saved-dedup-title">${_mfEscape(x.host)}</span> ` +
               `<button type="button" class="saved-autofile-notfeed" data-host="${_mfEscape(x.host)}" data-unmark="1"` +
@@ -1164,12 +1170,25 @@
       ev.preventDefault();      // the row is a <label> — don't toggle its checkbox
       ev.stopPropagation();
       const unmark = btn.dataset.unmark === '1';
+      // Two different "not a feed" decisions share this control: barring a
+      // subscription as a destination, and settling a host that has none.
+      const badFeed = btn.classList.contains('saved-autofile-badfeed');
+      if (badFeed) {
+        const sel = btn.closest('.saved-dedup-main')?.querySelector('.saved-autofile-target');
+        const feed = sel ? sel.value : btn.dataset.feed;
+        if (!feed) return;
+        if (!confirm(`Never offer "${feed}" as a destination? ` +
+                     `The subscription itself is left alone.`)) return;
+      }
       btn.disabled = true;
       try {
-        const resp = await fetch('/saved/autofile/non-feed', {
+        const resp = await fetch(
+          badFeed ? '/saved/autofile/non-feed-subscription' : '/saved/autofile/non-feed', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hosts: [btn.dataset.host], marked: !unmark }),
+          body: JSON.stringify(badFeed
+            ? { feed_urls: [btn.closest('.saved-dedup-main')?.querySelector('.saved-autofile-target')?.value || btn.dataset.feed], marked: true }
+            : { hosts: [btn.dataset.host], marked: !unmark }),
         });
         const data = await resp.json();
         if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);

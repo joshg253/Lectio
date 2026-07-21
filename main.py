@@ -3414,6 +3414,18 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Subscriptions that aren't really feeds — a single article URL that got
+        # added as one, a scraped page. They stay subscribed (their entries are
+        # real saved reading) but must never be offered as a destination for
+        # filing, or the site's whole backlog lands in a one-article stub.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS non_feed_subscriptions (
+                feed_url TEXT PRIMARY KEY,
+                marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         # Dead feeds the user has triaged as "needs a replacement": updates are
         # disabled (we stop hitting them) and they move out of the Failing list
         # into a Needs-replacement worklist, but the feed + its entries/curation
@@ -22324,7 +22336,7 @@ _AUTOFILE_BATCH = 150
 _AUTOFILE_BATCH_MAX = 500
 
 
-def _autofile_excluded_targets(feed_urls: Iterable[str]) -> frozenset[str]:
+def _autofile_excluded_targets(feed_urls: Iterable[str], conn=None) -> frozenset[str]:
     """Feeds an unfiled saved article must never be filed into.
 
     Saved Articles itself, obviously — and every YouTube feed. A saved *page* is
@@ -22333,9 +22345,18 @@ def _autofile_excluded_targets(feed_urls: Iterable[str]) -> frozenset[str]:
     exactly the target you'd pick by mistake. Cheap insurance: it only ever
     triggers for a saved youtube.com link, where filing into the channel feed
     would be wrong anyway.
+
+    Plus anything the user has marked in `non_feed_subscriptions`: a single
+    article URL that ended up subscribed as a feed is a plausible-looking target
+    on the right host, and filing that site's backlog into a one-article stub is
+    exactly the wrong outcome.
     """
     excluded = {saved_articles_service.SAVED_FEED_URL}
     excluded.update(u for u in feed_urls if "youtube.com/feeds/videos.xml" in str(u))
+    if conn is not None:
+        excluded.update(
+            r[0] for r in conn.execute("SELECT feed_url FROM non_feed_subscriptions")
+        )
     return frozenset(excluded)
 
 
@@ -22355,8 +22376,24 @@ def preview_saved_autofile():
     with get_reader() as reader:
         if reader.get_feed(saved_url, None) is None:
             return JSONResponse({"plan": [], "totals": saved_autofile_service.plan_totals([])})
-        titles = {f.url: (f.user_title or f.title or str(f.url)) for f in reader.get_feeds()}
+        titles = {}
+        # A feed declares its host twice: its own URL, and the site it
+        # advertises. Both count — a FeedBurner feed's URL host says nothing
+        # about the site whose posts it carries, but its link does.
+        declared_hosts: dict[str, set[str]] = {}
+        for f in reader.get_feeds():
+            url = str(f.url)
+            titles[url] = f.user_title or f.title or url
+            hosts = {saved_autofile_service.article_host(url)}
+            if getattr(f, "link", None):
+                hosts.add(saved_autofile_service.article_host(str(f.link)))
+            declared_hosts[url] = {h for h in hosts if h}
         db = reader._storage.get_db()
+        feed_sizes = {
+            str(f): int(n) for f, n in db.execute(
+                "SELECT feed, COUNT(*) FROM entries GROUP BY feed"
+            )
+        }
         # Only genuinely-kept saves are worth filing; a read, unstarred row is a
         # husk from an older move that predates source cleanup.
         with get_meta_connection() as conn:
@@ -22381,9 +22418,12 @@ def preview_saved_autofile():
             )
         ]
 
+    with get_meta_connection() as conn:
+        excluded = _autofile_excluded_targets(titles, conn)
     plan = saved_autofile_service.build_autofile_plan(
         saved_rows, feed_links, feed_titles=titles,
-        exclude_feeds=_autofile_excluded_targets(titles),
+        feed_hosts=declared_hosts, feed_sizes=feed_sizes,
+        exclude_feeds=excluded,
     )
     # Hosts marked "not a feed" are settled business — their saves are genuine
     # one-off captures, so they drop out of the worklist entirely rather than
@@ -22404,6 +22444,36 @@ def preview_saved_autofile():
             key=lambda c: (-c["count"], c["host"]),
         ),
     })
+
+
+@app.post("/saved/autofile/non-feed-subscription")
+async def mark_non_feed_subscription(request: Request):
+    """Mark or unmark a *subscription* as not really a feed.
+
+    Body (JSON): {"feed_urls": [...], "marked": bool}. Some subscriptions are a
+    single article URL that got added as a feed — they sit on exactly the right
+    host, so they look like the site's feed and would collect that site's whole
+    backlog. The subscription is left alone (its entries are real reading); it
+    is only barred as a filing destination.
+    """
+    body = await request.json()
+    feed_urls = [str(u).strip() for u in body.get("feed_urls", []) if u]
+    if not feed_urls:
+        return JSONResponse({"ok": False, "error": "No feeds given."}, status_code=400)
+    marked = bool(body.get("marked", True))
+    with get_meta_connection() as conn:
+        if marked:
+            conn.executemany(
+                "INSERT OR IGNORE INTO non_feed_subscriptions (feed_url) VALUES (?)",
+                [(u,) for u in feed_urls],
+            )
+        else:
+            conn.executemany(
+                "DELETE FROM non_feed_subscriptions WHERE feed_url = ?",
+                [(u,) for u in feed_urls],
+            )
+        conn.commit()
+    return JSONResponse({"ok": True, "feed_urls": feed_urls, "marked": marked})
 
 
 @app.post("/saved/autofile/non-feed")
@@ -22482,7 +22552,7 @@ async def apply_saved_autofile(request: Request):
             )
         # Enforced here too, not just in the preview: the target comes from the
         # request, so a stale plan must not be able to file into a barred feed.
-        barred = sorted(set(wanted.values()) & _autofile_excluded_targets(known_feeds))
+        barred = sorted(set(wanted.values()) & _autofile_excluded_targets(known_feeds, conn))
         if barred:
             return JSONResponse(
                 {"ok": False, "error": f"Not a valid target feed: {barred[0]}"},

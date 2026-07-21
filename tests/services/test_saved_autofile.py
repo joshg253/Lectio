@@ -195,3 +195,67 @@ def test_only_aggregators_still_counts_as_ambiguous():
         + _links("https://other.test/links", "example.com", 4),
     )
     assert plan[0]["ambiguous"] is True
+
+
+def test_a_feed_with_no_entries_yet_is_still_offered():
+    """A feed subscribed specifically to receive a backlog has fetched nothing
+    yet, so entry-link evidence cannot exist — it must still be proposable, or
+    adding the right feed appears to do nothing."""
+    fresh = "https://guitarchalk.com/blog/feed"
+    plan = build_autofile_plan(
+        [("s1", "https://www.guitarchalk.com/some-article")],
+        [],                                   # never fetched: no entries at all
+        feed_hosts={fresh: {"guitarchalk.com"}},
+        feed_sizes={fresh: 0},
+    )
+    c = plan[0]
+    assert c["target_feed_url"] == fresh
+    assert c["declared"] is True
+    # Offered, but not auto-approved: nothing yet proves it carries this site.
+    assert c["confident"] is False
+
+
+def test_a_link_proxying_feed_is_matched_by_the_site_it_advertises():
+    """FeedBurner rewrites every entry link to its own domain, so entry evidence
+    points at feedburner rather than the site. The feed's advertised site link
+    is what identifies it."""
+    fb = "https://feeds.feedburner.com/GuitarMasterClassnet"
+    plan = build_autofile_plan(
+        [("s1", "https://www.guitarmasterclass.net/lesson")],
+        _links(fb, "feeds.feedburner.com", 27),   # links all proxied
+        feed_hosts={fb: {"feeds.feedburner.com", "guitarmasterclass.net"}},
+        feed_sizes={fb: 27},
+    )
+    c = plan[0]
+    assert c["target_feed_url"] == fb
+    # A stocked feed that declares the host is trustworthy without on-host links.
+    assert c["confident"] is True
+
+
+def test_a_one_article_stub_on_the_right_host_is_not_confident():
+    """guitarplayer.com's subscription was a single scraped article URL. It sits
+    on exactly the right host, so without the size check it would read as the
+    site's feed and collect the site's entire backlog."""
+    stub = "https://www.guitarplayer.com/lessons/string-skipping-licks"
+    plan = build_autofile_plan(
+        [(f"s{i}", "https://guitarplayer.com/a") for i in range(303)],
+        _links(stub, "guitarplayer.com", 1),
+        feed_hosts={stub: {"guitarplayer.com"}},
+        feed_sizes={stub: 1},
+    )
+    c = plan[0]
+    assert c["target_feed_url"] == stub      # still offered, so it can be barred
+    assert c["confident"] is False
+
+
+def test_a_barred_subscription_is_no_longer_a_candidate():
+    """Marking the stub as not-a-feed removes it entirely."""
+    stub = "https://www.guitarplayer.com/lessons/string-skipping-licks"
+    plan = build_autofile_plan(
+        [("s1", "https://guitarplayer.com/a")],
+        _links(stub, "guitarplayer.com", 1),
+        feed_hosts={stub: {"guitarplayer.com"}},
+        feed_sizes={stub: 1},
+        exclude_feeds=frozenset({stub}),
+    )
+    assert plan[0]["target_feed_url"] is None

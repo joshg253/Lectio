@@ -351,7 +351,30 @@ scan re-read husks. The saved source is now hard-deleted via the shared
 `lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
 
 **Refinements from Josh working the list:**
-- **"Not a feed" per host.** Josh: some of these "need to be converted to just
+- **Newly added feeds weren't being suggested — three separate causes.** Josh
+  added feeds for the four biggest no-feed hosts and saw no change. Entry-link
+  evidence alone can't see them: `guitarchalk.com/blog/feed` and
+  `quickreads.net/feed.xml` had **0 entries** (never fetched, so no evidence can
+  exist), and the guitarmasterclass subscription is a **FeedBurner** feed whose
+  27 entries all link to `feeds.feedburner.com`, pointing its evidence at the
+  wrong host. Fixed by also using the hosts a feed *declares* — its own URL host
+  and its advertised `link` host (696 of 2,881 feeds differ between the two).
+  **Unmatched articles 698 → 66; confident 45 → 473**, with guitarmasterclass's
+  463-article cluster going from "no feed" to confident. A declared host makes a
+  feed a candidate but only makes it confident when the feed is also stocked, or
+  a one-article stub on the right host would swallow the site's backlog.
+  Third cause, not fixed: `tutsplus.com/posts.atom` publishes to
+  `photography.`/`design.`/`code.tutsplus.com`, never `music.tutsplus.com` —
+  subdomains are distinct hosts and an eTLD+1 fallback was already rejected.
+- **Barring a subscription as a destination** (`non_feed_subscriptions`, UI
+  "not a feed"). This was Josh's actual ask, which I first misread as being
+  about the saved articles: *"the 'not a feed' I'm talking about are some of the
+  actual feeds added"* — guitarplayer.com's subscription is a single scraped
+  article URL, so it is on exactly the right host and is precisely the wrong
+  place to file 303 articles. Marking bars it as a target on both preview and
+  apply; the subscription and its entry are untouched. Distinct from the
+  host-level decision below and labelled apart, since both can appear on one row.
+- **"One-off saves" per host.** Josh: some of these "need to be converted to just
   single saved items" — dummies.com, python.plainenglish.io and the like never
   came from a feed, so the filer could only keep re-proposing them. Marking a
   host drops it from the worklist for good; the saved articles are untouched
