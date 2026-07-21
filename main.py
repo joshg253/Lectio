@@ -3401,6 +3401,19 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Hosts the user has marked as never having a feed, so the saved-article
+        # auto-filer stops proposing them. Their saves are genuine one-off
+        # read-later captures — a cheat sheet, a one-time tutorial — not unfiled
+        # feed articles, and without this they reappear in every scan pass and
+        # never resolve.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS autofile_non_feed_hosts (
+                host TEXT PRIMARY KEY,
+                marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         # Dead feeds the user has triaged as "needs a replacement": updates are
         # disabled (we stop hitting them) and they move out of the Failing list
         # into a Needs-replacement worklist, but the feed + its entries/curation
@@ -22352,6 +22365,7 @@ def preview_saved_autofile():
                     "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
                 )
             }
+            non_feed = {r[0] for r in conn.execute("SELECT host FROM autofile_non_feed_hosts")}
         saved_rows = [
             (str(i), str(l or i))
             for i, l in db.execute(
@@ -22371,10 +22385,56 @@ def preview_saved_autofile():
         saved_rows, feed_links, feed_titles=titles,
         exclude_feeds=_autofile_excluded_targets(titles),
     )
+    # Hosts marked "not a feed" are settled business — their saves are genuine
+    # one-off captures, so they drop out of the worklist entirely rather than
+    # reappearing unresolved on every pass. Reported so they can be reviewed.
+    marked = [c for c in plan if c["host"] in non_feed]
+    plan = [c for c in plan if c["host"] not in non_feed]
     # entry_ids are only needed server-side on apply; sending 4k of them per
     # host would bloat the preview for no benefit.
     slim = [{k: v for k, v in c.items() if k != "entry_ids"} for c in plan]
-    return JSONResponse({"plan": slim, "totals": saved_autofile_service.plan_totals(plan)})
+    totals = saved_autofile_service.plan_totals(plan)
+    totals["non_feed_hosts"] = len(marked)
+    totals["non_feed_articles"] = sum(c["count"] for c in marked)
+    return JSONResponse({
+        "plan": slim,
+        "totals": totals,
+        "non_feed": sorted(
+            ({"host": c["host"], "count": c["count"]} for c in marked),
+            key=lambda c: (-c["count"], c["host"]),
+        ),
+    })
+
+
+@app.post("/saved/autofile/non-feed")
+async def mark_autofile_non_feed(request: Request):
+    """Mark or unmark hosts as never having a feed.
+
+    Body (JSON): {"hosts": [...], "marked": bool}. Purely a worklist decision —
+    the saved articles themselves are untouched and stay exactly as they are.
+    They were never unfiled feed articles in the first place; they're one-off
+    read-later captures (a cheat sheet, a single tutorial), and the auto-filer
+    kept re-proposing them because it can only see that no feed matches.
+    """
+    body = await request.json()
+    hosts = [saved_autofile_service.article_host(h) or str(h).strip().lower()
+             for h in body.get("hosts", []) if h]
+    hosts = [h for h in hosts if h]
+    if not hosts:
+        return JSONResponse({"ok": False, "error": "No hosts given."}, status_code=400)
+    marked = bool(body.get("marked", True))
+    with get_meta_connection() as conn:
+        if marked:
+            conn.executemany(
+                "INSERT OR IGNORE INTO autofile_non_feed_hosts (host) VALUES (?)",
+                [(h,) for h in hosts],
+            )
+        else:
+            conn.executemany(
+                "DELETE FROM autofile_non_feed_hosts WHERE host = ?", [(h,) for h in hosts]
+            )
+        conn.commit()
+    return JSONResponse({"ok": True, "hosts": hosts, "marked": marked})
 
 
 @app.post("/saved/autofile")

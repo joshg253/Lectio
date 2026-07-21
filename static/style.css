@@ -5064,6 +5064,26 @@ body[data-keyboard-open="1"] .action-modal-panel {
   font-size: 0.85rem;
 }
 .saved-autofile-row { align-items: flex-start; }
+.saved-autofile-notfeed {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.saved-autofile-notfeed:hover { color: var(--fg, inherit); }
+.saved-autofile-nonfeed { margin-top: 0.6rem; color: var(--muted); }
+.saved-autofile-nonfeed summary { cursor: pointer; font-size: 0.85rem; }
+.saved-autofile-nfrow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+  font-size: 0.85rem;
+}
 /* The plan runs to ~180 rows, so the action has to stay reachable without
    scrolling to the end — and since the selection isn't visible from down here,
    the button carries the running total. */

@@ -351,6 +351,18 @@ scan re-read husks. The saved source is now hard-deleted via the shared
 `lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
 
 **Refinements from Josh working the list:**
+- **"Not a feed" per host.** Josh: some of these "need to be converted to just
+  single saved items" — dummies.com, python.plainenglish.io and the like never
+  came from a feed, so the filer could only keep re-proposing them. Marking a
+  host drops it from the worklist for good; the saved articles are untouched
+  (verified: entries and stars unchanged), since they already *are* standalone
+  saves. Marked hosts stay reviewable in a collapsed section with undo. New meta
+  table `autofile_non_feed_hosts`, created in `ensure_meta_schema` so the
+  startup per-user migration covers existing tenants.
+  **This is what empties the list:** after Josh's filing pass the remaining
+  backlog was 1,076 articles across 72 hosts, of which **735 across 49 hosts had
+  no feed at all** — 614 of those in just guitarmasterclass.net (463) and
+  guitarchalk.com (151), and 35 more being one-off single-article hosts.
 - **Filing is batched.** One uncapped call over a big host runs past a minute
   and is cut off in flight: observed live as `POST /saved/autofile → status 0,
   16180ms`, where 278 articles *were* filed but the reply never arrived, so the
