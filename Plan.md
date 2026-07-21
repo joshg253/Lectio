@@ -5,12 +5,49 @@ this file only tracks what's still open.
 
 ## Now (priority order)
 
-The whole **Now** chain flows from **one read-only build**: the Inoreader comparison
-report (#1). It kills a paid annual SaaS, mechanically generates the failing-feed
-triage list that gates Tag-as-keep Part C (#2), and surfaces the exact feeds that
-need the fetch-proxy (#3). Start at the top; the rest unblocks in sequence.
+Two independent clocks drive this list, and they are not the same clock:
 
-### 1. Inoreader replacement — bot-walled feeds (the last blocker to dropping Ino)
+- **The Inoreader chain (#2 → #4) is important but not urgent-today.** The annual
+  plan is already paid and won't prorate, so the value lands at *renewal*, not now.
+  Its real deadline is "renewal date minus enough time to validate the replacement."
+  **If renewal is close, #2 jumps to the front** — that date is the single input
+  that reorders this list.
+- **The saved-dupe bugs (#1) are compounding and cheap.** Every day they go unfixed,
+  more duplicate entries accumulate at save time, and the dupe dialog keeps arriving
+  with deletes pre-armed. Hours of work, not days.
+
+Because #1 is hours and the chain is days, they don't really compete — do #1 first,
+then start the chain. Everything after #4 is genuinely deferrable.
+
+### 1. Saved-dupe correctness + safety (small; do first)
+
+Two bugs that belong in **one** change, because fixing either alone leaves the
+workflow wrong. Full detail under "Saved / Tags / dupe-scan friction" in Later.
+
+- **http/https produce separate saved entries.** `normalize_article_url`
+  ([services/saved_articles.py:40](services/saved_articles.py#L40)) preserves the
+  scheme and saved entries are keyed by that value, so both variants of one article
+  become two entries — new pairs accrue daily. `normalize_entry_link_for_dedupe`
+  ([main.py:4920](main.py#L4920)) then also keeps the scheme, so the scan's "same
+  URL" tier can't rejoin them. Fix **both** layers (fold scheme, almost certainly
+  `www.`), plus a one-off merge for existing pairs — normalization alone stops the
+  bleeding but won't heal what's there.
+- **The confirmed tier pre-arms deletion.** It renders with `preselect = true`
+  ([static/js/app.js:957](static/js/app.js#L957)): row 0 is "keep" and *every other
+  copy is pre-checked*, with a one-click "Check All" beside it. Change to
+  auto-select **only** 404 items, and select **none** when every item in a group is
+  404. (The possible tier already correctly preselects nothing.)
+
+These interlock: today's keeper heuristic claims to "prefer https," but with
+http/https variants rarely grouped in the first place that preference seldom
+engages — so the pre-armed default is picking winners on a signal that isn't
+working. Ship them together.
+
+Also small, same area: **the Saved search button does nothing** — reproduce first
+to confirm the surface (Read Mode's form is the prime suspect: no submit button, no
+JS, and it drops the selected node on submit).
+
+### 2. Inoreader replacement — comparison report (the last blocker to dropping Ino)
 
 Josh is close to fully replacing Inoreader with Lectio. The remaining concern is
 **bot-blocking**: feeds Inoreader can fetch but Lectio can't. Publishers allowlist
@@ -20,7 +57,7 @@ isocpp 752, libhunt newsletters, etc.). Good-citizen policy forbids spoofing Ino
 UA or evading IP blocks; Lectio already auto-escalates to browser-UA on refusal
 (`browser_ua_feeds`), which recovers some 403s but not IP/aggregator-only blocks.
 
-**This step is the comparison report only** (the fetch-proxy is #3). Both reuse the
+**This step is the comparison report only** (the fetch-proxy is #4). Both reuse the
 **existing** `services/inoreader.py` (OAuth + `get_subscriptions` +
 `get_stream_contents`).
 
@@ -28,18 +65,18 @@ UA or evading IP blocks; Lectio already auto-escalates to browser-UA on refusal
 the user's Inoreader subscriptions vs Lectio feeds and flag three sets:
 
 - **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
-  risk set. **This set IS the failing-feed triage list that gates #2**, produced
-  mechanically instead of by hand, and it names the feeds that need #3.
+  risk set. **This set IS the failing-feed triage list that gates #3**, produced
+  mechanically instead of by hand, and it names the feeds that need #4.
 - **(b) in Ino, not in Lectio** — subscriptions never migrated.
 - **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
 
 Turns "safe to drop Ino?" into a concrete checklist.
 
-Overall migration sequence: connect Ino → run comparison (#1) → triage/replace dead
-feeds (#2) → proxy the only-Ino feeds (#3) → let the annual Ino plan lapse (annual
+Overall migration sequence: connect Ino → run comparison (#2) → triage/replace dead
+feeds (#3) → proxy the only-Ino feeds (#4) → let the annual Ino plan lapse (annual
 SaaS rarely prorates a refund; worth asking but plan to ride it out).
 
-### 2. Tag-as-keep — Part C write-run (gated on the triage from #1)
+### 3. Tag-as-keep — Part C write-run (gated on the triage from #2)
 
 The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
 while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).
@@ -47,8 +84,17 @@ The backfill script (`scripts/migrate_tag_as_keep.py`) is **written and committe
 and its dry-run has run against live data. Dry-run is the *default*; writes are
 gated behind `--apply`. The real (write) run is **deferred pending manual
 failing-feed triage** (Josh wants to find replacements for dead feeds first). The
-comparison report (#1) now feeds that triage: its "Ino can, we can't" set is the
+comparison report (#2) now feeds that triage: its "Ino can, we can't" set is the
 "Needs replacement" worklist, alongside the PR #151 category filter.
+
+**Scope interaction with #1** (checked 2026-07-21, don't re-derive): at the default
+`--scope dead-unsub` the saved feed is **not** touched, so the dupe work and Part C
+are independent. `_at_risk_feeds` is `kept_feeds ∪ feed_failure_state(failures ≥ N)`,
+and `lectio:saved` has updates disabled (so never fails) and is never unsubscribed —
+it lands in neither set. **At `--scope all` it does matter**: saved articles are
+starred and `curated = tagged | starred`, so duplicate saves would each get
+retro-archived — wasted capture you then delete. If a `--scope all` run is ever
+planned, do the #1 dedup first.
 
 Two passes (`--scope dead-unsub` default, YouTube always excluded):
 1. **Retro-archive** every tagged entry with no `complete` archive row
@@ -62,7 +108,7 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
 
-### 3. Inoreader as fetch-proxy (needs the report from #1)
+### 4. Inoreader as fetch-proxy (needs the report from #2)
 
 Durable follow-on, and the step that actually lets Ino lapse. Legitimate — Ino *is*
 the subscriber, so this is not evasion: a per-feed "fetch via Inoreader" toggle that
@@ -71,16 +117,16 @@ stubborn bot-walled feeds surfaced by set (a) of the report. Keep Ino connected 
 quiet backend, not the reader. Scope depends on how big set (a) actually is — run #1
 first and let the count decide whether this is worth building at all.
 
-### 4. Full-content fetch at ingest for body-less feeds
+### 5. Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
 per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with #1: some "we can't fetch" feeds get fixed here instead of via the Ino proxy.
+with #2: some "we can't fetch" feeds get fixed here instead of via the Ino proxy.
 
-### 5. Page-weight reduction — follow-ups (main work landed 2026-07-15)
+### 6. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -101,11 +147,14 @@ feed rows (2.7MB), and by moving the ~580KB inline script to
 
 ### Saved / Tags / dupe-scan friction (reported 2026-07-21)
 
-User-reported friction on already-shipped surfaces. Deliberately **not** inserted
-into the Now chain, but the two confirmed bugs are small and worth picking off
-opportunistically. Code pointers below were verified 2026-07-21.
+User-reported friction on already-shipped surfaces. Code pointers verified
+2026-07-21.
 
-**Bugs**
+> **The two bugs below were promoted to Now #1** once the pre-armed-delete behavior
+> was confirmed — they're compounding and cheap. They stay documented here in full;
+> Now #1 is the summary. Everything else in this section remains deferred.
+
+**Bugs** — *promoted to Now #1*
 
 - **`http://` and `https://` count as different URLs in the Saved dupe scan.**
   Confirmed: `normalize_entry_link_for_dedupe` ([main.py:4920](main.py#L4920))
@@ -140,9 +189,13 @@ opportunistically. Code pointers below were verified 2026-07-21.
 - **More obvious per-item status** — e.g. a 404 rendered in red rather than
   neutral text (URL status already comes from `/saved/duplicates/check-urls`,
   [main.py:22031](main.py#L22031)).
-- **Change the auto-select rule** — auto-select *only* 404 items; if every item
-  in a group is 404, select none (never auto-arm a delete that removes the whole
-  group).
+- **Change the auto-select rule** — *promoted to Now #1*. Auto-select *only* 404
+  items; if every item in a group is 404, select none (never auto-arm a delete
+  that removes the whole group). Current behavior confirmed 2026-07-21: the
+  confirmed tier renders with `preselect = true`
+  ([static/js/app.js:957](static/js/app.js#L957)), so row 0 is tagged "keep" and
+  every other copy arrives **already checked**, with a one-click "Check All"
+  beside it. The possible tier already preselects nothing and is fine.
 
 **Saved organization**
 
