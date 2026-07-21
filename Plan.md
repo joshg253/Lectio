@@ -24,7 +24,7 @@ What actually has a clock is smaller and closer:
   hours of work and unblocks a workflow you're mid-way through, so it goes early.
 
 So: fix the friction you hit daily, capture the content that's rotting, then start
-the Ino migration on schedule. Everything below #6 is genuinely deferrable.
+the Ino migration on schedule. Everything below #7 is genuinely deferrable.
 
 ### 1. Saved dedup workflow — correctness, safety, then UX (one project)
 
@@ -101,7 +101,7 @@ So this is a genuine gap, not user error: **add a "save full page (don't extract
 option** that sanitizes the whole `<body>` via the existing
 `html_sanitize.sanitize_html` instead of readability-extracting. Wants to be
 reachable both at save time and as a per-entry "re-save without extraction" so
-already-bad captures can be fixed in place. Related to #7 (same pipeline, opposite
+already-bad captures can be fixed in place. Related to #8 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
 ### 3. Tag-as-keep — Part C: run pass 1 now, defer pass 2
@@ -125,7 +125,7 @@ earlier "wait for triage" framing):
 - **Pass 2, Wayback: keep deferred.** This one genuinely benefits from triage — you
   want to know which feeds are truly dead before spending Archive.org lookups, since
   a live-but-403 site is better served by the archive worker's own page fetch. Gate
-  it on the triage list from #6.
+  it on the triage list from #7.
 
 Caveat when running pass 1: it enqueues ~3,596 archive jobs, each a page fetch
 against mostly-dead hosts, so expect a long slow tail of 404s and watch worker load.
@@ -159,13 +159,59 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
   and the rule form (see "Tag filtering for firehose feeds" in Later, which wants
   the same thing fed from `entry_feed_tags`). Don't build two.
 - **Batch-align Uncategorized saved items into Feeds** — *promoted out of this
-  list; see Now #5.* Measured 2026-07-21 and it turned out far higher-yield than
+  list; see Now #6.* Measured 2026-07-21 and it turned out far higher-yield than
   a "small item."
 - **Set up the four verified firehose tag_filter rules** — config, not code; the
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-### 5. Auto-file Uncategorized saved items into their real feeds
+### 5. "Filter this view" — client-side list filter, then act on what's shown
+
+Josh's framing (2026-07-21) is the right one: **"actual search" vs "filter search"**
+are different tools. Search is a server-side query that changes *what is fetched*;
+a filter narrows *what is already in front of you*, instantly, so you can then act
+on the result as a set. Settings → Feeds already has the filter flavor
+([templates/index.html:1938](templates/index.html#L1938), logic at
+[static/js/app.js:10594](static/js/app.js#L10594) — debounced 200ms, matches
+folder name OR feed name OR feed URL, toggles `hidden`, shows an empty state).
+Port that pattern to the posts list.
+
+**Most of this already works — three findings from checking (2026-07-21):**
+
+1. **"Move all visible to feed" already exists**
+   ([static/js/app.js:7045](static/js/app.js#L7045)), so the "attach everything
+   shown to a feed" half is built. Only the filter is missing.
+2. **The data is already in the DOM.** Every row carries `data-post-link` and
+   `data-post-title` ([templates/index.html:629](templates/index.html#L629)), so a
+   URL/title filter needs **no** server change.
+3. **The server sends the whole list, not a page** — the client reveals it 10 at a
+   time on scroll. So a client-side filter really does span the entire view rather
+   than one page's worth. Good news for "filter to a domain, move all of it."
+
+**⚠ The footgun — read before implementing.** `post-item-hidden` is *already taken*
+by the scroll-chunking reveal ([static/js/app.js:11491](static/js/app.js#L11491)),
+and "move all visible" selects `.posts .post-item` **without** excluding it. Today
+that's merely mis-labeled ("visible" actually means "everything the server
+returned"). But the moment a filter reuses the same hidden mechanism, *filter to
+one domain and "move all visible" would move the entire unfiltered list to that
+feed* — a silent, bulk, hard-to-undo mis-file. So:
+
+- give the filter its **own** class (e.g. `post-item-filtered`), not
+  `post-item-hidden`; and
+- update the move-visible selector to respect it, and restate the button copy as
+  "move the N shown" with the count coming from the same predicate.
+
+**Sequencing note vs #6:** build this first — it's roughly a day (filter is a copy
+of an existing one, move already exists), it's a *general* capability worth having
+forever, and it's the manual escape hatch for the cases #6 can't resolve (the 7.8%
+with no match and the 0.7% ambiguous). But **don't hand-grind the 92% with it** —
+that's what #6 automates; use this for the tail and for spot work.
+
+Minor cleanup noticed while checking: `server_posts_total` / `server_posts_sent`
+are read in the template with `is defined` guards but never set anywhere in Python,
+so they're always empty — dead plumbing, drop them.
+
+### 6. Auto-file Uncategorized saved items into their real feeds
 
 **Measured against live data 2026-07-21 — the numbers make this the best
 value-per-effort item on the board.** Josh's read: "tons of Uncategorized Saved
@@ -211,7 +257,7 @@ Note this also supersedes most of the single-post-page workaround (see "Single-p
 pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
 which is exactly what this does.
 
-### 6. Inoreader replacement — the migration (start ~Dec 2026)
+### 7. Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
 ~3 months to validate before the date. Pulling it earlier buys nothing; the plan is
@@ -228,39 +274,39 @@ IP/aggregator-only blocks.
 Both steps reuse the **existing** `services/inoreader.py` (OAuth +
 `get_subscriptions` + `get_stream_contents`).
 
-**6a — Comparison report** (read-only; start here). Cross-reference Inoreader
+**7a — Comparison report** (read-only; start here). Cross-reference Inoreader
 subscriptions vs Lectio feeds and flag three sets:
 
 - **(a) in-Ino-with-recent-items but failing-in-Lectio** = the "Ino can, we can't"
   risk set. This is also the **triage list that gates Part C pass 2 (#3)**, produced
-  mechanically instead of by hand, and it names the feeds that need 6b.
+  mechanically instead of by hand, and it names the feeds that need 7b.
 - **(b) in Ino, not in Lectio** — subscriptions never migrated.
 - **(c) in Lectio, not in Ino** — Lectio-only, safe to ignore for the cutover.
 
 Turns "safe to drop Ino?" into a concrete checklist.
 
-**6b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
+**7b — Inoreader as fetch-proxy.** The step that actually lets Ino lapse, and
 legitimate rather than evasion — Ino *is* the subscriber. A per-feed "fetch via
 Inoreader" toggle pulling items from `stream/contents` instead of the origin, for
 the stubborn bot-walled feeds in set (a). Keep Ino connected as a quiet backend, not
-the reader. **Scope depends on how big set (a) turns out to be — run 6a first and let
+the reader. **Scope depends on how big set (a) turns out to be — run 7a first and let
 the count decide whether this is worth building at all.**
 
-Sequence: connect Ino → comparison report (6a) → triage/replace dead feeds → Part C
-pass 2 (#3) → proxy the only-Ino feeds (6b) → let the plan lapse 2027-03-16 (annual
+Sequence: connect Ino → comparison report (7a) → triage/replace dead feeds → Part C
+pass 2 (#3) → proxy the only-Ino feeds (7b) → let the plan lapse 2027-03-16 (annual
 SaaS rarely prorates; worth asking, but plan to ride it out).
 
-### 7. Full-content fetch at ingest for body-less feeds
+### 8. Full-content fetch at ingest for body-less feeds
 
 meetingcpp.com's feed went title+link-only in 2026-07 (CMS change: no
 description/content element at all; older stored entries have bodies, so this
 is upstream). A per-feed "fetch full content from the source page at ingest"
 option (readability pipeline already exists) would fix such feeds generally —
 per-feed opt-in in Feed Properties, capped/throttled like enhancement. Overlaps
-with #6: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
+with #7: some "we can't fetch" feeds get fixed here instead of via the Ino proxy,
 so it's worth revisiting once the comparison report sizes set (a).
 
-### 8. Page-weight reduction — follow-ups (main work landed 2026-07-15)
+### 9. Page-weight reduction — follow-ups (main work landed 2026-07-15)
 
 The 12.95MB landing render (2.9k feeds) was cut by lazy-loading the
 Settings → Feeds table (5.6MB), the Stale list (3.8MB), and the sidebar
@@ -286,7 +332,7 @@ User-reported friction on already-shipped surfaces. Code pointers verified
 
 > **Most of this section was promoted into Now #1**, which treats the dupe cluster
 > as one project (correctness+safety → repeat-session UX). Tag autocomplete and the
-> tag autocomplete went to Now #4 and the Uncategorized batch-align to Now #5
+> tag autocomplete went to Now #4 and the Uncategorized batch-align to Now #6
 > (it measured far bigger than expected). Everything stays documented here in
 > full; the Now entries are summaries. Nothing in this section is still deferred
 > except where noted inline.
@@ -414,12 +460,12 @@ into it. Two things make that unsatisfying, and they're separate problems:
    "track this page" instead of failing.
 
 **Josh's stated preference (2026-07-21) is not a synthetic single-page feed — it's
-to file such pages into an existing, at-least-related real feed.** That's Now #5,
+to file such pages into an existing, at-least-related real feed.** That's Now #6,
 which does exactly this in bulk. So the first-class single-page subscription is
-mostly *superseded*: build #2's raw-capture fix (makes the content good) and #5's
+mostly *superseded*: build #2's raw-capture fix (makes the content good) and #6's
 auto-file (puts it somewhere sensible), then reassess. Only revisit page-monitoring
 if the "re-check the page for changes" half turns out to be the actual want — that
-part #5 does not cover.
+part #6 does not cover.
 
 ### DeviantArt watchlist sync — remaining follow-up
 
