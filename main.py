@@ -65,6 +65,7 @@ from services import podcast_audio
 from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
+from services import saved_autofile as saved_autofile_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
@@ -13542,6 +13543,17 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         )
     conn.commit()
 
+    # A saved article is user-added, so unlike a feed-provided entry it *can* be
+    # removed properly — leaving it behind would keep a read, unstarred husk in
+    # Saved Articles forever, so the backlog never shrinks as you file it and
+    # every later dupe scan re-reads rows that are no longer real saves.
+    if saved_articles_service.is_saved_articles_feed(feed_url):
+        try:
+            _hard_delete_entry(reader, feed_url, entry_id, src)
+            result["source_deleted"] = True
+        except Exception:  # noqa: BLE001 — the move itself already succeeded
+            LOGGER.exception("[move-entry] source cleanup failed for %s", entry_id)
+
     if result["tags"] or result["star"]:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
@@ -22291,6 +22303,119 @@ async def deduplicate_saved(request: Request):
     if deleted:
         invalidate_unread_counts_cache()
     return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
+
+
+@app.get("/saved/autofile/preview")
+def preview_saved_autofile():
+    """Propose a home feed for each unfiled saved article, grouped by host.
+
+    Read-only. Saved articles imported from a read-later service are mostly
+    articles from feeds already subscribed to, so they can be filed onto their
+    real feed — which also collapses cross-feed duplicates, since the move
+    matches into the target by GUID else normalized link.
+
+    The client reviews and approves per host; see services/saved_autofile for
+    why a lone candidate feed isn't automatically a trustworthy one.
+    """
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    with get_reader() as reader:
+        if reader.get_feed(saved_url, None) is None:
+            return JSONResponse({"plan": [], "totals": saved_autofile_service.plan_totals([])})
+        titles = {f.url: (f.user_title or f.title or str(f.url)) for f in reader.get_feeds()}
+        db = reader._storage.get_db()
+        # Only genuinely-kept saves are worth filing; a read, unstarred row is a
+        # husk from an older move that predates source cleanup.
+        with get_meta_connection() as conn:
+            kept = {
+                r[0] for r in conn.execute(
+                    "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
+                )
+            }
+        saved_rows = [
+            (str(i), str(l or i))
+            for i, l in db.execute(
+                "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
+            )
+            if str(i) in kept
+        ]
+        feed_links = [
+            (str(f), str(l))
+            for f, l in db.execute(
+                "SELECT feed, link FROM entries WHERE link IS NOT NULL AND feed != ?",
+                (saved_url,),
+            )
+        ]
+
+    plan = saved_autofile_service.build_autofile_plan(
+        saved_rows, feed_links, feed_titles=titles,
+        exclude_feeds=frozenset({saved_url}),
+    )
+    # entry_ids are only needed server-side on apply; sending 4k of them per
+    # host would bloat the preview for no benefit.
+    slim = [{k: v for k, v in c.items() if k != "entry_ids"} for c in plan]
+    return JSONResponse({"plan": slim, "totals": saved_autofile_service.plan_totals(plan)})
+
+
+@app.post("/saved/autofile")
+async def apply_saved_autofile(request: Request):
+    """File the approved hosts' saved articles onto their target feeds.
+
+    Body (JSON): {"hosts": [{"host": ..., "target_feed_url": ...}, ...]} — the
+    target is taken from the request, not recomputed, so what the user approved
+    in the preview is exactly what runs. Each article goes through
+    _move_entry_to_feed, which migrates star/tags/read state and then removes
+    the now-empty saved source.
+    """
+    body = await request.json()
+    wanted = {
+        str(h.get("host") or ""): str(h.get("target_feed_url") or "")
+        for h in body.get("hosts", [])
+        if h.get("host") and h.get("target_feed_url")
+    }
+    if not wanted:
+        return JSONResponse({"ok": False, "error": "No hosts selected."}, status_code=400)
+
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    moved = 0
+    failed = 0
+    per_host: dict[str, int] = {}
+    with get_reader() as reader, get_meta_connection() as conn:
+        known_feeds = {str(f.url) for f in reader.get_feeds()}
+        bad = sorted(set(wanted.values()) - known_feeds)
+        if bad:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown target feed: {bad[0]}"}, status_code=400
+            )
+        rows = reader._storage.get_db().execute(
+            "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
+        ).fetchall()
+        kept = {
+            r[0] for r in conn.execute(
+                "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
+            )
+        }
+        for entry_id, link in rows:
+            entry_id = str(entry_id)
+            if entry_id not in kept:
+                continue
+            host = saved_autofile_service.article_host(str(link or entry_id))
+            target = wanted.get(host)
+            if not target:
+                continue
+            res = _move_entry_to_feed(reader, conn, saved_url, entry_id, target)
+            if res.get("ok"):
+                moved += 1
+                per_host[host] = per_host.get(host, 0) + 1
+            else:
+                failed += 1
+                LOGGER.warning("[autofile] %s -> %s failed: %s", entry_id, target,
+                               res.get("error"))
+    if moved:
+        invalidate_unread_counts_cache()
+    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed",
+                moved, len(per_host), failed)
+    return JSONResponse({"ok": failed == 0, "moved": moved, "failed": failed,
+                         "per_host": per_host})
 
 
 @app.get("/feeds/multi-folder")

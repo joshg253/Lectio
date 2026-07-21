@@ -75,7 +75,10 @@ The short version:
   **Check URLs** arms a copy for deletion, and only when that copy's link is
   provably dead. Titles are editable inline in the dialog (✎), for saved copies
   whose title has drifted from the live post; **Re-fetch content** re-extracts a saved
-  article in place to repair a bad initial capture; an **Instapaper CSV import**
+  article in place to repair a bad initial capture; **File saved articles** matches
+  unfiled saves to the subscribed feed they came from (grouped by host, reviewed
+  per host before anything moves) — the usual case after importing a read-later
+  library built from feeds; an **Instapaper CSV import**
   brings your whole library over with tags and archive state.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from

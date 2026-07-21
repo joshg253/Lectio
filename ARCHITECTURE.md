@@ -855,6 +855,17 @@ maintained at ingest, which isn't worth a schema change yet. On any SQL error th
 helper returns `None` and the caller keeps the full key set and post-filters in
 Python, so a failure degrades to the old behavior instead of showing no posts.
 
+**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
+
+Matching is by **article host, not feed-URL host**: a feed's own URL often lives on a different host than the articles it publishes (`rss.beehiiv.com` serving `joanwestenberg.com` posts), so the reliable signal is which subscribed feed already carries entries whose links are on that host. Two guards decide what may be *pre-approved*, and the distinction matters — measured against real data, `guitarworld.com`'s target was backed by 77 of the feed's own entries while `guitarplayer.com`'s only candidate was a scraped single-article URL with **one** supporting entry, and filing 303 articles into it would have been wrong:
+
+- `ambiguous` — more than one subscribed feed carries entries on the host, so picking one would be a guess.
+- `support` — how many of the target feed's own entries are on that host; below `MIN_SUPPORT` the cluster is shown but not pre-checked.
+
+The service is pure (it takes extracted rows, not a reader) so the guards are testable without a database. The preview is read-only and strips `entry_ids` before sending; apply takes the target from the request rather than recomputing it, so what was approved is exactly what runs.
+
+**Moving a saved article deletes its source.** `_move_entry_to_feed` normally leaves the source entry in place — reader can't delete feed-provided entries, so it settles for marking them read and stripping star/tags. That rationale does not apply to `lectio:saved`, whose entries are `added_by='user'` and therefore properly deletable, so the saved source is hard-deleted (tombstoned, via the shared `_hard_delete_entry`) once the move succeeds. Without this the Saved Articles feed kept a read, unstarred husk per filed article: the backlog never shrank as it was filed, and every later duplicate scan re-read rows that were no longer real saves.
+
 **Toolbar listeners must be delegated.** `loadScopePanesWithoutFullRefresh`
 (every sidebar/folder/scope click, and the search form itself) re-renders the
 toolbar, replacing its DOM nodes. Any listener attached directly to a

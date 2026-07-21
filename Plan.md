@@ -314,12 +314,61 @@ that's what #4 automates; use this for the tail and for spot work.
 (The dead `server_posts_total` / `server_posts_sent` plumbing noticed while checking
 this is filed with the other dead-code items under "Code health" in Later.)
 
-### 4. Auto-file Uncategorized saved items into their real feeds
+### 4. Auto-file Uncategorized saved items into their real feeds — BUILT 2026-07-21
 
-**Measured against live data 2026-07-21 — the numbers make this the best
-value-per-effort item on the board.** Josh's read: "tons of Uncategorized Saved
-Items that definitely came from Feeds at some point, but that info is missing."
-Correct, and recoverable from the URL:
+**Shipped:** `services/saved_autofile.py` + `GET /saved/autofile/preview` +
+`POST /saved/autofile`, driven from Settings → Feeds → Utilities → **File saved
+articles**. Nothing moves without per-host approval. Re-measured on live data at
+build time (the Plan's original numbers predate a lot of manual filing):
+
+| | |
+|---|---|
+| live unfiled saved articles | 4,261 across 176 hosts |
+| **confident match, pre-checked** | **2,880 across 87 hosts** |
+| weak match (low support) — shown, unchecked | 465 |
+| ambiguous (2+ candidate feeds) | 181 |
+| no subscribed feed for the host | 735 |
+
+**Match on the article host, not the feed-URL host** — a feed often lives on a
+different host than the articles it publishes (`rss.beehiiv.com` serving
+`joanwestenberg.com`), so the signal is which subscribed feed already carries
+entries linking to that host.
+
+**"Exactly one candidate" is not the same as "confident", and the difference was
+load-bearing.** `guitarworld.com`'s target is backed by 77 of the feed's own
+entries; `guitarplayer.com`'s only candidate was a scraped single-article URL
+with **one** supporting entry — auto-filing 303 articles into it would have been
+wrong. Hence `MIN_SUPPORT`. Josh independently confirmed the guitarplayer case
+is messy ("gp got sucked into guitarworld at some point").
+
+**Also fixed here: `_move_entry_to_feed` left a husk behind.** It marked the
+source read and stripped star/tags but never removed it, on the reasoning that
+reader can't delete feed-provided entries — which isn't true for `lectio:saved`,
+whose entries are `added_by='user'`. So filing never shrank the backlog (Josh
+moved a batch and `lectio:saved` stayed at exactly 4,334) and every later dupe
+scan re-read husks. The saved source is now hard-deleted via the shared
+`_hard_delete_entry`. Verified on a copy of live data: filing 11 articles took
+`lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
+
+Covered by `tests/services/test_saved_autofile.py` (16 cases) and verified in a
+browser against a copy of the real library: 175 rows, 86 pre-checked, 49
+disabled for having no feed, guitarplayer.com correctly not pre-checked.
+
+**Still open in this area:**
+- **Match at import time.** `services/instapaper_import.py` should run the same
+  matcher so a future import lands filed instead of piling into Uncategorized.
+- **The 735 with no subscribed feed** (guitarmasterclass.net 463, guitarchalk.com
+  151, …) are saves from sites Josh doesn't subscribe to. Filing can't help;
+  they either stay in Saved or become new subscriptions.
+- **Soft-404s are invisible to the dead-link checker.** Probing 8 guitarplayer
+  articles: all returned **200**, but 4 had been redirected to the bare
+  `/lessons` index — the article is gone and the site answers 200 for it.
+  `_check_saved_url` only counts 404/410 as dead, so this whole class reads as
+  alive. Detecting it needs a "redirected to a URL much shorter than the
+  original / to a known index path" heuristic. Relevant to #1's dead-link
+  arming and to any retention pass.
+
+Original analysis, kept for the reasoning:
 
 | | |
 |---|---|

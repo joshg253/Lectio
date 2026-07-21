@@ -1055,6 +1055,105 @@
       }
     });
 
+    // ── Auto-file saved articles into their real feeds ─────────────────────
+    const _afRow = (c) => {
+      const id = `af-${c.host.replace(/[^a-z0-9.-]/gi, '_')}`;
+      const opts = c.candidates.map(x =>
+        `<option value="${_mfEscape(x.feed_url)}"${x.feed_url === c.target_feed_url ? ' selected' : ''}>` +
+        `${_mfEscape(x.title)} (${x.support})</option>`).join('');
+      // Why a host isn't pre-checked matters more than the fact that it isn't.
+      let note = '';
+      if (!c.target_feed_url) note = '<span class="saved-dedup-badge">no subscribed feed for this host</span>';
+      else if (c.ambiguous) note = `<span class="saved-dedup-badge">${c.candidates.length} candidate feeds — pick one</span>`;
+      else if (!c.confident) note = `<span class="saved-dedup-badge">weak match — only ${c.support} post(s) from this host</span>`;
+      return `<label class="dedup-pair-row saved-autofile-row">` +
+        `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
+        ` id="${id}"${c.confident ? ' checked' : ''}${c.target_feed_url ? '' : ' disabled'}>` +
+        `<span class="saved-autofile-count">${c.count}</span>` +
+        `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note}` +
+        (c.candidates.length
+          ? `<br><select class="saved-autofile-target" aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>`
+          : '') +
+        `</span></label>`;
+    };
+
+    document.getElementById('saved-autofile-btn')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-autofile-results');
+      const intro = results.querySelector('.saved-autofile-intro');
+      const list = results.querySelector('.saved-autofile-list');
+      const okBtn = document.getElementById('saved-autofile-ok');
+      results.hidden = false;
+      intro.textContent = 'Scanning saved articles…';
+      list.innerHTML = '';
+      okBtn.hidden = true;
+      let data;
+      try {
+        const resp = await fetch('/saved/autofile/preview');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        intro.textContent = 'Scan failed: ' + err;
+        return;
+      }
+      const plan = data.plan || [];
+      const t = data.totals || {};
+      if (!plan.length) {
+        intro.textContent = 'No unfiled saved articles.';
+        return;
+      }
+      intro.textContent =
+        `${t.articles} saved article(s) across ${t.hosts} host(s). ` +
+        `${t.confident_articles} on ${t.confident_hosts} host(s) have a confident match and are pre-checked; ` +
+        `${t.low_support_articles} weak, ${t.ambiguous_articles} ambiguous, ${t.unmatched_articles} with no subscribed feed.`;
+      list.innerHTML = plan.map(_afRow).join('');
+      okBtn.hidden = false;
+    });
+
+    document.getElementById('saved-autofile-results')?.addEventListener('change', (ev) => {
+      // Choosing a feed for a weak/ambiguous host is the approval for it.
+      const sel = ev.target.closest?.('.saved-autofile-target');
+      if (!sel) return;
+      const cb = sel.closest('.saved-autofile-row')?.querySelector('.saved-autofile-check');
+      if (cb && !cb.disabled) cb.checked = true;
+    });
+
+    document.getElementById('saved-autofile-ok')?.addEventListener('click', async () => {
+      const rows = [...document.querySelectorAll('.saved-autofile-row')];
+      const hosts = rows.filter(r => r.querySelector('.saved-autofile-check')?.checked)
+        .map(r => ({
+          host: r.querySelector('.saved-autofile-check').dataset.host,
+          target_feed_url: r.querySelector('.saved-autofile-target')?.value || '',
+        }))
+        .filter(h => h.target_feed_url);
+      if (!hosts.length) { alert('Nothing selected.'); return; }
+      const total = rows.filter(r => r.querySelector('.saved-autofile-check')?.checked)
+        .reduce((n, r) => n + Number(r.querySelector('.saved-autofile-count')?.textContent || 0), 0);
+      if (!confirm(`File ${total} saved article(s) onto ${hosts.length} feed(s)? ` +
+                   `Stars, tags and read state move with them.`)) return;
+      const btn = document.getElementById('saved-autofile-ok');
+      btn.disabled = true;
+      btn.textContent = 'Filing…';
+      let data;
+      try {
+        const resp = await fetch('/saved/autofile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hosts }),
+        });
+        data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'File selected';
+        alert('Filing failed: ' + err);
+        return;
+      }
+      btn.disabled = false;
+      btn.textContent = 'File selected';
+      alert(`Filed ${data.moved} article(s).` + (data.failed ? ` ${data.failed} failed.` : ''));
+      document.getElementById('saved-autofile-btn')?.click();  // re-scan
+    });
+
     // ── Purge old posts utility ────────────────────────────────────────────
     document.getElementById('purge-old-btn')?.addEventListener('click', () => {
       const panel = document.getElementById('purge-old-panel');
