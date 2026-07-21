@@ -1058,8 +1058,12 @@
     // ── Auto-file saved articles into their real feeds ─────────────────────
     const _afRow = (c) => {
       const id = `af-${c.host.replace(/[^a-z0-9.-]/gi, '_')}`;
+      // Feed titles are often deliberately unlike their URLs, so the URL is the
+      // only way to be sure which feed you're filing into — surface it on hover
+      // for each option and on the closed select.
       const opts = c.candidates.map(x =>
-        `<option value="${_mfEscape(x.feed_url)}"${x.feed_url === c.target_feed_url ? ' selected' : ''}>` +
+        `<option value="${_mfEscape(x.feed_url)}" title="${_mfEscape(x.feed_url)}"` +
+        `${x.feed_url === c.target_feed_url ? ' selected' : ''}>` +
         `${_mfEscape(x.title)} (${x.support})</option>`).join('');
       // Why a host isn't pre-checked matters more than the fact that it isn't.
       let note = '';
@@ -1072,7 +1076,9 @@
         `<span class="saved-autofile-count">${c.count}</span>` +
         `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note}` +
         (c.candidates.length
-          ? `<br><select class="saved-autofile-target" aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>`
+          ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
+            ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
+            `<span class="saved-autofile-url">${_mfEscape(c.target_feed_url || '')}</span>`
           : '') +
         `</span></label>`;
     };
@@ -1113,8 +1119,13 @@
       // Choosing a feed for a weak/ambiguous host is the approval for it.
       const sel = ev.target.closest?.('.saved-autofile-target');
       if (!sel) return;
-      const cb = sel.closest('.saved-autofile-row')?.querySelector('.saved-autofile-check');
+      const row = sel.closest('.saved-autofile-row');
+      const cb = row?.querySelector('.saved-autofile-check');
       if (cb && !cb.disabled) cb.checked = true;
+      // Keep the visible URL and the hover title on the newly-picked feed.
+      sel.title = sel.value;
+      const shown = row?.querySelector('.saved-autofile-url');
+      if (shown) shown.textContent = sel.value;
     });
 
     document.getElementById('saved-autofile-ok')?.addEventListener('click', async () => {

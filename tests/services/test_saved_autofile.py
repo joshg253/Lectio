@@ -131,3 +131,18 @@ def test_plan_totals_split_the_backlog_by_disposition():
     assert t["low_support_articles"] == 1
     assert t["ambiguous_articles"] == 1
     assert t["unmatched_articles"] == 1
+
+
+def test_youtube_feeds_can_be_barred_as_targets():
+    """A saved page is never really a video-channel post, and channels routinely
+    share a name with the blog they accompany — with only titles on screen a
+    YouTube feed is exactly the target you'd pick by mistake. The caller passes
+    them via exclude_feeds (see main._autofile_excluded_targets)."""
+    yt = "https://www.youtube.com/feeds/videos.xml?channel_id=UC123"
+    links = _links(yt, "example.com", 40)
+    assert build_autofile_plan([("s1", "https://example.com/a")], links)[0]["target_feed_url"] == yt
+    barred = build_autofile_plan(
+        [("s1", "https://example.com/a")], links, exclude_feeds=frozenset({yt}),
+    )
+    assert barred[0]["target_feed_url"] is None
+    assert barred[0]["confident"] is False

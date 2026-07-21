@@ -22305,6 +22305,21 @@ async def deduplicate_saved(request: Request):
     return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
 
 
+def _autofile_excluded_targets(feed_urls: Iterable[str]) -> frozenset[str]:
+    """Feeds an unfiled saved article must never be filed into.
+
+    Saved Articles itself, obviously — and every YouTube feed. A saved *page* is
+    never really a video-channel post, and channels routinely share a name with
+    the blog they accompany, so with only titles on screen a YouTube feed is
+    exactly the target you'd pick by mistake. Cheap insurance: it only ever
+    triggers for a saved youtube.com link, where filing into the channel feed
+    would be wrong anyway.
+    """
+    excluded = {saved_articles_service.SAVED_FEED_URL}
+    excluded.update(u for u in feed_urls if "youtube.com/feeds/videos.xml" in str(u))
+    return frozenset(excluded)
+
+
 @app.get("/saved/autofile/preview")
 def preview_saved_autofile():
     """Propose a home feed for each unfiled saved article, grouped by host.
@@ -22348,7 +22363,7 @@ def preview_saved_autofile():
 
     plan = saved_autofile_service.build_autofile_plan(
         saved_rows, feed_links, feed_titles=titles,
-        exclude_feeds=frozenset({saved_url}),
+        exclude_feeds=_autofile_excluded_targets(titles),
     )
     # entry_ids are only needed server-side on apply; sending 4k of them per
     # host would bloat the preview for no benefit.
@@ -22385,6 +22400,14 @@ async def apply_saved_autofile(request: Request):
         if bad:
             return JSONResponse(
                 {"ok": False, "error": f"Unknown target feed: {bad[0]}"}, status_code=400
+            )
+        # Enforced here too, not just in the preview: the target comes from the
+        # request, so a stale plan must not be able to file into a barred feed.
+        barred = sorted(set(wanted.values()) & _autofile_excluded_targets(known_feeds))
+        if barred:
+            return JSONResponse(
+                {"ok": False, "error": f"Not a valid target feed: {barred[0]}"},
+                status_code=400,
             )
         rows = reader._storage.get_db().execute(
             "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)

@@ -5064,6 +5064,15 @@ body[data-keyboard-open="1"] .action-modal-panel {
   font-size: 0.85rem;
 }
 .saved-autofile-row { align-items: flex-start; }
+/* Feed titles are often deliberately unlike their URLs — show the target URL
+   outright, not only on hover. */
+.saved-autofile-url {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 
 .saved-dedup-title-edit {
   font-size: 0.72rem;

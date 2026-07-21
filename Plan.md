@@ -350,9 +350,27 @@ scan re-read husks. The saved source is now hard-deleted via the shared
 `_hard_delete_entry`. Verified on a copy of live data: filing 11 articles took
 `lectio:saved` 4,334 → 4,323 and moved 11 stars onto the target feed.
 
-Covered by `tests/services/test_saved_autofile.py` (16 cases) and verified in a
-browser against a copy of the real library: 175 rows, 86 pre-checked, 49
-disabled for having no feed, guitarplayer.com correctly not pre-checked.
+**Two refinements from Josh reviewing the first build:**
+- **YouTube feeds are never valid targets** (`_autofile_excluded_targets`,
+  enforced on preview *and* apply). A saved page is never really a video-channel
+  post, and channels often share a name with the blog they accompany — with only
+  titles visible, a YouTube feed is exactly what you'd pick by mistake. Currently
+  a no-op on live data (no saved youtube.com articles, and a YouTube feed can
+  only ever be a candidate for the youtube.com host), but 693 of 2,879 feeds are
+  YouTube, so the first saved YT link would have hit it.
+- **The target's feed URL is shown**, inline and as a hover title on both the
+  select and each option. Feed titles are often deliberately unlike their URLs
+  ("The Woodshed" living at `rss.beehiiv.com/feeds/XYZ.xml`), so a title alone
+  doesn't identify what you're filing into. Inline rather than hover-only
+  because hover doesn't exist on touch or e-ink.
+
+Covered by `tests/services/test_saved_autofile.py` (17 cases) and
+`tests/unit/test_autofile_excluded_targets.py` (4), and verified in a browser
+against a copy of the real library: 175 rows, 86 pre-checked, 49 disabled for
+having no feed, guitarplayer.com correctly not pre-checked. The YouTube bar was
+verified with two feeds sharing the title "The Woodshed" (one blog, one channel):
+the channel is absent from the picker, and posting it directly to apply is
+rejected.
 
 **Still open in this area:**
 - **Match at import time.** `services/instapaper_import.py` should run the same
