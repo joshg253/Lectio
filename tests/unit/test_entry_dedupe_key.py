@@ -61,6 +61,33 @@ def test_scheme_relative_and_bare_hosts_still_normalize():
     assert norm("example.com/a") == norm("https://www.example.com/a")
 
 
+def test_slug_key_is_scoped_to_the_host():
+    """A bare slug match *confirms* a duplicate in the saved scan, so the key has
+    to carry the host. Two publishers writing about one topic produced confirmed
+    'duplicates' from live data: guitarworld.com and guitarmasterclass.net both
+    have a pinch-harmonics article."""
+    a = main._saved_dup_host_slug("https://www.guitarworld.com/lessons/techniques/pinch-harmonics")
+    b = main._saved_dup_host_slug("https://www.guitarmasterclass.net/ls/Pinch-Harmonics/")
+    assert a and b and a != b
+
+
+def test_slug_key_still_matches_one_article_moved_on_the_same_site():
+    """The tier's real job: same article, same site, different path — including
+    across a scheme or www change, which the folded host absorbs."""
+    a = main._saved_dup_host_slug("http://example.com/2019/12/my-great-post")
+    b = main._saved_dup_host_slug("https://www.example.com/blog/archive/my-great-post/")
+    assert a == b is not None
+
+
+@pytest.mark.parametrize("link", [
+    "https://example.com/index.html",   # blocklisted stub
+    "https://example.com/p",            # too short
+    "https://example.com/",             # no slug at all
+])
+def test_generic_slugs_still_produce_no_key(link):
+    assert main._saved_dup_host_slug(link) is None
+
+
 def test_build_entry_dedupe_key_folds_through_to_the_render_time_key():
     """The list view collapses rows by link+title, so the fold has to reach it —
     otherwise an http and an https copy render as two rows."""

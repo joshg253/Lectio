@@ -71,7 +71,8 @@ The short version:
   utility (with side-by-side Compare and dead-link checking) cleans up
   same-article-different-URL saves — it never pre-selects anything, and only
   **Check URLs** arms a copy for deletion, and only when that copy's link is
-  provably dead; **Re-fetch content** re-extracts a saved
+  provably dead. Titles are editable inline in the dialog (✎), for saved copies
+  whose title has drifted from the live post; **Re-fetch content** re-extracts a saved
   article in place to repair a bad initial capture; an **Instapaper CSV import**
   brings your whole library over with tags and archive state.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old

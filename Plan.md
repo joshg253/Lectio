@@ -92,7 +92,36 @@ scope changed on contact with the data, so the corrections are recorded here.
     *"Check all URLs"* — it runs the throttled liveness probe, not a select-all.
     The danger was only the pre-checked boxes, and those are gone.
 
-Covered by `tests/unit/test_entry_dedupe_key.py` (17 cases).
+**1a-bis — the slug tier was host-blind. DONE 2026-07-21.** Found immediately
+after the above shipped: Josh re-ran the scan and *every* group was a
+false positive. Both confirmed groups were cross-site slug collisions —
+`pinch-harmonics` on guitarworld.com vs guitarmasterclass.net,
+`acoustic-guitar-strumming-patterns` on guitarworld.com vs guitarchalk.com.
+`_safe_dedup_entry_slug` returns the last path segment with no host, and
+`/saved/duplicates` is the **only** consumer where a bare slug match confirms a
+duplicate on its own (the multi-signal dedup always requires title/body
+corroboration — a lone `slug` is not in `_SAFE_DEDUP_COMBOS`). So two
+publishers writing about one topic became a confirmed duplicate, pre-armed for
+deletion until the safety fix landed hours earlier. Fixed with
+`_saved_dup_host_slug`, which scopes the key to the folded host; the shared
+helper is untouched. **Confirmed groups went 2 → 0 on live data.**
+
+**Inline title editing in the dupe dialog — DONE 2026-07-21.** Josh: some saved
+titles no longer match what the post says. Each row gets a ✎ that swaps the
+title for an input (Enter saves, Esc cancels, blur saves) and POSTs to the
+existing `/entries/set-title`, so the correction is pinned as an override that a
+later refresh can't clobber. The row is a `<label>`, so the handler
+preventDefaults to keep the edit from toggling that copy's checkbox.
+
+Covered by `tests/unit/test_entry_dedupe_key.py` (22 cases) and verified in a
+browser against a seeded instance: no checkbox pre-checked, "keep" on row 0
+only, title edit persists and leaves the selection alone.
+
+**What's left before the scan is actually finishable:** with the confirmed tier
+clean, the *only* thing still coming back every scan is the possible tier's
+rejects (two datagenetics posts that reuse a title, `Guns-N-Roses-Style` vs
+`Style2`). That is exactly what **"Not duplicates"** persistence in #1b is for —
+it is now the blocking item, not a nice-to-have.
 
 **1b — make repeat sessions bearable.** Only one item here isn't cosmetic:
 

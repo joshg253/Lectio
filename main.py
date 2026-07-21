@@ -21863,6 +21863,30 @@ def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[d
     return [g for g in groups.values() if len(g) > 1]
 
 
+def _saved_dup_host_slug(link: str) -> str | None:
+    """Host-scoped slug key for the saved scan's confirmed tier.
+
+    `_safe_dedup_entry_slug` is host-blind — it returns the last path segment
+    and nothing else. That is correct for its other callers (per-feed churn
+    history, and the multi-signal dedup where a slug alone is never one of
+    `_SAFE_DEDUP_COMBOS`), but here a bare slug match *is* a confirmed
+    duplicate, so unrelated publishers writing about one topic collided:
+    guitarworld.com and guitarmasterclass.net each have a `pinch-harmonics`
+    article, and the scan offered to delete one of them. A descriptive slug
+    clears every length/hyphen guard precisely *because* it describes a topic.
+
+    Scoping to the host keeps the tier's real job — the same article under a
+    changed path on one site — and leaves genuine cross-host syndication to the
+    title/body tier, which is much stronger evidence than a shared topic word.
+    """
+    slug = _safe_dedup_entry_slug(link)
+    if not slug:
+        return None
+    canon = normalize_entry_link_for_dedupe(link)
+    host = canon.partition("/")[0] if canon else ""
+    return f"{host}/{slug}" if host else None
+
+
 def _saved_dup_reasons(group: list[dict], checks: list[tuple[str, str]]) -> list[str]:
     reasons = []
     for field, label in checks:
@@ -21921,7 +21945,7 @@ def get_saved_duplicates():
             "read": bool(read),
             "has_content": body_head is not None,
             "_canon": normalize_entry_link_for_dedupe(link),
-            "_slug": _safe_dedup_entry_slug(link),
+            "_slug": _saved_dup_host_slug(link),
             "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
             "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
         })

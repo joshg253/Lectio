@@ -5026,6 +5026,31 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .saved-dedup-compare-btn:hover,
 .saved-dedup-check-urls-btn:hover { color: var(--fg, inherit); }
+.saved-dedup-title-edit {
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+  padding: 0 0.25rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+/* Revealed on hover/focus so it doesn't compete with the titles themselves. */
+.saved-dedup-row:hover .saved-dedup-title-edit,
+.saved-dedup-title-edit:focus { opacity: 1; }
+.saved-dedup-title-edit:hover { color: var(--fg, inherit); border-color: var(--line); }
+.saved-dedup-title-input {
+  font: inherit;
+  width: min(100%, 34rem);
+  padding: 0.05rem 0.3rem;
+  background: var(--bg, #fff);
+  color: var(--fg, inherit);
+  border: 1px solid var(--accent, #2c7);
+  border-radius: 4px;
+}
 .saved-dedup-badge--dead { color: var(--danger, #c0392b); border-color: currentColor; }
 .saved-dedup-badge--alive { color: var(--accent, #2c7); border-color: currentColor; }
 .saved-dedup-same-dest { margin-left: 0.4rem; }

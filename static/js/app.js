@@ -784,7 +784,9 @@
           `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
           ` data-has-content="${e.has_content ? '1' : '0'}">` +
           `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
-          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> <span class="saved-dedup-row-badges">${badges}</span>${date}` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span>` +
+          `<button type="button" class="saved-dedup-title-edit" title="Edit this copy's title">✎</button>` +
+          ` <span class="saved-dedup-row-badges">${badges}</span>${date}` +
           `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
           `</label>`;
       }).join('');
@@ -848,6 +850,70 @@
       }
     };
 
+    // Inline title repair. Saved titles drift when a publisher renames a post,
+    // and this dialog is where the drift shows up — two copies whose titles no
+    // longer describe the same thing, which is also what makes a real duplicate
+    // hard to recognize here. Reuses /entries/set-title, so the correction is
+    // pinned as an override and a later refresh can't clobber it.
+    const _sdEditTitle = (btn) => {
+      const main = btn.closest('.saved-dedup-main');
+      const span = main?.querySelector('.saved-dedup-title');
+      if (!span || main.querySelector('.saved-dedup-title-input')) return;
+      const entryId = btn.closest('.saved-dedup-row').querySelector('.saved-dedup-check').dataset.entryId;
+      const original = span.textContent;
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'saved-dedup-title-input';
+      input.value = original;
+      input.maxLength = 500;  // _ENTRY_TITLE_MAX_LEN
+      span.hidden = true;
+      btn.hidden = true;
+      span.after(input);
+      input.focus();
+      input.select();
+
+      let settled = false;
+      const close = (newTitle) => {
+        input.remove();
+        span.hidden = false;
+        btn.hidden = false;
+        if (newTitle) span.textContent = newTitle;
+      };
+      const cancel = () => { if (!settled) { settled = true; close(); } };
+      const save = async () => {
+        if (settled) return;           // Enter already saved; the blur is a no-op.
+        settled = true;
+        const title = input.value.trim();
+        if (!title || title === original) { close(); return; }
+        input.disabled = true;
+        try {
+          const resp = await fetch('/entries/set-title', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            credentials: 'same-origin',
+            body: new URLSearchParams({
+              feed_url: SAVED_FEED_URL, entry_id: entryId, title,
+            }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          close(data.title || title);
+        } catch (err) {
+          close();
+          alert('Could not update the title: ' + err);
+        }
+      };
+
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+      });
+      input.addEventListener('blur', save);
+      // The row is a <label>; keep clicks off the group's checkbox.
+      input.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+    };
+
     const _sdCheckGroupUrls = async (group) => {
       const ids = [...group.querySelectorAll('.saved-dedup-check')].map(cb => cb.dataset.entryId);
       const resp = await fetch('/saved/duplicates/check-urls', {
@@ -877,6 +943,13 @@
     };
 
     document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
+      const titleBtn = ev.target.closest('.saved-dedup-title-edit');
+      if (titleBtn) {
+        ev.preventDefault();      // inside a <label> — don't toggle the checkbox
+        ev.stopPropagation();
+        _sdEditTitle(titleBtn);
+        return;
+      }
       const checkBtn = ev.target.closest('.saved-dedup-check-urls-btn');
       if (checkBtn) {
         const group = checkBtn.closest('.saved-dedup-group');
