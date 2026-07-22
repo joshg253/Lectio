@@ -23,7 +23,59 @@ os.environ.setdefault("LECTIO_DATA_DIR", str(_TEST_DATA_DIR))
 # daemons; tests that need one invoke the service/function directly.
 os.environ.setdefault("LECTIO_DISABLE_STARTUP_BACKFILL", "1")
 
+import socket  # noqa: E402
+
 import pytest  # noqa: E402
+
+_real_connect = socket.socket.connect
+_real_create_connection = socket.create_connection
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", ""})
+
+
+def _host_of(address) -> str:
+    if isinstance(address, tuple) and address:
+        return str(address[0])
+    return str(address)
+
+
+@pytest.fixture(autouse=True)
+def _block_outbound_network(monkeypatch):
+    """Fail loudly on any real outbound connection from a test.
+
+    A test that reaches the internet is flaky by construction: it depends on a
+    third party being up and unchanged. One did — a YouTube feed fetch inside
+    the suite returned a live 404 and failed a test that passes in isolation and
+    on re-run, which is the worst shape a failure can have (looks like a
+    phantom bug in whatever you touched last).
+
+    Blocking at the socket layer catches every client — httpx, requests, urllib
+    — rather than trusting each test to mock its own. TestClient speaks ASGI
+    in-process and opens no socket, so route tests are unaffected; loopback
+    stays open for anything genuinely local.
+
+    The error names the address, so the offending call is obvious instead of
+    surfacing as an unrelated assertion failure minutes later. A test that truly
+    needs the network should mock the client, not unblock this.
+    """
+    def _blocked(self, address, *args, **kwargs):
+        if _host_of(address) in _LOCAL_HOSTS:
+            return _real_connect(self, address, *args, **kwargs)
+        raise RuntimeError(
+            f"outbound network blocked in tests: {_host_of(address)!r}. "
+            "Mock the HTTP client instead of reaching the internet."
+        )
+
+    def _blocked_create(address, *args, **kwargs):
+        if _host_of(address) in _LOCAL_HOSTS:
+            return _real_create_connection(address, *args, **kwargs)
+        raise RuntimeError(
+            f"outbound network blocked in tests: {_host_of(address)!r}. "
+            "Mock the HTTP client instead of reaching the internet."
+        )
+
+    monkeypatch.setattr(socket.socket, "connect", _blocked)
+    monkeypatch.setattr(socket, "create_connection", _blocked_create)
+    yield
 
 
 @pytest.fixture(autouse=True)
