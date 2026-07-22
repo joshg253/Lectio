@@ -12,6 +12,20 @@ broken (#1–#2), organize the pile (#3–#6), finish the Instapaper-clone surfa
 command with a decay clock — run it any time, it doesn't queue behind anything.
 **#10–#12** are unrelated and genuinely deferrable.
 
+**Overnight session 2026-07-22 — what changed:**
+- **#9 pass 1 ran** (`--only archive --apply`): **3,581 archives enqueued**, the
+  worker is draining them. Pass 2 (Wayback) still deferred.
+- **The orphaned star rows are solved** — `backfill_saved_entries_from_archive`
+  was re-creating them at every startup, which is why the bug looked
+  irreproducible. Fixed and tested; **the sweep still needs a go-ahead**, and
+  the orphaned *archive* rows need a re-key-or-delete decision. See #4.
+- **#5 and #6 re-measured.** #5 is unchanged in size (1,603) and safer than
+  before (only 29 rows carry `archived_at`). **#6 collapsed from ~490 groups to
+  65** — #4 did what it was predicted to do, and #6 may no longer be worth
+  building.
+- **#3 is blocked on a decision**: its core premise (client holds the whole
+  list) turned out to be false — the server sends 250 and pages after that.
+
 **Shipped 2026-07-21: #1, #1c and #4.** The duplicate workflow is safe and the
 scan returns nothing; Saved search went ~19s → ~1.2s and now matches article
 text; auto-filing took `lectio:saved` from **4,334 to 424**. **#5 and #6 are
@@ -265,7 +279,12 @@ reachable both at save time and as a per-entry "re-save without extraction" so
 already-bad captures can be fixed in place. Related to #10 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
-### 3. "Filter this view" — client-side list filter, then act on what's shown
+### 3. "Filter this view" — ⚠ BLOCKED on a decision (see finding 3 below)
+
+**Do not start this as written.** The premise that the client holds the whole
+list is false as of 2026-07-22; pick between options (a)/(b)/(c) in finding 3
+first. The `post-item-filtered` footgun below is still correct and still applies
+whichever option wins.
 
 Josh's framing (2026-07-21) is the right one: **"actual search" vs "filter search"**
 are different tools. Search is a server-side query that changes *what is fetched*;
@@ -284,9 +303,47 @@ Port that pattern to the posts list.
 2. **The data is already in the DOM.** Every row carries `data-post-link` and
    `data-post-title` ([templates/index.html:629](templates/index.html#L629)), so a
    URL/title filter needs **no** server change.
-3. **The server sends the whole list, not a page** — the client reveals it 10 at a
-   time on scroll. So a client-side filter really does span the entire view rather
-   than one page's worth. Good news for "filter to a domain, move all of it."
+3. ~~**The server sends the whole list, not a page**~~ — **WRONG, corrected
+   2026-07-22. Read this before building anything here.** The server sends **250
+   posts** on first load ([main.py:16591](main.py#L16591)); the client then pulls
+   further chunks of `CHUNK_SIZE` (10) via `chunk`/`chunk_delta`, **capped at
+   2,000** (`limit = min(requested_chunk * CHUNK_SIZE, 2000)`). Almost certainly
+   introduced by the page-weight work (#12, PR #146) after this finding was
+   written.
+
+   **This invalidates the design below, so don't build it as specified.** A
+   client-side filter spans only the ~250 rows currently in the DOM, so
+   "Move N shown" would silently move a fraction of a filtered set — the exact
+   footgun this item set out to avoid, relocated from the scroll window to the
+   fetch window. A 1,321-match filter is precisely the case that breaks.
+
+   **It also re-explains Josh's original report.** "Only the literally visible
+   stuff moved" was read as scroll-chunking; it is really server-side
+   pagination. **The existing `Move visible to feed…` has this bug today** — it
+   collects `document.querySelectorAll('.posts .post-item')`
+   ([static/js/app.js:7332](static/js/app.js#L7332)) and its comment claims that
+   is "whatever survives the active filters (tag, search, unread, star)", which
+   is only true when the result set is under 250. Worth fixing regardless of
+   whether the filter gets built.
+
+   **Three ways forward — needs a decision before any code:**
+   - **(a) Honest partial.** Filter what is loaded; label the button with both
+     numbers ("Move 84 shown of 250 loaded"). Cheap, keeps the promise small
+     and true, but is not the "act on the whole set" capability wanted.
+   - **(b) Load-all, then filter.** On engaging the filter, keep pulling chunks
+     to the 2,000 cap before filtering. Delivers the intended guarantee, but
+     re-inflates the page weight that #12 spent a release cutting, and still
+     silently truncates above 2,000.
+   - **(c) Server-side filter.** Pass the filter term as a query param and let
+     the server narrow, then move by *predicate* rather than by a list of ids.
+     The only option that is correct at any size, and the only one where "move
+     everything matching" is truthful — but it is a server change and overlaps
+     the existing search.
+
+   Leaning **(c)** for the move action and **(a)** for the typing-feels-instant
+   filter, i.e. filter locally for feedback but resolve the *move* server-side
+   against the same predicate. That keeps "everything I filtered to, nothing I
+   didn't" honest without re-loading thousands of rows into the DOM.
 
 **⚠ The footgun — read before implementing.** `post-item-hidden` is *already taken*
 by the scroll-chunking reveal ([static/js/app.js:11491](static/js/app.js#L11491)),
@@ -467,29 +524,57 @@ with no feed, most holding one or two articles.
   call, not automatable.
 - **Match at import time.** `services/instapaper_import.py` should run the same
   matcher so a future import lands filed instead of piling into Uncategorized.
-- **⚠ UNEXPLAINED: 3,593 orphaned star rows on `lectio:saved`** (found
-  2026-07-21 after the filing). `saved_entries` rows whose `lectio:saved` entry
-  no longer exists — every one of a 500-row sample is **tombstoned**, so the
-  entry was removed by the move's source cleanup, but the star row survived.
-  Total star rows went **11,050 → 13,895** across the session, roughly the
-  number of articles filed.
-  - **Not reproducible.** Against a copy of the live DBs, `_move_entry_to_feed`
-    deletes the source star row correctly (3996 → 3995, total flat) and
-    `_hard_delete_entry` cleans its star row too. Both current paths behave.
-  - **The rows are stamped *today*** (2,961 in one UTC hour), so they were
-    *written* during the session, not left behind — a leftover would keep its
-    original `saved_at` (the untouched rows still carry 2019/2020 dates). The
-    only writer that stamps `CURRENT_TIMESTAMP` on a `lectio:saved` star row is
-    `save_article`, and no import or bulk save path appears in the logs.
-  - **Impact is limited but real**: the rows are invisible in the UI (the entry
-    lookup returns nothing) and the articles themselves are correctly filed and
-    starred on their target feeds. They inflate the star count and add work to
-    every Saved-view query.
-  - **Next steps:** a sweep deleting `saved_entries` rows whose entry is gone
-    (bulk delete — needs the go-ahead), plus a defensive idempotent re-DELETE of
-    the source star row *after* the hard delete in `_move_entry_to_feed`, which
-    closes the hole whatever the cause. Don't ship the sweep without first
-    reproducing, or it will just run again next session.
+- **✅ SOLVED 2026-07-22: the orphaned star rows were the archive backfill.**
+  Cause found and fixed; the sweep is still outstanding and needs the go-ahead.
+
+  **`backfill_saved_entries_from_archive` was re-creating them at every
+  startup.** The function exists to recover from a meta-DB reset where the
+  starred-archive DB survived: it inserts a `saved_entries` row for every
+  `complete` `archived_entry`. But **an archive row outlives its entry** —
+  filing a saved article hard-deletes the `lectio:saved` source (and correctly
+  deletes its star row) while leaving the archive row untouched. So the next
+  boot dutifully "restored" a star pointing at a tombstone.
+
+  Every prediction the old note got wrong is explained by this:
+  - *"Not reproducible"* — correct, and it never would be: the orphan is not
+    created by the move at all. It needs **a move followed by a restart**.
+  - *"Stamped today, so written during the session"* — right, and it is an
+    `INSERT` (defaulting `saved_at` to `CURRENT_TIMESTAMP`), not a survival.
+  - *"The only writer that stamps CURRENT_TIMESTAMP is `save_article`"* —
+    **wrong**, and this is what sent the investigation the wrong way. Roughly
+    ten call sites insert `(feed_url, entry_id)` without `saved_at` and so
+    default it to now; the archive backfill is one of them.
+
+  **Verified against live data, 100% match**: all 4,264 orphaned `lectio:saved`
+  star rows have a `complete` archive row, and 0 have none. The star-row count
+  (4,667) equals the complete-archive count (4,667) exactly.
+
+  **It was also self-perpetuating**, which vindicates the old note's one correct
+  instinct ("don't ship the sweep without reproducing, or it will just run again
+  next session"): a sweep would have deleted all 4,264 and the very next restart
+  would have re-created every one. The count grew 3,593 → 4,264 between sessions
+  for exactly this reason, and 671 fresh rows landed at 21:00 local on 2026-07-21
+  on a restart alone.
+
+  **Fixed** in `backfill_saved_entries_from_archive`
+  ([services/starred_archive.py:324](services/starred_archive.py#L324)): it now
+  restores a star only when reader still holds the entry, and logs how many
+  archive rows it skipped as stale. Non-destructive by design — no archived
+  content is deleted — and it stops new orphans permanently. Covered by
+  `tests/services/test_starred_archive_backfill.py` (7 cases), including that a
+  failing reader lookup is treated as missing rather than resurrecting a star.
+
+  **Still open:**
+  - **The sweep** — delete `saved_entries` rows whose entry is gone (4,508
+    total, 4,264 on `lectio:saved`). Bulk delete, needs Josh's go-ahead. Now
+    worth doing, because the fix means it stays swept.
+  - **The archive rows themselves are still orphaned** — 4,264 `complete` rows
+    for entries that no longer exist, holding real captured content in a 7.6GB
+    DB. Two defensible options and it is a judgment call, not a cleanup:
+    **re-key** them onto the target feed when `_move_entry_to_feed` moves an
+    article (preserves the capture, more invasive), or **delete** them with the
+    source entry (simpler, discards a capture that may predate the target feed's
+    own). Do not do either without deciding which.
 - **⚠ Inline SVG in feed content is mangled at ingest.** Found 2026-07-21 while
   redoing the docs screenshots. feedparser parses an HTML-escaped
   `<description>` as HTML, where a trailing slash is meaningless — so
@@ -563,8 +648,36 @@ After the tag-as-keep flip a tag *is* a keep signal, so a star on an already-tag
 item is redundant — it only clutters Saved, which should be the read-later queue.
 Josh's idea: do it at DB level now, add a Utilities button for later upkeep.
 
-**Measured 2026-07-21 — this is safe, and I checked the thing that would have made
-it unsafe:**
+**RE-MEASURED 2026-07-22 (post-filing — these are the current numbers):**
+
+| | before #4 | now |
+|---|---|---|
+| star rows total | 13,895 | 14,566 |
+| **starred AND tagged (affected set)** | 1,643 | **1,603** |
+| ↳ in `lectio:saved` | 554 | **31** |
+| ↳ in real feeds | 1,089 | **1,572** |
+| share of all star rows | 14.9% | 11.0% |
+| ↳ carrying `archived_at` (Read Mode state) | 371 (all rows) | **29** |
+| distinct tags on the set | 57 | 58 |
+
+**The conclusion holds and is now stronger.** #4 moved the affected items out of
+`lectio:saved` and onto real feeds (554 → 31) rather than changing the size of
+the set, so this is still ~1,600 redundant stars. The tag distribution is
+essentially unchanged — `misc` 319, `linux-stuff` 211, `c++` 201,
+`science-+-math` 143, `games-to-play` 97, `python` 85 — and a fresh search for
+read/todo/later/queue/inbox/pending/unread-ish tag names again returns
+**nothing**. Topical filing tags, safe to unstar.
+
+Only **29** rows carry `archived_at`, so the Read Mode state at risk is now
+trivial (was 371 across the whole table). Still worth an opt-out rather than a
+blind delete, but it is no longer a reason to hesitate.
+
+Caveat carried forward: the star-row total includes the 4,264 orphans, so
+"share of all star rows" is understated. Run the orphan sweep (#4) first and the
+real share is nearer 15%.
+
+**Original measurement 2026-07-21 — this is safe, and I checked the thing that
+would have made it unsafe:**
 
 | | |
 |---|---|
@@ -615,8 +728,46 @@ first means operating on a set that #4 will rearrange underneath you.
 
 ### 6. Cross-feed duplicate scan — the dupes you can actually feel
 
-**Josh's hunch ("there's gotta be more dupes in there") is correct, and the reason
-the scan disagrees is that it's looking at the wrong set.** Measured 2026-07-21:
+**RE-MEASURED 2026-07-22 — #4 collapsed almost all of this, exactly as predicted.
+This item is now small enough to question whether it is worth building at all.**
+
+| set scanned | groups | extra copies |
+|---|---|---|
+| all starred, measured 2026-07-21 (pre-filing) | ~490 | ~520 |
+| **all starred, measured 2026-07-22 (post-filing)** | **65** | **87** |
+
+Breakdown of the 65 (10,058 starred entries carry a usable link; 323 skipped as
+homepage-like):
+
+| | groups |
+|---|---|
+| cross-feed, saved ↔ real feed | **3** (was 447) |
+| cross-feed, between two real feeds | **44** (was 46) |
+| same-feed | 18 |
+| oversized (≥10 copies) | **0** |
+
+**The dominant class is gone.** Auto-filing merged the saved copy onto the feed
+entry where it was already starred, taking saved↔real from 447 groups to 3 — the
+mechanism the Plan predicted (`_move_entry_to_feed` matches by GUID, else
+normalized link). What is left is the 44 "subscribed to a site *and* an
+aggregator that carries it" groups, which #4 was never going to touch.
+
+**The romhacking.net 244-copy false positive did not survive either**, and not by
+luck: the homepage guard sketched below (skip bare-domain/index links) removes it
+along with 322 other homepage-linked entries, and with it every oversized group.
+So the guard is validated — but it is now guarding a scan that finds 87 deletable
+copies.
+
+**Recommendation: don't build the cross-feed scanner UI.** 87 copies across 65
+groups is a smaller pile than the ~490 that justified a dedicated surface, and
+44 of the groups are a judgment call (which of two legitimate subscriptions
+should own the post?) rather than a mechanical dedup. Either fold the homepage
+guard + cross-feed grouping into the *existing* `/saved/duplicates` scan so it
+stops being blind to the class, or leave it. Josh's call.
+
+**Original analysis 2026-07-21 — Josh's hunch ("there's gotta be more dupes in
+there") was correct, and the reason the scan disagreed is that it was looking at
+the wrong set:**
 
 | set scanned | duplicate groups | extra copies |
 |---|---|---|
@@ -682,7 +833,21 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-### 9. Tag-as-keep — Part C: run pass 1 now, defer pass 2
+### 9. Tag-as-keep — Part C: pass 1 DONE 2026-07-22, pass 2 still deferred
+
+**Pass 1 ran with `--apply` on 2026-07-22: 3,581 archives enqueued** (dry-run and
+apply agreed; the Plan's earlier ~3,596 estimate was accurate). Live DBs were
+backed up first. The archive worker drains the queue in the background — expect a
+long tail of 404s, since most of these are dead/unsubscribed feeds. Check
+progress with `SELECT status, COUNT(*) FROM archived_entry GROUP BY status` in
+the user's `lectio_starred_archive.sqlite`; at kickoff it read
+`complete 14567 / pending 3576 / failed 3 / in_progress 1`.
+
+Pass 2 (Wayback) was **not** run and stays gated on the #10 triage list.
+
+The original write-up follows.
+
+
 
 The semantics flip shipped (PR #150): tagging keeps + full-archives, archive kept
 while starred OR tagged, unified **Kept** view, keep-on-unsubscribe (`kept_feeds`).

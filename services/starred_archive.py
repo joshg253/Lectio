@@ -326,6 +326,15 @@ class StarredArchiveService:
 
         The reverse of backfill_missing_archives. Recovers from meta DB resets
         where starred_archive survived intact. Returns the number of rows inserted.
+
+        Only restores a star for an entry reader still holds. An archive row
+        outlives its entry — moving a saved article to a real feed hard-deletes
+        the ``lectio:saved`` source but leaves its archive row behind — and
+        without this check every restart "restored" a star pointing at a
+        tombstone: invisible in the UI (the entry lookup returns nothing) but
+        inflating counts and adding work to every Saved-view query. That is the
+        whole of the orphaned-star-row mystery; it also made a one-off sweep
+        pointless, since the next startup re-created every row it deleted.
         """
         try:
             with self._get_archive_connection() as conn:
@@ -340,12 +349,22 @@ class StarredArchiveService:
             return 0
 
         inserted = 0
+        stale = 0
         try:
-            with self._get_meta_connection() as meta_conn:
+            with self._get_meta_connection() as meta_conn, self._get_reader() as reader:
                 for row in rows:
+                    feed_url = str(row["feed_url"])
+                    entry_id = str(row["entry_id"])
+                    try:
+                        entry = reader.get_entry((feed_url, entry_id), None)
+                    except Exception:  # noqa: BLE001
+                        entry = None
+                    if entry is None:
+                        stale += 1
+                        continue
                     cur = meta_conn.execute(
                         "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                        (str(row["feed_url"]), str(row["entry_id"])),
+                        (feed_url, entry_id),
                     )
                     if cur.rowcount:
                         inserted += 1
@@ -355,6 +374,10 @@ class StarredArchiveService:
 
         if inserted:
             LOGGER.info("starred archive: restored %d saved_entries row(s) from archive", inserted)
+        if stale:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) whose entry no longer exists", stale
+            )
         return inserted
 
     def backfill_metadata_for_complete_rows(self) -> int:
