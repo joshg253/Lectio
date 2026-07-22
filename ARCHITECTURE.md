@@ -728,6 +728,24 @@ re-fetching. The on-star destination fan-out is deliberately **not** fired —
 saving *into* Lectio shouldn't re-send the article to external read-later
 services.
 
+**Re-fetch follows the entry, not the feed.** `POST /articles/refresh-content`
+re-fetches and re-extracts a capture, replacing its stored content in place. It
+has two paths because a capture does not stay in `lectio:saved`: auto-filing
+(Settings → Feeds → File saved articles) moves it onto the feed that actually
+publishes the article, where it remains a capture (`added_by='user'`, entry id =
+source URL) on someone else's feed. For a still-unfiled article the route reuses
+`save_article(refresh_content=True)`; for a filed one it calls
+`refresh_filed_article`, which updates the entry where it now lives. Routing the
+filed case through the save path instead would write into `lectio:saved` and
+re-create the duplicate that filing removed — hence the split, and hence
+`_replace_entry_content` taking the feed as a parameter rather than assuming the
+saved feed. Feed-provided entries are refused: their content belongs to the
+publisher and the next refresh would overwrite it anyway.
+
+The UI gates the control the same way, on a per-entry `captured` flag
+(`data-post-captured`) rather than on feed identity. Gating on the feed is what
+silently stripped the escape hatch from every article the filer moved.
+
 Entry points: the **+ Save Article** modal (session `POST /articles/save`), a
 bookmarklet (`GET /articles/save?url=…` — a top-level navigation, so the
 SameSite=Lax session cookie rides along and an unauthenticated hit round-trips

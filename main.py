@@ -10853,6 +10853,11 @@ def list_entries_for_feeds(
                     "link": html_sanitize.safe_link_url(entry.link or _derived_entry_link(entry)),
                     "read": is_read,
                     "saved": is_saved,
+                    # A Lectio capture rather than a feed-provided entry. Drives
+                    # the Re-fetch control, which must follow the *entry*, not
+                    # the feed it happens to sit on — auto-filing moves captures
+                    # onto real feeds and used to strip their re-fetch hatch.
+                    "captured": str(getattr(entry, "added_by", "") or "") == "user",
                     sort_key: sort_value,
                 }
             )
@@ -12923,6 +12928,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "author": author_name,
             "read": bool(entry.read),
             "saved": is_saved,
+            # See the post-list builder: Re-fetch follows the entry, not the feed.
+            "captured": str(getattr(entry, "added_by", "") or "") == "user",
             "manual_tags": manual_tags,
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
@@ -23248,15 +23255,36 @@ async def refresh_saved_article_content(
     feed_url: str = Form(...),
     entry_id: str = Form(...),
 ):
-    """Re-fetch + re-extract a saved article's content, replacing the stored copy
-    and bumping it to the top. Fixes a bad initial capture (e.g. readability
+    """Re-fetch + re-extract a captured article's content, replacing the stored
+    copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
     grabbed a fragment, or a broken import) without deleting and re-adding.
-    Saved-articles feed only — the entry id there is the source URL."""
+
+    Works for any Lectio capture, not just ones still in the saved feed. Filing
+    an article onto its real feed (Settings → Feeds → File saved articles) used
+    to strip its re-fetch escape hatch, because both this route and the UI gated
+    on feed identity rather than on the entry being a capture — which took the
+    hatch away from every article the filer moved."""
     if not saved_articles_service.is_saved_articles_feed(feed_url):
-        return JSONResponse(
-            {"ok": False, "error": "Re-fetch is only available for saved articles."},
-            status_code=400,
+        # Filed capture: re-extract in place on the feed it now lives on.
+        # Routing this through the save path instead would write into
+        # lectio:saved and re-create the duplicate that filing removed.
+        result = await run_in_threadpool(
+            _refresh_filed_article_for_current_user, feed_url, entry_id
         )
+        if not result.get("ok"):
+            return JSONResponse(
+                {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+                status_code=400,
+            )
+        return JSONResponse({
+            "ok": True,
+            "refreshed": bool(result.get("refreshed")),
+            "extracted": bool(result.get("extracted")),
+            "title": result.get("title"),
+            "feed_url": feed_url,
+            "entry_id": entry_id,
+            "url": entry_id,
+        })
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
     result = await run_in_threadpool(_save_article_for_current_user, url, None, True)
     if not result.get("ok"):
@@ -23321,6 +23349,27 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
             reader.update_search()
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[search] post-save index update failed: %s", exc)
+    return result
+
+
+def _refresh_filed_article_for_current_user(feed_url: str, entry_id: str) -> dict:
+    """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
+    with the current tenancy's reader/meta DB."""
+    reader = get_reader()
+    with get_meta_connection() as conn:
+        result = saved_articles_service.refresh_filed_article(
+            reader,
+            conn,
+            feed_url,
+            entry_id,
+            extract=fetch_readability_article,
+            enqueue_archive=starred_archive_service.enqueue_archive,
+        )
+    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
+        try:
+            reader.update_search()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("[search] post-refresh index update failed: %s", exc)
     return result
 
 

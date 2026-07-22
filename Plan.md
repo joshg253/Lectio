@@ -264,9 +264,39 @@ export: 84 `<p>` scattered across 68 `<div>`, no `<article>`/`<section>`, and 13
 `<pre>`. Readability scores containers by paragraph density, so one big `<pre>`
 wins while the actual prose stays split across sibling divs that each score low.
 
-Why none of the existing escape hatches help — all three call the same
-`extract_readability_article`, so they are deterministic re-runs of the same
-failure:
+**⚠ CORRECTED 2026-07-22 — "deterministic re-run" is only half true, and the
+half that's false was hiding a working fix.** Two distinct failure modes were
+filed here as one:
+
+- **Deterministic** (the schacon example below): a static document that scores
+  the same way every time. Re-fetch genuinely can't help. The analysis below
+  stands for this case.
+- **Transient** — a JS-heavy page where extraction depends on what the fetch
+  returned that day. **Re-fetch is exactly the right escape hatch here**, and it
+  was being wrongly dismissed.
+
+Demonstrated on Josh's report of a Dropbox blog post stored as 638KB / 522
+images whose only text was bylines — readability had taken the *article-listing
+grid* off a 2.6MB, 1,620-image AEM page. Re-running the identical extractor on
+the live URL returned the correct article (11,591 chars, 5,006 chars of text).
+Better evidence still: the same URL was captured twice into two different feeds,
+and **one copy was already correct** — same code, same page, different outcome.
+
+Scope check across all 273 large user-saved captures: only 3 are
+image-dominated, and 2 of those are legitimately so ("All 182 screensavers on
+your Amazon Fire TV", "50 Time-Saving and Free Photoshop Actions"). So this is a
+rare failure, not a systemic one — which argues for keeping #2 as a manual
+escape hatch rather than a pipeline change.
+
+**Shipped alongside: Re-fetch works on filed articles.** It was gated on feed
+identity in both the route and the UI, so auto-filing (#4) silently stripped the
+hatch from every one of the ~3,900 articles it moved — the surface most likely
+to need it. Now gated on the entry being a Lectio capture, with in-place update
+via `refresh_filed_article`. See ARCHITECTURE "Saved articles".
+
+Why none of the existing escape hatches help *for the deterministic case* — all
+three call the same `extract_readability_article`, so they are deterministic
+re-runs of the same failure:
 
 - **Re-fetch content** (`/articles/refresh-content`, [main.py:22731](main.py#L22731))
   → re-fetch + re-extract, same pipeline.

@@ -7,6 +7,7 @@
         data-post-feed-url="{{ selected_entry.feed_url }}"
         data-post-entry-id="{{ selected_entry.id }}"
         data-post-read="{{ 1 if selected_entry.read else 0 }}"
+        data-post-captured="{{ 1 if selected_entry.captured else 0 }}"
         data-post-link="{{ selected_entry.link or '' }}"
         data-post-title="{{ selected_entry.title or '' }}"
         data-post-folder-id="{{ feed_to_folder.get(selected_entry.feed_url, selected_folder_id) }}"

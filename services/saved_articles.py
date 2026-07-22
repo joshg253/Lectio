@@ -65,34 +65,48 @@ def ensure_saved_feed(reader) -> bool:
     return True
 
 
-def _replace_entry_content(reader, conn: sqlite3.Connection, entry_id: str, title: str, article_html: str) -> None:
-    """Replace a saved article's stored content with a fresh extraction and
+def _replace_entry_content(
+    reader,
+    conn: sqlite3.Connection,
+    entry_id: str,
+    title: str,
+    article_html: str,
+    feed_url: str = SAVED_FEED_URL,
+) -> None:
+    """Replace a captured article's stored content with a fresh extraction and
     bump it to the top of the backlog (published/saved_at = now).
 
     reader has no public setter for entry content (EntryData is ingest-owned),
     so this writes the column directly in reader's own JSON shape. The title
     is only updated when the user hasn't pinned one via Edit title
-    (entry_title_overrides)."""
+    (entry_title_overrides).
+
+    *feed_url* defaults to the saved feed but must be passed for an article that
+    has been filed onto a real feed: auto-filing moves the entry out of
+    ``lectio:saved`` while leaving it a Lectio capture, and re-fetching such an
+    article has to update it where it now lives. Writing to the saved feed
+    instead would silently miss (wrong key) or re-create the Uncategorized
+    duplicate that filing removed."""
     now = datetime.now(timezone.utc)
     stored_published = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
     content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
     db = reader._storage.get_db()
     db.execute(
         "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
-        (content_json, stored_published, SAVED_FEED_URL, entry_id),
+        (content_json, stored_published, feed_url, entry_id),
     )
     title_pinned = False
     try:
         title_pinned = conn.execute(
             "SELECT 1 FROM entry_title_overrides WHERE feed_url = ? AND entry_id = ?",
-            (SAVED_FEED_URL, entry_id),
+            (feed_url, entry_id),
         ).fetchone() is not None
     except sqlite3.OperationalError:
         pass
     if title and not title_pinned:
         db.execute(
             "UPDATE entries SET title = ? WHERE feed = ? AND id = ?",
-            (title, SAVED_FEED_URL, entry_id),
+            (title, feed_url, entry_id),
         )
     db.commit()
     # The saved_at bump is cosmetic ordering — never let a transient lock
@@ -102,7 +116,7 @@ def _replace_entry_content(reader, conn: sqlite3.Connection, entry_id: str, titl
         try:
             conn.execute(
                 "UPDATE saved_entries SET saved_at = CURRENT_TIMESTAMP WHERE feed_url = ? AND entry_id = ?",
-                (SAVED_FEED_URL, entry_id),
+                (feed_url, entry_id),
             )
             conn.commit()
             break
@@ -111,6 +125,83 @@ def _replace_entry_content(reader, conn: sqlite3.Connection, entry_id: str, titl
                 LOGGER.warning("save-article: saved_at bump failed for %s: %s", entry_id, exc)
             else:
                 time.sleep(0.5)
+
+
+def refresh_filed_article(
+    reader,
+    conn: sqlite3.Connection,
+    feed_url: str,
+    entry_id: str,
+    *,
+    extract: Callable[[str], tuple[str, str]],
+    enqueue_archive: Callable[[str, str], None] | None = None,
+) -> dict:
+    """Re-fetch and re-extract a Lectio capture that has been filed onto a real
+    feed, replacing its stored content in place.
+
+    The counterpart to ``save_article(refresh_content=True)``, which only ever
+    touches ``lectio:saved``. Auto-filing moves a saved article onto the feed
+    that actually publishes it, so after filing the article is still a Lectio
+    capture (``added_by='user'``, entry id = source URL) but lives elsewhere —
+    and re-fetching it must update it there rather than re-saving, which would
+    resurrect the Uncategorized duplicate that filing removed.
+
+    Refuses feed-provided entries: their content is the publisher's and is
+    re-written by the next refresh, so replacing it would be both wrong and
+    silently undone.
+    """
+    result: dict = {
+        "ok": False,
+        "error": None,
+        "refreshed": False,
+        "extracted": False,
+        "feed_url": feed_url,
+        "entry_id": entry_id,
+        "title": None,
+    }
+
+    entry = reader.get_entry((feed_url, entry_id), None)
+    if entry is None:
+        result["error"] = "Entry not found."
+        return result
+    if str(getattr(entry, "added_by", "") or "") != "user":
+        result["error"] = "Re-fetch is only available for articles Lectio captured."
+        return result
+
+    result["title"] = entry.title or entry_id
+    source_url = normalize_article_url(str(getattr(entry, "link", "") or "") or entry_id)
+    if not source_url:
+        result["error"] = "This article has no usable source URL to re-fetch."
+        return result
+
+    try:
+        new_title, article_html = extract(source_url)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("refresh-filed: extraction failed for %s: %s", source_url, exc)
+        result["error"] = "Could not fetch the article."
+        return result
+    if not article_html:
+        result["error"] = "Nothing could be extracted from the page."
+        return result
+
+    try:
+        _replace_entry_content(reader, conn, entry_id, new_title, article_html, feed_url=feed_url)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("refresh-filed: content replace failed for %s: %s", entry_id, exc)
+        result["error"] = "Could not store the re-fetched content."
+        return result
+
+    if enqueue_archive is not None:
+        try:
+            enqueue_archive(feed_url, entry_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("refresh-filed: archive enqueue failed for %s: %s", entry_id, exc)
+
+    result["ok"] = True
+    result["refreshed"] = True
+    result["extracted"] = True
+    result["title"] = new_title or result["title"]
+    return result
 
 
 def save_article(

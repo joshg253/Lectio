@@ -2371,6 +2371,10 @@
     let contextPostFeedUrl = null;
     let contextPostEntryId = null;
     let contextPostRead = false;
+    // Whether the entry is a Lectio capture (added_by='user') rather than
+    // feed-provided. Gates Re-fetch, which follows the entry rather than the
+    // feed it sits on — auto-filing moves captures onto real feeds.
+    let contextPostCaptured = false;
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -5932,6 +5936,7 @@
           contextPostFeedUrl = entryPaneTitle.getAttribute('data-post-feed-url');
           contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
           contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
+          contextPostCaptured = entryPaneTitle.getAttribute('data-post-captured') === '1';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
           contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
           contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
@@ -5945,7 +5950,8 @@
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
+          setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
+              && Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
@@ -6286,6 +6292,7 @@
             contextPostFeedUrl = postItem.getAttribute('data-post-feed-url');
             contextPostEntryId = postItem.getAttribute('data-post-entry-id');
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
+            contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
             contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
@@ -6299,7 +6306,8 @@
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
+            setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
+                && Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
@@ -12649,6 +12657,7 @@
       contextPostFeedUrl = postItem.getAttribute('data-post-feed-url') || null;
       contextPostEntryId = postItem.getAttribute('data-post-entry-id') || null;
       contextPostRead = postItem.getAttribute('data-post-read') === '1';
+      contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
       contextPostLink = postItem.getAttribute('data-post-link') || '';
       return Boolean(contextPostFeedUrl && contextPostEntryId);
     }
