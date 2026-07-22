@@ -1155,6 +1155,13 @@ nobody references":
   external uses them, then drop.
 - **The dormant in-app star-mode tree/JS** that the Read Mode hijack bypasses —
   see Now #7, which lists it as a Read Mode follow-up. Same sweep.
+- **`LECTIO_SECURITY_MODE`** — set to `"multi"` by
+  `scripts/refresh_screenshots.py` for the Administration capture, but **nothing
+  in the app reads it**; `grep -rn SECURITY_MODE --include=*.py` matches only
+  that one line. A leftover from before auth became unconditional (`AUTH_ENABLED
+  = True`), so the admin instance is multi-user whether or not it is set.
+  Harmless but misleading — it reads as a supported switch. Found 2026-07-21
+  while repairing the screenshot tooling; drop the line.
 
 Other:
 - **Centralize schemeless-URL normalization** (Sourcery, PR #148): the
