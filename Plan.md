@@ -294,6 +294,43 @@ hatch from every one of the ~3,900 articles it moved — the surface most likely
 to need it. Now gated on the entry being a Lectio capture, with in-place update
 via `refresh_filed_article`. See ARCHITECTURE "Saved articles".
 
+**A third failure mode, found 2026-07-22: readability silently drops the lead
+image.** Distinct from both above — extraction succeeds, the prose is fine, but
+the article loses its opening art.
+
+Reproduced across three sibling posts on one site (Blood Meridian pt.1/2/3 on
+mattiaspettersson.com). All three wrap the cover identically:
+`<div class="separator"><a style="float:left"><img></a></div>` as the first
+child of `.entry-content`. Readability's *conditional cleaning* drops child divs
+that are text-free and link-heavy — the cover is 100% link, 0% text — but the
+thresholds scale with the page's overall text volume, so:
+
+| | extracted chars | lead image |
+|---|---|---|
+| pt-1 | 6,948 | **dropped** |
+| pt-2 | 4,155 | kept |
+| pt-3 | 8,870 | kept |
+
+Same code, same site, same markup, different side of the line. pt-1 also lost
+the styled pull-quote that followed the cover, so the loss isn't only images.
+
+**Two things this rules out, so don't re-test them:**
+- **Not the save method.** Josh's read was that the Readit extension captured
+  the image and the server-side save didn't. Running the *server-side* extractor
+  over all three URLs reproduces the split exactly, so the extension has no
+  advantage here and re-saving pt-1 by any route produces the same result.
+- **Not recoverable from metadata.** The page has no `og:image` and no
+  `twitter:image`, so the lead-image service has nothing to fall back on — the
+  image exists only inside the content readability just stripped.
+
+**Options, undecided:** (a) accept it; (b) a *lead-image rescue* — after
+extraction, if the raw page's first in-content image is absent from the result,
+prepend it. Fixes the class, but changes the pipeline for every save and needs
+care not to start dragging in logos and header art; (c) fold it into the
+raw/full-page save mode below, which sidesteps extraction entirely. **(c) is
+the natural home** — it's the same "readability made a bad call, let me keep
+the whole thing" need, and designing (b) separately risks two half-solutions.
+
 Why none of the existing escape hatches help *for the deterministic case* — all
 three call the same `extract_readability_article`, so they are deterministic
 re-runs of the same failure:
