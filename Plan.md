@@ -665,8 +665,24 @@ with no feed, most holding one or two articles.
   barred as a target), and probing showed many of its article URLs soft-404.
   Options are a real guitarplayer feed, "one-off saves", or deletion — Josh's
   call, not automatable.
-- **Match at import time.** `services/instapaper_import.py` should run the same
-  matcher so a future import lands filed instead of piling into Uncategorized.
+- **Match at import time — DONE 2026-07-22, but as a *report*, not a file.**
+  The import now runs the autofile matcher over just the rows it created and
+  says so: "N of these match feeds you already follow (M sites) — review under
+  Settings → Feeds → Utilities → File saved articles."
+
+  **Deliberately does not auto-file**, which is a change from how this item was
+  originally written. Filing exists behind a per-host review precisely because
+  "exactly one candidate feed" is not the same as a trustworthy one — the
+  guitarplayer.com stub would have swallowed 303 articles — and Josh's own
+  refinement was that confidence drives a *label*, never a selection. Filing
+  silently at import would bypass both. The value was never the automation; it
+  was that an import used to land in Uncategorized with nothing said, which is
+  how a 4,000-article backlog accumulates unnoticed.
+
+  `_current_autofile_plan(restrict_to=...)` was extracted from the preview route
+  so both share one assembly; the `restrict_to` filter keeps the count about
+  *this* import rather than the whole backlog. The matcher is wrapped so a
+  failure can never fail an import that has already committed.
 - **✅ SOLVED 2026-07-22: the orphaned star rows were the archive backfill.**
   Cause found and fixed; the sweep is still outstanding and needs the go-ahead.
 

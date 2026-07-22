@@ -22599,22 +22599,21 @@ def _autofile_excluded_targets(feed_urls: Iterable[str], conn=None) -> frozenset
     return frozenset(excluded)
 
 
-@app.get("/saved/autofile/preview")
-def preview_saved_autofile():
-    """Propose a home feed for each unfiled saved article, grouped by host.
+def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[dict], list[dict], dict]:
+    """Assemble the autofile plan for the current user.
 
-    Read-only. Saved articles imported from a read-later service are mostly
-    articles from feeds already subscribed to, so they can be filed onto their
-    real feed — which also collapses cross-feed duplicates, since the move
-    matches into the target by GUID else normalized link.
+    Returns ``(plan, marked, titles)`` — the worklist, the clusters whose host
+    the user has marked "not a feed" (settled business, reported separately),
+    and feed_url → display title.
 
-    The client reviews and approves per host; see services/saved_autofile for
-    why a lone candidate feed isn't automatically a trustworthy one.
+    *restrict_to* limits the saved articles considered to those entry ids, which
+    is how the Instapaper importer reports what a fresh import could file
+    without re-scanning the whole backlog.
     """
     saved_url = saved_articles_service.SAVED_FEED_URL
     with get_reader() as reader:
         if reader.get_feed(saved_url, None) is None:
-            return JSONResponse({"plan": [], "totals": saved_autofile_service.plan_totals([])})
+            return [], [], {}
         titles = {}
         # A feed declares its host twice: its own URL, and the site it
         # advertises. Both count — a FeedBurner feed's URL host says nothing
@@ -22647,7 +22646,7 @@ def preview_saved_autofile():
             for i, l in db.execute(
                 "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
             )
-            if str(i) in kept
+            if str(i) in kept and (restrict_to is None or str(i) in restrict_to)
         ]
         feed_links = [
             (str(f), str(l))
@@ -22669,6 +22668,22 @@ def preview_saved_autofile():
     # reappearing unresolved on every pass. Reported so they can be reviewed.
     marked = [c for c in plan if c["host"] in non_feed]
     plan = [c for c in plan if c["host"] not in non_feed]
+    return plan, marked, titles
+
+
+@app.get("/saved/autofile/preview")
+def preview_saved_autofile():
+    """Propose a home feed for each unfiled saved article, grouped by host.
+
+    Read-only. Saved articles imported from a read-later service are mostly
+    articles from feeds already subscribed to, so they can be filed onto their
+    real feed — which also collapses cross-feed duplicates, since the move
+    matches into the target by GUID else normalized link.
+
+    The client reviews and approves per host; see services/saved_autofile for
+    why a lone candidate feed isn't automatically a trustworthy one.
+    """
+    plan, marked, _titles = _current_autofile_plan()
     # entry_ids are only needed server-side on apply; sending 4k of them per
     # host would bloat the preview for no benefit.
     slim = [{k: v for k, v in c.items() if k != "entry_ids"} for c in plan]
@@ -24879,6 +24894,27 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
     if summary["tagged"]:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
+
+    # Run the autofile matcher over just what we imported, so the summary can
+    # say how much of it belongs to feeds already subscribed to. An import that
+    # lands silently in Uncategorized is how a 4,000-article backlog gets built
+    # without anyone noticing.
+    #
+    # Deliberately reports rather than files. "Exactly one candidate feed" is
+    # not the same as a trustworthy one — guitarplayer.com's only candidate was
+    # a scraped single-article stub that would have swallowed 303 articles — so
+    # filing stays behind the per-host review in Settings → Feeds, where the
+    # evidence for each target is visible and nothing is pre-checked.
+    try:
+        imported_ids = {bm.url for bm in plan}
+        matched, _marked, _titles = _current_autofile_plan(restrict_to=imported_ids)
+        totals = saved_autofile_service.plan_totals(matched)
+        summary["filable"] = totals["confident_articles"]
+        summary["filable_hosts"] = totals["confident_hosts"]
+    except Exception:  # noqa: BLE001 — a reporting extra must never fail an import
+        LOGGER.exception("instapaper import: autofile match failed")
+        summary["filable"] = 0
+        summary["filable_hosts"] = 0
     return summary
 
 
@@ -24900,6 +24936,14 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
         if summary["tagged"]:
             bits.append(f"{summary['tagged']} tagged")
         msg = "Instapaper import: " + ", ".join(bits) + ". Article text is being fetched in the background."
+        if summary.get("filable"):
+            # Signpost the review rather than filing silently — see
+            # _import_instapaper_for_current_user for why this doesn't auto-file.
+            msg += (
+                f" {summary['filable']} of these match feeds you already follow"
+                f" ({summary['filable_hosts']} site(s)) — review under"
+                " Settings → Feeds → Utilities → File saved articles."
+            )
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 

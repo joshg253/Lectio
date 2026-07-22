@@ -82,7 +82,9 @@ The short version:
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later
   library built from feeds; an **Instapaper CSV import**
-  brings your whole library over with tags and archive state.
+  brings your whole library over with tags and archive state — and tells you how
+  much of it belongs to feeds you already follow, so a fresh import doesn't
+  quietly become an unfiled backlog.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).
