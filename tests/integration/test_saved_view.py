@@ -105,9 +105,10 @@ def test_saved_unread_count_counts_only_unread_starred(configured):
     assert main.get_saved_unread_count() == 0
 
 
-def test_search_uses_fts_index_when_ready(configured):
-    """Search resolves via reader's FTS index (fast path) once built; the
-    match must work beyond the newest-N window semantics of the old scan."""
+def test_search_matches_all_terms(configured):
+    """Search resolves in SQL (_search_entry_keys_in_sql) rather than reader's
+    FTS index, which is retired. Terms AND together, and the match must work
+    beyond the newest-N window semantics of the old scan."""
     with main.get_reader() as reader:
         reader.add_entry({
             "feed_url": FEED,
@@ -115,19 +116,15 @@ def test_search_uses_fts_index_when_ready(configured):
             "title": "The bottle burger viral puzzle",
             "link": "https://example.test/bottle",
         })
-        reader.enable_search()
-        reader.update_search()
-    main.mark_search_index_ready()
-    try:
-        posts = main.list_entries_for_feeds({FEED}, search_query="bottle burger", read_filter="all")
-        assert [p["id"] for p in posts] == ["searchable"]
-        # No cross-term false positives.
-        assert main.list_entries_for_feeds({FEED}, search_query="bottle zebra", read_filter="all") == []
-    finally:
-        main._search_index_ready.clear()
+    posts = main.list_entries_for_feeds({FEED}, search_query="bottle burger", read_filter="all")
+    assert [p["id"] for p in posts] == ["searchable"]
+    # No cross-term false positives.
+    assert main.list_entries_for_feeds({FEED}, search_query="bottle zebra", read_filter="all") == []
 
 
-def test_search_falls_back_to_scan_before_index_ready(configured):
-    main._search_index_ready.clear()
+def test_search_needs_no_index_to_be_built(configured):
+    """The old fast path only engaged once a background build had populated the
+    index; searching before that silently fell back to a full scan. There is no
+    such warm-up any more — a fresh install searches at full speed."""
     posts = main.list_entries_for_feeds({FEED}, search_query="post e1", read_filter="all")
     assert any(p["id"] == "e1" for p in posts)

@@ -215,12 +215,17 @@ the problem. Both search surfaces now share a predicate, so a Feeds search
 reaches article text like Saved does (`coffee` 833 → 1,237 hits) and inherits
 the same raw-HTML caveat. `_search_entries_fts` and `_fts_query` were deleted.
 
-**Follow-up: nothing reads the FTS index now.** `search_entries` has no callers,
-but `update_search()` is still called on every save/refresh to keep the index
-fresh — write cost for an index no query touches. Either drop that maintenance
-(and the index) or keep it deliberately as an option for a future ranked search;
-right now it is neither. Small, self-contained, and needs a decision rather than
-investigation.
+**FTS index retired — DONE 2026-07-22.** Nothing read it, and maintaining it
+cost 1.3ms per new entry on every refresh plus **564MB** on disk (against a
+743MB reader DB). No longer built, enabled or updated; the startup index-build
+thread is gone too, so a fresh install stops spending its first minutes walking
+every entry. `scripts/drop_search_index.py` reclaims the space.
+
+Worth remembering, because it is a trap: **`disable_search()` does not reclaim
+anything.** The DROPs go to the WAL and SQLite never shrinks a file on its own,
+so the first run *grew* usage to 564MB index + 567MB WAL before the script
+learned to checkpoint and VACUUM (index → 4KB). Any future "drop a big derived
+table" work needs the same follow-through.
 
 The `coffee` jump (28 → 406 posts) is the second half: Saved search previously
 matched only metadata, never the article text, so a phrase from inside a saved

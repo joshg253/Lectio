@@ -1828,28 +1828,14 @@ async def lifespan(app: FastAPI):
     if backfill_disabled:
         LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping FTS build, scheduled refresh, and backfill threads")
 
-    # Build reader's FTS search index off the startup path (the first build
-    # walks every entry — minutes on a large library; incremental afterwards).
-    # Searches fall back to the legacy scan until each user's index is ready.
-    def _build_search_indexes() -> None:
-        # reader's HTML-stripping emits spurious bs4 "looks like a URL/filename"
-        # warnings for short text fields — one per entry is log spam at 100k.
-        import warnings as _warnings
-        from bs4 import MarkupResemblesLocatorWarning as _MRLW
-        _warnings.filterwarnings("ignore", category=_MRLW)
-
-        def _one() -> None:
-            try:
-                with get_reader() as reader:
-                    reader.enable_search()
-                    reader.update_search()
-                mark_search_index_ready()
-                LOGGER.info("[search] FTS index ready for %s", tenancy.current_user_id())
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("[search] FTS index build failed for %s", tenancy.current_user_id())
-        _for_each_background_user("search index build", _one)
-    if not backfill_disabled:
-        threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
+    # reader's FTS index is no longer built or maintained: both search surfaces
+    # resolve in SQL (_search_entry_keys_in_sql, _filter_star_keys_by_search)
+    # because search_entries builds a highlighted snippet per result, which
+    # measured at ~95% of a 10-20s search. Keeping the index cost 1.3ms per new
+    # entry on every refresh plus a file about the size of the reader DB itself
+    # (564MB against 743MB on the live library) — all of it for an index no
+    # query touched. scripts/drop_search_index.py reclaims it on an existing
+    # install; a fresh one never creates it.
 
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
@@ -10313,22 +10299,13 @@ def _display_title(entry) -> str:
     return ""
 
 
-# Per-user "FTS index is built" flags: searches use reader's search index
-# once the startup builder (or a refresh update) has populated it; before
-# that they fall back to the legacy full-scan.
-_search_index_ready: dict[str, bool] = {}
-
-
-def mark_search_index_ready() -> None:
-    _search_index_ready[tenancy.current_user_id()] = True
-
-
-# Nothing reads reader's FTS index any more: both search surfaces resolve in
-# SQL (_search_entry_keys_in_sql, _filter_star_keys_by_search) because
-# search_entries builds a highlighted snippet per result, which measured at
-# ~95% of a 10-20s search. `_search_index_ready` still gates the incremental
-# `update_search()` calls that keep the index fresh — see the Plan's note about
-# retiring that maintenance now that the index is unread.
+# reader's FTS index is retired. Both search surfaces resolve in SQL
+# (_search_entry_keys_in_sql for the Feeds view, _filter_star_keys_by_search for
+# Kept/Saved) because search_entries builds a highlighted snippet per result,
+# which measured at ~95% of a 10-20s search. Nothing queries the index, so it is
+# no longer built or updated: that cost 1.3ms per new entry on every refresh and
+# a file roughly the size of the reader DB (564MB against 743MB live).
+# scripts/drop_search_index.py reclaims the space on an existing install.
 
 
 def _filter_star_keys_by_search(
@@ -23480,13 +23457,6 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
         invalidate_problematic_feeds_cache()
     if result.get("ok") and not result.get("duplicate"):
         invalidate_unread_counts_cache()
-    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
-        # Make the save searchable immediately (incremental; guarded by the
-        # ready flag so this can never trigger the expensive first build).
-        try:
-            reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[search] post-save index update failed: %s", exc)
     return result
 
 
@@ -23503,11 +23473,6 @@ def _refresh_captured_article_for_current_user(feed_url: str, entry_id: str) -> 
             extract=fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
-    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
-        try:
-            reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[search] post-refresh index update failed: %s", exc)
     return result
 
 
@@ -24838,11 +24803,6 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
     if summary["tagged"]:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
-    if _search_index_ready.get(tenancy.current_user_id()):
-        try:
-            reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[search] post-import index update failed: %s", exc)
     return summary
 
 

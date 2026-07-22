@@ -623,13 +623,9 @@ class FeedRefreshService:
         self.reapply_entry_date_overrides(feed_url_list)
         self.reapply_entry_title_overrides(feed_url_list)
         self.reapply_entry_link_overrides(feed_url_list)
-        # Keep reader's FTS index fresh (incremental — only changed entries).
-        try:
-            with self._get_reader() as reader:
-                if reader.is_search_enabled():
-                    reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning("[refresh] search index update failed: %s", exc)
+        # reader's FTS index is retired — both search surfaces resolve in SQL,
+        # so refresh no longer pays 1.3ms/entry to maintain an index nothing
+        # queries. See main._search_entry_keys_in_sql.
 
         if enhance:
             self.enhance_feeds(feed_url_list)

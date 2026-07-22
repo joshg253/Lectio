@@ -895,10 +895,24 @@ the scope goes into the query, so `LIMIT` applies to rows the user can actually
 see; above that it matches unscoped and the caller drops out-of-scope feeds — the
 same shape (and the same under-fill caveat) the FTS path had.
 
-**Nothing reads reader's FTS index any more.** Both surfaces resolve in SQL, so
-`search_entries` has no callers; `_search_index_ready` survives only to gate the
-incremental `update_search()` calls that keep the index current. Retiring that
-maintenance is a live follow-up — an unread index costs write time on every save.
+**reader's FTS index is retired.** Both surfaces resolve in SQL, so nothing
+called `search_entries` — and maintaining the index was not free: 1.3ms per new
+entry on every refresh (`update_search()` ran at the end of each refresh batch,
+on every save, and after imports), plus a file roughly the size of the reader DB
+itself — **564MB against 743MB** on the live library. It is no longer built,
+enabled, or updated, and the startup index-build thread is gone with it, so a
+fresh install no longer spends its first minutes walking every entry.
+
+`scripts/drop_search_index.py` reclaims the space on an existing install.
+`disable_search()` alone does *not* reclaim it: the DROPs land in the WAL and
+SQLite never shrinks a file on its own, so a naive drop briefly **doubles** disk
+use (measured: 564MB index + 567MB WAL). The script checkpoints and VACUUMs,
+taking the index to 4KB.
+
+The index is derived, not user data — `enable_search()` + `update_search()`
+rebuilds it from the entries table should a future ranked search want it. That
+rebuild walks every entry and takes minutes on a large library, which is why
+dropping it is a deliberate script rather than a startup side effect.
 
 **Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from Settings → Feeds → **Utilities**; the two duplicate scanners sit on their own **Dupes** tab, since both are long-running, produce long reviewable lists, and are worked in repeated passes rather than fired once). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
 
