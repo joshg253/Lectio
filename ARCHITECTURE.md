@@ -871,8 +871,7 @@ the survivors are hydrated: ~1.2s for the same queries.
 reader's own FTS index is deliberately **not** used for this. `search_entries`
 builds a highlighted snippet per result, measured at ~7.8ms/row — 76s for one
 common term across 133k entries — so routing the kept view through it was *worse*
-than the scan it replaced (97s end to end). The same cost is why a Feeds-view
-search still takes ~10s; that path is a separate, known target. The SQL predicate
+than the scan it replaced (97s end to end). The SQL predicate
 covers title, resolved feed title, feed URL, link, author, summary **and the
 stored content**, so a Saved search reaches the article's text — the point of a
 read-later archive. Content is matched as stored (raw HTML), so a markup-ish term
@@ -880,6 +879,26 @@ matches nearly everything; stripping tags would need a plain-text column
 maintained at ingest, which isn't worth a schema change yet. On any SQL error the
 helper returns `None` and the caller keeps the full key set and post-filters in
 Python, so a failure degrades to the old behavior instead of showing no posts.
+
+**Searching the Feeds view** (`_search_entry_keys_in_sql`) now works the same
+way, for the same reason. It previously used the FTS index, and the snippet cost
+above turned out to be ~95% of the time — measured on the live library (134k
+entries, 2,888 feeds): `search_entries` took 19.7s for `python` against 1.3s to
+hydrate the results. Narrowing to matching keys in SQL and hydrating only the
+survivors took the same search to **1.45s**, and `guitar` from 9.3s to 1.3s.
+
+Two consequences worth knowing. First, the two search surfaces now share a
+predicate, so they finally agree: a Feeds search reaches article text rather than
+only metadata (`coffee`: 833 → 1,237 hits), and inherits the same raw-HTML
+caveat. Second, when the selected feed set fits under SQLite's 999-variable limit
+the scope goes into the query, so `LIMIT` applies to rows the user can actually
+see; above that it matches unscoped and the caller drops out-of-scope feeds — the
+same shape (and the same under-fill caveat) the FTS path had.
+
+**Nothing reads reader's FTS index any more.** Both surfaces resolve in SQL, so
+`search_entries` has no callers; `_search_index_ready` survives only to gate the
+incremental `update_search()` calls that keep the index current. Retiring that
+maintenance is a live follow-up — an unread index costs write time on every save.
 
 **Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from Settings → Feeds → **Utilities**; the two duplicate scanners sit on their own **Dupes** tab, since both are long-running, produce long reviewable lists, and are worked in repeated passes rather than fired once). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
 

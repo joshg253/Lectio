@@ -199,8 +199,28 @@ only the survivors are hydrated.
 **A dead end worth not repeating: do not route this through reader's FTS index.**
 `search_entries` builds a highlighted snippet per result — ~7.8ms/row, 76s for
 one common term — so the FTS version measured *worse* (97s) than the scan it
-replaced. That same cost is why a **Feeds-view** search still takes ~10s; it sits
-on `_search_entries_fts` and is now the slowest search surface left. Open item.
+replaced. That same cost is why a **Feeds-view** search still took ~10s.
+**DONE 2026-07-22** — the Feeds view now uses the same SQL narrowing
+(`_search_entry_keys_in_sql`), measured on the live library (134k entries,
+2,888 feeds):
+
+| query | before | after |
+|---|---|---|
+| `python` | 21.0s | **1.45s** |
+| `guitar` | 9.3s | **1.26s** |
+| `coffee` | 4.6s | **1.35s** |
+
+Snippet-building was ~95% of it (19.7s of `python`'s 21.0s); hydration was never
+the problem. Both search surfaces now share a predicate, so a Feeds search
+reaches article text like Saved does (`coffee` 833 → 1,237 hits) and inherits
+the same raw-HTML caveat. `_search_entries_fts` and `_fts_query` were deleted.
+
+**Follow-up: nothing reads the FTS index now.** `search_entries` has no callers,
+but `update_search()` is still called on every save/refresh to keep the index
+fresh — write cost for an index no query touches. Either drop that maintenance
+(and the index) or keep it deliberately as an option for a future ranked search;
+right now it is neither. Small, self-contained, and needs a decision rather than
+investigation.
 
 The `coffee` jump (28 → 406 posts) is the second half: Saved search previously
 matched only metadata, never the article text, so a phrase from inside a saved

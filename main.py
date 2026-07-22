@@ -10323,31 +10323,12 @@ def mark_search_index_ready() -> None:
     _search_index_ready[tenancy.current_user_id()] = True
 
 
-def _fts_query(normalized_query: str) -> str:
-    """AND-of-quoted-tokens FTS5 query (quotes escaped) — mirrors the legacy
-    scan's all-terms-must-match semantics without exposing FTS operators."""
-    tokens = [t.replace('"', '""') for t in normalized_query.split()]
-    return " ".join(f'"{t}"' for t in tokens)
-
-
-def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], reader_read_filter):
-    """Resolve a search via reader's FTS index; None → caller falls back to
-    the scan (index not built yet, or the query broke FTS5 parsing)."""
-    if not _search_index_ready.get(tenancy.current_user_id()):
-        return None
-    try:
-        out = []
-        for r in reader.search_entries(_fts_query(normalized_query), read=reader_read_filter,
-                                       sort="recent", limit=2000):
-            if r.feed_url not in feed_urls:
-                continue
-            e = reader.get_entry((r.feed_url, r.id), None)
-            if e is not None:
-                out.append(e)
-        return out
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[search] FTS query failed, falling back to scan: %s", exc)
-        return None
+# Nothing reads reader's FTS index any more: both search surfaces resolve in
+# SQL (_search_entry_keys_in_sql, _filter_star_keys_by_search) because
+# search_entries builds a highlighted snippet per result, which measured at
+# ~95% of a 10-20s search. `_search_index_ready` still gates the incremental
+# `update_search()` calls that keep the index fresh — see the Plan's note about
+# retiring that maintenance now that the index is unread.
 
 
 def _filter_star_keys_by_search(
@@ -10416,6 +10397,88 @@ def _filter_star_keys_by_search(
         LOGGER.warning("star key search query failed, post-filtering in Python: %s", exc)
         return None
     return matched
+
+
+def _search_entry_keys_in_sql(
+    search_terms: list[str],
+    feed_urls: set[str],
+    reader_read_filter: bool | None,
+    limit: int,
+) -> list[tuple[str, str]] | None:
+    """Resolve a Feeds-view search in SQL. None on any error → caller falls
+    back to the Python scan.
+
+    The Feeds-view counterpart to `_filter_star_keys_by_search`, and it exists
+    for the same reason that one avoids reader's FTS: `search_entries` builds a
+    highlighted snippet per result. Measured on the live library (134k entries,
+    2,888 feeds), snippet-building is ~95% of the cost and the query itself is
+    almost free:
+
+    | query  | FTS + hydrate | this |
+    |--------|---------------|------|
+    | python | 19.7s + 1.3s  | 1.6s |
+    | guitar |  8.2s + 1.2s  | 1.1s |
+    | coffee |  4.1s + 0.5s  | 1.3s |
+
+    It also *finds more*: the haystack includes stored content, so a phrase from
+    inside an article matches instead of only its metadata (coffee: 833 → 1,237).
+    That is the same behavior Saved search already has, so the two surfaces now
+    agree — previously one searched article text and the other didn't.
+
+    Same known tradeoff as the Saved path, inherited deliberately: content is
+    matched as stored, i.e. raw HTML, so a markup-ish term ("span", "http")
+    matches nearly everything. Fixing that needs a plain-text column maintained
+    at ingest; not worth a schema change until a real search is hurt.
+    """
+    if not search_terms:
+        return None
+
+    def _lit(term: str) -> str:
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    haystack = (
+        "lower(COALESCE(e.title,'') || ' ' || COALESCE(f.user_title, f.title, '')"
+        " || ' ' || COALESCE(e.feed,'') || ' ' || COALESCE(e.link,'')"
+        " || ' ' || COALESCE(e.author,'') || ' ' || COALESCE(e.summary,'')"
+        " || ' ' || COALESCE(e.content,''))"
+    )
+    where = [f"{haystack} LIKE ? ESCAPE '\\'" for _ in search_terms]
+    params: list = [f"%{_lit(t)}%" for t in search_terms]
+
+    read_clause = {
+        True: "e.read = 1",
+        False: "(e.read IS NULL OR e.read != 1)",
+    }.get(reader_read_filter)
+    if read_clause:
+        where.append(read_clause)
+
+    # Scope to the selected feeds in SQL when they fit under SQLite's
+    # 999-variable limit, so LIMIT applies to rows the user can actually see.
+    # Above that, match unscoped and let the caller drop out-of-scope feeds —
+    # the same shape the FTS path had, and the same under-fill caveat.
+    scoped = len(feed_urls) <= 900
+    if scoped:
+        placeholders = ",".join("?" for _ in feed_urls)
+        where.append(f"e.feed IN ({placeholders})")
+        params.extend(feed_urls)
+
+    params.append(limit)
+    try:
+        conn = sqlite3.connect(f"file:{tenancy.reader_db_path()}?mode=ro", uri=True, timeout=10.0)
+        try:
+            rows = conn.execute(
+                "SELECT e.feed, e.id FROM entries e "
+                "LEFT JOIN feeds f ON f.url = e.feed "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY COALESCE(e.published, e.first_updated) DESC LIMIT ?",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[search] SQL search failed, falling back to scan: %s", exc)
+        return None
+    return [(str(r[0]), str(r[1])) for r in rows]
 
 
 def _sorted_star_key_window(
@@ -10630,14 +10693,21 @@ def list_entries_for_feeds(
                 if e is not None:
                     all_feed_entries.append(e)
         elif search_terms:
-            # Search fast path: reader's FTS5 index instead of scanning the
-            # whole library and building a haystack per entry (which took
-            # tens of seconds at ~100k entries). Falls back to the scan while
-            # the index is still building.
-            fts_entries = _search_entries_fts(reader, normalized_search_query, feed_urls, reader_read_filter)
-            if fts_entries is not None:
-                all_feed_entries = fts_entries
-                search_terms = []  # already matched by the index
+            # Search fast path: narrow to matching keys in SQL, then hydrate
+            # only the survivors. Replaces reader's FTS index, whose
+            # per-result highlighted snippet was ~95% of a ~10-20s search —
+            # see _search_entry_keys_in_sql. Falls back to the Python scan.
+            matched_keys = _search_entry_keys_in_sql(
+                search_terms, feed_urls, reader_read_filter, fetch_limit
+            )
+            if matched_keys is not None:
+                for furl, eid in matched_keys:
+                    if furl not in feed_urls:
+                        continue  # unscoped query (>900 feeds): drop out-of-scope
+                    e = reader.get_entry((furl, eid), None)
+                    if e is not None:
+                        all_feed_entries.append(e)
+                search_terms = []  # already matched in SQL
             else:
                 for entry in reader.get_entries(read=reader_read_filter):
                     if entry.feed_url not in feed_urls:
