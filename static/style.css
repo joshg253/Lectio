@@ -5133,6 +5133,9 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .saved-dedup-badge--dead { color: var(--danger, #c0392b); border-color: currentColor; }
 .saved-dedup-badge--alive { color: var(--accent, #2c7); border-color: currentColor; }
+/* Soft 404: served 200 but redirected to a section index. Amber, not red —
+   it's a URL-shape heuristic and never arms a delete, unlike a real 404. */
+.saved-dedup-badge--soft-dead { color: var(--warning, #b8860b); border-color: currentColor; }
 .saved-dedup-same-dest { margin-left: 0.4rem; }
 .saved-dedup-compare {
   display: grid;

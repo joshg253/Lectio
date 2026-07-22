@@ -809,6 +809,14 @@
       if (r.dead) {
         b.classList.add('saved-dedup-badge--dead');
         b.textContent = `dead (${r.status})`;
+      } else if (r.soft_dead) {
+        // 200, but the site redirected an article URL onto a section index —
+        // the page is gone and the server won't say so. Advisory only: this is
+        // a URL-shape guess, and _sdApplySelection arms on `dead` alone, so it
+        // never pre-checks a delete.
+        b.classList.add('saved-dedup-badge--soft-dead');
+        b.textContent = 'probably gone';
+        b.title = `Redirected to ${r.final_url} — the article URL no longer resolves to an article`;
       } else if (r.alive) {
         b.classList.add('saved-dedup-badge--alive');
         b.textContent = r.status === 200 ? 'alive' : `alive (${r.status})`;

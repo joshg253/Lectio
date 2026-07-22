@@ -22363,6 +22363,75 @@ _SAVED_DUP_CHECK_TIMEOUT = 8.0
 _SAVED_DUP_CHECK_PAUSE = 0.3  # between requests in one group — usually same host
 
 
+_SOFT_404_PATH_NAMES = frozenset({
+    "", "index", "index.html", "index.php", "index.htm", "home", "default.aspx",
+    "404", "not-found", "notfound", "error", "search", "blog", "news", "articles",
+})
+
+
+def _normalize_probe_path(url: str) -> list[str]:
+    """Path segments of *url*, lowercased, with empties and a trailing
+    index-file dropped — the shape used to compare a redirect's start and end."""
+    try:
+        path = urlparse(url).path or "/"
+    except ValueError:
+        return []
+    segs = [s.lower() for s in path.split("/") if s]
+    if segs and segs[-1] in {"index.html", "index.htm", "index.php", "default.aspx"}:
+        segs.pop()
+    return segs
+
+
+def _looks_like_soft_404(original: str, final: str) -> bool:
+    """True if a 200 response looks like the article is gone and the site
+    quietly redirected to an index instead.
+
+    `_check_saved_url` only counts 404/410, so this whole class reads as alive:
+    probing 8 guitarplayer.com articles returned 200 for all of them while 4 had
+    been redirected to the bare `/lessons` index. The article is gone; the site
+    just won't say so.
+
+    Deliberately narrow — it fires only when a redirect *lost* path depth, i.e.
+    the destination is an ancestor of where we started (or the root, or an
+    obviously index-ish name). A redirect that merely reshapes a URL at the same
+    depth (`/2019/post-name` → `/blog/post-name`) is a site reorganization, not
+    a soft 404, and must not trip this: it is the case where the article is
+    still there. Same-page redirects (http→https, adding `www`, adding a
+    trailing slash) never count, since the path is unchanged.
+    """
+    try:
+        o_host = (urlparse(original).netloc or "").lower().removeprefix("www.")
+        f_host = (urlparse(final).netloc or "").lower().removeprefix("www.")
+    except ValueError:
+        return False
+    # A cross-domain redirect is a migration or a parking page — too ambiguous
+    # to call from the URL alone, and not what this is for.
+    if o_host != f_host:
+        return False
+
+    o_segs = _normalize_probe_path(original)
+    f_segs = _normalize_probe_path(final)
+    # Needs an article-shaped starting point (2+ segments) to have lost
+    # anything: probing a section page says nothing about a missing article.
+    if len(o_segs) < 2 or f_segs == o_segs:
+        return False
+    if len(f_segs) >= len(o_segs):
+        return False  # same depth or deeper — a reshape, not a disappearance
+    # Landed on the root.
+    if not f_segs:
+        return True
+    # Collapsed onto a top-level section page. This is the observed shape and
+    # the ancestor test misses it, because sites redirect *across* sections:
+    # guitarplayer.com sends /technique/<article> to /lessons, so the
+    # destination shares no prefix with the original and isn't named like an
+    # index either. A single remaining segment on the same host is a section
+    # landing page, not an article.
+    if len(f_segs) == 1:
+        return True
+    # Deeper destination that is still a strict ancestor, or index-ish.
+    return o_segs[:len(f_segs)] == f_segs or f_segs[-1] in _SOFT_404_PATH_NAMES
+
+
 def _check_saved_url(url: str) -> dict:
     """Liveness probe for one saved article URL. Honest UA, SSRF-guarded,
     redirects followed with per-hop validation. Never raises.
@@ -22370,7 +22439,12 @@ def _check_saved_url(url: str) -> dict:
     Classification is deliberately conservative: only 404/410 count as dead
     (the keeper auto-flip acts on it); 403/429/5xx are bot-walls or hiccups,
     not proof the page is gone. A HEAD failure is retried once as a GET —
-    some servers reject or mishandle HEAD but serve the page fine."""
+    some servers reject or mishandle HEAD but serve the page fine.
+
+    `soft_dead` is reported separately and never folded into `dead`: it is a
+    URL-shape heuristic (see `_looks_like_soft_404`), and `dead` is what arms a
+    deletion. Same rule as the dupe scan's probe arming — a guess may inform the
+    user, never pre-check a destructive box."""
     headers = {"User-Agent": LECTIO_HONEST_USER_AGENT}
     status: int | None = None
     final_url = url
@@ -22382,14 +22456,16 @@ def _check_saved_url(url: str) -> dict:
                 resp = url_guard.safe_get(client, url)
             status, final_url = resp.status_code, str(resp.url)
     except url_guard.UnsafeURLError:
-        return {"status": None, "alive": False, "dead": False, "final_url": url, "error": "unsafe URL"}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
+                "final_url": url, "error": "unsafe URL"}
     except Exception as exc:  # noqa: BLE001 — DNS failure, timeout, TLS, ...
-        return {"status": None, "alive": False, "dead": False, "final_url": url,
-                "error": type(exc).__name__}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
+                "final_url": url, "error": type(exc).__name__}
     return {
         "status": status,
         "alive": status < 400,
         "dead": status in (404, 410),
+        "soft_dead": status < 400 and _looks_like_soft_404(url, final_url),
         "final_url": final_url,
         "error": None,
     }

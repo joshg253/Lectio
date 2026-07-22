@@ -376,6 +376,20 @@ reachable both at save time and as a per-entry "re-save without extraction" so
 already-bad captures can be fixed in place. Related to #10 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
+### 2a. Backups: retention is count-based and size-blind
+
+`scripts/backup_databases.py --keep 5` means five generations of an **8.4GB**
+starred archive — ~40GB on a 72GB disk. Two safety backups taken during the
+2026-07-22 session took the disk to **98% (1.9GB free)** on their own; deleting
+the older set brought it back to 86%. Nothing schedules backups (no cron), so
+this only bites when someone runs it repeatedly — which is exactly what a busy
+session does.
+
+Wants a size budget rather than a count: `--max-bytes`, or a `--keep` default
+that drops to 2 once a source is over a GB. Also worth noting the archive grew
+7.2 → 7.9GB overnight capturing 3,581 retro-archive pages, so the number this
+is sized against keeps moving.
+
 ### 2b. Dead feed-redirector links — investigated 2026-07-22, automation exhausted
 
 Not a new item; recording the measurement so nobody re-investigates. Every
@@ -757,13 +771,29 @@ with no feed, most holding one or two articles.
     nesting in `sanitize_html`, which already special-cases `<svg>`).
   - A `data:` image dodges the parser entirely but Lectio's sanitizer strips
     data URIs from `src`, so that is not an escape hatch either.
-- **Soft-404s are invisible to the dead-link checker.** Probing 8 guitarplayer
-  articles: all returned **200**, but 4 had been redirected to the bare
-  `/lessons` index — the article is gone and the site answers 200 for it.
-  `_check_saved_url` only counts 404/410 as dead, so this whole class reads as
-  alive. Detecting it needs a "redirected to a URL much shorter than the
-  original / to a known index path" heuristic. Relevant to #1's dead-link
-  arming and to any retention pass.
+- **Soft-404 detection — DONE 2026-07-22.** `_check_saved_url` only counted
+  404/410, so a site that answers 200 for an article it no longer has read as
+  alive. `_looks_like_soft_404` adds a `soft_dead` flag, surfaced in the dupe
+  dialog as an amber **"probably gone"** badge.
+
+  **It is advisory and never arms a delete.** `_sdApplySelection` still keys on
+  `dead` alone, so a URL-shape guess can't pre-check a destructive box — same
+  rule as the rest of that dialog.
+
+  **The first implementation was wrong and live data caught it.** An
+  ancestor-only rule (`/lessons/x` → `/lessons`) matched the Plan's original
+  description but flagged **0 of 14** sampled guitarplayer URLs, because the
+  site redirects *across* sections: `/technique/<article>` → `/lessons`, which
+  shares no path prefix and isn't named like an index. The real signal is that a
+  2+ segment article path collapsed onto a **single-segment section page**.
+  After the fix, the same sample: **9 soft-404, 1 hard dead, 2 alive, 2
+  redirects correctly left alone** — one of those being
+  `/technique/exploring-ty-tabors-guitar-magic` →
+  `/lessons/exploring-ty-tabors-guitar-magic`, a genuine section move where the
+  article still exists. Same depth in, same depth out, so it isn't flagged.
+
+  Worth reusing that shape: **depth lost = content gone; depth preserved = URL
+  reshaped.** Relevant to any retention pass, and to the guitarplayer.com 303.
 
 Original analysis, kept for the reasoning:
 

@@ -285,7 +285,8 @@ def test_check_saved_url_classification(configured, monkeypatch):
 
     _patch_probes(monkeypatch, 200)
     assert main._check_saved_url(url) == {
-        "status": 200, "alive": True, "dead": False, "final_url": url, "error": None}
+        "status": 200, "alive": True, "dead": False, "soft_dead": False,
+        "final_url": url, "error": None}
 
     _patch_probes(monkeypatch, 404, get_status=404)  # HEAD 4xx is confirmed with a GET
     assert main._check_saved_url(url)["dead"] is True
