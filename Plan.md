@@ -272,7 +272,28 @@ Verified in a browser end to end: search and clear both work *after* an in-page
 nav, Enter still routes in-page rather than reloading, and a search started
 inside Archive stays in Archive.
 
-### 2. Saved capture quality — a raw / full-page save mode
+### 2. Saved capture quality — engine DONE 2026-07-22, UI pending
+
+`extract_full_page_article` / `fetch_full_page_article` capture the whole page
+body instead of readability-extracting it: same sanitizer and post-processing
+tail (factored into `_finalize_article_html`), but the body-selection step keeps
+everything rather than scoring it. Reachable now via
+`POST /articles/refresh-content` with `mode=full`, so a bad capture can be
+re-taken in place without extraction. **The save-time toggle and a Re-fetch menu
+variant wait for browser testing.**
+
+Verified on the two shapes below plus the live Blood Meridian article: full
+capture keeps the cover image and pull-quote readability drops (4 imgs / 7,238
+chars vs 2 / 5,774). Subsumes the lead-image-drop finding — that third failure
+mode is now fixable, not just diagnosed.
+
+The tradeoff is deliberate: on a blog-shaped page this keeps nav/sidebar chrome
+readability would strip, so it is the escape hatch for document-shaped pages,
+not the default. Only script/style/nav/header/footer are removed as never-content.
+
+The original analysis follows.
+
+
 
 **Every save path funnels through readability, so there is currently no way to get
 a fuller copy of a page it handles badly.** Verified 2026-07-21 against Josh's

@@ -10179,22 +10179,95 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             fallback = _bs4_content_fallback(raw_html)
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
-    article_html = html_sanitize.reapply_img_sizes(article_html, _img_sizes, base_url=source_url)
-    article_html = _dedupe_readability_images(article_html)
-    article_html = _strip_bandcamp_track_signature(article_html)
-    # Resolve any remaining relative src/href (esp. the BS4 fallback path,
-    # which returns its element verbatim) against the source page URL.
-    article_html = _absolutize_article_urls(article_html, source_url)
-    # Apply the same hotlink handling as the entry pane (runs after
-    # absolutization so host-matching sees absolute src): route known
-    # hotlink hosts through /api/img (e.g. fabiensanglard.net, whose .webp
-    # 403 a no-Referer browser load), and strip the Referer on the rest so
-    # foreign-Referer placeholder hosts serve the real image.
-    article_html = proxy_hotlink_images(article_html)
-    article_html = add_no_referrer_to_images(article_html)
+    article_html = _finalize_article_html(article_html, source_url, _img_sizes)
     if not article_html:
         raise ValueError("No readable article content was found.")
     return title, article_html
+
+
+def _finalize_article_html(article_html: str, source_url: str, img_sizes) -> str:
+    """Shared post-processing for captured article HTML, whether readability-
+    extracted or full-page. Reapplies image sizes captured from the raw page,
+    resolves relative URLs against the source, and applies the entry pane's
+    hotlink handling (route known hotlink hosts through /api/img; strip the
+    Referer elsewhere so foreign-Referer placeholder hosts serve the real
+    image)."""
+    article_html = html_sanitize.reapply_img_sizes(article_html, img_sizes, base_url=source_url)
+    article_html = _dedupe_readability_images(article_html)
+    article_html = _strip_bandcamp_track_signature(article_html)
+    article_html = _absolutize_article_urls(article_html, source_url)
+    article_html = proxy_hotlink_images(article_html)
+    article_html = add_no_referrer_to_images(article_html)
+    return article_html
+
+
+def _page_title_from_html(raw_html: str, source_url: str) -> str:
+    """Best page title without running readability's body extraction: og:title,
+    then twitter:title, then <title>, then the first <h1>, then the URL."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for attrs in ({"property": "og:title"}, {"name": "twitter:title"}):
+            tag = soup.find("meta", attrs=attrs)
+            if tag and tag.get("content", "").strip():
+                return tag["content"].strip()
+        if soup.title and soup.title.string and soup.title.string.strip():
+            return soup.title.string.strip()
+        h1 = soup.find("h1")
+        if h1 and h1.get_text(strip=True):
+            return h1.get_text(strip=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return source_url
+
+
+def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]:
+    """Capture the whole page body instead of readability-extracting it.
+
+    The escape hatch for pages readability handles badly: a DocBook-style export
+    whose prose is scattered across low-scoring sibling divs, or an article whose
+    lead image sits in a text-free floated div that readability's cleaning drops
+    (the Blood Meridian case). Those are structural extraction failures, not bad
+    input — re-running readability just reproduces them, so this takes the whole
+    <body> through the same sanitizer and post-processing instead.
+
+    The tradeoff is deliberate and the opposite of readability's: on a blog-
+    shaped page this keeps nav/sidebar/footer chrome, which readability would
+    have stripped. It is for the document-shaped pages where that chrome is
+    absent and the prose is the body. Only ``<script>``/``<style>``/``<nav>``/
+    ``<header>``/``<footer>`` are removed, as obvious non-content that is never
+    the article even on a document page."""
+    raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
+    title = _page_title_from_html(raw_html, source_url)
+
+    body_html = raw_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        body = soup.body or soup
+        body_html = str(body)
+    except Exception:  # noqa: BLE001
+        pass
+
+    article_html = html_sanitize.sanitize_html(body_html).strip()
+    article_html = _finalize_article_html(article_html, source_url, img_sizes)
+    if not article_html:
+        raise ValueError("The page had no usable content.")
+    return title, article_html
+
+
+def fetch_full_page_article(source_url: str) -> tuple[str, str]:
+    """Fetch *source_url* and return ``(title, body_html)`` without readability
+    extraction — see extract_full_page_article. Markdown is still converted."""
+    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
+    response.raise_for_status()
+    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(response.text, source_url)
+    return extract_full_page_article(response.text, source_url)
 
 
 def build_readability_response(source_url: str) -> HTMLResponse:
@@ -23555,6 +23628,7 @@ async def refresh_saved_article_content(
     request: Request,
     feed_url: str = Form(...),
     entry_id: str = Form(...),
+    mode: str = Form("readability"),
 ):
     """Re-fetch + re-extract a captured article's content, replacing the stored
     copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
@@ -23569,10 +23643,16 @@ async def refresh_saved_article_content(
       capture's id is the address it was first saved from and never changes, so
       a repointed article kept re-fetching the dead URL and reporting success.
 
+    *mode* ``"full"`` re-captures the whole page instead of readability-
+    extracting — for a page readability mangles (prose scattered across
+    low-scoring divs, or a lead image dropped by its cleaning). The save-path
+    fallback below is readability-only; a full-page re-capture needs an entry to
+    already exist, which after any real capture it does.
+
     The save path is kept only as a fallback for the case it is actually good
     at — a saved URL with no entry behind it yet."""
     result = await run_in_threadpool(
-        _refresh_captured_article_for_current_user, feed_url, entry_id
+        _refresh_captured_article_for_current_user, feed_url, entry_id, mode
     )
     if result.get("ok"):
         return JSONResponse({
@@ -23652,9 +23732,16 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
     return result
 
 
-def _refresh_captured_article_for_current_user(feed_url: str, entry_id: str) -> dict:
+def _refresh_captured_article_for_current_user(
+    feed_url: str, entry_id: str, mode: str = "readability"
+) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
-    with the current tenancy's reader/meta DB."""
+    with the current tenancy's reader/meta DB.
+
+    *mode* ``"full"`` captures the whole page body instead of readability-
+    extracting it — the escape hatch for pages readability mangles. See
+    extract_full_page_article."""
+    extract = fetch_full_page_article if mode == "full" else fetch_readability_article
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.refresh_captured_article(
@@ -23662,7 +23749,7 @@ def _refresh_captured_article_for_current_user(feed_url: str, entry_id: str) -> 
             conn,
             feed_url,
             entry_id,
-            extract=fetch_readability_article,
+            extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
     return result
