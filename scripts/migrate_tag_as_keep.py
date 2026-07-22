@@ -36,6 +36,7 @@ import sqlite3
 import sys
 import time
 from typing import Iterable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -77,7 +78,11 @@ def _is_youtube_feed(feed_url: str) -> bool:
     # YouTube entries (add-to-playlist → watch → retention-purge) are ephemeral
     # video links with legitimately short descriptions — pointless to archive or
     # Wayback-fill, and they inflate the "empty" count. Always excluded.
-    return "youtube.com/feeds/videos.xml" in feed_url or "youtube.com" in feed_url
+    #
+    # Matched on the parsed host via main's canonical check, which is an exact
+    # suffix test: the previous `"youtube.com" in feed_url` substring form also
+    # matched `youtube.com.evil.com` and `notyoutube.com`.
+    return main._is_youtube_host(urlparse(feed_url).netloc)
 
 
 def _kept_feed_urls() -> set[str]:
