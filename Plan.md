@@ -852,7 +852,23 @@ Note this also supersedes most of the single-post-page workaround (see "Single-p
 pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
 which is exactly what this does.
 
-### 5. Unstar items that carry tags (DB one-off, then a Utilities button)
+### 5. Unstar items that carry tags — service + API DONE 2026-07-22, UI pending
+
+Built as `services/unstar_tagged.py` (pure decision layer) +
+`GET /saved/unstar-tagged/preview` + `POST /saved/unstar-tagged`. Read-only
+preview returns per-tag counts, the archived_at-loss count, and suggested
+queue-like opt-outs; apply recomputes server-side under the given `keep_tags`
+and deletes only the star row. **No UI yet — deferred until browser testing is
+possible** (Josh was phone-only on 2026-07-22).
+
+Dry-run on live data at build time: **1,767 affected across 60 tags, 24 carrying
+archived_at, zero queue-like names.** The count includes the ~166 tag-created
+stars from the backfill bug (now indistinguishable from genuine star+tag), which
+is fine — this is exactly the cleanup that removes them.
+
+The rest of this entry is the original analysis, still valid as the reasoning.
+
+
 
 After the tag-as-keep flip a tag *is* a keep signal, so a star on an already-tagged
 item is redundant — it only clutters Saved, which should be the read-later queue.
