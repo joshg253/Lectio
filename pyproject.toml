@@ -9,7 +9,7 @@ dependencies = [
     "fastapi",
     "feedparser",
     "httpx",
-    "pillow>=11.0",
+    "pillow>=12.3.0",
     "smartcrop>=0.5",
     "itsdangerous",
     "jinja2",
