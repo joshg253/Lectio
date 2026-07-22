@@ -585,6 +585,14 @@ feeds must be excluded from the global caches.
   handler, all `href`/`xlink:href`, and any non-`url(#fragment)` reference, then
   serves it as a `data:image/svg+xml` URI (kept vector — no rasterization, no
   outbound fetch).
+  **Caveat (found 2026-07-21): most inline SVG never reaches this code intact.**
+  feedparser parses an HTML-escaped `<description>` as HTML, where a trailing
+  slash is meaningless, so `<rect/><circle/><path/>` arrives as
+  `<rect><circle><path>` — every shape nested inside a rect, which cannot
+  contain shapes. The sanitizer faithfully preserves that nesting and the
+  browser paints only the rect, so the feature degrades to a flat colour block.
+  Both sanitizers are innocent; the damage predates them. See Plan.md for the
+  repro and the fix options (re-parse SVG subtrees as XML at ingest).
 - **Reader-view embed re-injection** — `python-readability`'s `.summary()` strips
   *every* `<iframe>` during extraction (and sometimes keeps the lead image twice),
   so allowlisted players would vanish from Reader view. `build_readability_response`

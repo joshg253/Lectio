@@ -12,6 +12,14 @@ broken (#1–#2), organize the pile (#3–#6), finish the Instapaper-clone surfa
 command with a decay clock — run it any time, it doesn't queue behind anything.
 **#10–#12** are unrelated and genuinely deferrable.
 
+**Shipped 2026-07-21: #1, #1c and #4.** The duplicate workflow is safe and the
+scan returns nothing; Saved search went ~19s → ~1.2s and now matches article
+text; auto-filing took `lectio:saved` from **4,334 to 424**. **#5 and #6 are
+therefore unblocked** — and every number they were scoped against is now stale,
+because #4 rearranged exactly the sets they operate on. **Re-measure first.**
+Still open in the epic: **#2**, **#3**, **#5**, **#6**, **#7**, plus #1b's "not
+duplicates" persistence (demoted — see #1).
+
 **The cleanup order inside #3–#6 matters** and isn't arbitrary: auto-file (#4)
 merges curation between duplicate copies, which changes which entries carry stars
 and tags — so unstarring (#5) and dupe-scanning (#6) must come after it or they
@@ -22,15 +30,19 @@ runway at ~$5.83/month, so the Ino chain (#10) is **scheduled work, not urgent**
 start ~Dec 2026, leaving ~3 months to validate before renewal. The motivation is
 consolidation and ownership, not cost.
 
-**Measured 2026-07-21 (read-only against live data) — the numbers driving the
-epic's shape:**
+**⚠ Measured 2026-07-21 BEFORE the filing run — every row below is superseded.**
+Kept because it is the reasoning that shaped the epic, not because it is current.
+#4 has since taken `lectio:saved` from 4,334 to **424**, so the #5 and #6 rows in
+particular describe a set that no longer exists. Re-measure before acting on them.
+(The starred total also moved 11,050 → 13,895, but ~3,600 of that is the orphaned
+star rows logged under #4 — not real saves.)
 
 | finding | number | item |
 |---|---|---|
-| saved articles with no feed, but a host matching one you subscribe to | **3,974 of 4,334 (91.7%)** | #4 |
-| starred items that also carry a tag (star now redundant) | **1,643 (14.9% of starred)** | #5 |
-| duplicate groups the *current* scan can see (`lectio:saved` only) | **5** | #6 |
-| duplicate groups actually in the Saved **view** (all starred items) | **~490, ~520 extra copies** | #6 |
+| saved articles with no feed, but a host matching one you subscribe to | **3,974 of 4,334 (91.7%)** | #4 — done |
+| starred items that also carry a tag (star now redundant) | **1,643 (14.9% of starred)** | #5 — restale |
+| duplicate groups the *current* scan can see (`lectio:saved` only) | **5** | #6 — now 0 |
+| duplicate groups actually in the Saved **view** (all starred items) | **~490, ~520 extra copies** | #6 — restale |
 
 That last gap is the headline: **the dupe scan structurally cannot see the dominant
 duplicate class.** It scans `feed = 'lectio:saved'` only, but the Saved view shows
