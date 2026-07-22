@@ -23321,23 +23321,21 @@ async def refresh_saved_article_content(
     copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
     grabbed a fragment, or a broken import) without deleting and re-adding.
 
-    Works for any Lectio capture, not just ones still in the saved feed. Filing
-    an article onto its real feed (Settings → Feeds → File saved articles) used
-    to strip its re-fetch escape hatch, because both this route and the UI gated
-    on feed identity rather than on the entry being a capture — which took the
-    hatch away from every article the filer moved."""
-    if not saved_articles_service.is_saved_articles_feed(feed_url):
-        # Filed capture: re-extract in place on the feed it now lives on.
-        # Routing this through the save path instead would write into
-        # lectio:saved and re-create the duplicate that filing removed.
-        result = await run_in_threadpool(
-            _refresh_filed_article_for_current_user, feed_url, entry_id
-        )
-        if not result.get("ok"):
-            return JSONResponse(
-                {"ok": False, "error": result.get("error") or "Re-fetch failed."},
-                status_code=400,
-            )
+    Works for any Lectio capture, wherever it lives, and always re-fetches the
+    entry's current **link** rather than its id. Two bugs made that necessary:
+
+    - Gating on feed identity stripped the hatch from every article auto-filing
+      moved out of `lectio:saved` (~3,900 of them).
+    - Re-fetching by entry id ignored an **Edit URL** correction entirely: a
+      capture's id is the address it was first saved from and never changes, so
+      a repointed article kept re-fetching the dead URL and reporting success.
+
+    The save path is kept only as a fallback for the case it is actually good
+    at — a saved URL with no entry behind it yet."""
+    result = await run_in_threadpool(
+        _refresh_captured_article_for_current_user, feed_url, entry_id
+    )
+    if result.get("ok"):
         return JSONResponse({
             "ok": True,
             "refreshed": bool(result.get("refreshed")),
@@ -23345,8 +23343,16 @@ async def refresh_saved_article_content(
             "title": result.get("title"),
             "feed_url": feed_url,
             "entry_id": entry_id,
-            "url": entry_id,
+            "url": result.get("source_url") or entry_id,
         })
+    # Only the saved feed has a meaningful fallback: re-running the save path
+    # can create the entry when it is genuinely absent. Anywhere else, the
+    # in-place result is the answer.
+    if not saved_articles_service.is_saved_articles_feed(feed_url):
+        return JSONResponse(
+            {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+            status_code=400,
+        )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
     result = await run_in_threadpool(_save_article_for_current_user, url, None, True)
     if not result.get("ok"):
@@ -23414,12 +23420,12 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
     return result
 
 
-def _refresh_filed_article_for_current_user(feed_url: str, entry_id: str) -> dict:
+def _refresh_captured_article_for_current_user(feed_url: str, entry_id: str) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB."""
     reader = get_reader()
     with get_meta_connection() as conn:
-        result = saved_articles_service.refresh_filed_article(
+        result = saved_articles_service.refresh_captured_article(
             reader,
             conn,
             feed_url,

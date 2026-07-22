@@ -127,7 +127,7 @@ def _replace_entry_content(
                 time.sleep(0.5)
 
 
-def refresh_filed_article(
+def refresh_captured_article(
     reader,
     conn: sqlite3.Connection,
     feed_url: str,
@@ -136,15 +136,22 @@ def refresh_filed_article(
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
 ) -> dict:
-    """Re-fetch and re-extract a Lectio capture that has been filed onto a real
-    feed, replacing its stored content in place.
+    """Re-fetch and re-extract a Lectio capture in place, wherever it lives.
 
-    The counterpart to ``save_article(refresh_content=True)``, which only ever
-    touches ``lectio:saved``. Auto-filing moves a saved article onto the feed
-    that actually publishes it, so after filing the article is still a Lectio
-    capture (``added_by='user'``, entry id = source URL) but lives elsewhere —
-    and re-fetching it must update it there rather than re-saving, which would
-    resurrect the Uncategorized duplicate that filing removed.
+    Replaces ``save_article(refresh_content=True)`` as the re-fetch path, and
+    fixes two things that one gets wrong:
+
+    **It fetches the entry's current ``link``, not its id.** A capture's id is
+    the URL it was *first* saved from and is immutable — it keys the
+    ``saved_entries`` star row, manual tags and archive rows. So when Edit URL
+    repoints a dead or moved article, only ``link`` moves, and re-fetching by id
+    would keep hitting the dead address forever while reporting success.
+
+    **It works off ``lectio:saved`` too.** Auto-filing moves a saved article
+    onto the feed that actually publishes it, where it stays a capture
+    (``added_by='user'``) but no longer matches the saved-feed gate. Re-saving
+    such an article instead of updating it in place would resurrect the
+    Uncategorized duplicate that filing removed.
 
     Refuses feed-provided entries: their content is the publisher's and is
     re-written by the next refresh, so replacing it would be both wrong and
@@ -158,6 +165,7 @@ def refresh_filed_article(
         "feed_url": feed_url,
         "entry_id": entry_id,
         "title": None,
+        "source_url": None,
     }
 
     entry = reader.get_entry((feed_url, entry_id), None)
@@ -173,11 +181,12 @@ def refresh_filed_article(
     if not source_url:
         result["error"] = "This article has no usable source URL to re-fetch."
         return result
+    result["source_url"] = source_url
 
     try:
         new_title, article_html = extract(source_url)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("refresh-filed: extraction failed for %s: %s", source_url, exc)
+        LOGGER.warning("refresh-capture: extraction failed for %s: %s", source_url, exc)
         result["error"] = "Could not fetch the article."
         return result
     if not article_html:
@@ -187,7 +196,7 @@ def refresh_filed_article(
     try:
         _replace_entry_content(reader, conn, entry_id, new_title, article_html, feed_url=feed_url)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("refresh-filed: content replace failed for %s: %s", entry_id, exc)
+        LOGGER.warning("refresh-capture: content replace failed for %s: %s", entry_id, exc)
         result["error"] = "Could not store the re-fetched content."
         return result
 
@@ -195,7 +204,7 @@ def refresh_filed_article(
         try:
             enqueue_archive(feed_url, entry_id)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("refresh-filed: archive enqueue failed for %s: %s", entry_id, exc)
+            LOGGER.warning("refresh-capture: archive enqueue failed for %s: %s", entry_id, exc)
 
     result["ok"] = True
     result["refreshed"] = True

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import pytest
 
 from services.reader_api import ReaderApi
-from services.saved_articles import SAVED_FEED_URL, refresh_filed_article
+from services.saved_articles import SAVED_FEED_URL, refresh_captured_article
 
 REAL_FEED = "https://blog.example.com/feed/"
 ARTICLE = "https://blog.example.com/topics/how-to-focus"
@@ -97,7 +97,7 @@ def test_replaces_content_in_place_on_the_real_feed(reader, meta_conn):
     _add_filed_capture(reader, meta_conn)
     archived: list[tuple[str, str]] = []
 
-    result = refresh_filed_article(
+    result = refresh_captured_article(
         reader, meta_conn, REAL_FEED, ARTICLE,
         extract=_extract_ok,
         enqueue_archive=lambda f, e: archived.append((f, e)),
@@ -115,7 +115,7 @@ def test_never_writes_into_the_saved_feed(reader, meta_conn):
     Uncategorized copy that auto-filing removed."""
     _add_filed_capture(reader, meta_conn)
 
-    refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert reader.get_entry((SAVED_FEED_URL, ARTICLE), None) is None
     saved_rows = meta_conn.execute(
@@ -127,7 +127,7 @@ def test_never_writes_into_the_saved_feed(reader, meta_conn):
 def test_updates_the_title_when_not_pinned(reader, meta_conn):
     _add_filed_capture(reader, meta_conn)
 
-    refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert reader.get_entry((REAL_FEED, ARTICLE)).title == "The Real Article"
 
@@ -140,7 +140,7 @@ def test_a_pinned_title_survives_the_refresh(reader, meta_conn):
     )
     meta_conn.commit()
 
-    refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert reader.get_entry((REAL_FEED, ARTICLE)).title == "Stale Listing Page"
     # ...but the content still refreshed.
@@ -166,14 +166,14 @@ def test_refuses_a_feed_provided_entry(reader, meta_conn):
     )
     db.commit()
 
-    result = refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
 
     assert result["ok"] is False
     assert "captured" in result["error"]
 
 
 def test_missing_entry_is_reported(reader, meta_conn):
-    result = refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
     assert result["ok"] is False
     assert result["error"] == "Entry not found."
 
@@ -182,7 +182,7 @@ def test_a_failed_fetch_leaves_the_stored_copy_alone(reader, meta_conn):
     """A bad capture is still better than an empty one."""
     _add_filed_capture(reader, meta_conn)
 
-    result = refresh_filed_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_boom)
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_boom)
 
     assert result["ok"] is False
     assert "By Jesse Will" in _stored_content(reader, REAL_FEED, ARTICLE)
@@ -191,7 +191,7 @@ def test_a_failed_fetch_leaves_the_stored_copy_alone(reader, meta_conn):
 def test_an_empty_extraction_leaves_the_stored_copy_alone(reader, meta_conn):
     _add_filed_capture(reader, meta_conn)
 
-    result = refresh_filed_article(
+    result = refresh_captured_article(
         reader, meta_conn, REAL_FEED, ARTICLE, extract=lambda url: ("Title", "")
     )
 
