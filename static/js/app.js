@@ -769,18 +769,24 @@
     // ── Saved Articles duplicate scan ──────────────────────────────────────
     const SAVED_DEDUP_GROUP_CAP = 200;
 
-    const savedDedupGroupHtml = (g, preselect) => {
+    // Nothing is ever pre-checked: a scan result is a claim, not evidence, and
+    // a pre-armed "Check All" beside it turns one stray click into a bulk
+    // delete. Selection is armed only by a URL probe (see _sdApplySelection).
+    // `showKeeper` just labels the copy the keep-order would keep.
+    const savedDedupGroupHtml = (g, showKeeper) => {
       const rows = g.entries.map((e, i) => {
-        const keeper = preselect && i === 0;
+        const keeper = showKeeper && i === 0;
         const badges =
           `<span class="saved-dedup-badge${e.read ? '' : ' saved-dedup-badge--unread'}">${e.read ? 'read' : 'unread'}</span>` +
           (e.has_content ? '' : '<span class="saved-dedup-badge">no content</span>');
         const date = e.published ? `<span class="saved-dedup-date">${_mfEscape(String(e.published).slice(0, 10))}</span>` : '';
         return `<label class="dedup-pair-row saved-dedup-row">` +
           `<input type="checkbox" class="saved-dedup-check" data-entry-id="${_mfEscape(e.entry_id)}"` +
-          ` data-has-content="${e.has_content ? '1' : '0'}"${preselect && !keeper ? ' checked' : ''}>` +
+          ` data-has-content="${e.has_content ? '1' : '0'}">` +
           `<span class="dedup-tag${keeper ? ' keep-tag' : ''}">${keeper ? 'keep' : ''}</span>` +
-          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span> <span class="saved-dedup-row-badges">${badges}</span>${date}` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(e.title || e.link)}</span>` +
+          `<button type="button" class="saved-dedup-title-edit" title="Edit this copy's title">✎</button>` +
+          ` <span class="saved-dedup-row-badges">${badges}</span>${date}` +
           `<br><a class="dedup-url" href="${_mfEscape(e.link)}" target="_blank" rel="noopener noreferrer">${_mfEscape(e.link)}</a></span>` +
           `</label>`;
       }).join('');
@@ -789,7 +795,7 @@
         `<div class="saved-dedup-group-head">` +
         `<span class="saved-dedup-reasons">${_mfEscape(reasons)}</span>` +
         `<span class="saved-dedup-group-btns">` +
-        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and the kept copy switches to a live one">Check URLs</button>` +
+        `<button type="button" class="saved-dedup-check-urls-btn" title="Probe each copy's URL — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check URLs</button>` +
         `<button type="button" class="saved-dedup-compare-btn" title="Show the stored text of each copy side by side">Compare</button>` +
         `</span></div>` +
         rows + `</div>`;
@@ -813,26 +819,99 @@
       return b;
     };
 
-    // Flip the group's selection to keep a live copy — only when every
-    // currently-kept row turned out dead, and never at the cost of deleting
-    // the only copy with stored content.
-    const _sdFlipKeeper = (group, byId) => {
+    // Arm the group's selection from probe evidence: a copy is selected only
+    // when its URL came back dead (404/410). Everything else — alive,
+    // bot-walled, timed out, never checked — stays unselected, so an
+    // inconclusive probe can never queue a delete.
+    //
+    // Two groups deliberately select nothing: one where *every* copy is dead
+    // (link rot, not duplication — deleting all of them loses the article
+    // entirely), and the sole copy that still has stored content, which stays
+    // selectable only by hand even when its URL is gone.
+    // The possible tier never auto-arms at all; it is too weak a signal.
+    const _sdApplySelection = (group, byId) => {
       if (!group.closest('.saved-dedup-confirmed-list')) return;
       const info = [...group.querySelectorAll('.saved-dedup-row')].map(row => {
         const cb = row.querySelector('.saved-dedup-check');
-        return { row, cb, r: byId.get(cb.dataset.entryId), hasContent: cb.dataset.hasContent === '1' };
+        return { row, cb, dead: !!(byId.get(cb.dataset.entryId) || {}).dead,
+                 hasContent: cb.dataset.hasContent === '1' };
       });
-      const kept = info.filter(i => !i.cb.checked);
-      if (!kept.length || !kept.every(i => i.r && i.r.dead)) return;
-      const candidate = info.find(i => i.r && i.r.alive);  // rows are in keep-priority order
-      if (!candidate) return;
-      if (!candidate.hasContent && info.some(i => i.hasContent)) return;  // human call
+      const allDead = info.every(i => i.dead);
+      const withContent = info.filter(i => i.hasContent);
+      const soleContent = withContent.length === 1 ? withContent[0] : null;
+      for (const i of info) i.cb.checked = i.dead && !allDead && i !== soleContent;
+      // The keep tag always names the first copy that will actually survive.
+      const keeper = info.find(i => !i.cb.checked);
       for (const i of info) {
-        i.cb.checked = i !== candidate && !!(i.r && (i.r.alive || i.r.dead));
         const tag = i.row.querySelector('.dedup-tag');
-        tag.textContent = i === candidate ? 'keep' : '';
-        tag.classList.toggle('keep-tag', i === candidate);
+        if (!tag) continue;
+        tag.textContent = i === keeper ? 'keep' : '';
+        tag.classList.toggle('keep-tag', i === keeper);
       }
+    };
+
+    // Inline title repair. Saved titles drift when a publisher renames a post,
+    // and this dialog is where the drift shows up — two copies whose titles no
+    // longer describe the same thing, which is also what makes a real duplicate
+    // hard to recognize here. Reuses /entries/set-title, so the correction is
+    // pinned as an override and a later refresh can't clobber it.
+    const _sdEditTitle = (btn) => {
+      const main = btn.closest('.saved-dedup-main');
+      const span = main?.querySelector('.saved-dedup-title');
+      if (!span || main.querySelector('.saved-dedup-title-input')) return;
+      const entryId = btn.closest('.saved-dedup-row').querySelector('.saved-dedup-check').dataset.entryId;
+      const original = span.textContent;
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'saved-dedup-title-input';
+      input.value = original;
+      input.maxLength = 500;  // _ENTRY_TITLE_MAX_LEN
+      span.hidden = true;
+      btn.hidden = true;
+      span.after(input);
+      input.focus();
+      input.select();
+
+      let settled = false;
+      const close = (newTitle) => {
+        input.remove();
+        span.hidden = false;
+        btn.hidden = false;
+        if (newTitle) span.textContent = newTitle;
+      };
+      const cancel = () => { if (!settled) { settled = true; close(); } };
+      const save = async () => {
+        if (settled) return;           // Enter already saved; the blur is a no-op.
+        settled = true;
+        const title = input.value.trim();
+        if (!title || title === original) { close(); return; }
+        input.disabled = true;
+        try {
+          const resp = await fetch('/entries/set-title', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            credentials: 'same-origin',
+            body: new URLSearchParams({
+              feed_url: SAVED_FEED_URL, entry_id: entryId, title,
+            }).toString(),
+          });
+          const data = await resp.json();
+          if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+          close(data.title || title);
+        } catch (err) {
+          close();
+          alert('Could not update the title: ' + err);
+        }
+      };
+
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+      });
+      input.addEventListener('blur', save);
+      // The row is a <label>; keep clicks off the group's checkbox.
+      input.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); });
     };
 
     const _sdCheckGroupUrls = async (group) => {
@@ -860,10 +939,17 @@
         s.title = 'These URLs redirect to the same page';
         group.querySelector('.saved-dedup-reasons').after(s);
       }
-      _sdFlipKeeper(group, byId);
+      _sdApplySelection(group, byId);
     };
 
     document.getElementById('saved-dedup-results')?.addEventListener('click', async (ev) => {
+      const titleBtn = ev.target.closest('.saved-dedup-title-edit');
+      if (titleBtn) {
+        ev.preventDefault();      // inside a <label> — don't toggle the checkbox
+        ev.stopPropagation();
+        _sdEditTitle(titleBtn);
+        return;
+      }
       const checkBtn = ev.target.closest('.saved-dedup-check-urls-btn');
       if (checkBtn) {
         const group = checkBtn.closest('.saved-dedup-group');
@@ -915,8 +1001,8 @@
       group.appendChild(pane);
     });
 
-    const savedDedupListHtml = (groups, preselect) =>
-      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, preselect)).join('') +
+    const savedDedupListHtml = (groups, showKeeper) =>
+      groups.slice(0, SAVED_DEDUP_GROUP_CAP).map(g => savedDedupGroupHtml(g, showKeeper)).join('') +
       (groups.length > SAVED_DEDUP_GROUP_CAP
         ? `<p class="muted">Showing the first ${SAVED_DEDUP_GROUP_CAP} of ${groups.length} groups — re-run the scan after deleting these.</p>`
         : '');
@@ -953,7 +1039,7 @@
       okBtn.hidden = false;
       if (checkAllBtn) checkAllBtn.hidden = false;
       if (confirmed.length > 0) {
-        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — extra copies are preselected, keeping the copy with content, preferring https, then oldest:`;
+        intro.textContent = `Found ${confirmed.length} duplicate group(s) among ${data.scanned} saved articles — nothing is selected yet. "keep" marks the copy the scan would keep (has content, then https, then oldest); run Check URLs to select copies whose links are dead:`;
         confirmedList.innerHTML = savedDedupListHtml(confirmed, true);
       } else {
         intro.textContent = `No confirmed duplicates among ${data.scanned} saved articles.`;
@@ -967,6 +1053,213 @@
       } else {
         possibleSection.hidden = true;
       }
+    });
+
+    // ── Auto-file saved articles into their real feeds ─────────────────────
+    const _afRow = (c) => {
+      const id = `af-${c.host.replace(/[^a-z0-9.-]/gi, '_')}`;
+      // Feed titles are often deliberately unlike their URLs, so the URL is the
+      // only way to be sure which feed you're filing into — surface it on hover
+      // for each option and on the closed select.
+      //
+      // Two candidates can also carry the *same* title (a site's feed and its
+      // variant, or a blog and its companion channel), which made the choice
+      // impossible to make from the dropdown alone. When a title is shared, put
+      // the URL in the label itself so the options are never indistinguishable.
+      const titleCounts = {};
+      for (const x of c.candidates) titleCounts[x.title] = (titleCounts[x.title] || 0) + 1;
+      const optLabel = (x) => titleCounts[x.title] > 1 ? `${x.title} — ${x.feed_url}` : x.title;
+      const opts = c.candidates.map(x =>
+        `<option value="${_mfEscape(x.feed_url)}" title="${_mfEscape(x.feed_url)}"` +
+        `${x.feed_url === c.target_feed_url ? ' selected' : ''}>` +
+        `${_mfEscape(optLabel(x))} (${x.support})</option>`).join('');
+      // Nothing is ever pre-checked — this files thousands of rows, and the plan
+      // is worked through in passes. The badge says how much to trust each row
+      // so the strong ones are still easy to pick out by eye.
+      let note = '';
+      if (!c.target_feed_url) note = '<span class="saved-dedup-badge">no subscribed feed for this host</span>';
+      else if (c.ambiguous) note = `<span class="saved-dedup-badge">${c.candidates.length} candidate feeds — pick one</span>`;
+      else if (!c.confident) note = `<span class="saved-dedup-badge">weak match — only ${c.support} post(s) from this host</span>`;
+      else note = `<span class="saved-dedup-badge saved-dedup-badge--alive">strong match — ${c.support} posts from this host</span>`;
+      // Two different decisions, so two distinct labels: this one settles the
+      // *host* (its saves are genuine one-off captures and no feed will ever
+      // match), while "not a feed" below bars a *subscription* as a target.
+      const notFeed = `<button type="button" class="saved-autofile-notfeed" ` +
+        `data-host="${_mfEscape(c.host)}" title="These are one-off saved articles, not posts from a feed — stop listing this host">one-off saves</button>`;
+      return `<label class="dedup-pair-row saved-autofile-row">` +
+        `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
+        ` id="${id}"${c.target_feed_url ? '' : ' disabled'}>` +
+        `<span class="saved-autofile-count">${c.count}</span>` +
+        `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note} ${notFeed}` +
+        (c.candidates.length
+          ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
+            ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
+            // Some subscriptions are a single article URL that got added as a
+            // feed: right host, plausible title, completely wrong destination.
+            `<button type="button" class="saved-autofile-notfeed saved-autofile-badfeed"` +
+            ` data-feed="${_mfEscape(c.target_feed_url || '')}"` +
+            ` title="This subscription isn't really a feed — never offer it as a destination">not a feed</button>` +
+            `<span class="saved-autofile-url">${_mfEscape(c.target_feed_url || '')}</span>`
+          : '') +
+        `</span></label>`;
+    };
+
+    document.getElementById('saved-autofile-btn')?.addEventListener('click', async () => {
+      const results = document.getElementById('saved-autofile-results');
+      const intro = results.querySelector('.saved-autofile-intro');
+      const list = results.querySelector('.saved-autofile-list');
+      const okBtn = document.getElementById('saved-autofile-ok');
+      results.hidden = false;
+      intro.textContent = 'Scanning saved articles…';
+      list.innerHTML = '';
+      okBtn.hidden = true;
+      let data;
+      try {
+        const resp = await fetch('/saved/autofile/preview');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        intro.textContent = 'Scan failed: ' + err;
+        return;
+      }
+      const plan = data.plan || [];
+      const t = data.totals || {};
+      if (!plan.length) {
+        intro.textContent = 'No unfiled saved articles.';
+        return;
+      }
+      intro.textContent =
+        `${t.articles} saved article(s) across ${t.hosts} host(s) — nothing is selected. ` +
+        `${t.confident_articles} on ${t.confident_hosts} host(s) are a strong match; ` +
+        `${t.low_support_articles} weak, ${t.ambiguous_articles} ambiguous, ${t.unmatched_articles} with no subscribed feed.` +
+        (t.non_feed_hosts
+          ? ` ${t.non_feed_articles} article(s) on ${t.non_feed_hosts} host(s) are settled as one-off saves and hidden.`
+          : '');
+      const nf = data.non_feed || [];
+      list.innerHTML = plan.map(_afRow).join('') +
+        (nf.length
+          ? `<details class="saved-autofile-nonfeed"><summary>${nf.length} host(s) settled as one-off saves — not feed posts</summary>` +
+            nf.map(x => `<div class="saved-autofile-nfrow"><span class="saved-autofile-count">${x.count}</span> ` +
+              `<span class="saved-dedup-title">${_mfEscape(x.host)}</span> ` +
+              `<button type="button" class="saved-autofile-notfeed" data-host="${_mfEscape(x.host)}" data-unmark="1"` +
+              ` title="Put this host back in the worklist">undo</button></div>`).join('') +
+            `</details>`
+          : '');
+      okBtn.hidden = false;
+      _afSyncButton();
+    });
+
+    // The action is pinned to the bottom of a long list, so the selection isn't
+    // on screen when you press it — say what's about to happen on the button.
+    const _afSyncButton = () => {
+      const btn = document.getElementById('saved-autofile-ok');
+      if (!btn) return;
+      const rows = [...document.querySelectorAll('.saved-autofile-row')]
+        .filter(r => r.querySelector('.saved-autofile-check')?.checked);
+      const articles = rows.reduce(
+        (n, r) => n + Number(r.querySelector('.saved-autofile-count')?.textContent || 0), 0);
+      btn.textContent = rows.length
+        ? `File ${articles} article(s) from ${rows.length} host(s)`
+        : 'File selected';
+      btn.disabled = !rows.length;
+    };
+
+    document.getElementById('saved-autofile-results')?.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest?.('.saved-autofile-notfeed');
+      if (!btn) return;
+      ev.preventDefault();      // the row is a <label> — don't toggle its checkbox
+      ev.stopPropagation();
+      const unmark = btn.dataset.unmark === '1';
+      // Two different "not a feed" decisions share this control: barring a
+      // subscription as a destination, and settling a host that has none.
+      const badFeed = btn.classList.contains('saved-autofile-badfeed');
+      if (badFeed) {
+        const sel = btn.closest('.saved-dedup-main')?.querySelector('.saved-autofile-target');
+        const feed = sel ? sel.value : btn.dataset.feed;
+        if (!feed) return;
+        if (!confirm(`Never offer "${feed}" as a destination? ` +
+                     `The subscription itself is left alone.`)) return;
+      }
+      btn.disabled = true;
+      try {
+        const resp = await fetch(
+          badFeed ? '/saved/autofile/non-feed-subscription' : '/saved/autofile/non-feed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(badFeed
+            ? { feed_urls: [btn.closest('.saved-dedup-main')?.querySelector('.saved-autofile-target')?.value || btn.dataset.feed], marked: true }
+            : { hosts: [btn.dataset.host], marked: !unmark }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      } catch (err) {
+        btn.disabled = false;
+        alert('Could not update that host: ' + err);
+        return;
+      }
+      document.getElementById('saved-autofile-btn')?.click();  // re-scan
+    });
+
+    document.getElementById('saved-autofile-results')?.addEventListener('change', (ev) => {
+      if (ev.target.closest?.('.saved-autofile-check')) { _afSyncButton(); return; }
+      // Choosing a feed for a weak/ambiguous host is the approval for it.
+      const sel = ev.target.closest?.('.saved-autofile-target');
+      if (!sel) return;
+      const row = sel.closest('.saved-autofile-row');
+      const cb = row?.querySelector('.saved-autofile-check');
+      if (cb && !cb.disabled) cb.checked = true;
+      // Keep the visible URL and the hover title on the newly-picked feed.
+      sel.title = sel.value;
+      const shown = row?.querySelector('.saved-autofile-url');
+      if (shown) shown.textContent = sel.value;
+      _afSyncButton();
+    });
+
+    document.getElementById('saved-autofile-ok')?.addEventListener('click', async () => {
+      const rows = [...document.querySelectorAll('.saved-autofile-row')];
+      const hosts = rows.filter(r => r.querySelector('.saved-autofile-check')?.checked)
+        .map(r => ({
+          host: r.querySelector('.saved-autofile-check').dataset.host,
+          target_feed_url: r.querySelector('.saved-autofile-target')?.value || '',
+        }))
+        .filter(h => h.target_feed_url);
+      if (!hosts.length) { alert('Nothing selected.'); return; }
+      const total = rows.filter(r => r.querySelector('.saved-autofile-check')?.checked)
+        .reduce((n, r) => n + Number(r.querySelector('.saved-autofile-count')?.textContent || 0), 0);
+      if (!confirm(`File ${total} saved article(s) onto ${hosts.length} feed(s)? ` +
+                   `Stars, tags and read state move with them.`)) return;
+      const btn = document.getElementById('saved-autofile-ok');
+      btn.disabled = true;
+      // Filed in batches: one uncapped call over a big host runs past a minute
+      // and gets cut off in flight — the work lands but the reply never
+      // arrives, so the list looks untouched and the articles appear unmoved.
+      let done = 0, failed = 0, guard = 0;
+      for (;;) {
+        btn.textContent = done ? `Filing… ${done}/${total}` : 'Filing…';
+        let data;
+        try {
+          const resp = await fetch('/saved/autofile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hosts }),
+          });
+          data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        } catch (err) {
+          btn.disabled = false;
+          _afSyncButton();
+          alert(`Filing stopped after ${done} article(s): ` + err);
+          document.getElementById('saved-autofile-btn')?.click();
+          return;
+        }
+        done += data.moved || 0;
+        failed += data.failed || 0;
+        // A batch that moves nothing but still reports work left would spin.
+        if (!data.remaining || !data.moved || ++guard > 200) break;
+      }
+      btn.disabled = false;
+      alert(`Filed ${done} article(s).` + (failed ? ` ${failed} failed.` : ''));
+      document.getElementById('saved-autofile-btn')?.click();  // re-scan
     });
 
     // ── Purge old posts utility ────────────────────────────────────────────
@@ -11840,8 +12133,13 @@
       }).catch(() => {});
     });
 
-    const topbarSearchForm = document.querySelector('.posts-search-form');
-    topbarSearchForm?.addEventListener('submit', (event) => {
+    // Delegated for the same reason as the toolbar's buttons: an in-page
+    // navigation replaces the form node, and a listener bound to the old one
+    // would leave Enter falling through to a full page reload.
+    document.addEventListener('submit', (event) => {
+      const topbarSearchForm = event.target instanceof HTMLFormElement
+        ? event.target.closest('.posts-search-form') : null;
+      if (!topbarSearchForm) return;
       event.preventDefault();
 
       const targetUrl = new URL(topbarSearchForm.getAttribute('action') || '/', window.location.origin);
@@ -12973,14 +13271,47 @@
       searchInput.select();
     }
 
-    document.getElementById('toolbar-search-btn')?.addEventListener('click', () => {
-      const row = document.getElementById('toolbar-search-row');
-      if (row?.classList.contains('toolbar-search-hidden')) {
-        openSearchRow();
-        document.getElementById('topbar-search-input')?.focus();
-      } else {
-        closeSearchRow();
+    // Delegated, not bound to the toolbar's own nodes: an in-page navigation
+    // (loadScopePanesWithoutFullRefresh — every sidebar/folder/scope click)
+    // re-renders the toolbar, so a listener attached to #toolbar-search-btn
+    // dies with the node it was bound to. That is how the search button ended
+    // up doing nothing at all after the first in-page nav: no row, no request,
+    // no error. Anything wired to this toolbar has to be delegated.
+    const _syncSearchClear = () => {
+      const input = document.getElementById('topbar-search-input');
+      const clear = document.getElementById('topbar-search-clear');
+      if (!(input instanceof HTMLInputElement) || !clear) return;
+      clear.hidden = !input.value.trim();
+    };
+
+    document.addEventListener('click', (event) => {
+      if (event.target.closest?.('#toolbar-search-btn')) {
+        const row = document.getElementById('toolbar-search-row');
+        if (row?.classList.contains('toolbar-search-hidden')) {
+          openSearchRow();
+          document.getElementById('topbar-search-input')?.focus();
+        } else {
+          closeSearchRow();
+        }
+        return;
       }
+      // Clear returns to the same view without the query; the form's submit
+      // handler drops `q` and restores the pre-search read filter.
+      if (event.target.closest?.('#topbar-search-clear')) {
+        const input = document.getElementById('topbar-search-input');
+        const form = document.querySelector('.posts-search-form');
+        if (!(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) return;
+        input.value = '';
+        _syncSearchClear();
+        // The reload re-renders the toolbar with no query, so the row collapses
+        // and the magnifier reopens it — don't focus a node about to be replaced.
+        if (form.requestSubmit) form.requestSubmit();
+        else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+      }
+    });
+
+    document.addEventListener('input', (event) => {
+      if (event.target && event.target.id === 'topbar-search-input') _syncSearchClear();
     });
 
     function shouldHandleGlobalShortcut(event) {

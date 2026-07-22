@@ -65,6 +65,7 @@ from services import podcast_audio
 from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
+from services import saved_autofile as saved_autofile_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
@@ -3400,6 +3401,31 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Hosts the user has marked as never having a feed, so the saved-article
+        # auto-filer stops proposing them. Their saves are genuine one-off
+        # read-later captures — a cheat sheet, a one-time tutorial — not unfiled
+        # feed articles, and without this they reappear in every scan pass and
+        # never resolve.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS autofile_non_feed_hosts (
+                host TEXT PRIMARY KEY,
+                marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        # Subscriptions that aren't really feeds — a single article URL that got
+        # added as one, a scraped page. They stay subscribed (their entries are
+        # real saved reading) but must never be offered as a destination for
+        # filing, or the site's whole backlog lands in a one-article stub.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS non_feed_subscriptions (
+                feed_url TEXT PRIMARY KEY,
+                marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         # Dead feeds the user has triaged as "needs a replacement": updates are
         # disabled (we stop hitting them) and they move out of the Failing list
         # into a Needs-replacement worklist, but the feed + its entries/curation
@@ -4917,11 +4943,33 @@ def entry_effective_date(entry) -> datetime | None:
     return entry.published or entry.updated or entry.added
 
 
+_DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+
+
 def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
+    """Canonical comparison key for an article link.
+
+    The scheme and a leading ``www.`` are folded away: http/https and
+    www/non-www are the same article, and keeping them apart pushed real
+    duplicates into the saved scan's weaker "possible" tier whenever the URL
+    slug was too generic for `_safe_dedup_entry_slug` to rescue the pair
+    (``/index.html``, hyphen-free stubs). Only the host is lowercased — paths
+    are case-sensitive.
+
+    The result is a comparison key, not a URL: never fetch or display it.
+    """
     if not link:
         return None
-    normalized_link = str(link).split("#")[0].rstrip("/")
-    return normalized_link or None
+    normalized_link = str(link).split("#")[0].strip().rstrip("/")
+    if not normalized_link:
+        return None
+    # Protocol-relative links fold the same way a scheme'd one does.
+    stripped = _DEDUPE_SCHEME_RE.sub("", normalized_link).removeprefix("//")
+    host, sep, rest = stripped.partition("/")
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return f"{host}{sep}{rest}" or None
 
 
 def normalize_entry_title_for_dedupe(title: str | None) -> str:
@@ -10278,6 +10326,74 @@ def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], read
         return None
 
 
+def _filter_star_keys_by_search(
+    keys: set[tuple[str, str]], search_terms: list[str]
+) -> set[tuple[str, str]] | None:
+    """Narrow kept keys to those matching every search term, in SQL. None on
+    any error → caller keeps the full set and post-filters in Python.
+
+    Same technique as `_sorted_star_key_window`, for the same reason: joining
+    the keys against the entries table is milliseconds where hydrating them via
+    reader.get_entry is seconds. reader's own FTS index is deliberately *not*
+    used here — `search_entries` builds a highlighted snippet per result, which
+    measured at ~7.8ms/row (76s for one common term), so it costs far more than
+    the scan it would replace.
+
+    The predicate covers the Python haystack's fields (title, resolved feed
+    title, link, author, summary) and adds the stored content, so a Saved
+    search reaches the text of the article rather than only its metadata —
+    the point of a read-later archive, and cheap here (~60ms over 11k keys)
+    because it never leaves SQLite. Entry titles corrected via
+    /entries/set-title are written into reader's own title column, so overrides
+    are covered.
+
+    Content is matched as stored, i.e. raw HTML, so a markup-ish term ("span",
+    "http") matches nearly everything. Stripping tags would need a plain-text
+    column maintained at ingest; not worth a schema change until a real search
+    is hurt by it.
+    """
+    if not search_terms:
+        return keys
+    # LIKE wildcards in a user's search term are literals, not patterns.
+    def _lit(term: str) -> str:
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    haystack = (
+        "lower(COALESCE(e.title,'') || ' ' || COALESCE(f.user_title, f.title, '')"
+        " || ' ' || COALESCE(e.feed,'') || ' ' || COALESCE(e.link,'')"
+        " || ' ' || COALESCE(e.author,'') || ' ' || COALESCE(e.summary,'')"
+        " || ' ' || COALESCE(e.content,''))"
+    )
+    term_sql = " AND ".join(f"{haystack} LIKE ? ESCAPE '\\'" for _ in search_terms)
+    term_params = [f"%{_lit(t)}%" for t in search_terms]
+
+    matched: set[tuple[str, str]] = set()
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            key_list = list(keys)
+            # 2 bound vars per key; stay under SQLite's 999-variable limit.
+            for i in range(0, len(key_list), 450):
+                chunk = key_list[i:i + 450]
+                values = ",".join("(?,?)" for _ in chunk)
+                params = [v for pair in chunk for v in pair] + term_params
+                rows = conn.execute(
+                    f"WITH k(feed, id) AS (VALUES {values}) "
+                    f"SELECT e.feed, e.id FROM entries e "
+                    f"JOIN k ON e.feed = k.feed AND e.id = k.id "
+                    f"LEFT JOIN feeds f ON f.url = e.feed "
+                    f"WHERE {term_sql}",
+                    params,
+                ).fetchall()
+                matched.update((str(r[0]), str(r[1])) for r in rows)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("star key search query failed, post-filtering in Python: %s", exc)
+        return None
+    return matched
+
+
 def _sorted_star_key_window(
     keys: set[tuple[str, str]],
     *,
@@ -10462,13 +10578,24 @@ def list_entries_for_feeds(
             # shows nothing. kept_entries_set (star OR tag) is already restricted
             # to the view's feeds; point-lookup exactly those keys instead.
             star_keys: Iterable[tuple[str, str]] = kept_entries_set
-            if len(kept_entries_set) > fetch_limit and not search_terms and not normalized_selected_tag:
+            if search_terms:
+                # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
+                # `elif search_terms` fast path below, so the Saved view was the
+                # one place a search never took a fast path at all: it hydrated
+                # every kept key and filtered in Python — ~11k get_entry calls,
+                # measured at 28s per search on a real library, which reads as a
+                # search box that does nothing.
+                matched_keys = _filter_star_keys_by_search(kept_entries_set, search_terms)
+                if matched_keys is not None:
+                    star_keys = matched_keys
+                    search_terms = []  # already matched in SQL
+            if len(star_keys) > fetch_limit and not search_terms and not normalized_selected_tag:
                 # Big backlog: hydrating every kept key costs seconds (6k
                 # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
                 # the raw keys and hydrate only the visible window. Skipped for
                 # tag/search, which post-filter and need the whole set.
                 star_keys = _sorted_star_key_window(
-                    kept_entries_set,
+                    star_keys,
                     sort_by=normalized_sort_by,
                     sort_dir=normalized_sort_dir,
                     reader_read_filter=reader_read_filter,
@@ -13441,6 +13568,40 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         )
     conn.commit()
 
+    # A saved article is user-added, so unlike a feed-provided entry it *can* be
+    # removed properly — leaving it behind would keep a read, unstarred husk in
+    # Saved Articles forever, so the backlog never shrinks as you file it and
+    # every later dupe scan re-reads rows that are no longer real saves.
+    if saved_articles_service.is_saved_articles_feed(feed_url):
+        try:
+            _hard_delete_entry(reader, feed_url, entry_id, src)
+            result["source_deleted"] = True
+        except Exception:  # noqa: BLE001 — the move itself already succeeded
+            LOGGER.exception("[move-entry] source cleanup failed for %s", entry_id)
+        else:
+            # Belt and braces. The star row is moved above, so this should
+            # already be a no-op — but a filing run left 3,593 saved_entries
+            # rows pointing at entries it had just tombstoned, and that was
+            # never reproduced against a copy of the same data. Once the source
+            # entry is gone no star row may reference it, so re-issuing the
+            # delete is unconditionally correct and closes the hole whatever
+            # the cause. Cheap: one indexed delete per filed article.
+            try:
+                cur = conn.execute(
+                    "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                conn.commit()
+                if cur.rowcount:
+                    # Never expected — if this fires, the star row outlived the
+                    # move and the root cause is live. Log loudly enough to find.
+                    LOGGER.warning(
+                        "[move-entry] star row survived the move and was swept: %s %s",
+                        feed_url, entry_id,
+                    )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[move-entry] star sweep failed for %s", entry_id)
+
     if result["tags"] or result["star"]:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
@@ -15049,6 +15210,38 @@ def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
     ]
 
 
+def _read_mode_search_fields(
+    *,
+    scope: str,
+    folder_id: int | None = None,
+    list_feed_url: str | None = None,
+    tag: str | None = None,
+    archived: bool = False,
+) -> list[dict]:
+    """Hidden fields the Read Mode search form must carry to stay inside the
+    node you searched from.
+
+    The form used to post only `scope`, so searching from a folder, feed, tag,
+    or Archive silently threw that selection away and searched everything.
+    """
+    fields = [{"name": "scope", "value": scope}] if scope and scope != "saved" else []
+    if folder_id is not None:
+        fields.append({"name": "folder_id", "value": str(folder_id)})
+    if list_feed_url:
+        fields.append({"name": "list_feed_url", "value": list_feed_url})
+    if tag:
+        fields.append({"name": "tag", "value": tag})
+    if archived:
+        fields.append({"name": "archived", "value": "1"})
+    return fields
+
+
+def _read_clear_search_href(fields: list[dict]) -> str:
+    """Same node, no query — what the Clear control returns you to."""
+    params = urlencode([(f["name"], f["value"]) for f in fields])
+    return "/read" + (f"?{params}" if params else "")
+
+
 def _build_feeds_mode_context(
     request: Request,
     *,
@@ -15135,6 +15328,9 @@ def _build_feeds_mode_context(
                              scope="feeds", list_feed_url=list_feed_url),
     } for it in items]
 
+    _feeds_search_fields = _read_mode_search_fields(
+        scope="feeds", folder_id=folder_id, list_feed_url=list_feed_url, tag=tag,
+    )
     return {
         "scope_tabs": _read_mode_scope_tabs("feeds"),
         "folder_nodes": folder_nodes,
@@ -15144,6 +15340,8 @@ def _build_feeds_mode_context(
         "selected_label": selected_label,
         "node_selected": node_selected,
         "search_query": q or "",
+        "search_fields": _feeds_search_fields,
+        "read_clear_search_href": _read_clear_search_href(_feeds_search_fields),
         "tags_open": bool(tag),
         "scope": "feeds",
         "exit_href": "/?full=1",
@@ -15243,6 +15441,9 @@ def _build_read_mode_context(
                              folder_id=folder_id, tag=tag, archived=archived, q=q),
     } for it in items]
 
+    _saved_search_fields = _read_mode_search_fields(
+        scope="saved", folder_id=folder_id, tag=tag, archived=archived,
+    )
     return {
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
@@ -15256,6 +15457,8 @@ def _build_read_mode_context(
         "selected_label": selected_label,
         "node_selected": node_selected,
         "search_query": q or "",
+        "search_fields": _saved_search_fields,
+        "read_clear_search_href": _read_clear_search_href(_saved_search_fields),
         "tags_open": bool(tag),  # expand the tag list when a tag is selected
         "scope": "saved",
         "exit_href": "/",
@@ -21841,6 +22044,30 @@ def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[d
     return [g for g in groups.values() if len(g) > 1]
 
 
+def _saved_dup_host_slug(link: str) -> str | None:
+    """Host-scoped slug key for the saved scan's confirmed tier.
+
+    `_safe_dedup_entry_slug` is host-blind — it returns the last path segment
+    and nothing else. That is correct for its other callers (per-feed churn
+    history, and the multi-signal dedup where a slug alone is never one of
+    `_SAFE_DEDUP_COMBOS`), but here a bare slug match *is* a confirmed
+    duplicate, so unrelated publishers writing about one topic collided:
+    guitarworld.com and guitarmasterclass.net each have a `pinch-harmonics`
+    article, and the scan offered to delete one of them. A descriptive slug
+    clears every length/hyphen guard precisely *because* it describes a topic.
+
+    Scoping to the host keeps the tier's real job — the same article under a
+    changed path on one site — and leaves genuine cross-host syndication to the
+    title/body tier, which is much stronger evidence than a shared topic word.
+    """
+    slug = _safe_dedup_entry_slug(link)
+    if not slug:
+        return None
+    canon = normalize_entry_link_for_dedupe(link)
+    host = canon.partition("/")[0] if canon else ""
+    return f"{host}/{slug}" if host else None
+
+
 def _saved_dup_reasons(group: list[dict], checks: list[tuple[str, str]]) -> list[str]:
     reasons = []
     for field, label in checks:
@@ -21899,7 +22126,7 @@ def get_saved_duplicates():
             "read": bool(read),
             "has_content": body_head is not None,
             "_canon": normalize_entry_link_for_dedupe(link),
-            "_slug": _safe_dedup_entry_slug(link),
+            "_slug": _saved_dup_host_slug(link),
             "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
             "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
         })
@@ -22124,6 +22351,269 @@ async def deduplicate_saved(request: Request):
     if deleted:
         invalidate_unread_counts_cache()
     return JSONResponse({"ok": errors == 0, "deleted": deleted, "errors": errors})
+
+
+# Filing runs at roughly 17 articles/second, so ~150 keeps a call near ten
+# seconds — short enough to survive a reverse proxy and to report progress.
+_AUTOFILE_BATCH = 150
+_AUTOFILE_BATCH_MAX = 500
+
+
+def _autofile_excluded_targets(feed_urls: Iterable[str], conn=None) -> frozenset[str]:
+    """Feeds an unfiled saved article must never be filed into.
+
+    Saved Articles itself, obviously — and every YouTube feed. A saved *page* is
+    never really a video-channel post, and channels routinely share a name with
+    the blog they accompany, so with only titles on screen a YouTube feed is
+    exactly the target you'd pick by mistake. Cheap insurance: it only ever
+    triggers for a saved youtube.com link, where filing into the channel feed
+    would be wrong anyway.
+
+    Plus anything the user has marked in `non_feed_subscriptions`: a single
+    article URL that ended up subscribed as a feed is a plausible-looking target
+    on the right host, and filing that site's backlog into a one-article stub is
+    exactly the wrong outcome.
+    """
+    excluded = {saved_articles_service.SAVED_FEED_URL}
+    excluded.update(u for u in feed_urls if "youtube.com/feeds/videos.xml" in str(u))
+    if conn is not None:
+        excluded.update(
+            r[0] for r in conn.execute("SELECT feed_url FROM non_feed_subscriptions")
+        )
+    return frozenset(excluded)
+
+
+@app.get("/saved/autofile/preview")
+def preview_saved_autofile():
+    """Propose a home feed for each unfiled saved article, grouped by host.
+
+    Read-only. Saved articles imported from a read-later service are mostly
+    articles from feeds already subscribed to, so they can be filed onto their
+    real feed — which also collapses cross-feed duplicates, since the move
+    matches into the target by GUID else normalized link.
+
+    The client reviews and approves per host; see services/saved_autofile for
+    why a lone candidate feed isn't automatically a trustworthy one.
+    """
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    with get_reader() as reader:
+        if reader.get_feed(saved_url, None) is None:
+            return JSONResponse({"plan": [], "totals": saved_autofile_service.plan_totals([])})
+        titles = {}
+        # A feed declares its host twice: its own URL, and the site it
+        # advertises. Both count — a FeedBurner feed's URL host says nothing
+        # about the site whose posts it carries, but its link does.
+        declared_hosts: dict[str, set[str]] = {}
+        for f in reader.get_feeds():
+            url = str(f.url)
+            titles[url] = f.user_title or f.title or url
+            hosts = {saved_autofile_service.article_host(url)}
+            if getattr(f, "link", None):
+                hosts.add(saved_autofile_service.article_host(str(f.link)))
+            declared_hosts[url] = {h for h in hosts if h}
+        db = reader._storage.get_db()
+        feed_sizes = {
+            str(f): int(n) for f, n in db.execute(
+                "SELECT feed, COUNT(*) FROM entries GROUP BY feed"
+            )
+        }
+        # Only genuinely-kept saves are worth filing; a read, unstarred row is a
+        # husk from an older move that predates source cleanup.
+        with get_meta_connection() as conn:
+            kept = {
+                r[0] for r in conn.execute(
+                    "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
+                )
+            }
+            non_feed = {r[0] for r in conn.execute("SELECT host FROM autofile_non_feed_hosts")}
+        saved_rows = [
+            (str(i), str(l or i))
+            for i, l in db.execute(
+                "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
+            )
+            if str(i) in kept
+        ]
+        feed_links = [
+            (str(f), str(l))
+            for f, l in db.execute(
+                "SELECT feed, link FROM entries WHERE link IS NOT NULL AND feed != ?",
+                (saved_url,),
+            )
+        ]
+
+    with get_meta_connection() as conn:
+        excluded = _autofile_excluded_targets(titles, conn)
+    plan = saved_autofile_service.build_autofile_plan(
+        saved_rows, feed_links, feed_titles=titles,
+        feed_hosts=declared_hosts, feed_sizes=feed_sizes,
+        exclude_feeds=excluded,
+    )
+    # Hosts marked "not a feed" are settled business — their saves are genuine
+    # one-off captures, so they drop out of the worklist entirely rather than
+    # reappearing unresolved on every pass. Reported so they can be reviewed.
+    marked = [c for c in plan if c["host"] in non_feed]
+    plan = [c for c in plan if c["host"] not in non_feed]
+    # entry_ids are only needed server-side on apply; sending 4k of them per
+    # host would bloat the preview for no benefit.
+    slim = [{k: v for k, v in c.items() if k != "entry_ids"} for c in plan]
+    totals = saved_autofile_service.plan_totals(plan)
+    totals["non_feed_hosts"] = len(marked)
+    totals["non_feed_articles"] = sum(c["count"] for c in marked)
+    return JSONResponse({
+        "plan": slim,
+        "totals": totals,
+        "non_feed": sorted(
+            ({"host": c["host"], "count": c["count"]} for c in marked),
+            key=lambda c: (-c["count"], c["host"]),
+        ),
+    })
+
+
+@app.post("/saved/autofile/non-feed-subscription")
+async def mark_non_feed_subscription(request: Request):
+    """Mark or unmark a *subscription* as not really a feed.
+
+    Body (JSON): {"feed_urls": [...], "marked": bool}. Some subscriptions are a
+    single article URL that got added as a feed — they sit on exactly the right
+    host, so they look like the site's feed and would collect that site's whole
+    backlog. The subscription is left alone (its entries are real reading); it
+    is only barred as a filing destination.
+    """
+    body = await request.json()
+    feed_urls = [str(u).strip() for u in body.get("feed_urls", []) if u]
+    if not feed_urls:
+        return JSONResponse({"ok": False, "error": "No feeds given."}, status_code=400)
+    marked = bool(body.get("marked", True))
+    with get_meta_connection() as conn:
+        if marked:
+            conn.executemany(
+                "INSERT OR IGNORE INTO non_feed_subscriptions (feed_url) VALUES (?)",
+                [(u,) for u in feed_urls],
+            )
+        else:
+            conn.executemany(
+                "DELETE FROM non_feed_subscriptions WHERE feed_url = ?",
+                [(u,) for u in feed_urls],
+            )
+        conn.commit()
+    return JSONResponse({"ok": True, "feed_urls": feed_urls, "marked": marked})
+
+
+@app.post("/saved/autofile/non-feed")
+async def mark_autofile_non_feed(request: Request):
+    """Mark or unmark hosts as never having a feed.
+
+    Body (JSON): {"hosts": [...], "marked": bool}. Purely a worklist decision —
+    the saved articles themselves are untouched and stay exactly as they are.
+    They were never unfiled feed articles in the first place; they're one-off
+    read-later captures (a cheat sheet, a single tutorial), and the auto-filer
+    kept re-proposing them because it can only see that no feed matches.
+    """
+    body = await request.json()
+    hosts = [saved_autofile_service.article_host(h) or str(h).strip().lower()
+             for h in body.get("hosts", []) if h]
+    hosts = [h for h in hosts if h]
+    if not hosts:
+        return JSONResponse({"ok": False, "error": "No hosts given."}, status_code=400)
+    marked = bool(body.get("marked", True))
+    with get_meta_connection() as conn:
+        if marked:
+            conn.executemany(
+                "INSERT OR IGNORE INTO autofile_non_feed_hosts (host) VALUES (?)",
+                [(h,) for h in hosts],
+            )
+        else:
+            conn.executemany(
+                "DELETE FROM autofile_non_feed_hosts WHERE host = ?", [(h,) for h in hosts]
+            )
+        conn.commit()
+    return JSONResponse({"ok": True, "hosts": hosts, "marked": marked})
+
+
+@app.post("/saved/autofile")
+async def apply_saved_autofile(request: Request):
+    """File the approved hosts' saved articles onto their target feeds.
+
+    Body (JSON): {"hosts": [{"host": ..., "target_feed_url": ...}, ...],
+                  "limit": int} — the target is taken from the request, not
+    recomputed, so what the user approved in the preview is exactly what runs.
+    Each article goes through _move_entry_to_feed, which migrates star/tags/read
+    state and then removes the now-empty saved source.
+
+    *limit* caps how many articles one call moves, and the response reports what
+    is still outstanding so the client can loop. Filing is ~17 articles/second,
+    so an uncapped run over a big host (1,300+ articles) takes well over a
+    minute and gets cut off by a proxy or the browser mid-flight — the work
+    lands but the caller never learns it did, and the list looks untouched.
+    """
+    body = await request.json()
+    wanted = {
+        str(h.get("host") or ""): str(h.get("target_feed_url") or "")
+        for h in body.get("hosts", [])
+        if h.get("host") and h.get("target_feed_url")
+    }
+    if not wanted:
+        return JSONResponse({"ok": False, "error": "No hosts selected."}, status_code=400)
+
+    try:
+        limit = int(body.get("limit") or _AUTOFILE_BATCH)
+    except (TypeError, ValueError):
+        limit = _AUTOFILE_BATCH
+    limit = max(1, min(limit, _AUTOFILE_BATCH_MAX))
+
+    saved_url = saved_articles_service.SAVED_FEED_URL
+    moved = 0
+    failed = 0
+    remaining = 0
+    per_host: dict[str, int] = {}
+    with get_reader() as reader, get_meta_connection() as conn:
+        known_feeds = {str(f.url) for f in reader.get_feeds()}
+        bad = sorted(set(wanted.values()) - known_feeds)
+        if bad:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown target feed: {bad[0]}"}, status_code=400
+            )
+        # Enforced here too, not just in the preview: the target comes from the
+        # request, so a stale plan must not be able to file into a barred feed.
+        barred = sorted(set(wanted.values()) & _autofile_excluded_targets(known_feeds, conn))
+        if barred:
+            return JSONResponse(
+                {"ok": False, "error": f"Not a valid target feed: {barred[0]}"},
+                status_code=400,
+            )
+        rows = reader._storage.get_db().execute(
+            "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
+        ).fetchall()
+        kept = {
+            r[0] for r in conn.execute(
+                "SELECT entry_id FROM saved_entries WHERE feed_url = ?", (saved_url,)
+            )
+        }
+        for entry_id, link in rows:
+            entry_id = str(entry_id)
+            if entry_id not in kept:
+                continue
+            host = saved_autofile_service.article_host(str(link or entry_id))
+            target = wanted.get(host)
+            if not target:
+                continue
+            if moved >= limit:
+                remaining += 1      # counted, not moved — the client loops
+                continue
+            res = _move_entry_to_feed(reader, conn, saved_url, entry_id, target)
+            if res.get("ok"):
+                moved += 1
+                per_host[host] = per_host.get(host, 0) + 1
+            else:
+                failed += 1
+                LOGGER.warning("[autofile] %s -> %s failed: %s", entry_id, target,
+                               res.get("error"))
+    if moved:
+        invalidate_unread_counts_cache()
+    LOGGER.info("[autofile] filed %d saved article(s) across %d host(s), %d failed, %d left",
+                moved, len(per_host), failed, remaining)
+    return JSONResponse({"ok": failed == 0, "moved": moved, "failed": failed,
+                         "remaining": remaining, "per_host": per_host})
 
 
 @app.get("/feeds/multi-folder")

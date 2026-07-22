@@ -43,7 +43,9 @@ and **[Multi-user & APIs](https://github.com/joshg253/Lectio/wiki/Multi-user-and
 The short version:
 
 - **Fast triage** — three-pane reader, keyboard nav, context menus, manual and
-  feed-provided tags, read history, search, and a Readability/web-view proxy.
+  feed-provided tags, read history, search (with a Search button and a clear
+  control; in the Saved view it also matches the saved article's text, not just
+  its title), and a Readability/web-view proxy.
   Bulk mark-as-read shows an **Undo** toast that restores exactly that batch.
 - **Rich content** — embeds that actually render (curated trusted-host
   allowlist), inline podcast audio (including audio borrowed from a separate
@@ -69,8 +71,14 @@ The short version:
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
   `/read` (paginated, Supernote-friendly). A **Scan Saved for duplicates**
   utility (with side-by-side Compare and dead-link checking) cleans up
-  same-article-different-URL saves; **Re-fetch content** re-extracts a saved
-  article in place to repair a bad initial capture; an **Instapaper CSV import**
+  same-article-different-URL saves — it never pre-selects anything, and only
+  **Check URLs** arms a copy for deletion, and only when that copy's link is
+  provably dead. Titles are editable inline in the dialog (✎), for saved copies
+  whose title has drifted from the live post; **Re-fetch content** re-extracts a saved
+  article in place to repair a bad initial capture; **File saved articles** matches
+  unfiled saves to the subscribed feed they came from (grouped by host, reviewed
+  per host before anything moves) — the usual case after importing a read-later
+  library built from feeds; an **Instapaper CSV import**
   brings your whole library over with tags and archive state.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from

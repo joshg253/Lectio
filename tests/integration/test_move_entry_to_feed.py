@@ -153,3 +153,65 @@ def test_batch_move_rejects_oversize_and_bad_payload(env):
     assert not data["ok"] and "Too many" in data["error"]
     resp = main.move_entries_to_feed_batch_route(entries="not json", target_url=DST)
     assert not json.loads(bytes(resp.body))["ok"]
+
+
+# ── moving *out of* Saved Articles ────────────────────────────────────────────
+# A saved article is user-added, so unlike a feed-provided entry the source can
+# be removed properly. Leaving it behind kept a read, unstarred husk in Saved
+# Articles forever: the backlog never shrank as it was filed, and every later
+# duplicate scan re-read rows that were no longer real saves.
+
+SAVED = "lectio:saved"
+SAVED_ID = "https://example.test/saved-article"
+
+
+def _setup_saved() -> None:
+    with main.get_reader() as reader:
+        reader.add_feed(SAVED, allow_invalid_url=True, exist_ok=True)
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": SAVED, "id": SAVED_ID, "title": "Saved post",
+                          "link": SAVED_ID})
+
+
+def _move_from(source: str, entry_id: str, target: str = DST) -> dict:
+    with main.get_reader() as reader:
+        with main.get_meta_connection() as conn:
+            return main._move_entry_to_feed(reader, conn, source, entry_id, target)
+
+
+def _saved_rows(feed_url: str) -> int:
+    with main.get_meta_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM saved_entries WHERE feed_url = ?", (feed_url,)
+        ).fetchone()[0]
+
+
+def test_moving_a_saved_article_removes_the_source_entry(env):
+    _setup_saved()
+    _star(SAVED, SAVED_ID)
+    res = _move_from(SAVED, SAVED_ID)
+    assert res["ok"] and res.get("source_deleted")
+    with main.get_reader() as reader:
+        assert reader.get_entry((SAVED, SAVED_ID), None) is None
+
+
+def test_no_star_row_survives_on_the_saved_feed(env):
+    """Regression guard for 3,593 orphaned rows seen in production: entries
+    tombstoned by the move, star rows left pointing at them."""
+    _setup_saved()
+    _star(SAVED, SAVED_ID)
+    assert _saved_rows(SAVED) == 1
+    assert _move_from(SAVED, SAVED_ID)["ok"]
+    assert _saved_rows(SAVED) == 0        # source cleaned
+    assert _saved_rows(DST) == 1          # star moved, not duplicated
+
+
+def test_a_feed_provided_source_is_still_kept(env):
+    """Only saved articles are deletable; a feed-provided entry keeps the old
+    behaviour of staying put, marked read and stripped of curation."""
+    _setup_feeds()
+    _star(SRC, "e1")
+    assert _move("e1", DST)["ok"]
+    with main.get_reader() as reader:
+        assert reader.get_entry((SRC, "e1"), None) is not None
+    assert _saved_rows(SRC) == 0

@@ -1403,11 +1403,34 @@ button:hover, .button-link:hover {
 
 .toolbar-search-row .posts-search-form {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .toolbar-search-row .topbar-search-input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
 }
+
+/* The form has no other affordance — without a visible button the only way to
+   run a search is Enter, which nothing on screen tells you. */
+.topbar-search-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.topbar-search-go:hover { color: var(--fg, inherit); }
+.topbar-search-go .material-symbols-rounded { font-size: 1.1rem; }
+.topbar-search-clear[hidden] { display: none; }
 
 .toolbar-search-hidden {
   display: none;
@@ -5026,6 +5049,88 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .saved-dedup-compare-btn:hover,
 .saved-dedup-check-urls-btn:hover { color: var(--fg, inherit); }
+.saved-autofile-count {
+  flex: 0 0 auto;
+  min-width: 3.2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--muted);
+}
+.saved-autofile-target {
+  margin-top: 0.2rem;
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.saved-autofile-row { align-items: flex-start; }
+.saved-autofile-notfeed {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.saved-autofile-notfeed:hover { color: var(--fg, inherit); }
+.saved-autofile-nonfeed { margin-top: 0.6rem; color: var(--muted); }
+.saved-autofile-nonfeed summary { cursor: pointer; font-size: 0.85rem; }
+.saved-autofile-nfrow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+  font-size: 0.85rem;
+}
+/* The plan runs to ~180 rows, so the action has to stay reachable without
+   scrolling to the end — and since the selection isn't visible from down here,
+   the button carries the running total. */
+#saved-autofile-results .dedup-inline-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.5rem 0;
+  margin-top: 0.25rem;
+  background: var(--panel, var(--bg, #fff));
+  border-top: 1px solid var(--line);
+}
+/* Feed titles are often deliberately unlike their URLs — show the target URL
+   outright, not only on hover. */
+.saved-autofile-url {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.saved-dedup-title-edit {
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+  padding: 0 0.25rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+/* Revealed on hover/focus so it doesn't compete with the titles themselves. */
+.saved-dedup-row:hover .saved-dedup-title-edit,
+.saved-dedup-title-edit:focus { opacity: 1; }
+.saved-dedup-title-edit:hover { color: var(--fg, inherit); border-color: var(--line); }
+.saved-dedup-title-input {
+  font: inherit;
+  width: min(100%, 34rem);
+  padding: 0.05rem 0.3rem;
+  background: var(--bg, #fff);
+  color: var(--fg, inherit);
+  border: 1px solid var(--accent, #2c7);
+  border-radius: 4px;
+}
 .saved-dedup-badge--dead { color: var(--danger, #c0392b); border-color: currentColor; }
 .saved-dedup-badge--alive { color: var(--accent, #2c7); border-color: currentColor; }
 .saved-dedup-same-dest { margin-left: 0.4rem; }

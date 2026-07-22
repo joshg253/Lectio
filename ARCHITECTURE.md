@@ -687,7 +687,11 @@ Two mechanisms prevent duplicate articles from accumulating in the reader DB:
 
 **Intra-feed and cross-feed cleanup** (`_cleanup_intra_feed_slug_dupes`, runs at startup and after each refresh cycle): two-pass retroactive cleanup for duplicates that slipped through before suppression was in place or before Deduplicate rules ran.
 - Pass 1: within each feed, keep the oldest entry per slug and per title+date; mark newer copies read.
-- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe` (canonical URL after stripping tracking params); keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+- Pass 2: across all feeds, group entries by `normalize_entry_link_for_dedupe`; keep the oldest copy globally and mark the rest read. This handles syndicated posts that appear in multiple subscribed feeds (e.g. a blog post cross-posted to two feeds from the same author).
+
+`normalize_entry_link_for_dedupe` is the single canonical link key, shared by this pass, the render-time list collapse (`build_entry_dedupe_key`), the curation migration on feed removal, and the Saved duplicate scan's "confirmed" tier. It drops the fragment and trailing slash, then **folds the scheme and a leading `www.`**, lowercasing only the host — paths stay case-sensitive. The fold matters because the Saved scan's other confirmed-tier key, the URL slug, is deliberately discarded when it is generic (`/index.html`, blocklisted, or hyphen-free and short); before the fold, an http/https or www/non-www twin with such a URL had no confirmed-tier key at all and fell through to the weaker "possible" tier, where it needed a hand judgment. The result is a comparison key, not a URL — it has no scheme and is never fetched or displayed.
+
+**The saved scan's slug key is host-scoped** (`_saved_dup_host_slug`), unlike the shared `_safe_dedup_entry_slug` it wraps. That helper returns the last path segment and nothing more, which is right for its other callers — per-feed GUID-churn history, and the multi-signal dedup where a lone `slug` is never one of `_SAFE_DEDUP_COMBOS` — but in `/saved/duplicates` a bare slug match *confirms* a duplicate on its own. Host-blind, that made unrelated publishers collide: guitarworld.com and guitarmasterclass.net each have a `pinch-harmonics` article, and the scan offered to delete one of them. A descriptive slug clears every length/hyphen guard precisely *because* it names a topic. Scoping the key to the folded host keeps the tier's real job (one article under a changed path on one site, including across a scheme/www change) and leaves genuine cross-host syndication to the title/body tier, which is far stronger evidence.
 
 These run server-side and affect the underlying DB state, so third-party clients (Capy, etc.) see the clean state after the next sync.
 
@@ -828,6 +832,64 @@ never auto-pruned) whenever it's starred **or** manually tagged. Tag is the
   re-enables updates; a later full delete (`purge_orphaned_feed`) drops it.
   `kept_feeds` is created in `ensure_meta_schema` (covered by the startup
   per-user migration, so existing tenants don't 500).
+
+**Searching the Kept view.** The kept branch in `list_entries_for_feeds` runs
+*ahead* of the generic `elif search_terms` fast path, so for a long time this was
+the one view where a search took no fast path at all: it hydrated every kept key
+via `reader.get_entry` and filtered in Python — ~11k lookups, measured at ~19s
+per search on a real library, which reads as a search box that does nothing.
+`_filter_star_keys_by_search` now narrows the keys in SQL first (the same
+keys-joined-against-`entries` technique as `_sorted_star_key_window`), so only
+the survivors are hydrated: ~1.2s for the same queries.
+
+reader's own FTS index is deliberately **not** used for this. `search_entries`
+builds a highlighted snippet per result, measured at ~7.8ms/row — 76s for one
+common term across 133k entries — so routing the kept view through it was *worse*
+than the scan it replaced (97s end to end). The same cost is why a Feeds-view
+search still takes ~10s; that path is a separate, known target. The SQL predicate
+covers title, resolved feed title, feed URL, link, author, summary **and the
+stored content**, so a Saved search reaches the article's text — the point of a
+read-later archive. Content is matched as stored (raw HTML), so a markup-ish term
+matches nearly everything; stripping tags would need a plain-text column
+maintained at ingest, which isn't worth a schema change yet. On any SQL error the
+helper returns `None` and the caller keeps the full key set and post-filters in
+Python, so a failure degrades to the old behavior instead of showing no posts.
+
+**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from Settings → Feeds → **Utilities**; the two duplicate scanners sit on their own **Dupes** tab, since both are long-running, produce long reviewable lists, and are worked in repeated passes rather than fired once). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
+
+Matching is by **article host**, from two independent signals. The evidential one is which subscribed feed already carries entries whose links are on that host — a feed's own URL often lives elsewhere than the articles it publishes (`rss.beehiiv.com` serving `joanwestenberg.com`). The declarative one is the hosts a feed *advertises*: its own URL host and its `link` (site) host. Entry links alone are not enough, because two common cases produce no usable evidence at all — a feed **subscribed but not yet fetched** has no entries, so a feed added specifically to receive a backlog would never be offered for it; and a **link-proxying feed** (FeedBurner rewrites every entry link to `feeds.feedburner.com`) points its evidence at the wrong host entirely. Measured here, 696 of 2,881 feeds advertise a site on a different host than their feed URL. Adding the declarative signal took unmatched articles from 698 to 66.
+
+A declared host makes a feed a candidate; it makes it *confident* only when the feed is also stocked (`feed_sizes` ≥ `MIN_SUPPORT`). Without that size check a scraped one-article URL sitting in the subscription list — right host, plausible title — would read as the site's real feed and collect the site's whole backlog. Two guards decide what may be *pre-approved*, and the distinction matters — measured against real data, `guitarworld.com`'s target was backed by 77 of the feed's own entries while `guitarplayer.com`'s only candidate was a scraped single-article URL with **one** supporting entry, and filing 303 articles into it would have been wrong:
+
+- `ambiguous` — more than one *on-host* subscribed feed carries entries on the host, so picking one would be a guess.
+- `support` — how many of the target feed's own entries are on that host; below `MIN_SUPPORT` the cluster is shown but not pre-checked.
+
+The service is pure (it takes extracted rows, not a reader) so the guards are testable without a database. The preview is read-only and strips `entry_ids` before sending; apply takes the target from the request rather than recomputing it, so what was approved is exactly what runs.
+
+**Filing is batched, and has to be.** `_move_entry_to_feed` runs at roughly 17 articles/second, so one uncapped call over a large host (1,300+ articles) takes well over a minute and gets cut off in flight — observed live as `POST /saved/autofile → status 0, 16180ms`, where 278 articles really were filed but the reply never arrived, so the UI looked untouched and the articles appeared unmoved. The endpoint therefore caps each call at `_AUTOFILE_BATCH` articles and reports `remaining`; the client loops, showing progress, until nothing is left. A batch that reports work outstanding while moving nothing breaks the loop rather than spinning.
+
+**Two different "this isn't a feed" decisions**, deliberately labelled apart in the UI because they can appear on the same row:
+
+- **`non_feed_subscriptions`** (`POST /saved/autofile/non-feed-subscription`, UI: *not a feed*) bars a **subscription** from ever being a filing destination. Some subscriptions are a single article URL that got added as a feed; they sit on exactly the right host with a plausible title, so they are the target you would pick by mistake, and filing a site's backlog into a one-article stub is the worst available outcome. The subscription itself is left alone — its entries are real reading — and it is fed into `_autofile_excluded_targets`, so it is barred on the apply path too.
+- **`autofile_non_feed_hosts`** (`POST /saved/autofile/non-feed`, UI: *one-off saves*) settles a **host** whose saves never came from a feed at all.
+
+**Hosts settled as one-off saves** drop out of the worklist entirely. Some saves never came from a feed at all — a cheat sheet, a one-off tutorial — and the filer can only observe that no subscribed feed matches, so it re-proposed them on every pass and they never resolved. Marking is purely a worklist decision: the saved articles are untouched and stay exactly what they already are, standalone read-later captures. Marked hosts are reported back in a collapsed section with an undo, so the decision is reviewable rather than a black hole, and the mark keys on `article_host()` — the same normalized form the plan groups by, or a host would return under its `www.`/cased spelling. The table is created in `ensure_meta_schema`, which the startup per-user migration runs for every tenant; a meta table added anywhere else 500s for users provisioned before it existed.
+
+**Nothing in the plan is ever pre-checked.** It files thousands of rows at a time and is meant to be worked in passes — file a batch, re-scan, continue — so the `confident` flag drives a *label* ("strong match — N posts from this host"), never a selection. Same rule as the Saved duplicate dialog: a scan result is a claim, not an instruction.
+
+**Barred targets** (`_autofile_excluded_targets`, applied on *both* preview and apply so a stale plan can't route around it): Saved Articles itself, and every YouTube feed. A saved page is never really a video-channel post, and channels routinely share a name with the blog they accompany — with only feed titles on screen, a YouTube feed is precisely the target a reviewer would pick by mistake. For the same reason the picker shows each candidate's **feed URL**, inline and as a hover title: feed titles are frequently and deliberately unlike their URLs (`rss.beehiiv.com/feeds/XYZ.xml` titled "The Woodshed"), so the title alone is not enough to identify what you are filing into. When two candidates for one host share a title (a feed and its format variant, or a blog and its companion channel) the URL is folded into the option label itself — otherwise the dropdown offers choices that read identically and the pick cannot be made at all.
+
+**Moving a saved article deletes its source.** `_move_entry_to_feed` normally leaves the source entry in place — reader can't delete feed-provided entries, so it settles for marking them read and stripping star/tags. That rationale does not apply to `lectio:saved`, whose entries are `added_by='user'` and therefore properly deletable, so the saved source is hard-deleted (tombstoned, via the shared `_hard_delete_entry`) once the move succeeds. Without this the Saved Articles feed kept a read, unstarred husk per filed article: the backlog never shrank as it was filed, and every later duplicate scan re-read rows that were no longer real saves.
+
+**Toolbar listeners must be delegated.** `loadScopePanesWithoutFullRefresh`
+(every sidebar/folder/scope click, and the search form itself) re-renders the
+toolbar, replacing its DOM nodes. Any listener attached directly to a
+`#toolbar-*` node at init dies with the node it was bound to — silently, with no
+console error. That is exactly how the search button came to do nothing at all
+after the first in-page navigation, while still working on a direct URL load
+(which is why it survived testing). The search button, its clear control, the
+query input, and the search form's `submit` handler are therefore all delegated
+from `document`. Wire anything new on this toolbar the same way.
 
 ## Read Mode — e-ink reading app (`GET /read`)
 
