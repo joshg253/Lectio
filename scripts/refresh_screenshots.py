@@ -72,6 +72,22 @@ def _static_server(directory: Path, port: int):
         httpd.shutdown()
 
 
+def _demo_user_id(data_dir: Path) -> str:
+    """The per-user directory the freshly-booted instance provisioned.
+
+    Auto-login binds a real account, and tenancy gives each account its own
+    ``users/<id>/`` subtree; there is exactly one here because the instance is
+    throwaway.
+    """
+    users = sorted(p.name for p in (data_dir / "users").glob("u_*") if p.is_dir())
+    if not users:
+        raise SystemExit(
+            "No per-user data dir was provisioned — the demo library would be "
+            "seeded somewhere the app never reads."
+        )
+    return users[0]
+
+
 def _wait_healthy(url: str, proc: subprocess.Popen, timeout: float = 40.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -124,13 +140,35 @@ def main() -> int:
             "YOUTUBE_CHANNEL_ID": "",
         })
 
+        # Auth is unconditional, so the browsing session is always a real user
+        # with its own per-user data dir. Seeding into the legacy top-level DBs
+        # (what happens when the seeder runs unbound) writes a library nothing
+        # ever serves — the capture then shoots an empty reader. So: boot once
+        # to provision the user, learn its id, seed bound to it, then serve.
+        serve_env = dict(env, LECTIO_DEBUG="0", LECTIO_DISABLE_STARTUP_BACKFILL="1",
+                         LECTIO_AUTO_LOGIN="1", LECTIO_SECRET_KEY=secrets.token_hex(32),
+                         LECTIO_HTTPS_ONLY="0")
+        print("Provisioning the demo user…")
+        boot = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "main:app",
+             "--host", "127.0.0.1", "--port", str(app_port), "--log-level", "warning"],
+            env=serve_env, cwd=str(ROOT),
+        )
+        procs.append(boot)
+        _wait_healthy(base_app_url + "/", boot)
+        _stop(boot)
+        procs.remove(boot)
+        user_id = _demo_user_id(data_dir)
+        print(f"Demo user: {user_id}")
+
         # Seed the library while the demo feeds are being served locally.
         # LECTIO_DEBUG=1 only while seeding: it disables the SSRF guard so the
         # localhost demo feed server is reachable. The serve phase runs WITHOUT
         # debug, since debug mode also auto-subscribes (failing) dev feeds.
         with _static_server(feeds_dir, feed_port):
             seed_env = dict(env, LECTIO_DEBUG="1",
-                            DEMO_BASE_URL=f"http://127.0.0.1:{feed_port}")
+                            DEMO_BASE_URL=f"http://127.0.0.1:{feed_port}",
+                            LECTIO_SEED_USER_ID=user_id)
             print("Seeding demo library…")
             subprocess.run(
                 [sys.executable, "-m", "scripts.screenshots.seed"],
@@ -138,7 +176,6 @@ def main() -> int:
             )
 
         # Serve the seeded instance (no background refresh — feeds are gone now).
-        serve_env = dict(env, LECTIO_DEBUG="0", LECTIO_DISABLE_STARTUP_BACKFILL="1")
         print(f"Starting Lectio on {base_app_url}…")
         server_proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "main:app",

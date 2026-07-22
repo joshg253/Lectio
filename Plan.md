@@ -478,6 +478,24 @@ with no feed, most holding one or two articles.
     the source star row *after* the hard delete in `_move_entry_to_feed`, which
     closes the hole whatever the cause. Don't ship the sweep without first
     reproducing, or it will just run again next session.
+- **⚠ Inline SVG in feed content is mangled at ingest.** Found 2026-07-21 while
+  redoing the docs screenshots. feedparser parses an HTML-escaped
+  `<description>` as HTML, where a trailing slash is meaningless — so
+  `<rect/><circle/><path/>` becomes `<rect><circle><path>`, every shape nested
+  inside the rect, which cannot contain shapes. The browser paints the rect and
+  drops the rest, i.e. **any feed shipping inline SVG art renders as a flat
+  colour block**, and the inline-SVG thumbnail feature (PR #29) degrades to a
+  solid rectangle. Lectio's own sanitizers are innocent: `svg_sanitize` and
+  `sanitize_html` both round-trip the markup correctly — the damage is done
+  before either sees it.
+  - Reproduce: feed a `<description>` containing `<svg><rect/><circle/></svg>`
+    through `feedparser.parse` and look for `</rect>` in the result.
+  - The screenshot tooling now emits explicit end tags, which survive the HTML
+    parse; that is a workaround for the demo, **not** a fix for real feeds. A
+    real fix means re-parsing SVG subtrees as XML at ingest (or repairing the
+    nesting in `sanitize_html`, which already special-cases `<svg>`).
+  - A `data:` image dodges the parser entirely but Lectio's sanitizer strips
+    data URIs from `src`, so that is not an escape hatch either.
 - **Soft-404s are invisible to the dead-link checker.** Probing 8 guitarplayer
   articles: all returned **200**, but 4 had been redirected to the bare
   `/lessons` index — the article is gone and the site answers 200 for it.

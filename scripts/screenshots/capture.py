@@ -29,10 +29,19 @@ def _set_theme(page, theme: str) -> None:
 def _open_first_article(page, base_url: str) -> None:
     """Load a feed's posts and open the first article so the reading pane fills.
 
-    Sidebar feeds live inside collapsed folders, so rather than expand the tree
-    we navigate straight to the first feed's own list URL (its href), then open
-    the first post.
+    Sidebar feeds live inside collapsed folders whose rows are **lazy** — the
+    `<ul data-lazy-feeds>` ships empty and is filled from
+    /tree/folder-feeds/{id} on first expand, so on a fresh load there is no
+    `.feed-link` in the DOM at all. Expand the first folder, wait for its rows
+    to arrive, then navigate to the feed's own list URL and open a post.
     """
+    toggle = page.locator(".tree-toggle[data-tree-target]").first
+    if toggle.count():
+        toggle.click()
+        try:
+            page.wait_for_selector(".feed-link[href]", timeout=10_000)
+        except Exception:  # noqa: BLE001 — fall through to the root list
+            pass
     href = page.evaluate(
         "(() => { const el = document.querySelector('.feed-link[href]');"
         " return el ? el.getAttribute('href') : null; })()"
@@ -73,14 +82,22 @@ def capture_admin(base_url: str, out_dir: Path, admin_user: str, admin_pw: str) 
         page.click("button[type='submit']")
         page.wait_for_load_state("networkidle")
 
-        for name, pw_ in (("alice", "demo-password"), ("mallory", "demo-password")):
+        # The page is tabbed and opens on Settings; user management lives in the
+        # Users panel, which is display:none until its tab is clicked — so the
+        # create-user form is in the DOM but not fillable until then.
+        def _open_users_tab() -> None:
             page.goto(base_url + "/administration", wait_until="networkidle")
+            page.click(".adm-tab[data-panel='panel-users']")
+            page.wait_for_selector("#panel-users.active", timeout=10_000)
+
+        for name, pw_ in (("alice", "demo-password"), ("mallory", "demo-password")):
+            _open_users_tab()
             page.fill("form[action='/admin/users/create'] input[name='username']", name)
             page.fill("form[action='/admin/users/create'] input[name='password']", pw_)
             page.click("form[action='/admin/users/create'] button[type='submit']")
             page.wait_for_load_state("networkidle")
 
-        page.goto(base_url + "/administration", wait_until="networkidle")
+        _open_users_tab()
         page.wait_for_timeout(400)
         _shoot(page, out_dir, "11administration.png")
         ctx.close()
