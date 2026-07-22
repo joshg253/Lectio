@@ -13578,6 +13578,29 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             result["source_deleted"] = True
         except Exception:  # noqa: BLE001 — the move itself already succeeded
             LOGGER.exception("[move-entry] source cleanup failed for %s", entry_id)
+        else:
+            # Belt and braces. The star row is moved above, so this should
+            # already be a no-op — but a filing run left 3,593 saved_entries
+            # rows pointing at entries it had just tombstoned, and that was
+            # never reproduced against a copy of the same data. Once the source
+            # entry is gone no star row may reference it, so re-issuing the
+            # delete is unconditionally correct and closes the hole whatever
+            # the cause. Cheap: one indexed delete per filed article.
+            try:
+                cur = conn.execute(
+                    "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                conn.commit()
+                if cur.rowcount:
+                    # Never expected — if this fires, the star row outlived the
+                    # move and the root cause is live. Log loudly enough to find.
+                    LOGGER.warning(
+                        "[move-entry] star row survived the move and was swept: %s %s",
+                        feed_url, entry_id,
+                    )
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[move-entry] star sweep failed for %s", entry_id)
 
     if result["tags"] or result["star"]:
         invalidate_has_manual_tags_cache()
