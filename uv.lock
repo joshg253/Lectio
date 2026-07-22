@@ -385,6 +385,7 @@ screenshots = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx2" },
+    { name = "playwright" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
@@ -417,6 +418,7 @@ provides-extras = ["screenshots"]
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx2" },
+    { name = "playwright", specifier = ">=1.44" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "ruff" },
     { name = "ty" },

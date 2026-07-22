@@ -40,6 +40,13 @@ dev = [
     # starlette's TestClient prefers httpx2; without it the suite emits a
     # StarletteDeprecationWarning. Test-only — production code still uses httpx.
     "httpx2",
+    # Drives the browser verification of UI work (launch the app, click through
+    # it, assert on the real DOM). Also in the `screenshots` extra, which exists
+    # as a no-dev install path — but a plain `uv sync` prunes anything outside
+    # the default groups, so leaving it only there silently removed the tooling
+    # mid-session. The wheel alone is cheap; browsers are a separate
+    # `playwright install chromium` and are NOT fetched by syncing.
+    "playwright>=1.44",
 ]
 
 [tool.ruff]
