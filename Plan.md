@@ -314,6 +314,38 @@ reachable both at save time and as a per-entry "re-save without extraction" so
 already-bad captures can be fixed in place. Related to #10 (same pipeline, opposite
 direction: that one *adds* extraction to feeds with no body).
 
+### 2b. Dead feed-redirector links — investigated 2026-07-22, automation exhausted
+
+Not a new item; recording the measurement so nobody re-investigates. Every
+automatic recovery path fails on the live library:
+
+| starred redirector links | 37 |
+|---|---|
+| recoverable from captured archive HTML | **0** — no archive rows for these |
+| recoverable by live redirect resolution | **0** — feedproxy.google.com 404s, no redirect chain |
+| recoverable from Archive.org | **0** — no snapshots of the redirector URLs |
+| have an article slug in the path (reconstructable in principle) | 15 |
+| opaque id only (`~3/vGL5XCHkyww/`) | 22 |
+| whose feed knows the publisher host | 30 |
+| **still hold their content** (article readable in Lectio) | **36 of 37** |
+
+`scripts/backfill_canonical_links.py` was built for this and returns
+`0/37 recoverable`. Hosts: 35 feedproxy.google.com, 1 danielmiessler, 1 betanews.
+
+**A host+slug reconstruction tier was considered and rejected**: it would cover
+~13 entries, needs a per-entry verification fetch, and guesses the publisher
+host from the feed's site link or the `/~r/<token>/` path. Poor value for 13
+links on mostly dead 2013-era blogs.
+
+**Resolved instead by Edit URL** (`POST /entries/set-link`) — the user finds the
+new location by hand and pins it, then Re-fetch pulls the body from there. That
+covers the 22 opaque ones no heuristic could ever reach, and generalizes past
+redirectors to any moved or reorganized site. See ARCHITECTURE "Canonical entry
+links".
+
+Note the loss here is only the *link*: 36 of 37 still have their stored content,
+so the articles read fine in Lectio today.
+
 ### 3. "Filter this view" — ⚠ BLOCKED on a decision (see finding 3 below)
 
 **Do not start this as written.** The premise that the client holds the whole

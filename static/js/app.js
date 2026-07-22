@@ -2249,6 +2249,7 @@
     const postDeleteButton = document.getElementById('ctx-post-delete');
     const postEditDateButton = document.getElementById('ctx-post-edit-date');
     const postEditTitleButton = document.getElementById('ctx-post-edit-title');
+    const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
@@ -5950,6 +5951,7 @@
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
               && Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
@@ -6306,6 +6308,7 @@
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
                 && Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
@@ -7281,6 +7284,42 @@
             window.location.reload();
           } catch (_) {
             window.alert('Could not save the title.');
+          }
+        },
+      });
+    });
+
+    postEditLinkButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const currentLink = contextPostLink;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openActionInputModal({
+        title: 'Edit URL',
+        // Repairs a dead or moved source link (e.g. a retired feedproxy URL).
+        // Only the link changes — the entry keeps its id, so star, tags and
+        // read state are untouched. Re-fetch content then pulls the article
+        // from the new address.
+        label: 'Source URL',
+        initialValue: currentLink,
+        submitLabel: 'Save',
+        onSubmit: async (value) => {
+          try {
+            const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, link: value });
+            const resp = await fetch('/entries/set-link', { method: 'POST', body });
+            const data = await resp.json();
+            if (!data.ok) {
+              window.alert(data.error || 'Could not save the URL.');
+              return;
+            }
+            // Both the list row and the pane header render the link
+            // server-side; reload to reflect both, as Edit title does.
+            window.location.reload();
+          } catch (_) {
+            window.alert('Could not save the URL.');
           }
         },
       });

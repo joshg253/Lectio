@@ -94,7 +94,11 @@ The short version:
   duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —
   unsubscribing a feed that has starred/tagged posts defaults to **keeping**
   them: the feed leaves the tree but its curated items stay browsable per feed
-  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title.
+  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title, and
+  **edit URL** — repoint a post at a moved or dead source link (a retired
+  feedproxy/FeedBurner redirector, or a site reorganization), then **Re-fetch
+  content** to pull the article from its new home. The star, tags and read
+  state are kept: only the link changes.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can

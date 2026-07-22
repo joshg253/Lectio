@@ -21638,6 +21638,68 @@ def set_entry_title_route(feed_url: str = Form(...), entry_id: str = Form(...), 
     return JSONResponse({"ok": True, "title": title})
 
 
+_ENTRY_LINK_MAX_LEN = 2000
+
+
+@app.post("/entries/set-link")
+def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), link: str = Form("")):
+    """Override a post's source URL (repairs a dead or moved link).
+
+    Same mechanism as /entries/set-title: the corrected link is written into
+    reader's `entries.link` column and a meta `entry_link_overrides` row lets
+    the refresh service re-pin it if the feed re-ingests the original. An empty
+    `link` clears the override.
+
+    **Only `link` changes — never the entry id.** For a Lectio capture the id
+    *is* the original URL, and it keys the star row, manual tags, and archive
+    rows; re-keying would scatter all three. Changing the link alone is enough:
+    the UI's "open original" and the Re-fetch path both read `link` first, so
+    correcting it here is what lets Re-fetch pull the article from its new home.
+
+    This is the manual counterpart to the archive worker's automatic
+    canonicalization (`_apply_canonical_entry_link`), which only fires for
+    redirector links it can resolve. Dead redirectors like feedproxy.google.com
+    can't be resolved by anything — the user finds the new location by hand and
+    pins it here.
+    """
+    link = link.strip()
+    with get_reader() as reader:
+        if reader.get_entry((feed_url, entry_id), None) is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not link:
+            with get_meta_connection() as conn:
+                conn.execute(
+                    "DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                conn.commit()
+            return JSONResponse({"ok": True, "cleared": True})
+        if len(link) > _ENTRY_LINK_MAX_LEN:
+            return JSONResponse({"ok": False, "error": "URL is too long."}, status_code=400)
+        # http(s) only. safe_link_url also passes mailto:/tel:, which are fine
+        # as hrefs but are not source URLs a re-fetch could ever follow.
+        parsed = urlparse(link)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return JSONResponse(
+                {"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400
+            )
+        if not html_sanitize.safe_link_url(link):
+            return JSONResponse({"ok": False, "error": "That URL isn't safe to link."}, status_code=400)
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_link_overrides (feed_url, entry_id, link) VALUES (?, ?, ?)",
+                (feed_url, entry_id, link),
+            )
+            conn.commit()
+        db = reader._storage.get_db()
+        db.execute(
+            "UPDATE entries SET link = ? WHERE feed = ? AND id = ?",
+            (link, feed_url, entry_id),
+        )
+        db.commit()
+    return JSONResponse({"ok": True, "link": link})
+
+
 @app.post("/entries/move-to-feed")
 def move_entry_to_feed_route(
     feed_url: str = Form(...),
