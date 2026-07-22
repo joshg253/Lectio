@@ -66,6 +66,7 @@ from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
+from services import unstar_tagged as unstar_tagged_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
@@ -22697,6 +22698,106 @@ def preview_saved_autofile():
             ({"host": c["host"], "count": c["count"]} for c in marked),
             key=lambda c: (-c["count"], c["host"]),
         ),
+    })
+
+
+def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
+    """Assemble the unstar-tagged plan for the current user.
+
+    Reads the star rows, every manual tag, and the archived-at set, and hands
+    them to the pure decision layer. Read-only.
+    """
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        tags_by_key: dict[tuple[str, str], list[str]] = {}
+        for feed, eid, key in db.execute(
+            "SELECT feed, id, key FROM entry_tags WHERE key LIKE ?",
+            (f"{MANUAL_TAG_KEY_PREFIX}%",),
+        ):
+            tags_by_key.setdefault((str(feed), str(eid)), []).append(
+                str(key)[len(MANUAL_TAG_KEY_PREFIX):]
+            )
+    with get_meta_connection() as conn:
+        starred = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries"
+            )
+        }
+        archived = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
+            )
+        }
+    plan = unstar_tagged_service.build_unstar_plan(
+        starred, tags_by_key, archived=archived, keep_tags=keep_tags,
+    )
+    plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags(
+        {row["tag"] for row in plan["per_tag"]}
+    )
+    return plan
+
+
+@app.get("/saved/unstar-tagged/preview")
+def preview_unstar_tagged(keep_tags: str = Query("")):
+    """Preview which starred+tagged entries would be unstarred.
+
+    Read-only. After tag-as-keep a tag already keeps an entry, so a star on a
+    tagged entry is redundant clutter in the read-later queue. *keep_tags* is a
+    comma-separated opt-out; any entry carrying one of those tags is protected.
+
+    The per-tag breakdown and the suggested queue-like opt-outs let the reviewer
+    keep aspirational reading queues (`games-to-play`, `books`) starred while
+    clearing topical filing tags. The entry-id lists aren't sent — the preview
+    only needs counts, and apply recomputes the set under the same keep_tags.
+    """
+    keep = {t.strip() for t in keep_tags.split(",") if t.strip()}
+    plan = _current_unstar_tagged_plan(keep)
+    return JSONResponse({
+        "totals": plan["totals"],
+        "per_tag": plan["per_tag"],
+        "queue_like_tags": plan["queue_like_tags"],
+    })
+
+
+@app.post("/saved/unstar-tagged")
+async def apply_unstar_tagged(request: Request):
+    """Unstar every starred entry that carries a manual tag, minus opt-outs.
+
+    Body (JSON): {"keep_tags": [...]}. Recomputes the plan server-side under the
+    given opt-outs rather than trusting a client-supplied id list — the preview
+    is advisory, the decision is made here against live data.
+
+    Only the star row is deleted. Manual tags, read state, and the offline
+    archive are untouched: a tagged entry keeps its capture (the unstar route's
+    archive-removal is gated on having no tags, and this bypasses that path
+    entirely, so nothing is ever enqueued for removal).
+    """
+    body = await request.json()
+    keep = {str(t).strip() for t in body.get("keep_tags", []) if str(t).strip()}
+    plan = _current_unstar_tagged_plan(keep)
+    to_unstar = plan["to_unstar"]
+    if not to_unstar:
+        return JSONResponse({"ok": True, "unstarred": 0, "archived_at_lost": 0})
+
+    deleted = 0
+    with get_meta_connection() as conn:
+        for start in range(0, len(to_unstar), 400):
+            chunk = to_unstar[start:start + 400]
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            flat = [v for key in chunk for v in key]
+            cur = conn.execute(
+                f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({placeholders})",
+                flat,
+            )
+            deleted += cur.rowcount
+        conn.commit()
+
+    # A behind-the-back delete leaves the generation-guarded counts stale.
+    invalidate_unread_counts_cache()
+    return JSONResponse({
+        "ok": True,
+        "unstarred": deleted,
+        "archived_at_lost": plan["totals"]["archived_at_lost"],
     })
 
 
