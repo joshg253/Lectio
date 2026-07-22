@@ -19,6 +19,11 @@ command with a decay clock — run it any time, it doesn't queue behind anything
   was re-creating them at every startup, which is why the bug looked
   irreproducible. Fixed and tested; **the sweep still needs a go-ahead**, and
   the orphaned *archive* rows need a re-key-or-delete decision. See #4.
+- **⚠ A second bug in the same function was silently starring tagged entries**,
+  and pass 1 was feeding it — left alone it would have manufactured ~3,581
+  redundant stars, re-creating #5's entire backlog. Caught mid-run at 166 and
+  fixed. See #4 for the mechanism; **#5's count is now a moving target
+  (1,603 → 1,769), so re-measure right before acting on it.**
 - **#5 and #6 re-measured.** #5 is unchanged in size (1,603) and safer than
   before (only 29 rows carry `archived_at`). **#6 collapsed from ~490 groups to
   65** — #4 did what it was predicted to do, and #6 may no longer be worth
@@ -564,7 +569,42 @@ with no feed, most holding one or two articles.
   `tests/services/test_starred_archive_backfill.py` (7 cases), including that a
   failing reader lookup is treated as missing rather than resurrecting a star.
 
+  **A second bug in the same function, found while verifying the first — this
+  one was actively firing.** After the fix above shipped and the container
+  restarted, star rows still climbed 14,566 → 14,732. The 166 new rows were
+  **not** orphans: every one was a **manually tagged entry on a live feed**,
+  163 of them on the dead `heyscriptingguy` feed.
+
+  **Tag-as-keep broke this function's core inference.** It reasons "has a
+  complete archive ⇒ was starred", which was true when written. Since the flip a
+  *tag* archives too, so `archived_entry` is now a **superset** of the starred
+  set — and the backfill was converting tagged entries into starred ones.
+
+  **Tonight's Part C pass 1 was the trigger**, which makes this a self-inflicted
+  wound worth understanding: retro-archiving 3,581 tagged entries meant that as
+  each archive completed, the next startup would star it. Measured mid-run:
+  1,769 tagged entries already starred, 29 more queued, **3,385 archives still
+  pending** — i.e. left alone it would have manufactured ~3,581 redundant stars
+  and inflated Saved by that much. That is precisely what #5 exists to undo, so
+  pass 1 would have quietly re-created #5's entire backlog.
+
+  **Fixed** in the same function: an entry carrying a manual tag is never
+  star-restored (its archive is explained by the tag), and if the manual-tag
+  lookup fails the backfill restores *nothing* rather than guessing — inventing
+  thousands of stars is far worse than skipping a recovery path. Entries both
+  starred and tagged are skipped too; this is disaster recovery, and losing one
+  real star beats inventing thousands. Bulk `_manually_tagged_entry_keys()` in
+  main.py backs it so the startup pass stays one query, not thousands.
+
+  **Consequence for #5: its number is now a moving target.** The 1,603 measured
+  earlier tonight became 1,769 during the run. Re-measure immediately before
+  acting, and note ~166 of the affected set are stars *this session created*.
+
   **Still open:**
+  - **The 166 already-converted stars** — tagged entries starred by the buggy
+    backfill before it was fixed. They are indistinguishable from a genuine
+    star-and-tag, so they cannot be surgically reverted; #5's cleanup is what
+    removes them, which is an argument for running #5 sooner.
   - **The sweep** — delete `saved_entries` rows whose entry is gone (4,508
     total, 4,264 on `lectio:saved`). Bulk delete, needs Josh's go-ahead. Now
     worth doing, because the fix means it stays swept.

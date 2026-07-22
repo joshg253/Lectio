@@ -68,13 +68,19 @@ def dbs(tmp_path):
     meta.close()
 
 
-def _service(archive, meta, reader):
+def _service(archive, meta, reader, tagged=None, tagged_raises=False):
+    def manually_tagged_keys():
+        if tagged_raises:
+            raise RuntimeError("reader db unavailable")
+        return set(tagged or ())
+
     return StarredArchiveService(
         get_archive_connection=lambda: archive,
         get_meta_connection=lambda: meta,
         get_reader=lambda: reader,
         user_agent="test",
         sanitize_readability_html=lambda h: h,
+        manually_tagged_keys=manually_tagged_keys,
     )
 
 
@@ -157,6 +163,55 @@ def test_a_failing_reader_lookup_is_treated_as_missing(dbs):
     archive, meta = dbs
     _add_archive(archive, "unknown")
     svc = _service(archive, meta, _FakeReader(set(), raises=True))
+
+    assert svc.backfill_saved_entries_from_archive() == 0
+    assert _stars(meta) == set()
+
+
+def test_a_manually_tagged_entry_is_never_starred(dbs):
+    """Since tag-as-keep a tag archives too, so a complete archive row no longer
+    implies the entry was starred. Retro-archiving tagged entries (Part C pass 1)
+    used to convert them into stars at the next boot."""
+    archive, meta = dbs
+    _add_archive(archive, "tagged-only", feed="https://example.com/feed")
+    svc = _service(
+        archive,
+        meta,
+        _FakeReader({("https://example.com/feed", "tagged-only")}),
+        tagged={("https://example.com/feed", "tagged-only")},
+    )
+
+    assert svc.backfill_saved_entries_from_archive() == 0
+    assert _stars(meta) == set()
+
+
+def test_tagged_and_untagged_are_separated_in_one_batch(dbs):
+    archive, meta = dbs
+    _add_archive(archive, "starred-only", feed="https://example.com/feed")
+    _add_archive(archive, "tagged-only", feed="https://example.com/feed")
+    live = {
+        ("https://example.com/feed", "starred-only"),
+        ("https://example.com/feed", "tagged-only"),
+    }
+    svc = _service(
+        archive, meta, _FakeReader(live), tagged={("https://example.com/feed", "tagged-only")}
+    )
+
+    assert svc.backfill_saved_entries_from_archive() == 1
+    assert _stars(meta) == {("https://example.com/feed", "starred-only")}
+
+
+def test_a_failing_tag_lookup_restores_nothing(dbs):
+    """Without the tag set every tagged entry would be starred, so bail entirely
+    rather than guess — inventing stars is worse than skipping the recovery."""
+    archive, meta = dbs
+    _add_archive(archive, "e1", feed="https://example.com/feed")
+    svc = _service(
+        archive,
+        meta,
+        _FakeReader({("https://example.com/feed", "e1")}),
+        tagged_raises=True,
+    )
 
     assert svc.backfill_saved_entries_from_archive() == 0
     assert _stars(meta) == set()

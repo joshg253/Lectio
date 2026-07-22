@@ -65,6 +65,7 @@ class StarredArchiveService:
         sanitize_readability_html: Callable[[str], str],
         background_user_ids: Callable[[], list[str]] | None = None,
         on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
+        manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
@@ -75,6 +76,11 @@ class StarredArchiveService:
         # page fetch when the redirect chain landed on a different URL, so the
         # app can canonicalize redirector entry links at zero extra requests.
         self._on_canonical_link = on_canonical_link
+        # Every (feed_url, entry_id) carrying a manual tag, fetched in bulk.
+        # Since the tag-as-keep flip a *tag* also creates an archive, so
+        # "has a complete archive" no longer implies "was starred" — see
+        # backfill_saved_entries_from_archive.
+        self._manually_tagged_keys = manually_tagged_keys
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -327,14 +333,27 @@ class StarredArchiveService:
         The reverse of backfill_missing_archives. Recovers from meta DB resets
         where starred_archive survived intact. Returns the number of rows inserted.
 
-        Only restores a star for an entry reader still holds. An archive row
-        outlives its entry — moving a saved article to a real feed hard-deletes
-        the ``lectio:saved`` source but leaves its archive row behind — and
-        without this check every restart "restored" a star pointing at a
-        tombstone: invisible in the UI (the entry lookup returns nothing) but
-        inflating counts and adding work to every Saved-view query. That is the
-        whole of the orphaned-star-row mystery; it also made a one-off sweep
+        Two things it must *not* do, both learned the hard way:
+
+        **Never restore a star for an entry reader no longer holds.** An archive
+        row outlives its entry — moving a saved article to a real feed
+        hard-deletes the ``lectio:saved`` source but leaves its archive row
+        behind — so without this check every restart "restored" a star pointing
+        at a tombstone: invisible in the UI (the entry lookup returns nothing)
+        but inflating counts and adding work to every Saved-view query. That is
+        the whole of the orphaned-star-row mystery; it also made a one-off sweep
         pointless, since the next startup re-created every row it deleted.
+
+        **Never restore a star for a manually tagged entry.** This function
+        infers "had a complete archive" ⇒ "was starred", which was true when it
+        was written and became false at the tag-as-keep flip: a tag now archives
+        too, so ``archived_entry`` is a superset of the starred set. Without the
+        check, retro-archiving tagged entries (Part C pass 1) silently converted
+        them into *starred* entries at the next boot — manufacturing exactly the
+        redundant stars that the "unstar tagged items" cleanup exists to remove.
+        An entry that is both starred and tagged is skipped too: this is a
+        disaster-recovery path, and failing to restore one real star is far
+        cheaper than inventing thousands.
         """
         try:
             with self._get_archive_connection() as conn:
@@ -348,13 +367,28 @@ class StarredArchiveService:
         if not rows:
             return 0
 
+        try:
+            tagged = self._manually_tagged_keys() if self._manually_tagged_keys else set()
+        except Exception as exc:  # noqa: BLE001
+            # Without the tag set every tagged entry would be starred, so bail
+            # rather than guess — the recovery this function offers is worth far
+            # less than the damage of inventing stars.
+            LOGGER.warning(
+                "starred archive: backfill_saved_entries skipped, manual-tag lookup failed: %s", exc
+            )
+            return 0
+
         inserted = 0
         stale = 0
+        tag_explained = 0
         try:
             with self._get_meta_connection() as meta_conn, self._get_reader() as reader:
                 for row in rows:
                     feed_url = str(row["feed_url"])
                     entry_id = str(row["entry_id"])
+                    if (feed_url, entry_id) in tagged:
+                        tag_explained += 1
+                        continue
                     try:
                         entry = reader.get_entry((feed_url, entry_id), None)
                     except Exception:  # noqa: BLE001
@@ -377,6 +411,11 @@ class StarredArchiveService:
         if stale:
             LOGGER.info(
                 "starred archive: skipped %d archive row(s) whose entry no longer exists", stale
+            )
+        if tag_explained:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) explained by a manual tag, not a star",
+                tag_explained,
             )
         return inserted
 

@@ -7640,6 +7640,10 @@ starred_archive_service = StarredArchiveService(
     # Lazy for the same reason: rewrites redirector entry links (feedproxy/
     # feedburner) to the canonical URL the capture's source fetch resolved to.
     on_canonical_link=lambda f, e, old, new: _apply_canonical_entry_link(f, e, old, new),
+    # Lazy for the same reason. Lets the star-restore backfill tell a
+    # tag-created archive from a star-created one — since tag-as-keep, an
+    # archive row alone no longer means the entry was starred.
+    manually_tagged_keys=lambda: _manually_tagged_entry_keys(),
 )
 
 
@@ -7916,6 +7920,26 @@ def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
         if not entry:
             return []
         return get_manual_tags_for_resource(reader, entry.resource_id)
+
+
+def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
+    """Every (feed_url, entry_id) carrying a manual tag, in one query.
+
+    Bulk because the caller (the starred-archive star-restore backfill) checks
+    thousands of rows at startup; a per-row lookup there would be a reader round
+    trip each time.
+    """
+    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0)
+    try:
+        return {
+            (str(feed), str(entry_id))
+            for feed, entry_id in conn.execute(
+                "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
+                (f"{MANUAL_TAG_KEY_PREFIX}%",),
+            )
+        }
+    finally:
+        conn.close()
 
 
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
