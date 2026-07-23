@@ -793,13 +793,20 @@ with no feed, most holding one or two articles.
   - **The sweep** — delete `saved_entries` rows whose entry is gone (4,508
     total, 4,264 on `lectio:saved`). Bulk delete, needs Josh's go-ahead. Now
     worth doing, because the fix means it stays swept.
-  - **The archive rows themselves are still orphaned** — 4,264 `complete` rows
-    for entries that no longer exist, holding real captured content in a 7.6GB
-    DB. Two defensible options and it is a judgment call, not a cleanup:
-    **re-key** them onto the target feed when `_move_entry_to_feed` moves an
-    article (preserves the capture, more invasive), or **delete** them with the
-    source entry (simpler, discards a capture that may predate the target feed's
-    own). Do not do either without deciding which.
+  - **Orphaned archive rows — RESOLVED 2026-07-23.** These surfaced as
+    user-visible **phantom duplicates**: the Read/Saved view renders starred
+    entries from archive rows (`get_archived_entry_detail`), so an orphaned
+    `lectio:saved` capture showed as a second copy of the moved article, with
+    its own worse content (a comments thread, an empty husk). Both decisions
+    taken, not either/or: `_move_entry_to_feed` now re-keys the capture onto the
+    target (or deletes it if the target already has one), and
+    `scripts/dedupe_orphan_archives.py` cleaned the backlog — **4,076 redundant
+    deleted, 502 true orphans left** (fully-gone articles, invisible, not a dup).
+    `lectio:saved` archive rows 4,650 → 574. New service primitives:
+    `has_complete_archive` / `delete_archive` / `rekey_archive`. A 597MB export
+    of the deleted rows is parked at `/data/deleted_saved_archives_*.sqlite` as a
+    safety net — delete once confident. Archive not VACUUMed (needs ~8GB scratch
+    the disk lacks; freed pages get reused).
 - **⚠ Inline SVG in feed content is mangled at ingest.** Found 2026-07-21 while
   redoing the docs screenshots. feedparser parses an HTML-escaped
   `<description>` as HTML, where a trailing slash is meaningless — so
