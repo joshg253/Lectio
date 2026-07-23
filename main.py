@@ -8047,6 +8047,35 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     return keys
 
 
+def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of entries carrying manual tag *tag*, in the view's
+    feeds. Lets the Saved+tag view narrow to the tag in SQL before hydrating,
+    instead of hydrating the whole kept set and post-filtering in Python — the
+    latter fetched lead images for thousands of entries to render a tag view
+    that might match none (measured at ~38s for an empty `inbox` view)."""
+    keys: set[tuple[str, str]] = set()
+    key = f"{MANUAL_TAG_KEY_PREFIX}{tag}"
+    if not feed_urls:
+        return keys
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            feed_list = list(feed_urls)
+            for i in range(0, len(feed_list), 900):
+                chunk = feed_list[i:i + 900]
+                ph = ",".join("?" for _ in chunk)
+                for row in conn.execute(
+                    f"SELECT feed, id FROM entry_tags WHERE key = ? AND feed IN ({ph})",
+                    [key, *chunk],
+                ):
+                    keys.add((str(row[0]), str(row[1])))
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("get_entry_keys_for_manual_tag failed: %s", exc)
+    return keys
+
+
 def invalidate_tag_counts_cache() -> None:
     with tag_counts_cache_lock:
         tag_counts_cache.clear()
@@ -10810,6 +10839,13 @@ def list_entries_for_feeds(
             # shows nothing. kept_entries_set (star OR tag) is already restricted
             # to the view's feeds; point-lookup exactly those keys instead.
             star_keys: Iterable[tuple[str, str]] = kept_entries_set
+            if normalized_selected_tag:
+                # Narrow to the tag in SQL BEFORE hydrating. Without this the tag
+                # filter ran in Python after hydrating (and lead-image-fetching)
+                # the whole kept set — ~38s to render an empty `inbox` view.
+                star_keys = kept_entries_set & get_entry_keys_for_manual_tag(
+                    set(feed_urls), normalized_selected_tag
+                )
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -10817,15 +10853,16 @@ def list_entries_for_feeds(
                 # every kept key and filtered in Python — ~11k get_entry calls,
                 # measured at 28s per search on a real library, which reads as a
                 # search box that does nothing.
-                matched_keys = _filter_star_keys_by_search(kept_entries_set, search_terms)
+                matched_keys = _filter_star_keys_by_search(set(star_keys), search_terms)
                 if matched_keys is not None:
                     star_keys = matched_keys
                     search_terms = []  # already matched in SQL
-            if len(star_keys) > fetch_limit and not search_terms and not normalized_selected_tag:
+            if len(star_keys) > fetch_limit and not search_terms:
                 # Big backlog: hydrating every kept key costs seconds (6k
                 # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
-                # the raw keys and hydrate only the visible window. Skipped for
-                # tag/search, which post-filter and need the whole set.
+                # the raw keys and hydrate only the visible window. The tag
+                # narrowing above already reduced the set, so this now applies to
+                # tag views too.
                 star_keys = _sorted_star_key_window(
                     star_keys,
                     sort_by=normalized_sort_by,
@@ -23865,6 +23902,24 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
     # article never appeared in the Inbox until the cache expired.
     if result.get("ok") and (not result.get("duplicate") or result.get("resurfaced")):
         invalidate_unread_counts_cache()
+        # Land the save in the Saved Inbox: tag it 'inbox', the same bucket the
+        # auto-save rule uses. A manual save (extension/bookmarklet/modal) never
+        # got this, so saves were starred but invisible in the Inbox tag view.
+        # Only on a new save or a resurface — never re-tag a duplicate the user
+        # has deliberately filed out of the Inbox.
+        eid = result.get("entry_id")
+        if eid:
+            try:
+                existing = get_manual_tags_for_entry(saved_articles_service.SAVED_FEED_URL, eid)
+                if _SAVE_ARTICLE_INBOX_TAG not in existing:
+                    set_manual_tags_for_entry(
+                        saved_articles_service.SAVED_FEED_URL, eid,
+                        " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG]),
+                    )
+                    invalidate_tag_counts_cache()
+                    invalidate_has_manual_tags_cache()
+            except Exception:  # noqa: BLE001 — the save landed; the tag is a nicety
+                LOGGER.warning("[save-article] inbox tag failed for %s", eid)
     return result
 
 
