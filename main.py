@@ -10179,6 +10179,19 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             fallback = _bs4_content_fallback(raw_html)
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
+                art_img_count = article_html.lower().count("<img")
+            # Last resort: readability *and* the selector fallback both kept
+            # essentially no images on an image-heavy page — the catastrophic
+            # case, not mere trimming. guitarplayer lessons are the example:
+            # ~1 of ~54 images survive, and the dropped ones are the tablature
+            # figures that *are* the lesson, on a DOM no content selector
+            # matches. Take the whole body. Gated hard (≤1 kept, >10 present) so
+            # a page where readability kept a reasonable share is never widened
+            # into dragging in its chrome images.
+            if art_img_count <= 1 and raw_img_count > 10:
+                whole = _whole_body_content(raw_html)
+                if whole and whole.lower().count("<img") > art_img_count:
+                    article_html = whole
     article_html = _finalize_article_html(article_html, source_url, _img_sizes)
     if not article_html:
         raise ValueError("No readable article content was found.")
@@ -10240,7 +10253,18 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     title = _page_title_from_html(raw_html, source_url)
+    article_html = _whole_body_content(raw_html)
+    article_html = _finalize_article_html(article_html, source_url, img_sizes)
+    if not article_html:
+        raise ValueError("The page had no usable content.")
+    return title, article_html
 
+
+def _whole_body_content(raw_html: str) -> str:
+    """Sanitized whole-page body with only obvious non-content removed
+    (script/style/nav/header/footer). Keeps everything readability would score
+    away — the shared core of full-page capture and the image-rescue last resort
+    in extract_readability_article."""
     body_html = raw_html
     try:
         from bs4 import BeautifulSoup
@@ -10251,12 +10275,7 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
         body_html = str(body)
     except Exception:  # noqa: BLE001
         pass
-
-    article_html = html_sanitize.sanitize_html(body_html).strip()
-    article_html = _finalize_article_html(article_html, source_url, img_sizes)
-    if not article_html:
-        raise ValueError("The page had no usable content.")
-    return title, article_html
+    return html_sanitize.sanitize_html(body_html).strip()
 
 
 def fetch_full_page_article(source_url: str) -> tuple[str, str]:
@@ -14140,6 +14159,10 @@ def _start_background_update(feed_url: str) -> None:
 
 
 _FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
+# Feeds in no folder ("Uncategorized") are invisible to the per-folder loop, so
+# they get their own attempt-clock at the global cadence. Without this a feed
+# added to Uncategorized never refreshes at all — no folder ever selects it.
+_UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY = "uncategorized_cadence_last_refresh"
 
 
 def _background_user_ids() -> list[str]:
@@ -14228,6 +14251,7 @@ def _scheduled_refresh_tick() -> None:
     # exclude paused feeds here ourselves (alongside Lectio's own disabled_feeds).
     with get_reader() as reader:
         paused = {str(f.url) for f in reader.get_feeds(updates_enabled=False)}
+        enabled_feed_urls = {str(f.url) for f in reader.get_feeds(updates_enabled=True)}
     with get_meta_connection() as conn:
         disabled = get_disabled_feed_urls(conn) | paused
         # Load all folders and their per-folder cadence settings.
@@ -14250,6 +14274,25 @@ def _scheduled_refresh_tick() -> None:
                 if url not in disabled:
                     feeds_to_refresh.add(url)
             folders_to_mark.append((key, str(now_ts)))
+
+        # Uncategorized feeds: those in no folder never appear above, so refresh
+        # them as one bucket on the global cadence. update_feeds still applies
+        # its own per-feed/domain/429 backoff, so this only decides candidacy.
+        foldered = {
+            str(row["feed_url"])
+            for row in conn.execute("SELECT DISTINCT feed_url FROM folder_feeds")
+        }
+        orphan_feeds = {
+            url for url in enabled_feed_urls
+            if url not in foldered and url not in disabled
+        }
+        if orphan_feeds:
+            last_ts_str = get_setting(conn, _UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY)
+            last_ts = float(last_ts_str) if last_ts_str else 0.0
+            if (now_ts - last_ts) >= global_minutes * 60:
+                feeds_to_refresh |= orphan_feeds
+                folders_to_mark.append((_UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY, str(now_ts)))
+
         if folders_to_mark:
             for key, val in folders_to_mark:
                 set_setting(conn, key, val)
