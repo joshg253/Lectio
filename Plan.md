@@ -291,6 +291,16 @@ The tradeoff is deliberate: on a blog-shaped page this keeps nav/sidebar chrome
 readability would strip, so it is the escape hatch for document-shaped pages,
 not the default. Only script/style/nav/header/footer are removed as never-content.
 
+**Image-drop also fixed at the extraction level (2026-07-23).** guitarplayer
+lessons store ~54 tab figures in bare divs no content selector matches;
+readability kept ~1, so a normal refetch lost the figures that *are* the lesson.
+`extract_readability_article` now falls back to the whole body as a last resort
+when it *and* the selector fallback both keep ≤1 image on a >10-image page — so a
+normal refetch recovers them, not only `mode=full`. Gated hard so a reasonable
+extraction is never widened into dragging in chrome. 51 captured guitarplayer
+lessons batch-refetched with `mode=full` (images 41 → 1,118, ~22 each); the 50
+feed-provided GP entries are correctly untouched (the feed owns their content).
+
 The original analysis follows.
 
 
