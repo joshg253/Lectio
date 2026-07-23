@@ -92,9 +92,12 @@ def run_for_user(uid: str, apply: bool) -> dict:
         for r in mc.execute("SELECT feed_url, from_host, to_host FROM feed_url_rewrites"):
             rules_by_feed.setdefault(str(r["feed_url"]), {})[str(r["from_host"]).lower()] = str(r["to_host"])
 
+    import time as _time
+
     stats: Counter[str] = Counter()
     reader = main.get_reader()
     with main.get_meta_connection() as conn:
+        conn.execute("PRAGMA busy_timeout = 20000")
         for feed, host_map in rules_by_feed.items():
             for e in list(reader.get_entries(feed=feed)):
                 old_id = str(e.id)
@@ -102,9 +105,21 @@ def run_for_user(uid: str, apply: bool) -> dict:
                 if new_id == old_id:
                     continue
                 stats["match"] += 1
-                if apply:
-                    new_link = _swap_host(str(e.link or old_id), host_map)
-                    stats[_migrate_entry(reader, conn, feed, old_id, new_id, new_link)] += 1
+                if not apply:
+                    continue
+                new_link = _swap_host(str(e.link or old_id), host_map)
+                # The live app's workers write the same DBs; retry a locked
+                # entry rather than aborting the whole run mid-migration.
+                for attempt in range(4):
+                    try:
+                        stats[_migrate_entry(reader, conn, feed, old_id, new_id, new_link)] += 1
+                        break
+                    except sqlite3.OperationalError as exc:
+                        if "locked" in str(exc).lower() and attempt < 3:
+                            _time.sleep(1.5)
+                            continue
+                        stats["locked"] += 1
+                        break
     return dict(stats)
 
 
