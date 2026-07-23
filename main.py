@@ -9862,6 +9862,36 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         }
 
 
+# Comment threads are never article content, but they defeat extraction: a
+# blogspot/WordPress comments section carries hundreds of avatar/delete-icon
+# images and huge text, so readability scores it above the actual post and the
+# "more images = better content" fallback can't rescue it (the comic post-body
+# has *fewer* images than the comment avatars). Stripping the section before
+# extraction lets the real body win. Container-level selectors only — never a
+# broad `[class*=comment]`, which would catch content like "commentary" or a
+# "N comments" badge.
+_COMMENT_SECTION_SELECTORS = (
+    "#comments", ".comments", ".comments-area", ".comment-list",
+    ".comment-thread", ".comment-section", "#comment-holder",
+    "#disqus_thread", ".disqus", "#respond", ".comment-form", "#comment-form",
+)
+
+
+def _strip_comment_sections(raw_html: str) -> str:
+    """Remove comment-thread containers from page HTML before extraction."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in _COMMENT_SECTION_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001
+        return raw_html
+
+
 def _bs4_content_fallback(raw_html: str) -> str:
     """Extract article content via BS4 using known content-area selectors.
 
@@ -10152,6 +10182,9 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    # Strip comment threads first — otherwise readability scores a big comments
+    # section above the post and no image-count fallback can recover the body.
+    raw_html = _strip_comment_sections(raw_html)
     _img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url
@@ -10271,6 +10304,12 @@ def _whole_body_content(raw_html: str) -> str:
         soup = BeautifulSoup(raw_html, "html.parser")
         for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
             tag.decompose()
+        # Comment threads are not article content, and a full-body capture would
+        # otherwise swallow a huge comments section (the whole point of the
+        # image-rescue was to keep content, not a wall of avatars).
+        for sel in _COMMENT_SECTION_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
         body = soup.body or soup
         body_html = str(body)
     except Exception:  # noqa: BLE001
