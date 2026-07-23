@@ -3210,6 +3210,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # "Fix URLs" automation: per-feed host aliases. When an author moves
+        # domains without updating their feed's <guid>/<link> (they keep emitting
+        # the old host), every entry lands with an old-domain id/link. A rule
+        # here rewrites from_host -> to_host at ingest so entries arrive with the
+        # current domain. Per-feed by design: an author's dead domains are only
+        # rewritten inside their own feed, never a legit link elsewhere.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_url_rewrites (
+                feed_url TEXT NOT NULL,
+                from_host TEXT NOT NULL,
+                to_host TEXT NOT NULL,
+                PRIMARY KEY(feed_url, from_host)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS read_history (
@@ -4638,6 +4654,25 @@ def feed_in_rule_scope(scope: str, scope_id: str, feed_url: str, folder_feed_url
 def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT feed_url FROM disabled_feeds").fetchall()
     return {str(r["feed_url"]) for r in rows}
+
+
+def get_feed_url_rewrites(feed_url: str) -> list[tuple[str, str]]:
+    """[(from_host, to_host)] host-alias rules for *feed_url*, for the ingest
+    rewrite hook. Opens its own connection: called from the sanitizing parser,
+    which runs in the caller's tenancy context but has no meta connection."""
+    try:
+        conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
+        try:
+            return [
+                (str(f), str(t)) for f, t in conn.execute(
+                    "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?",
+                    (feed_url,),
+                )
+            ]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — a rewrite lookup must never break a parse
+        return []
 
 
 def get_browser_ua_feed_urls(conn: sqlite3.Connection) -> set[str]:
@@ -7592,6 +7627,7 @@ def _store_feed_window(feed_url: str, entry_ids: list[str]) -> None:
 
 reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
 reader_sanitize.set_feed_window_sink(_store_feed_window)
+reader_sanitize.set_url_rewrite_provider(get_feed_url_rewrites)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
