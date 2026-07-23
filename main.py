@@ -23859,7 +23859,11 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
         # The Saved Articles feed just appeared — surface it in the sidebar tree.
         invalidate_meta_structure_cache()
         invalidate_problematic_feeds_cache()
-    if result.get("ok") and not result.get("duplicate"):
+    # Invalidate on a new save OR a resurface: a resurface un-archives and marks
+    # a *duplicate* unread, which changes the unread counts and the Saved Inbox
+    # list — gating only on "not duplicate" left those stale, so a re-saved
+    # article never appeared in the Inbox until the cache expired.
+    if result.get("ok") and (not result.get("duplicate") or result.get("resurfaced")):
         invalidate_unread_counts_cache()
     return result
 
