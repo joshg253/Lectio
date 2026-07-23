@@ -267,6 +267,13 @@ def save_article(
                 "WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
                 (SAVED_FEED_URL, clean_url),
             )
+            # entry_read_state is a read-state OVERRIDE re-applied on refresh, so
+            # marking unread in reader alone doesn't stick — the override flips it
+            # back to read. Clear it so the resurfaced-unread state survives.
+            conn.execute(
+                "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+                (SAVED_FEED_URL, clean_url),
+            )
             conn.commit()
             reader.mark_entry_as_unread((SAVED_FEED_URL, clean_url))
             result["resurfaced"] = bool(cur.rowcount) or bool(existing.read)

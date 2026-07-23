@@ -42,6 +42,16 @@ def meta_conn():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE entry_read_state (
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            read_at TEXT NOT NULL,
+            PRIMARY KEY(feed_url, entry_id)
+        )
+        """
+    )
     try:
         yield conn
     finally:
@@ -132,6 +142,12 @@ def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
         "UPDATE saved_entries SET archived_at = '2019-10-31T23:47:54+00:00' WHERE entry_id = ?",
         (url,),
     )
+    # A read-state override row, as the earlier read state left behind — it would
+    # re-mark the entry read on the next refresh if not cleared.
+    meta_conn.execute(
+        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, '2019-10-31T23:47:54')",
+        (SAVED_FEED_URL, url),
+    )
     meta_conn.commit()
     reader.mark_entry_as_read((SAVED_FEED_URL, url))
 
@@ -144,6 +160,10 @@ def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
     ).fetchone()[0]
     assert archived is None                              # back out of Archive
     assert reader.get_entry((SAVED_FEED_URL, url)).read in (False, None)  # back to unread
+    # The read-state override is gone, so a refresh can't flip it back to read.
+    assert meta_conn.execute(
+        "SELECT COUNT(*) FROM entry_read_state WHERE entry_id = ?", (url,)
+    ).fetchone()[0] == 0
 
 
 def test_resave_of_an_inbox_article_is_not_flagged_resurfaced(reader, meta_conn):
