@@ -5,6 +5,24 @@ this file only tracks what's still open.
 
 ## Now (priority order)
 
+**Shipped 2026-07-23 (engines done, rule-management UI deferred to a browser
+session):**
+- **"Fix URLs" per-feed host rewrite** — for an author who moved domains without
+  updating their feed's `<guid>`/`<link>` (e.g. `tush.ar/rss.xml` still emits
+  `tushar.lol`/`sadh.life`). A `feed_url_rewrites` rule rewrites the host at
+  ingest (raw feedparser result, before reader derives ids), so entries arrive
+  with the current-domain id/link — which is what the post title-links carry, and
+  the *only* way to fix them durably (the link alone can be overridden; the id is
+  the PK and the feed re-serves the old guid every refresh).
+  `scripts/apply_feed_url_rewrites.py` migrated the 31 existing tush.ar entries
+  (→18 after same-slug cross-domain merges; 1 star + 15 tags preserved), and a
+  live refresh confirmed the old ids don't come back. **TODO: a UI to add/edit
+  rules** (rules seeded from the shell for now).
+- **Re-save resurfaces from Archive** — an explicit save of an already-archived+
+  read article (e.g. one a 2019 Instapaper import archived) now un-archives it and
+  marks it unread, so it lands in the Saved Inbox instead of silently staying in
+  Archive. Was the reactormag "Black Cat" report.
+
 **Current focus: Saved Articles — finish the read-later app, then get the backlog
 under control.** Items **#1–#7** are that epic, in dependency order: fix what's
 broken (#1–#2), organize the pile (#3–#6), finish the Instapaper-clone surface
