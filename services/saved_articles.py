@@ -256,6 +256,22 @@ def save_article(
     if existing is not None:
         result["duplicate"] = True
         result["title"] = existing.title or clean_url
+        # An explicit re-save means "put this back in my Inbox to read." Without
+        # this, saving an article that a past Instapaper import had archived (or
+        # that the user archived earlier) silently leaves it in Archive marked
+        # read — so a fresh save appears to do nothing. Un-archive and mark it
+        # unread so it resurfaces.
+        try:
+            cur = conn.execute(
+                "UPDATE saved_entries SET archived_at = NULL "
+                "WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
+                (SAVED_FEED_URL, clean_url),
+            )
+            conn.commit()
+            reader.mark_entry_as_unread((SAVED_FEED_URL, clean_url))
+            result["resurfaced"] = bool(cur.rowcount) or bool(existing.read)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("save-article: resurface failed for %s: %s", clean_url, exc)
         if refresh_content:
             try:
                 new_title, article_html = extract(clean_url)

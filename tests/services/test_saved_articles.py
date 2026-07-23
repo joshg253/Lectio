@@ -37,6 +37,7 @@ def meta_conn():
             feed_url TEXT NOT NULL,
             entry_id TEXT NOT NULL,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            archived_at TIMESTAMP DEFAULT NULL,
             PRIMARY KEY(feed_url, entry_id)
         )
         """
@@ -118,6 +119,41 @@ def test_save_article_duplicate_restars_without_refetch(reader, meta_conn):
     assert result["duplicate"] is True
     assert calls == []  # no re-fetch for an already-captured article
     assert meta_conn.execute("SELECT COUNT(*) FROM saved_entries").fetchone()[0] == 1
+
+
+def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
+    """An explicit re-save means 'put this back in my Inbox.' A URL saved today
+    that a past Instapaper import had archived+read must un-archive and go unread,
+    not silently stay in Archive (the reactormag Black Cat case)."""
+    url = "https://example.com/black-cat"
+    save_article(reader, meta_conn, url, extract=_extract_ok)
+    # Simulate the prior archived+read state (as an Instapaper Archive import left it).
+    meta_conn.execute(
+        "UPDATE saved_entries SET archived_at = '2019-10-31T23:47:54+00:00' WHERE entry_id = ?",
+        (url,),
+    )
+    meta_conn.commit()
+    reader.mark_entry_as_read((SAVED_FEED_URL, url))
+
+    result = save_article(reader, meta_conn, url, extract=_extract_ok)
+
+    assert result["duplicate"] is True
+    assert result["resurfaced"] is True
+    archived = meta_conn.execute(
+        "SELECT archived_at FROM saved_entries WHERE entry_id = ?", (url,)
+    ).fetchone()[0]
+    assert archived is None                              # back out of Archive
+    assert reader.get_entry((SAVED_FEED_URL, url)).read in (False, None)  # back to unread
+
+
+def test_resave_of_an_inbox_article_is_not_flagged_resurfaced(reader, meta_conn):
+    """A re-save of something already unread in the Inbox changes nothing to
+    resurface — the flag stays false so the UI doesn't claim it moved."""
+    url = "https://example.com/fresh"
+    save_article(reader, meta_conn, url, extract=_extract_ok)
+    result = save_article(reader, meta_conn, url, extract=_extract_ok)
+    assert result["duplicate"] is True
+    assert result.get("resurfaced") is False
 
 
 def test_save_article_survives_extraction_failure(reader, meta_conn):
