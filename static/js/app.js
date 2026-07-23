@@ -1098,7 +1098,9 @@
         `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
         ` id="${id}"${c.target_feed_url ? '' : ' disabled'}>` +
         `<span class="saved-autofile-count">${c.count}</span>` +
-        `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note} ${notFeed}` +
+        `<span class="saved-dedup-main"><a class="saved-dedup-title saved-autofile-host-link" ` +
+          `href="https://${_mfEscape(c.host)}" target="_blank" rel="noopener noreferrer" ` +
+          `onclick="event.stopPropagation()" title="Open ${_mfEscape(c.host)} in a new tab to look for a feed">${_mfEscape(c.host)}</a> ${note} ${notFeed}` +
         (c.candidates.length
           ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
             ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
@@ -1107,7 +1109,9 @@
             `<button type="button" class="saved-autofile-notfeed saved-autofile-badfeed"` +
             ` data-feed="${_mfEscape(c.target_feed_url || '')}"` +
             ` title="This subscription isn't really a feed — never offer it as a destination">not a feed</button>` +
-            `<span class="saved-autofile-url">${_mfEscape(c.target_feed_url || '')}</span>`
+            `<a class="saved-autofile-url" href="${_mfEscape(c.target_feed_url || '')}" ` +
+            `target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" ` +
+            `title="Open this feed URL in a new tab">${_mfEscape(c.target_feed_url || '')}</a>`
           : '') +
         `</span></label>`;
     };
@@ -2191,6 +2195,8 @@
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
+    const folderRemoveStarsButton = document.getElementById('ctx-folder-remove-stars');
+    const folderRemoveTagsButton = document.getElementById('ctx-folder-remove-tags');
     const youtubeSyncButton = document.getElementById('ctx-youtube-sync');
     const disableFeedButton = document.getElementById('ctx-disable-feed');
     const addFeedForm = document.getElementById('context-add-feed-form');
@@ -2254,6 +2260,7 @@
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
+    const postRemoveTagShownButton = document.getElementById('ctx-post-remove-tag-shown');
     const postDeleteButton = document.getElementById('ctx-post-delete');
     const postEditDateButton = document.getElementById('ctx-post-edit-date');
     const postEditTitleButton = document.getElementById('ctx-post-edit-title');
@@ -5588,6 +5595,14 @@
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
+        // Curation-clearing is a Saved-view action: only meaningful when the
+        // tree is showing starred/tagged items, and kept apart from Delete
+        // Folder (which unsubscribes feeds — a very different, destructive op).
+        {
+          const inSaved = !!document.querySelector('nav.tree.saved-mode');
+          setMenuItemVisible(folderRemoveStarsButton, inSaved);
+          setMenuItemVisible(folderRemoveTagsButton, inSaved);
+        }
         setMenuItemVisible(disableFeedButton, false);
         // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
         // so renaming the folder doesn't break "Sync Subscriptions". Fall back to an
@@ -5963,6 +5978,7 @@
           setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
               && Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
+          setMenuItemVisible(postRemoveTagShownButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -6320,6 +6336,18 @@
             setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
                 && Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
+            // "Remove this tag from all shown": only in the Saved view filtered
+            // by a tag. Scoped server-side to the folder+tag, so it clears the
+            // whole filtered set, not just the paginated window on screen.
+            {
+              const _p = new URLSearchParams(window.location.search);
+              const _tag = (_p.get('tag') || '').trim();
+              const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
+              if (postRemoveTagShownButton && _show) {
+                postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
+              }
+              setMenuItemVisible(postRemoveTagShownButton, _show);
+            }
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -7381,6 +7409,32 @@
         }
       } catch (_) {
         window.alert('Re-fetch failed.');
+      }
+    });
+
+    postRemoveTagShownButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAllContextMenus();
+      const p = new URLSearchParams(window.location.search);
+      const tag = (p.get('tag') || '').trim();
+      const folderId = p.get('folder_id') || '';
+      if (!tag || !folderId) return;
+      if (!window.confirm(
+        `Remove the tag “${tag}” from every item shown in this view?\n\n` +
+        `Scoped to this folder + tag. Other tags and your feed subscriptions are untouched.`
+      )) return;
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, remove_tags: '1', tag });
+        const resp = await fetch('/saved/folder/clear-curation', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) { window.alert(data.error || 'Could not remove the tag.'); return; }
+        if (typeof showToastMessage === 'function') {
+          showToastMessage(`Removed “${tag}” from ${data.tags_removed} item(s).`);
+        }
+        window.location.reload();
+      } catch (_) {
+        window.alert('Could not remove the tag.');
       }
     });
 
@@ -11773,6 +11827,52 @@
       }
       hideAllContextMenus();
       deleteFolderModal.removeAttribute('hidden');
+    });
+
+    // Saved-view bulk curation clear: remove all stars OR all tags for a whole
+    // folder's items, without unsubscribing anything (unlike Delete Folder).
+    const clearFolderCuration = async (folderId, folderName, removeStars, removeTags) => {
+      const what = removeStars ? 'stars' : 'tags';
+      if (!window.confirm(
+        `Remove all ${what} from every item in "${folderName}"?\n\n` +
+        `This clears them from Saved but does NOT unsubscribe any feeds or delete the folder.`
+      )) { hideContextMenu(); return; }
+      try {
+        const body = new URLSearchParams({
+          folder_id: folderId,
+          remove_stars: removeStars ? '1' : '0',
+          remove_tags: removeTags ? '1' : '0',
+        });
+        const resp = await fetch('/saved/folder/clear-curation', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) { window.alert(data.error || 'Could not clear curation.'); return; }
+        if (typeof showToastMessage === 'function') {
+          showToastMessage(`Removed ${data.stars_removed} star(s) and ${data.tags_removed} tag(s).`);
+        }
+        window.location.reload();
+      } catch (_) {
+        window.alert('Could not clear curation.');
+      }
+    };
+
+    folderRemoveStarsButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId) return;
+      const name = contextFolderName;
+      const id = contextFolderId;
+      hideAllContextMenus();
+      clearFolderCuration(id, name, true, false);
+    });
+
+    folderRemoveTagsButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId) return;
+      const name = contextFolderName;
+      const id = contextFolderId;
+      hideAllContextMenus();
+      clearFolderCuration(id, name, false, true);
     });
 
     deleteFolderConfirm?.addEventListener('click', () => {

@@ -7850,6 +7850,121 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     return removed
 
 
+def clear_folder_curation(
+    folder_id: int, remove_stars: bool, remove_tags: bool, only_tag: str | None = None
+) -> dict:
+    """Bulk-remove stars and/or manual tags from every entry in a folder's feeds,
+    so a whole folder drops out of the Saved/Kept view — without unsubscribing
+    anything (deleting the folder would). The Saved-view counterpart to
+    "move all visible", scoped to a folder so it is correct at any size.
+
+    *only_tag* (with remove_tags) strips just that one tag rather than all manual
+    tags — the "filter Saved by tag XYZ, remove XYZ from all shown" flow, scoped
+    server-side so it isn't bounded by the client's paginated window.
+
+    Releases the offline archive for any entry left with no curation, matching
+    the single unstar/untag lifecycle."""
+    result = {"stars_removed": 0, "tags_removed": 0, "entries_uncurated": 0}
+    only_tag = normalize_tag_value(only_tag) if only_tag else None
+    if not (remove_stars or remove_tags):
+        return result
+    with get_meta_connection() as conn:
+        feeds = get_folder_feed_urls(conn, folder_id)
+    if not feeds:
+        return result
+
+    affected: set[tuple[str, str]] = set()
+
+    if remove_stars:
+        with get_meta_connection() as conn:
+            starred = [
+                (str(f), str(i)) for f, i in conn.execute(
+                    "SELECT feed_url, entry_id FROM saved_entries"
+                ) if str(f) in feeds
+            ]
+            for start in range(0, len(starred), 400):
+                chunk = starred[start:start + 400]
+                ph = ",".join("(?,?)" for _ in chunk)
+                conn.execute(
+                    f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({ph})",
+                    [v for k in chunk for v in k],
+                )
+            conn.commit()
+        result["stars_removed"] = len(starred)
+        affected |= set(starred)
+
+    if remove_tags:
+        # Match a single tag key when only_tag is given, else any manual tag.
+        match_sql = "key = ?" if only_tag else "key LIKE ?"
+        match_val = f"{MANUAL_TAG_KEY_PREFIX}{only_tag}" if only_tag else f"{MANUAL_TAG_KEY_PREFIX}%"
+        feed_list = list(feeds)
+        tagged: set[tuple[str, str]] = set()
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0)
+        try:
+            for i in range(0, len(feed_list), 900):
+                fchunk = feed_list[i:i + 900]
+                fph = ",".join("?" for _ in fchunk)
+                for f, e in conn.execute(
+                    f"SELECT DISTINCT feed, id FROM entry_tags WHERE {match_sql} AND feed IN ({fph})",
+                    [match_val, *fchunk],
+                ):
+                    tagged.add((str(f), str(e)))
+        finally:
+            conn.close()
+        with get_reader() as reader:
+            for feed_url, entry_id in tagged:
+                for t in reader.get_tags((feed_url, entry_id)):
+                    key = t[0] if isinstance(t, tuple) else t
+                    if not key or not key.startswith(MANUAL_TAG_KEY_PREFIX):
+                        continue
+                    # only_tag: strip just that one; else strip every manual tag.
+                    if only_tag and key != f"{MANUAL_TAG_KEY_PREFIX}{only_tag}":
+                        continue
+                    try:
+                        reader.delete_tag((feed_url, entry_id), key, missing_ok=True)
+                        result["tags_removed"] += 1
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("clear_folder_curation: untag failed %s", entry_id)
+        affected |= tagged
+
+    # Release archives for entries left with no curation (star or tag).
+    for feed_url, entry_id in affected:
+        try:
+            if not _entry_is_starred(feed_url, entry_id) and not get_manual_tags_for_entry(feed_url, entry_id):
+                starred_archive_service.enqueue_removal(feed_url, entry_id)
+                result["entries_uncurated"] += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+    if result["stars_removed"] or result["tags_removed"]:
+        invalidate_unread_counts_cache()
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return result
+
+
+@app.post("/saved/folder/clear-curation")
+def clear_folder_curation_route(
+    folder_id: int = Form(...),
+    remove_stars: str = Form("0"),
+    remove_tags: str = Form("0"),
+    tag: str = Form(""),
+):
+    """Remove stars and/or manual tags from a folder's items in Saved.
+
+    With *tag*, removes only that one tag (the "filter Saved by tag XYZ, remove
+    XYZ from all shown" flow); without it, removes all manual tags. Either way
+    non-destructive to Feeds: the folder and subscriptions are untouched, only
+    curation is cleared, so items leave the Saved/Kept view. Deliberately *not*
+    folder deletion, which unsubscribes feeds."""
+    rs = remove_stars in ("1", "true", "on")
+    rt = remove_tags in ("1", "true", "on")
+    if not (rs or rt):
+        return JSONResponse({"ok": False, "error": "Nothing selected to remove."}, status_code=400)
+    result = clear_folder_curation(folder_id, rs, rt, only_tag=(tag.strip() or None))
+    return JSONResponse({"ok": True, **result})
+
+
 def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tuple[int, bool]:
     """Rename a manual tag across every entry that carries it.
 
