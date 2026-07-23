@@ -191,6 +191,99 @@ class StarredArchiveService:
             return {}
         return {str(row["source_url"]): str(row["asset_hash"]) for row in rows}
 
+    def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
+        """True if a `complete` archive row exists for this key."""
+        try:
+            with self._get_archive_connection() as conn:
+                return conn.execute(
+                    "SELECT 1 FROM archived_entry "
+                    "WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
+                    (feed_url, entry_id),
+                ).fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    def delete_archive(self, feed_url: str, entry_id: str) -> bool:
+        """Synchronously remove an archive row and its now-unreferenced assets.
+
+        The same cascade the removal worker runs, but immediate — used when a
+        move makes a capture redundant (the target already has one) or when
+        sweeping orphaned rows. Assets shared with another entry are kept."""
+        try:
+            with self._get_archive_connection() as conn:
+                hashes = [
+                    str(r["asset_hash"]) for r in conn.execute(
+                        "SELECT DISTINCT asset_hash FROM archived_asset_link "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (feed_url, entry_id),
+                    ).fetchall()
+                ]
+                conn.execute(
+                    "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                if hashes:
+                    placeholders = ",".join("?" * len(hashes))
+                    conn.execute(
+                        f"DELETE FROM archived_asset WHERE asset_hash IN ({placeholders})"
+                        f" AND asset_hash NOT IN (SELECT DISTINCT asset_hash FROM archived_asset_link)",
+                        hashes,
+                    )
+                conn.execute(
+                    "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+            return True
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: delete_archive failed for %s/%s: %s", feed_url, entry_id, exc)
+            return False
+
+    def rekey_archive(self, src_feed: str, src_id: str, dst_feed: str, dst_id: str) -> bool:
+        """Move a capture from one (feed, id) to another, preserving it.
+
+        Used when an article is filed onto its real feed and the target has no
+        capture of its own: re-point the archive row and its asset links rather
+        than deleting the only copy. If the target *already* has a complete
+        archive the source is redundant — the caller should delete_archive it
+        instead; this refuses to clobber, so a redundant re-key is a no-op-delete
+        of the source to avoid a duplicate-key collision."""
+        if (src_feed, src_id) == (dst_feed, dst_id):
+            return True
+        try:
+            with self._get_archive_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                    (dst_feed, dst_id),
+                ).fetchone() is not None
+                if exists:
+                    # Target already captured — drop the source rows to dedupe.
+                    conn.execute(
+                        "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                        (src_feed, src_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                        (src_feed, src_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE archived_entry SET feed_url = ?, entry_id = ? "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id, src_feed, src_id),
+                    )
+                    conn.execute(
+                        "UPDATE archived_asset_link SET feed_url = ?, entry_id = ? "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id, src_feed, src_id),
+                    )
+            return True
+        except sqlite3.Error as exc:
+            LOGGER.warning(
+                "starred archive: rekey_archive failed %s/%s -> %s/%s: %s",
+                src_feed, src_id, dst_feed, dst_id, exc,
+            )
+            return False
+
     def get_archived_entry_detail(self, feed_url: str, entry_id: str) -> dict[str, Any] | None:
         """Return a render-shaped dict for an entry that lives only in the archive.
 

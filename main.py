@@ -13744,6 +13744,20 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     # Saved Articles forever, so the backlog never shrinks as you file it and
     # every later dupe scan re-reads rows that are no longer real saves.
     if saved_articles_service.is_saved_articles_feed(feed_url):
+        # The source archive capture must follow the entry, or it is orphaned:
+        # the Read/Saved view renders starred entries from archive rows, so a
+        # leftover lectio:saved capture shows as a phantom duplicate of the moved
+        # article (with its own, often worse, content). Re-key it onto the
+        # target so the capture is preserved; if the target already has one, the
+        # source is redundant and re-key deletes it. (This is the recurrence
+        # guard for the orphaned-archive-row cleanup in scripts/.)
+        try:
+            if starred_archive_service.has_complete_archive(target_url, target_id):
+                starred_archive_service.delete_archive(feed_url, entry_id)
+            else:
+                starred_archive_service.rekey_archive(feed_url, entry_id, target_url, target_id)
+        except Exception:  # noqa: BLE001 — never fail the move over archive housekeeping
+            LOGGER.exception("[move-entry] archive re-key failed for %s", entry_id)
         try:
             _hard_delete_entry(reader, feed_url, entry_id, src)
             result["source_deleted"] = True
