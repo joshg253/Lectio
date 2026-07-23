@@ -7432,7 +7432,12 @@
         if (typeof showToastMessage === 'function') {
           showToastMessage(`Removed “${tag}” from ${data.tags_removed} item(s).`);
         }
-        window.location.reload();
+        // Don't reload into the now-empty tag=XYZ view (looks like everything
+        // vanished). Drop the tag filter so the folder's remaining Saved items
+        // show instead.
+        const dest = new URL(window.location.href);
+        dest.searchParams.delete('tag');
+        window.location.href = dest.toString();
       } catch (_) {
         window.alert('Could not remove the tag.');
       }
@@ -11849,7 +11854,10 @@
         if (typeof showToastMessage === 'function') {
           showToastMessage(`Removed ${data.stars_removed} star(s) and ${data.tags_removed} tag(s).`);
         }
-        window.location.reload();
+        // Land on the folder's Saved view, not a now-empty tag-filtered one.
+        const dest = new URL(window.location.href);
+        dest.searchParams.delete('tag');
+        window.location.href = dest.toString();
       } catch (_) {
         window.alert('Could not clear curation.');
       }
