@@ -87,6 +87,15 @@ The short version:
   brings your whole library over with tags and archive state — and tells you how
   much of it belongs to feeds you already follow, so a fresh import doesn't
   quietly become an unfiled backlog.
+- **Clean up article** (🧹 in the reading pane) — an Aardvark-style editor for a
+  post's body. Hovering outlines the element under the cursor and clicking
+  removes it; `W`/`N` widen and narrow the selection, `I` isolates (keeps only
+  what's selected and drops everything else), `Ctrl+Z` undoes, `Esc` cancels.
+  Nothing is written until **Save**, and **Revert cleanup** (📄 next to it)
+  restores the article exactly as the feed served it. Good for share widgets,
+  "related stories" blocks, newsletter footers, and the player chrome that
+  captured pages drag along. What you removed is recorded per post, so a future
+  release can promote a removal into a rule for the whole feed.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).

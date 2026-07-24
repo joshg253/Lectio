@@ -65,7 +65,7 @@ def ensure_saved_feed(reader) -> bool:
     return True
 
 
-def _replace_entry_content(
+def replace_entry_content(
     reader,
     conn: sqlite3.Connection,
     entry_id: str,
@@ -149,6 +149,28 @@ def _replace_entry_content(
                 LOGGER.warning("save-article: saved_at bump failed for %s: %s", entry_id, exc)
             else:
                 time.sleep(0.5)
+
+
+def read_entry_content_json(reader, feed_url: str, entry_id: str) -> str | None:
+    """Return reader's raw ``entries.content`` JSON for an entry, or None.
+
+    The counterpart to replace_entry_content: cleanup edits snapshot this before
+    overwriting so the pristine body can be restored verbatim, rather than being
+    re-derived (which would lose whatever the feed no longer serves)."""
+    row = reader._storage.get_db().execute(
+        "SELECT content FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id),
+    ).fetchone()
+    return row[0] if row else None  # index access: reader's row_factory is not ours to assume
+
+
+def restore_entry_content(reader, feed_url: str, entry_id: str, content_json: str) -> None:
+    """Write a previously snapshotted content JSON back onto an entry."""
+    db = reader._storage.get_db()
+    db.execute(
+        "UPDATE entries SET content = ? WHERE feed = ? AND id = ?",
+        (content_json, feed_url, entry_id),
+    )
+    db.commit()
 
 
 def refresh_captured_article(
@@ -241,7 +263,7 @@ def refresh_captured_article(
         # A feed entry keeps its date and gets its content pinned against the
         # next refresh; a capture bumps to the top and needs no pin (its feed
         # never refreshes).
-        _replace_entry_content(
+        replace_entry_content(
             reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
             bump_date=is_capture, pin_content=not is_capture,
         )
@@ -337,7 +359,7 @@ def save_article(
             else:
                 if article_html:
                     try:
-                        _replace_entry_content(reader, conn, clean_url, new_title, article_html)
+                        replace_entry_content(reader, conn, clean_url, new_title, article_html)
                     except Exception as exc:  # noqa: BLE001 — refresh is best-effort on a duplicate
                         LOGGER.warning("save-article: content refresh failed for %s: %s", clean_url, exc)
                     else:

@@ -1123,6 +1123,33 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
+### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
+
+Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
+by hand and `entry_content_edits` records both the pristine body and the ops that
+were replayed over it. The ops are the raw material for Phase 2 — the whole point
+of recording them rather than just storing cleaned HTML.
+
+What's left:
+
+- **A `feed_content_rules` table + matcher**, applied inside
+  `_apply_feed_content_cleanups` at *render* time. Not a bulk rewrite of stored
+  bodies: feed-wide that would touch hundreds of entries irreversibly, while the
+  render-time form covers old and new posts alike and un-promoting restores them.
+  This is also where the six hand-coded per-site strips should eventually migrate
+  to — they are the same thing, hardcoded.
+- **A Cleanups section in Feed Properties** listing the selectors recorded from
+  that feed's edits, each with a live match count across the feed's entries
+  ("matches 47 of 312") so a promotion's blast radius is visible before it
+  happens. Nothing pre-checked (see the bulk-action rule).
+- **Selector derivation from the recorded fingerprints.** An op stores a
+  structural path plus tag/id/classes/text; a *rule* needs the part that
+  generalizes — usually `tag.class` — and must refuse to promote an op whose only
+  distinguishing signal is its text (that matches one post, not a feed).
+- Open question worth measuring before building: how many removals a real feed
+  actually repeats. If share widgets and footers dominate, promotion is high
+  value; if most cleanups are one-offs, this stays deferred.
+
 ### 9. Tag-as-keep — Part C: pass 1 DONE 2026-07-22, pass 2 still deferred
 
 **Pass 1 ran with `--apply` on 2026-07-22: 3,581 archives enqueued** (dry-run and

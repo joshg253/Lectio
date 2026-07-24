@@ -63,6 +63,7 @@ from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
+from services import content_edits
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
@@ -3211,6 +3212,24 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 content TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        # Aardvark-style per-entry cleanup: the pristine body (reader's JSON
+        # content shape) plus the ops that were replayed over it. The original
+        # is what "Revert cleanup" restores; the ops are the record of *what*
+        # was removed, which a later per-feed rule gets promoted from. Only the
+        # first edit writes original_content — repeated cleanups of the same
+        # entry must keep reverting to the true original, not to the last edit.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_content_edits (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                original_content TEXT NOT NULL,
+                ops TEXT NOT NULL,
+                edited_at TEXT NOT NULL,
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
@@ -13213,6 +13232,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 )
                 content_html = _existing + _add
 
+        # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
+        # the UI, and suppresses the embed recovery below — re-adding an embed
+        # the user just deleted is the one way a cleanup could look undone.
+        try:
+            with get_meta_connection() as _edit_conn:
+                content_edited = bool(_edit_conn.execute(
+                    "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone())
+        except sqlite3.OperationalError:
+            content_edited = False  # tenant DB predates the table
+
         # Per-site / generic feed-content cleanups (NASA nav, mynorthwest related
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
         # iframes, recovered YouTube embeds). Operates on content_html only.
@@ -13223,7 +13254,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # placeholder to refill. Skips when the body already has an embed; fetch is
         # cached and SSRF-guarded. Runs before the YouTube-feed injection below so
         # that path still wins for native YouTube feeds.
-        if not (isinstance(feed_url, str)
+        if not content_edited and not (isinstance(feed_url, str)
                 and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
             content_html = _inject_recovered_source_embeds(content_html, entry)
 
@@ -13631,6 +13662,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "author": author_name,
             "read": bool(entry.read),
             "saved": is_saved,
+            "content_edited": content_edited,
             # See the post-list builder: Re-fetch follows the entry, not the feed.
             "captured": str(getattr(entry, "added_by", "") or "") == "user",
             "manual_tags": manual_tags,
@@ -22482,6 +22514,107 @@ def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), l
         )
         db.commit()
     return JSONResponse({"ok": True, "link": link})
+
+
+@app.post("/entries/content/clean")
+def clean_entry_content_route(
+    feed_url: str = Form(...), entry_id: str = Form(...), ops: str = Form(...),
+):
+    """Apply the reading pane's Aardvark-style cleanup to a post's stored body.
+
+    The browser sends *what it removed* (an ordered op list of structural paths
+    + fingerprints), not the edited HTML — see services/content_edits for why.
+    The ops are replayed here against reader's stored content, the result is
+    sanitized and written back through the same path a content re-fetch uses
+    (`replace_entry_content`, with `pin_content` so the next refresh can't
+    re-serve the junk), and the pristine body is snapshotted first so
+    /entries/content/revert can put it back.
+
+    Ops that match nothing are reported rather than guessed at: a rendered node
+    that isn't in the stored body (an injected embed, something a render-time
+    cleanup already removed) simply has nothing to delete.
+    """
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        try:
+            parsed_ops = content_edits.parse_ops(ops)
+            content_html = _resolve_entry_content_html(entry)
+            new_html, applied, unmatched = content_edits.apply_ops(content_html, parsed_ops)
+        except content_edits.ContentEditError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        if not applied:
+            return JSONResponse(
+                {"ok": False, "error": "None of those elements could be matched in the stored article.",
+                 "unmatched": unmatched},
+                status_code=409,
+            )
+        # The result is user-directed but still passes the normal allowlist —
+        # a cleanup must never be a way to widen what the body may contain.
+        new_html = html_sanitize.sanitize_html(new_html)
+        original_content = saved_articles_service.read_entry_content_json(reader, feed_url, entry_id)
+        with get_meta_connection() as conn:
+            if original_content is not None:
+                # First edit only: repeated cleanups must still revert to the
+                # true original rather than to the previous cleanup's output.
+                conn.execute(
+                    "INSERT OR IGNORE INTO entry_content_edits"
+                    " (feed_url, entry_id, original_content, ops, edited_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (feed_url, entry_id, original_content, "[]",
+                     datetime.now(timezone.utc).isoformat()),
+                )
+            existing = conn.execute(
+                "SELECT ops FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            prior_ops = []
+            if existing:
+                try:
+                    prior_ops = json.loads(existing[0]) or []
+                except (TypeError, ValueError):
+                    prior_ops = []
+            conn.execute(
+                "UPDATE entry_content_edits SET ops = ?, edited_at = ?"
+                " WHERE feed_url = ? AND entry_id = ?",
+                (json.dumps(prior_ops + parsed_ops), datetime.now(timezone.utc).isoformat(),
+                 feed_url, entry_id),
+            )
+            conn.commit()
+            saved_articles_service.replace_entry_content(
+                reader, conn, entry_id, "", new_html, feed_url=feed_url,
+                bump_date=False, pin_content=True,
+            )
+    return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
+
+
+@app.post("/entries/content/revert")
+def revert_entry_content_route(feed_url: str = Form(...), entry_id: str = Form(...)):
+    """Undo every cleanup on a post, restoring the body as the feed served it."""
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"ok": False, "error": "This post has no cleanup to revert."}, status_code=404)
+        with get_reader() as reader:
+            if reader.get_entry((feed_url, entry_id), None) is None:
+                return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+            saved_articles_service.restore_entry_content(reader, feed_url, entry_id, row[0])
+        # Drop the pin too, or the refresh service would re-apply the cleaned
+        # copy over the body we just restored.
+        conn.execute(
+            "DELETE FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+        conn.execute(
+            "DELETE FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+        conn.commit()
+    return JSONResponse({"ok": True})
 
 
 def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
