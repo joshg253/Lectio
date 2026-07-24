@@ -18624,8 +18624,14 @@ def create_scraped_feed_route(
         )
 
     invalidate_meta_structure_cache()
+    # Open the new page feed (like Add Feed) so it's confirmed and immediately
+    # usable, rather than dropping back on the folder. read_filter=all since a
+    # fresh feed's items are unread and the user wants to see what it scraped.
     return RedirectResponse(
-        url=f"/?folder_id={target_folder_id}&message={quote_plus('Page feed created.')}",
+        url=(
+            f"/?folder_id={target_folder_id}&list_feed_url={quote_plus(file_url)}"
+            f"&read_filter=all&message={quote_plus('Page feed created.')}"
+        ),
         status_code=303,
     )
 
