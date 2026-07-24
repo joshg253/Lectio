@@ -88,6 +88,31 @@ def test_generic_slugs_still_produce_no_key(link):
     assert main._saved_dup_host_slug(link) is None
 
 
+def test_reddit_posts_key_on_the_thing_id_not_the_truncated_slug():
+    """Reddit truncates its permalink slug to a fixed length, so different posts
+    collide on the last path segment (both Harry Potter soundtracks became
+    …/amazon_..._harry_potter_and_the/). Key on the unique thing id instead."""
+    sorcerers = "https://old.reddit.com/r/VinylDeals/comments/1ukcin6/amazon_john_williams_harry_potter_and_the/"
+    azkaban = "https://www.reddit.com/r/VinylDeals/comments/1uezt72/amazon_alexandre_desplat_harry_potter_and_the/"
+    ks = main._safe_dedup_entry_slug(sorcerers)
+    ka = main._safe_dedup_entry_slug(azkaban)
+    assert ks == "reddit:1ukcin6"
+    assert ka == "reddit:1uezt72"
+    assert ks != ka  # the false match is gone
+
+
+def test_reddit_same_post_across_feeds_still_matches():
+    """The same thread linked from two feeds (old vs www, different trailing
+    slug) must still dedupe — that's what the slug key is for."""
+    a = "https://www.reddit.com/r/VinylDeals/comments/1uezt72/some_slug/"
+    b = "https://old.reddit.com/r/VinylDeals/comments/1uezt72/a_totally_different_slug/"
+    assert main._safe_dedup_entry_slug(a) == main._safe_dedup_entry_slug(b) == "reddit:1uezt72"
+
+
+def test_reddit_short_link_shares_the_key():
+    assert main._safe_dedup_entry_slug("https://redd.it/1uezt72") == "reddit:1uezt72"
+
+
 def test_build_entry_dedupe_key_folds_through_to_the_render_time_key():
     """The list view collapses rows by link+title, so the fold has to reach it —
     otherwise an http and an https copy render as two rows."""

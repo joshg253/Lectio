@@ -5043,6 +5043,16 @@ _SAFE_DEDUP_MIN_SLUG_LEN      = 4
 _SAFE_DEDUP_MIN_TITLE_WORDS   = 4
 _SAFE_DEDUP_MIN_SLUG_NO_HYPHEN = 16
 
+# Reddit truncates the title-slug in its permalinks to a fixed length, so two
+# different posts collide on the last path segment
+# (…/comments/<id>/amazon_..._harry_potter_and_the/ for both Sorcerer's Stone
+# and Prisoner of Azkaban). The unique thing id sits earlier in the path — use
+# it so different posts don't false-match and genuine cross-feed reposts of the
+# same thread still do.
+_REDDIT_THING_ID_RE = re.compile(
+    r"(?:reddit\.com/(?:r/[^/]+/)?comments/|redd\.it/)([a-z0-9]{4,})", re.IGNORECASE
+)
+
 _SAFE_DEDUP_SLUG_EXTS = frozenset({
     ".php", ".html", ".htm", ".asp", ".aspx", ".cgi", ".pl", ".jsp", ".cfm", ".shtml"
 })
@@ -5090,6 +5100,11 @@ _SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
 def _safe_dedup_entry_slug(url: str | None) -> str | None:
     if not url:
         return None
+    # Reddit's truncated permalink slug collides across posts — key on the
+    # unique thing id instead (see _REDDIT_THING_ID_RE).
+    reddit = _REDDIT_THING_ID_RE.search(url)
+    if reddit:
+        return f"reddit:{reddit.group(1).lower()}"
     path = url.split("#")[0].split("?")[0].rstrip("/")
     slug = path.rsplit("/", 1)[-1].lower()
     for ext in _SAFE_DEDUP_SLUG_EXTS:
