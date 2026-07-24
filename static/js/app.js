@@ -7324,8 +7324,19 @@
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Moved.');
-            // Reload the list panes so star/tag badges and read state reflect the move.
-            loadScopePanesWithoutFullRefresh(window.location.href, false);
+            // Stay exactly where you are and just drop the moved rows from the
+            // list — they've left this scope (filed out of Saved / a search).
+            // Reloading the scope instead followed the moved entry to its new
+            // feed and lost the active search/filter you were working in.
+            // Keep rows whose source feed IS the target: the server skips those
+            // (a "move visible" over a folder includes the target's own posts).
+            const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
+            for (const e of entries) {
+              if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
+              document.querySelectorAll(
+                `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
+              ).forEach((row) => row.remove());
+            }
             onDone?.(data);
           } else {
             showToastMessage(data.error || 'Move failed.');
