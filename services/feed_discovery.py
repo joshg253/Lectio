@@ -201,7 +201,35 @@ def _behance_feed_url(url: str) -> str | None:
     return f"https://www.behance.net/{user}.rss"
 
 
-_SITE_FEED_REWRITES = [_pinboard_feed_url, _artstation_feed_url, _behance_feed_url]
+def _freecodecamp_feed_url(url: str) -> str | None:
+    """freeCodeCamp News (Ghost) publishes an RSS feed for every collection at
+    ``<path>/rss/`` — the whole site (``/news/rss/``), a tag
+    (``/news/tag/<tag>/rss/``) or an author (``/news/author/<name>/rss/``).
+
+    Autodiscovery on a tag or author *page* advertises the site-wide feed, so
+    pasting a tag page would subscribe the firehose instead of that tag (the
+    reported case: ``/news/tag/advanced-mathematics/`` resolved to
+    ``/news/rss``). Map the collection page to its own feed; article URLs
+    (``/news/<slug>/``) have no feed and fall through to generic discovery."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("freecodecamp.org", "www.freecodecamp.org"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments or segments[0].lower() != "news" or segments[-1].lower() == "rss":
+        return None
+    if len(segments) == 1:                                   # /news/ → site feed
+        path = "news"
+    elif len(segments) == 3 and segments[1].lower() in ("tag", "author"):
+        path = "/".join(segments)                            # /news/tag|author/<x>/
+    else:
+        return None                                          # article or unknown
+    return f"https://www.freecodecamp.org/{path}/rss/"
+
+
+_SITE_FEED_REWRITES = [
+    _pinboard_feed_url, _artstation_feed_url, _behance_feed_url, _freecodecamp_feed_url,
+]
 
 
 def rewrite_known_site_url(url: str) -> str:

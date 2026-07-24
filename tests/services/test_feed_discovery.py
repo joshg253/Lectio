@@ -403,3 +403,41 @@ class TestBehanceFeedRewrite:
     def test_deep_path_unchanged(self):
         url = "https://www.behance.net/gallery/12345/Project-Name"
         assert rewrite_known_site_url(url) == url
+
+
+class TestFreeCodeCampFeedRewrite:
+    """freeCodeCamp News (Ghost) has a feed per collection at <path>/rss/, but a
+    tag/author page advertises the site-wide feed — so a tag page must be mapped
+    to its own feed, not the firehose."""
+
+    def test_tag_page_maps_to_tag_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/advanced-mathematics/") == \
+            "https://www.freecodecamp.org/news/tag/advanced-mathematics/rss/"
+
+    def test_tag_page_without_trailing_slash(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/python") == \
+            "https://www.freecodecamp.org/news/tag/python/rss/"
+
+    def test_author_page_maps_to_author_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/author/quincy/") == \
+            "https://www.freecodecamp.org/news/author/quincy/rss/"
+
+    def test_news_root_maps_to_site_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/") == \
+            "https://www.freecodecamp.org/news/rss/"
+
+    def test_already_a_feed_passes_through(self):
+        for url in (
+            "https://www.freecodecamp.org/news/rss/",
+            "https://www.freecodecamp.org/news/tag/python/rss/",
+        ):
+            assert rewrite_known_site_url(url) == url
+
+    def test_article_url_falls_through(self):
+        # An article has no feed — leave it for generic discovery, don't 404 on /rss/.
+        url = "https://www.freecodecamp.org/news/how-to-learn-python/"
+        assert rewrite_known_site_url(url) == url
+
+    def test_non_news_path_unchanged(self):
+        url = "https://www.freecodecamp.org/learn/"
+        assert rewrite_known_site_url(url) == url
