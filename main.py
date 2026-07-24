@@ -10178,6 +10178,46 @@ def _strip_comment_sections(raw_html: str) -> str:
         return raw_html
 
 
+# In-body chrome that modern CMSes embed *inside* the article container, so it
+# survives a content-selector match (Future plc's #article-body carries the
+# social-share bar, follow/newsletter widgets, ad units and a related-posts
+# aside among the tab figures). Removed before extraction so neither readability
+# nor the selector/whole-body fallbacks drag it in. Kept to markers that are
+# never article prose: named share/newsletter/ad/affiliate widgets, tooltips,
+# and <aside> (tangential content by definition).
+_ARTICLE_CHROME_SELECTORS = (
+    '[class*="flexisites-social"]',   # Future plc social-share bar
+    '[class*="byline-social"]',
+    '.google-follow-us-button',
+    '[class*="hawk-root"]',           # Future plc affiliate/product widget
+    '[class*="social-share"]',
+    '[class*="share-buttons"]',
+    '[class*="sharing-buttons"]',
+    '[class*="newsletter"]', '[id*="newsletter"]',
+    '[class*="ad-unit"]',
+    '[class*="tooltip"]',
+    "aside",
+)
+
+
+def _strip_article_chrome(raw_html: str) -> str:
+    """Remove in-body share/newsletter/ad/related chrome before extraction.
+
+    See _ARTICLE_CHROME_SELECTORS — the containers a content selector would
+    otherwise keep because the CMS nests them inside the article body itself."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in _ARTICLE_CHROME_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001
+        return raw_html
+
+
 def _bs4_content_fallback(raw_html: str) -> str:
     """Extract article content via BS4 using known content-area selectors.
 
@@ -10474,6 +10514,10 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # Strip comment threads first — otherwise readability scores a big comments
     # section above the post and no image-count fallback can recover the body.
     raw_html = _strip_comment_sections(raw_html)
+    # Then the in-body share/newsletter/ad/related chrome CMSes nest inside the
+    # article container — otherwise a #article-body match keeps it (guitarplayer
+    # led every capture with a share bar and a newsletter signup).
+    raw_html = _strip_article_chrome(raw_html)
     _img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url

@@ -84,3 +84,29 @@ def test_future_plc_article_body_id_beats_whole_body():
     assert 12 <= html.lower().count("<img") <= 16      # the tabs, not the chrome
     assert "related0.jpg" not in html                   # no related-article junk
     assert "tab0.jpg" in html
+
+
+def test_future_plc_in_body_chrome_is_stripped():
+    """Future plc nests a social-share bar and a newsletter signup *inside*
+    #article-body, ahead of the prose, so a container match kept them and every
+    capture led with 'Facebook X Pinterest … Subscribe to our newsletter'. The
+    chrome strip drops the widgets while leaving the lesson and its tab figures."""
+    tabs = "".join(f'<img src="https://cdn.test/tab{i}.jpg" width="600">' for i in range(15))
+    page = (
+        "<html><head><title>Turbo Slurs</title></head><body>"
+        '<div id="article-body">'
+        '<div class="flexisites-social"><a>Facebook</a><a>Pinterest</a>Share this article</div>'
+        '<a class="google-follow-us-button">Follow us</a>'
+        "<p>You don't have to be fast to be a great guitarist, but it helps to fake it.</p>"
+        f"{tabs}"
+        '<aside class="related">You may like: Joe Satriani on small realities</aside>'
+        '<div class="slice-container newsletter-inbodyContent-slice">Subscribe to our newsletter</div>'
+        "</div></body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "great guitarist" in html                    # the article stayed
+    assert "tab0.jpg" in html                            # the tab figures stayed
+    assert "Pinterest" not in html                       # share bar gone
+    assert "Subscribe to our newsletter" not in html     # newsletter gone
+    assert "You may like" not in html                    # related aside gone
+    assert "Follow us" not in html
