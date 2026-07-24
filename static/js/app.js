@@ -1182,19 +1182,20 @@
 
     document.getElementById('saved-autofile-results')?.addEventListener('click', async (ev) => {
       // Magnifying glass: close the dialog (via full navigation) and open the
-      // Saved view searched for this host, as if you'd searched Saved for the
-      // domain — so a multi-feed host (Medium, Ars Technica) that can't be
-      // auto-filed can be reviewed and filed by hand from there.
+      // Saved Articles feed scoped to this host — only the *unfiled* saves (the
+      // synthetic lectio:saved feed holds articles not yet attached to a feed),
+      // narrowed by site:<host> so a multi-feed host (Medium, Ars Technica) that
+      // can't be auto-filed can be reviewed and filed by hand from there.
       const reviewLink = ev.target.closest?.('.saved-autofile-review');
       if (reviewLink) {
         ev.preventDefault();
         ev.stopPropagation();
         const host = reviewLink.dataset.host;
         if (!host) return;
-        const savedAll = document.querySelector('.saved-all-item');
-        const target = new URL(savedAll ? savedAll.getAttribute('href') : '/?star_only=1', window.location.origin);
-        target.searchParams.set('q', host);
+        const target = new URL('/', window.location.origin);
+        target.searchParams.set('list_feed_url', 'lectio:saved');
         target.searchParams.set('read_filter', 'all');
+        target.searchParams.set('q', `site:${host}`);
         window.location.assign(target.toString());
         return;
       }

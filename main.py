@@ -11051,6 +11051,34 @@ def _sorted_star_key_window(
     return [(f, i) for f, i, _sv in scored[:limit]]
 
 
+def _entry_link_site_host(entry) -> str:
+    """The bare host of an entry's link — no userinfo/port, leading www. folded."""
+    net = urlparse(str(getattr(entry, "link", "") or "")).netloc.split("@")[-1].split(":")[0].lower()
+    return net[4:] if net.startswith("www.") else net
+
+
+def _split_site_terms(terms: list[str]) -> tuple[list[str], list[str]]:
+    """Pull ``site:<host>`` tokens out of a term list → (regular_terms, hosts).
+
+    ``site:`` scopes a search to entries whose *link host* is that host or a
+    subdomain of it — precise where a bare host term also matches the host
+    appearing in an article's body or in another feed's post. Used by the
+    File-Saved "review this host" link so a multi-feed host's unfiled saves can
+    be listed exactly."""
+    regular: list[str] = []
+    sites: list[str] = []
+    for tok in terms:
+        if tok.startswith("site:") and len(tok) > 5:
+            host = tok[5:].lstrip("@").split("/")[0]
+            if host.startswith("www."):
+                host = host[4:]
+            if host:
+                sites.append(host)
+        else:
+            regular.append(tok)
+    return regular, sites
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -11072,6 +11100,9 @@ def list_entries_for_feeds(
     normalized_selected_tag = normalize_tag_value(selected_tag)
     normalized_search_query = normalize_search_query(search_query)
     search_terms = [token.lower() for token in normalized_search_query.split()] if normalized_search_query else []
+    # site:<host> narrows to entries on that link host; it never goes to the
+    # text-matching paths (SQL or haystack), only the link-host filter below.
+    search_terms, site_hosts = _split_site_terms(search_terms)
 
     reader_read_filter: bool | None = None
     if normalized_read_filter == "unread":
@@ -11159,7 +11190,7 @@ def list_entries_for_feeds(
 
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
-        need_all = bool(search_terms or normalized_sort_dir == "asc")
+        need_all = bool(search_terms or site_hosts or normalized_sort_dir == "asc")
         # When a manual tag is selected, push the filter into reader's native
         # tags= argument so the match happens in SQL across the whole library.
         # Previously the tag was applied only as a post-filter on the newest-N
@@ -11403,6 +11434,10 @@ def list_entries_for_feeds(
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
 
+            if site_hosts:
+                host = _entry_link_site_host(entry)
+                if not any(host == s or host.endswith("." + s) for s in site_hosts):
+                    continue
             title_text = _display_title(entry) or entry.title
             if search_terms:
                 search_haystack = " ".join(
@@ -11790,6 +11825,11 @@ def filter_feed_urls(feed_urls: set[str], list_feed_url: str | None) -> set[str]
     if not list_feed_url:
         return feed_urls
     if list_feed_url in feed_urls:
+        return {list_feed_url}
+    # The Saved Articles feed is synthetic and absent from get_all_feed_urls, so
+    # it would never match above — but it is directly viewable (the File-Saved
+    # "review this host" link opens it, scoped by site:). Allow it explicitly.
+    if list_feed_url == saved_articles_service.SAVED_FEED_URL:
         return {list_feed_url}
     return set()
 
