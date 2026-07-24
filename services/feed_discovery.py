@@ -174,7 +174,34 @@ def _artstation_feed_url(url: str) -> str | None:
     return f"https://www.artstation.com/{user}.rss"
 
 
-_SITE_FEED_REWRITES = [_pinboard_feed_url, _artstation_feed_url]
+# Single-segment behance.net paths that are site pages, not usernames.
+_BEHANCE_RESERVED = frozenset({
+    "search", "galleries", "joblist", "hire", "assets", "for_you", "live",
+    "onboarding", "settings", "notifications", "messages", "adobe", "blog",
+    "help", "about", "careers", "login", "signup", "feeds", "gallery",
+    "collection", "collections", "reviews", "schools", "discover",
+})
+
+
+def _behance_feed_url(url: str) -> str | None:
+    """Behance per-user feeds live at ``www.behance.net/<user>.rss`` (the profile
+    page itself is HTML). Map a bare profile URL onto the .rss form so Add Feed
+    resolves it. (``/feeds/user?username=<user>`` also works and is left alone if
+    pasted directly.)"""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("behance.net", "www.behance.net"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if len(segments) != 1:
+        return None
+    user = segments[0]
+    if user.lower().endswith(".rss") or user.lower() in _BEHANCE_RESERVED:
+        return None
+    return f"https://www.behance.net/{user}.rss"
+
+
+_SITE_FEED_REWRITES = [_pinboard_feed_url, _artstation_feed_url, _behance_feed_url]
 
 
 def rewrite_known_site_url(url: str) -> str:

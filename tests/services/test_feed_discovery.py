@@ -373,3 +373,33 @@ class TestArtstationFeedRewrite:
     def test_www_subdomain_not_treated_as_user(self):
         assert rewrite_known_site_url("https://www.artstation.com/") == \
             "https://www.artstation.com/"
+
+
+class TestBehanceFeedRewrite:
+    """Behance per-user feeds live at www.behance.net/<user>.rss; the profile
+    page is HTML. Map the profile URL onto the .rss form."""
+
+    EXPECTED = "https://www.behance.net/polibear.rss"
+
+    def test_profile_www(self):
+        assert rewrite_known_site_url("https://www.behance.net/polibear") == self.EXPECTED
+
+    def test_profile_bare_host(self):
+        assert rewrite_known_site_url("https://behance.net/polibear") == self.EXPECTED
+
+    def test_already_rss_passes_through(self):
+        url = "https://www.behance.net/polibear.rss"
+        assert rewrite_known_site_url(url) == url
+
+    def test_feeds_user_form_untouched(self):
+        url = "https://www.behance.net/feeds/user?username=polibear"
+        assert rewrite_known_site_url(url) == url
+
+    def test_reserved_pages_unchanged(self):
+        for path in ("search", "galleries", "joblist", "hire", "for_you"):
+            url = f"https://www.behance.net/{path}"
+            assert rewrite_known_site_url(url) == url
+
+    def test_deep_path_unchanged(self):
+        url = "https://www.behance.net/gallery/12345/Project-Name"
+        assert rewrite_known_site_url(url) == url
