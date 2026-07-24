@@ -2717,7 +2717,15 @@
         // before the tag (carried in resume_read_filter) — mirroring how exiting
         // History returns to the prior filter. Drop the tag from the target.
         if (currentParams.get('tag')) {
-          const resume = currentParams.get('resume_read_filter') || 'unread';
+          // Restore the filter active before the tag (carried in
+          // resume_read_filter). When there is none — e.g. the Inbox opened
+          // straight from Saved, which has no prior filter — default to the
+          // view's own default: 'all' in the Saved/star_only view (it always
+          // defaults to All server-side), 'unread' in Feeds. Defaulting to
+          // 'unread' everywhere stamped read_filter=unread onto a folder opened
+          // from the Inbox.
+          const savedView = currentParams.get('star_only') === '1';
+          const resume = currentParams.get('resume_read_filter') || (savedView ? 'all' : 'unread');
           targetUrl.searchParams.set('read_filter', resume);
           targetUrl.searchParams.set('resume_read_filter', resume);
           for (const key of ['star_only', 'sort_by', 'sort_dir']) {
