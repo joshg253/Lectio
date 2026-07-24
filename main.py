@@ -11465,6 +11465,10 @@ def list_entries_for_feeds(
     enrich_start = time.perf_counter()
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+    # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
+    # can't send correct entry links back to an author's dead domain still named
+    # in a feed's channel <link>. Loaded once — {} for the common no-rules case.
+    _host_aliases = get_dedupe_host_aliases()
     # Enrich the surviving (top-N) records with display fields.
     entries = []
     for rec in light_records:
@@ -11496,7 +11500,7 @@ def list_entries_for_feeds(
 
         # Rebase proxy-feed entry links (e.g. feedburner) to the real publisher host.
         if rec.get("link") and hasattr(entry, "feed"):
-            _ch = getattr(entry.feed, "link", None)
+            _ch = _rewrite_url_host(getattr(entry.feed, "link", None), _host_aliases)
             rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
         _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
@@ -11843,9 +11847,28 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     }
 
 
+def _rewrite_url_host(url: str | None, aliases: dict[str, str]) -> str | None:
+    """Rewrite *url*'s host through a ``{from_host: to_host}`` alias map (a
+    leading ``www.`` folds). Returns *url* unchanged when nothing matches."""
+    if not url or not aliases:
+        return url
+    parsed = urlparse(str(url))
+    host = parsed.netloc.lower()
+    bare = host[4:] if host.startswith("www.") else host
+    new_host = aliases.get(bare)
+    if not new_host or new_host == parsed.netloc:
+        return url
+    return parsed._replace(netloc=new_host).geturl()
+
+
 def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link: str | None) -> str | None:
     """Rebase an entry link that points to a proxy host (e.g. feedburner) back to the
-    real publisher host stored in the feed's channel link element."""
+    real publisher host stored in the feed's channel link element.
+
+    The caller folds ``channel_link`` through the feed's declared host migrations
+    first (see `_rewrite_url_host` / `get_dedupe_host_aliases`): a feed whose
+    channel ``<link>`` still names the author's dead domain would otherwise rebase
+    already-correct entry links back onto it — the tush.ar/tushar.lol case."""
     if not entry_link or not channel_link:
         return entry_link
     ep = urlparse(str(entry_link))
