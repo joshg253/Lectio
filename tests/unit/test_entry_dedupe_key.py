@@ -45,6 +45,30 @@ def test_distinct_articles_keep_distinct_keys(a, b):
     assert norm(a) != norm(b)
 
 
+def test_host_aliases_fold_a_declared_domain_migration():
+    """A feed_url_rewrites rule declares an author moved hosts. Passing that map
+    pairs an article saved under the dead host with the same path on the new one
+    (Tushar Sadhwani: sadh.life/tushar.lol -> tush.ar), which the strictly
+    host-scoped key otherwise splits across two saved copies."""
+    aliases = {"sadh.life": "tush.ar", "tushar.lol": "tush.ar"}
+    old = norm("https://sadh.life/post/dunders/", aliases)
+    new = norm("https://tush.ar/post/dunders/", aliases)
+    assert old == new == "tush.ar/post/dunders"
+    # The slug tier folds through the same map.
+    assert (main._saved_dup_host_slug("https://tushar.lol/post/packaged/", aliases)
+            == main._saved_dup_host_slug("https://tush.ar/post/packaged/", aliases))
+
+
+def test_host_aliases_do_not_merge_unrelated_hosts():
+    """Only hosts named in the map fold; everything else stays host-scoped, so
+    two publishers on one topic still don't collide."""
+    aliases = {"sadh.life": "tush.ar"}
+    assert (norm("https://guitarworld.com/x", aliases)
+            != norm("https://guitarmasterclass.net/x", aliases))
+    # No map at all == the old strict behavior.
+    assert norm("https://sadh.life/post/dunders/") == "sadh.life/post/dunders"
+
+
 def test_key_is_not_a_url():
     """Callers compare keys; none fetch or render them. Guard the shape so a
     future caller can't mistake one for a link."""

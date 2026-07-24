@@ -4699,6 +4699,43 @@ def get_feed_url_rewrites(feed_url: str) -> list[tuple[str, str]]:
         return []
 
 
+def get_dedupe_host_aliases() -> dict[str, str]:
+    """{from_host: to_host} across every feed's URL-rewrite rules, for the saved
+    dedupe scan.
+
+    A feed_url_rewrites rule is the user declaring "this author moved domains" —
+    ingest already stamps new entries with the current host, but articles saved
+    before the move keep the dead host, so an old sadh.life/post/x and a new
+    tush.ar/post/x are the same article the host-scoped dedupe key can't pair.
+    Folding the migrated host onto its target makes them one key. Because the
+    map is user-declared (not a heuristic), it can't false-match the way a
+    cross-host slug tier would."""
+    try:
+        conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
+        try:
+            aliases: dict[str, str] = {}
+            for f, t in conn.execute(
+                "SELECT DISTINCT from_host, to_host FROM feed_url_rewrites"
+            ):
+                fh = str(f).lower().removeprefix("www.")
+                th = str(t).lower().removeprefix("www.")
+                if fh and th and fh != th:
+                    aliases[fh] = th
+            # Follow chained migrations (a -> b, b -> c) to the final host.
+            for src in list(aliases):
+                seen = {src}
+                dst = aliases[src]
+                while dst in aliases and dst not in seen:
+                    seen.add(dst)
+                    dst = aliases[dst]
+                aliases[src] = dst
+            return aliases
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — dedupe must degrade to host-scoped, not break
+        return {}
+
+
 def get_browser_ua_feed_urls(conn: sqlite3.Connection) -> set[str]:
     """Feeds whose fetch should use a browser identity (UA + headers).
 
@@ -4992,7 +5029,9 @@ def entry_effective_date(entry) -> datetime | None:
 _DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 
 
-def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
+def normalize_entry_link_for_dedupe(
+    link: str | None, host_aliases: dict[str, str] | None = None
+) -> str | None:
     """Canonical comparison key for an article link.
 
     The scheme and a leading ``www.`` are folded away: http/https and
@@ -5001,6 +5040,11 @@ def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
     slug was too generic for `_safe_dedup_entry_slug` to rescue the pair
     (``/index.html``, hyphen-free stubs). Only the host is lowercased — paths
     are case-sensitive.
+
+    ``host_aliases`` (a ``{from_host: to_host}`` map) additionally folds
+    user-declared domain migrations so an article saved under an author's old
+    host pairs with the same article on the new one; without it the key stays
+    strictly host-scoped. See `get_dedupe_host_aliases`.
 
     The result is a comparison key, not a URL: never fetch or display it.
     """
@@ -5015,6 +5059,8 @@ def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
     host = host.lower()
     if host.startswith("www."):
         host = host[4:]
+    if host_aliases:
+        host = host_aliases.get(host, host)
     return f"{host}{sep}{rest}" or None
 
 
@@ -22607,7 +22653,7 @@ def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[d
     return [g for g in groups.values() if len(g) > 1]
 
 
-def _saved_dup_host_slug(link: str) -> str | None:
+def _saved_dup_host_slug(link: str, host_aliases: dict[str, str] | None = None) -> str | None:
     """Host-scoped slug key for the saved scan's confirmed tier.
 
     `_safe_dedup_entry_slug` is host-blind — it returns the last path segment
@@ -22626,7 +22672,7 @@ def _saved_dup_host_slug(link: str) -> str | None:
     slug = _safe_dedup_entry_slug(link)
     if not slug:
         return None
-    canon = normalize_entry_link_for_dedupe(link)
+    canon = normalize_entry_link_for_dedupe(link, host_aliases)
     host = canon.partition("/")[0] if canon else ""
     return f"{host}/{slug}" if host else None
 
@@ -22659,6 +22705,7 @@ def get_saved_duplicates():
     """
     import html as _html
 
+    host_aliases = get_dedupe_host_aliases()
     saved_url = saved_articles_service.SAVED_FEED_URL
     with get_reader() as reader:
         if reader.get_feed(saved_url, None) is None:
@@ -22695,8 +22742,8 @@ def get_saved_duplicates():
             "published": str(published or ""),
             "read": bool(read),
             "has_content": body_head is not None,
-            "_canon": normalize_entry_link_for_dedupe(link),
-            "_slug": _saved_dup_host_slug(link),
+            "_canon": normalize_entry_link_for_dedupe(link, host_aliases),
+            "_slug": _saved_dup_host_slug(link, host_aliases),
             "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
             "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
         })
