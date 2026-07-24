@@ -7413,7 +7413,27 @@
         const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
         const data = await resp.json();
-        if (!data.ok) { window.alert(data.error || 'Re-fetch failed.'); return; }
+        if (!data.ok) {
+          // A dead source (404/410) will never re-fetch — offer to delete it
+          // right here instead of leaving the user retrying a gone URL.
+          if (data.dead && window.confirm(`${data.error}\n\nDelete this post? A tombstone stops the next refresh from re-adding it.`)) {
+            const delResp = await fetch('/entries/delete', {
+              method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId }),
+            });
+            const delData = await delResp.json();
+            if (delData.ok) {
+              document.querySelector(
+                `.posts .post-item[data-post-entry-id="${window.CSS && CSS.escape ? CSS.escape(entryId) : entryId}"]`
+              )?.remove();
+              if (typeof showToastMessage === 'function') showToastMessage('Dead post deleted.');
+            } else {
+              window.alert(delData.error || 'Delete failed.');
+            }
+            return;
+          }
+          window.alert(data.error || 'Re-fetch failed.');
+          return;
+        }
         if (typeof showToastMessage === 'function') showToastMessage('Content re-fetched.');
         // If this entry is currently open, re-render the pane to show the fresh copy.
         const cur = new URL(window.location.href);

@@ -24072,7 +24072,8 @@ async def refresh_saved_article_content(
     # in-place result is the answer.
     if not saved_articles_service.is_saved_articles_feed(feed_url):
         return JSONResponse(
-            {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+            {"ok": False, "error": result.get("error") or "Re-fetch failed.",
+             "dead": bool(result.get("dead"))},
             status_code=400,
         )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id

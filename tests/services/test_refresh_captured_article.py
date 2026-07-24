@@ -250,3 +250,44 @@ def test_an_empty_extraction_leaves_the_stored_copy_alone(reader, meta_conn):
 
     assert result["ok"] is False
     assert "By Jesse Will" in _stored_content(reader, REAL_FEED, ARTICLE)
+
+
+class _FakeStatusError(Exception):
+    """Stands in for httpx.HTTPStatusError: carries a .response.status_code the
+    service duck-types, without importing httpx into the test."""
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status}")
+        self.response = type("R", (), {"status_code": status})()
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_a_dead_source_is_reported_as_gone(reader, meta_conn, status):
+    """A 404/410 means the article is gone at the source — re-fetch will never
+    work, so the result says so and flags `dead` so the UI can offer to delete
+    instead of leaving the user retrying a dead URL."""
+    _add_filed_capture(reader, meta_conn)
+
+    def _extract_gone(url: str):
+        raise _FakeStatusError(status)
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_gone)
+
+    assert result["ok"] is False
+    assert result["dead"] is True
+    assert str(status) in result["error"] and "gone" in result["error"].lower()
+    assert "By Jesse Will" in _stored_content(reader, REAL_FEED, ARTICLE)  # untouched
+
+
+def test_a_transient_http_error_is_not_flagged_dead(reader, meta_conn):
+    """A 503 (or any non-404/410) is not a dead source — surface the code but
+    keep `dead` false so the UI doesn't offer to delete a retryable article."""
+    _add_filed_capture(reader, meta_conn)
+
+    def _extract_503(url: str):
+        raise _FakeStatusError(503)
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_503)
+
+    assert result["ok"] is False
+    assert result["dead"] is False
+    assert "503" in result["error"]

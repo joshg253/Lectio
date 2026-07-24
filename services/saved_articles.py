@@ -189,6 +189,7 @@ def refresh_captured_article(
         "error": None,
         "refreshed": False,
         "extracted": False,
+        "dead": False,
         "feed_url": feed_url,
         "entry_id": entry_id,
         "title": None,
@@ -219,7 +220,18 @@ def refresh_captured_article(
         new_title, article_html = extract(source_url)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("refresh-capture: extraction failed for %s: %s", source_url, exc)
-        result["error"] = "Could not fetch the article."
+        # Duck-type an httpx HTTPStatusError's status without importing httpx
+        # here. A 404/410 means the article is gone at the source, so re-fetch
+        # will never work — say so, and flag it so the caller can offer to
+        # delete rather than leave the user retrying a dead URL.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (404, 410):
+            result["error"] = f"The source article is gone (HTTP {status}) — nothing to re-fetch."
+            result["dead"] = True
+        elif status is not None:
+            result["error"] = f"Could not fetch the article (HTTP {status})."
+        else:
+            result["error"] = "Could not fetch the article."
         return result
     if not article_html:
         result["error"] = "Nothing could be extracted from the page."
