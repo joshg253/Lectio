@@ -1102,7 +1102,6 @@
           `href="https://${_mfEscape(c.host)}" target="_blank" rel="noopener noreferrer" ` +
           `onclick="event.stopPropagation()" title="Open ${_mfEscape(c.host)} in a new tab to look for a feed">${_mfEscape(c.host)}</a>` +
         `<a class="saved-autofile-review" data-host="${_mfEscape(c.host)}" href="#" ` +
-          `onclick="event.stopPropagation()" ` +
           `title="Open these ${c.count} saved article(s) in the Saved view to file them by hand">` +
           `<span class="material-symbols-rounded" aria-hidden="true">search</span></a>` +
         ` ${note} ${notFeed}` +
