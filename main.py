@@ -10144,6 +10144,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
         for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
         for selector_type, value in [
+            ("id",    "article-body"),     # Future plc (guitarplayer/guitarworld/musicradar/…)
             ("class", "post-body"),       # Blogger
             ("class", "entry-content"),   # WordPress / Blogger
             ("class", "post-content"),    # Ghost, common themes
@@ -10153,6 +10154,8 @@ def _bs4_content_fallback(raw_html: str) -> str:
         ]:
             if selector_type == "class":
                 elem = soup.find(class_=lambda c, v=value: bool(c) and v in c.split())  # type: ignore[arg-type]
+            elif selector_type == "id":
+                elem = soup.find(id=value)
             else:
                 elem = soup.find(value)
             if elem:

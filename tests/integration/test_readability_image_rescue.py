@@ -62,3 +62,25 @@ def test_last_resort_needs_an_image_heavy_page():
     # rescue; result stays small rather than pulling in the body.
     _title, html = main.extract_readability_article(_imgs(3), URL)
     assert html.lower().count("<img") <= 3
+
+
+def test_future_plc_article_body_id_beats_whole_body():
+    """Future plc sites (guitarplayer/guitarworld/musicradar) put the article in
+    an id=article-body container. The fallback must pick that — clean tab
+    figures — over the whole body, which drags in related-article chrome that
+    made captures 'pull in a bunch of bs'."""
+    tabs = "".join(f'<img src="https://cdn.test/tab{i}.jpg" width="600">' for i in range(15))
+    chrome_imgs = "".join(f'<img src="https://cdn.test/related{i}.jpg">' for i in range(20))
+    page = (
+        "<html><head><title>Arpeggios</title></head><body>"
+        f'<header><nav>{chrome_imgs}</nav></header>'
+        '<div id="article-body">'
+        "<p>Learn arpeggios with these tab exercises over the next hour of practice.</p>"
+        f"{tabs}</div>"
+        f'<aside class="related">More from GuitarPlayer{chrome_imgs}</aside>'
+        "</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert 12 <= html.lower().count("<img") <= 16      # the tabs, not the chrome
+    assert "related0.jpg" not in html                   # no related-article junk
+    assert "tab0.jpg" in html
