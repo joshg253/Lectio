@@ -5077,6 +5077,8 @@ _SAFE_DEDUP_UNICODE_TRANS = str.maketrans({
     ' ': ' ',
 })
 _SAFE_DEDUP_TAG_RE = re.compile(r"<[^>]+>")
+# A tag left unclosed because a fixed-size window truncated the HTML mid-tag.
+_SAFE_DEDUP_UNCLOSED_TAG_RE = re.compile(r"<[^>]*$")
 
 _SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
     frozenset({"slug", "title", "body"}),
@@ -22673,6 +22675,13 @@ def get_saved_duplicates():
         body = ""
         if body_head:
             body = _SAFE_DEDUP_TAG_RE.sub(" ", body_head)
+            # The 2000-char SQL window can cut off inside a tag, leaving an
+            # unclosed "<img …src="…long-url" fragment that _SAFE_DEDUP_TAG_RE
+            # (which needs a closing >) can't strip. That fragment is the site
+            # logo — byte-identical across every page on the site — so it made
+            # unrelated articles (harrypotter.com/writing/*) false-match on
+            # "same content". Drop a residual unclosed tag.
+            body = _SAFE_DEDUP_UNCLOSED_TAG_RE.sub("", body)
             body = _html.unescape(body)
             body = " ".join(body.split())[:_SAVED_DUP_BODY_HEAD_CHARS].lower()
         ntitle = normalize_entry_title_for_dedupe(title)
