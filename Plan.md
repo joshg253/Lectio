@@ -16,8 +16,16 @@ session):**
   the PK and the feed re-serves the old guid every refresh).
   `scripts/apply_feed_url_rewrites.py` migrated the 31 existing tush.ar entries
   (→18 after same-slug cross-domain merges; 1 star + 15 tags preserved), and a
-  live refresh confirmed the old ids don't come back. **TODO: a UI to add/edit
-  rules** (rules seeded from the shell for now).
+  live refresh confirmed the old ids don't come back.
+  **UI shipped 2026-07-24:** Feed Properties → **Edit** next to Website. Editing
+  the site domain seeds the `feed_url_rewrites` rule (old channel-link host → new
+  Website host) and migrates the existing posts inline via
+  `migrate_feed_host_rewrite` — the same per-entry logic the batch script now
+  imports from `main` (`migrate_entry_to_new_host`). Also fixed the reverse bug
+  it exposed: the list/pane rebase (`_rebase_proxy_entry_link`) folds the channel
+  link through declared migrations first, so a feed whose channel `<link>` still
+  names the dead host can't rewrite correct entry links back onto it, and the
+  Website/favicon read the migrated host too.
 - **Re-save resurfaces from Archive** — an explicit save of an already-archived+
   read article (e.g. one a 2019 Instapaper import archived) now un-archives it and
   marks it unread, so it lands in the Saved Inbox instead of silently staying in

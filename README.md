@@ -100,7 +100,11 @@ The short version:
   **edit URL** — repoint a post at a moved or dead source link (a retired
   feedproxy/FeedBurner redirector, or a site reorganization), then **Re-fetch
   content** to pull the article from its new home. The star, tags and read
-  state are kept: only the link changes.
+  state are kept: only the link changes. Per-feed, **edit Website** in Feed
+  Properties when an author moved domains without updating their feed's
+  `<guid>`/`<link>`: it rewrites every post link onto the new domain (carrying
+  stars/tags/read state), records the rule so re-ingested items stay corrected,
+  and fixes the site link, favicon and duplicate-scan pairing too.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can

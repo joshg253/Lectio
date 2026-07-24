@@ -2299,6 +2299,12 @@
     const feedPropChangeUrlSave = document.getElementById('feed-prop-change-url-save');
     const feedPropChangeUrlCancel = document.getElementById('feed-prop-change-url-cancel');
     const feedPropChangeUrlStatus = document.getElementById('feed-prop-change-url-status');
+    const feedPropChangeWebsiteBtn = document.getElementById('feed-prop-change-website-btn');
+    const feedPropChangeWebsiteWrap = document.getElementById('feed-prop-change-website-wrap');
+    const feedPropChangeWebsiteInput = document.getElementById('feed-prop-change-website-input');
+    const feedPropChangeWebsiteSave = document.getElementById('feed-prop-change-website-save');
+    const feedPropChangeWebsiteCancel = document.getElementById('feed-prop-change-website-cancel');
+    const feedPropChangeWebsiteStatus = document.getElementById('feed-prop-change-website-status');
     const feedPropUpdatesLabel = document.getElementById('feed-prop-updates-label');
     const feedPropDisableBtn = document.getElementById('feed-prop-disable-btn');
     const feedPropDisableStatus = document.getElementById('feed-prop-disable-status');
@@ -3797,6 +3803,10 @@
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
         if (feedPropChangeUrlInput) feedPropChangeUrlInput.value = '';
         if (feedPropChangeUrlStatus) feedPropChangeUrlStatus.textContent = '';
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteInput) feedPropChangeWebsiteInput.value = '';
+        if (feedPropChangeWebsiteStatus) feedPropChangeWebsiteStatus.textContent = '';
         {
           const updatesEnabled = data.updates_enabled !== false;
           if (feedPropUpdatesLabel) feedPropUpdatesLabel.textContent = updatesEnabled ? 'Active' : 'Disabled';
@@ -5147,6 +5157,56 @@
         feedPropChangeUrlStatus.textContent = `Error: ${err.message}`;
       } finally {
         feedPropChangeUrlSave.disabled = false;
+      }
+    });
+
+    feedPropChangeWebsiteBtn?.addEventListener('click', () => {
+      if (!feedPropChangeWebsiteWrap || !feedPropChangeWebsiteInput) return;
+      const cur = (feedPropWebsite?.textContent || '').trim();
+      feedPropChangeWebsiteInput.value = cur === '-' ? '' : cur;
+      feedPropChangeWebsiteWrap.hidden = false;
+      feedPropChangeWebsiteBtn.hidden = true;
+      feedPropChangeWebsiteStatus.textContent = '';
+      feedPropChangeWebsiteInput.focus();
+      feedPropChangeWebsiteInput.select();
+    });
+    feedPropChangeWebsiteCancel?.addEventListener('click', () => {
+      if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+      if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+    });
+    feedPropChangeWebsiteSave?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      const newWebsite = feedPropChangeWebsiteInput?.value?.trim();
+      if (!feedUrl || !newWebsite) {
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        return;
+      }
+      feedPropChangeWebsiteSave.disabled = true;
+      feedPropChangeWebsiteStatus.textContent = 'Repointing…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, website: newWebsite });
+        const resp = await fetch('/feeds/set-website', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'Repoint failed');
+        // Reflect the corrected website in place.
+        if (feedPropWebsite) setFeedPropText(feedPropWebsite, json.website || newWebsite);
+        if (feedPropWebsiteOpen) {
+          const ws = (json.website || newWebsite).trim();
+          feedPropWebsiteOpen.href = safeHttpUrl(ws) || '#';
+          feedPropWebsiteOpen.hidden = !ws;
+        }
+        feedPropChangeWebsiteStatus.textContent =
+          json.unchanged ? 'Already on that domain.' : `Rewrote ${json.migrated || 0} post(s).`;
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        // Reload so the rewritten post links show immediately (brief pause to
+        // let the "Rewrote N post(s)" status register first).
+        if (!json.unchanged) setTimeout(() => window.location.reload(), 900);
+      } catch (err) {
+        feedPropChangeWebsiteStatus.textContent = `Error: ${err.message}`;
+      } finally {
+        feedPropChangeWebsiteSave.disabled = false;
       }
     });
 

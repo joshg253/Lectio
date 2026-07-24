@@ -23,66 +23,16 @@ import os
 import sqlite3
 import sys
 from collections import Counter
-from urllib.parse import urlsplit, urlunsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
 from services import tenancy  # noqa: E402
 
-
-def _swap_host(url: str, host_map: dict[str, str]) -> str:
-    try:
-        p = urlsplit(url)
-    except ValueError:
-        return url
-    bare = (p.netloc or "").split("@")[-1].split(":")[0].lower()
-    to = host_map.get(bare)
-    return urlunsplit((p.scheme, to, p.path, p.query, p.fragment)) if to else url
-
-
-def _migrate_entry(reader, conn, feed, old_id, new_id, new_link) -> str:
-    src = reader.get_entry((feed, old_id), None)
-    if src is None:
-        return "gone"
-    if reader.get_entry((feed, new_id), None) is None:
-        ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
-                    "title": src.title or ""}
-        if src.published:
-            ed["published"] = src.published
-        if getattr(src, "content", None):
-            ed["content"] = [{"value": src.content[0].value}]
-        elif src.summary:
-            ed["summary"] = src.summary
-        reader.add_entry(ed)
-
-    # Manual tags (feed-provided ones re-populate on the next refresh).
-    for t in reader.get_tags(src.resource_id):
-        key = t[0] if isinstance(t, tuple) else t
-        if key and key.startswith(main.MANUAL_TAG_KEY_PREFIX):
-            reader.set_tag((feed, new_id), key)
-            reader.delete_tag(src.resource_id, key, missing_ok=True)
-
-    # Star (+ archived_at), read state, link-override cleanup.
-    row = conn.execute(
-        "SELECT saved_at, archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-        (feed, old_id),
-    ).fetchone()
-    if row:
-        conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
-            "VALUES (?, ?, ?, ?)", (feed, new_id, row["saved_at"], row["archived_at"]),
-        )
-        conn.execute("DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
-    if src.read:
-        reader.mark_entry_as_read((feed, new_id))
-    conn.execute("DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
-    conn.commit()
-
-    # Offline archive, then drop the source entry.
-    main.starred_archive_service.rekey_archive(feed, old_id, feed, new_id)
-    main._hard_delete_entry(reader, feed, old_id, src)
-    return "migrated"
+# The host-swap and per-entry migration now live in main so the Edit-Website
+# route and this batch script share one implementation.
+_swap_host = main._swap_host_in_url
+_migrate_entry = main.migrate_entry_to_new_host
 
 
 def run_for_user(uid: str, apply: bool) -> dict:

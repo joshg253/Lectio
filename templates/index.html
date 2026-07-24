@@ -2395,6 +2395,13 @@
           <dd id="feed-prop-website-row">
             <span id="feed-prop-website">-</span>
             <a id="feed-prop-website-open" href="#" target="_blank" rel="noopener noreferrer" class="feed-prop-inline-btn feed-prop-open-btn" hidden title="Open in new tab">&#x2197;</a>
+            <button type="button" id="feed-prop-change-website-btn" class="feed-prop-inline-btn" title="Repoint this feed to a new site domain and rewrite its post links">Edit</button>
+            <span id="feed-prop-change-website-wrap" hidden>
+              <input type="url" id="feed-prop-change-website-input" class="feed-prop-url-input" placeholder="New site URL (e.g. https://newdomain.com/)" autocomplete="off" />
+              <button type="button" id="feed-prop-change-website-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+              <button type="button" id="feed-prop-change-website-cancel" class="feed-prop-inline-btn">Cancel</button>
+              <span id="feed-prop-change-website-status" class="feed-prop-inline-status"></span>
+            </span>
           </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">

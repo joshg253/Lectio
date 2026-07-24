@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Sequence, cast
-from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
 import httpx
@@ -22351,6 +22351,150 @@ def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), l
         )
         db.commit()
     return JSONResponse({"ok": True, "link": link})
+
+
+def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
+    """Swap *url*'s bare host per ``{from_host: to_host}`` (case-insensitive,
+    ignores userinfo/port); scheme, path, query and fragment are preserved.
+    Shared by the Edit-Website route and the apply_feed_url_rewrites script."""
+    try:
+        p = urlsplit(url)
+    except ValueError:
+        return url
+    bare = (p.netloc or "").split("@")[-1].split(":")[0].lower()
+    to = host_map.get(bare)
+    return urlunsplit((p.scheme, to, p.path, p.query, p.fragment)) if to else url
+
+
+def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> str:
+    """Recreate one entry under its host-rewritten id, carrying the star
+    (+archived_at), manual tags, read state and offline archive, then delete the
+    old one. Returns "migrated" / "gone". Idempotent: an already-migrated entry
+    no longer matches a from_host. Must run with the ingest rewrite hook in place
+    so the feed re-serving the old guid updates the migrated entry, not a
+    resurrected old one."""
+    src = reader.get_entry((feed, old_id), None)
+    if src is None:
+        return "gone"
+    if reader.get_entry((feed, new_id), None) is None:
+        ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
+                    "title": src.title or ""}
+        if src.published:
+            ed["published"] = src.published
+        if getattr(src, "content", None):
+            ed["content"] = [{"value": src.content[0].value}]
+        elif src.summary:
+            ed["summary"] = src.summary
+        reader.add_entry(ed)
+    for t in reader.get_tags(src.resource_id):
+        key = t[0] if isinstance(t, tuple) else t
+        if key and key.startswith(MANUAL_TAG_KEY_PREFIX):
+            reader.set_tag((feed, new_id), key)
+            reader.delete_tag(src.resource_id, key, missing_ok=True)
+    row = conn.execute(
+        "SELECT saved_at, archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        (feed, old_id),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
+            "VALUES (?, ?, ?, ?)", (feed, new_id, row["saved_at"], row["archived_at"]),
+        )
+        conn.execute("DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    if src.read:
+        reader.mark_entry_as_read((feed, new_id))
+    conn.execute("DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    conn.commit()
+    starred_archive_service.rekey_archive(feed, old_id, feed, new_id)
+    _hard_delete_entry(reader, feed, old_id, src)
+    return "migrated"
+
+
+def migrate_feed_host_rewrite(feed_url: str, host_map: dict[str, str]) -> dict:
+    """Rewrite existing entries of one feed whose id/link host matches *host_map*.
+    The single-feed, inline counterpart of the apply_feed_url_rewrites script, so
+    an Edit-Website flips old links immediately instead of on the next refresh."""
+    import time as _time
+    from collections import Counter
+    stats: Counter[str] = Counter()
+    reader = get_reader()
+    with get_meta_connection() as conn:
+        conn.execute("PRAGMA busy_timeout = 20000")
+        for e in list(reader.get_entries(feed=feed_url)):
+            old_id = str(e.id)
+            new_id = _swap_host_in_url(old_id, host_map)
+            if new_id == old_id:
+                continue
+            stats["match"] += 1
+            new_link = _swap_host_in_url(str(e.link or old_id), host_map)
+            for attempt in range(4):
+                try:
+                    stats[migrate_entry_to_new_host(reader, conn, feed_url, old_id, new_id, new_link)] += 1
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" in str(exc).lower() and attempt < 3:
+                        _time.sleep(1.5)
+                        continue
+                    stats["locked"] += 1
+                    break
+    return dict(stats)
+
+
+@app.post("/feeds/set-website")
+def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
+    """Repoint a feed to a new site domain: seed a Fix-URLs rule (old host → new
+    host) and rewrite existing post links/ids onto the new host right away.
+
+    The old host is the one the feed itself advertises in its channel <link>;
+    if that's absent, the host most of its posts link to. Everything downstream
+    already honors feed_url_rewrites — the entry-link rebase, dupe scan, favicon
+    and re-fetch — so seeding the rule fixes the Website, the post links, and the
+    dead-domain rebase in one move. This is the front door to the rewrite engine
+    that previously had to be hand-seeded in the DB."""
+    website = website.strip()
+    parsed = urlparse(website)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return JSONResponse({"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400)
+    to_host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+
+    with get_reader() as reader:
+        feed_obj = reader.get_feed(feed_url, None)
+        if feed_obj is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        from_host = ""
+        if getattr(feed_obj, "link", None):
+            from_host = urlparse(str(feed_obj.link)).netloc.split("@")[-1].split(":")[0].lower()
+        # No channel link, or it already names the new host: fall back to the
+        # host most posts link to, so we migrate from wherever the posts live.
+        if not from_host or from_host == to_host:
+            from collections import Counter as _Counter
+            hosts = _Counter(
+                urlparse(str(e.link)).netloc.split("@")[-1].split(":")[0].lower()
+                for e in reader.get_entries(feed=feed_url) if getattr(e, "link", None)
+            )
+            hosts.pop(to_host, None)  # already-correct posts aren't a source
+            from_host = hosts.most_common(1)[0][0] if hosts else from_host
+
+    # Nothing to migrate from (empty feed, or already all on the new host).
+    if not from_host or from_host == to_host:
+        return JSONResponse({"ok": True, "website": website, "migrated": 0, "unchanged": True})
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+            (feed_url, from_host, to_host),
+        )
+        conn.commit()
+    stats = migrate_feed_host_rewrite(feed_url, {from_host: to_host})
+    invalidate_unread_counts_cache()
+    invalidate_meta_structure_cache()
+    return JSONResponse({
+        "ok": True,
+        "website": f"{parsed.scheme}://{parsed.netloc}/",
+        "from_host": from_host,
+        "to_host": to_host,
+        "migrated": stats.get("migrated", 0),
+    })
 
 
 @app.post("/entries/move-to-feed")
