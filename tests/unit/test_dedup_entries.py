@@ -149,6 +149,11 @@ def test_slug_dedup_returns_kept_list(monkeypatch):
     assert not (marked_ids & kept_ids)
     kept = result["kept"][0]
     assert kept["title"] == "Some Post" and kept["link"]
+    # Pairing for run history: each marked entry carries the kept copy's link it
+    # matched, and the kept anchors its own group by its own link.
+    assert kept["matched_link"] == kept["link"]
+    for m in result["entries"]:
+        assert m["matched_link"] == kept["link"]
 
 
 def test_safe_dedup_returns_kept_list(monkeypatch):

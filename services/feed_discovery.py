@@ -140,7 +140,96 @@ def _pinboard_feed_url(url: str) -> str | None:
     return "https://feeds.pinboard.in/rss/" + "/".join(segments) + "/"
 
 
-_SITE_FEED_REWRITES = [_pinboard_feed_url]
+# Single-segment artstation.com paths that are site pages, not usernames — never
+# rewrite these to a bogus <seg>.rss.
+_ARTSTATION_RESERVED = frozenset({
+    "artwork", "search", "jobs", "blogs", "prints", "marketplace", "learning",
+    "contests", "channels", "guilds", "about", "terms", "privacy", "podcast",
+    "magazine", "studios", "schools", "wallpapers", "2d", "3d", "login", "signup",
+    "users", "explore", "following", "notifications", "messages",
+})
+
+
+def _artstation_feed_url(url: str) -> str | None:
+    """ArtStation feeds live at ``www.artstation.com/<user>.rss``.
+
+    The subdomain form (``<user>.artstation.com/rss``) and the profile page both
+    403 any fetch — even a browser identity — but the www ``.rss`` form serves
+    the feed with our honest UA. Map both profile forms onto it so Add Feed
+    resolves an artist URL instead of failing on the bot-wall."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    user = None
+    if host.endswith(".artstation.com") and host != "www.artstation.com":
+        sub = host[:-len(".artstation.com")]
+        if sub and "." not in sub:
+            user = sub
+    elif host in ("artstation.com", "www.artstation.com"):
+        segments = [s for s in parsed.path.split("/") if s]
+        if len(segments) == 1 and not segments[0].lower().endswith(".rss"):
+            if segments[0].lower() not in _ARTSTATION_RESERVED:
+                user = segments[0]
+    if not user:
+        return None
+    return f"https://www.artstation.com/{user}.rss"
+
+
+# Single-segment behance.net paths that are site pages, not usernames.
+_BEHANCE_RESERVED = frozenset({
+    "search", "galleries", "joblist", "hire", "assets", "for_you", "live",
+    "onboarding", "settings", "notifications", "messages", "adobe", "blog",
+    "help", "about", "careers", "login", "signup", "feeds", "gallery",
+    "collection", "collections", "reviews", "schools", "discover",
+})
+
+
+def _behance_feed_url(url: str) -> str | None:
+    """Behance per-user feeds live at ``www.behance.net/<user>.rss`` (the profile
+    page itself is HTML). Map a bare profile URL onto the .rss form so Add Feed
+    resolves it. (``/feeds/user?username=<user>`` also works and is left alone if
+    pasted directly.)"""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("behance.net", "www.behance.net"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if len(segments) != 1:
+        return None
+    user = segments[0]
+    if user.lower().endswith(".rss") or user.lower() in _BEHANCE_RESERVED:
+        return None
+    return f"https://www.behance.net/{user}.rss"
+
+
+def _freecodecamp_feed_url(url: str) -> str | None:
+    """freeCodeCamp News (Ghost) publishes an RSS feed for every collection at
+    ``<path>/rss/`` — the whole site (``/news/rss/``), a tag
+    (``/news/tag/<tag>/rss/``) or an author (``/news/author/<name>/rss/``).
+
+    Autodiscovery on a tag or author *page* advertises the site-wide feed, so
+    pasting a tag page would subscribe the firehose instead of that tag (the
+    reported case: ``/news/tag/advanced-mathematics/`` resolved to
+    ``/news/rss``). Map the collection page to its own feed; article URLs
+    (``/news/<slug>/``) have no feed and fall through to generic discovery."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in ("freecodecamp.org", "www.freecodecamp.org"):
+        return None
+    segments = [s for s in parsed.path.split("/") if s]
+    if not segments or segments[0].lower() != "news" or segments[-1].lower() == "rss":
+        return None
+    if len(segments) == 1:                                   # /news/ → site feed
+        path = "news"
+    elif len(segments) == 3 and segments[1].lower() in ("tag", "author"):
+        path = "/".join(segments)                            # /news/tag|author/<x>/
+    else:
+        return None                                          # article or unknown
+    return f"https://www.freecodecamp.org/{path}/rss/"
+
+
+_SITE_FEED_REWRITES = [
+    _pinboard_feed_url, _artstation_feed_url, _behance_feed_url, _freecodecamp_feed_url,
+]
 
 
 def rewrite_known_site_url(url: str) -> str:

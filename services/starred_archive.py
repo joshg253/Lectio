@@ -65,6 +65,7 @@ class StarredArchiveService:
         sanitize_readability_html: Callable[[str], str],
         background_user_ids: Callable[[], list[str]] | None = None,
         on_canonical_link: Callable[[str, str, str, str], bool] | None = None,
+        manually_tagged_keys: Callable[[], set[tuple[str, str]]] | None = None,
     ) -> None:
         self._get_archive_connection = get_archive_connection
         self._get_meta_connection = get_meta_connection
@@ -75,6 +76,11 @@ class StarredArchiveService:
         # page fetch when the redirect chain landed on a different URL, so the
         # app can canonicalize redirector entry links at zero extra requests.
         self._on_canonical_link = on_canonical_link
+        # Every (feed_url, entry_id) carrying a manual tag, fetched in bulk.
+        # Since the tag-as-keep flip a *tag* also creates an archive, so
+        # "has a complete archive" no longer implies "was starred" — see
+        # backfill_saved_entries_from_archive.
+        self._manually_tagged_keys = manually_tagged_keys
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
@@ -184,6 +190,131 @@ class StarredArchiveService:
         except sqlite3.Error:
             return {}
         return {str(row["source_url"]): str(row["asset_hash"]) for row in rows}
+
+    def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
+        """True if a `complete` archive row exists for this key."""
+        try:
+            with self._get_archive_connection() as conn:
+                return conn.execute(
+                    "SELECT 1 FROM archived_entry "
+                    "WHERE feed_url = ? AND entry_id = ? AND status = 'complete' LIMIT 1",
+                    (feed_url, entry_id),
+                ).fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    def delete_archive(self, feed_url: str, entry_id: str) -> bool:
+        """Synchronously remove an archive row and its now-unreferenced assets.
+
+        The same cascade the removal worker runs, but immediate — used when a
+        move makes a capture redundant (the target already has one) or when
+        sweeping orphaned rows. Assets shared with another entry are kept."""
+        try:
+            with self._get_archive_connection() as conn:
+                hashes = [
+                    str(r["asset_hash"]) for r in conn.execute(
+                        "SELECT DISTINCT asset_hash FROM archived_asset_link "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (feed_url, entry_id),
+                    ).fetchall()
+                ]
+                conn.execute(
+                    "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                if hashes:
+                    placeholders = ",".join("?" * len(hashes))
+                    conn.execute(
+                        f"DELETE FROM archived_asset WHERE asset_hash IN ({placeholders})"
+                        f" AND asset_hash NOT IN (SELECT DISTINCT asset_hash FROM archived_asset_link)",
+                        hashes,
+                    )
+                conn.execute(
+                    "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+            return True
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: delete_archive failed for %s/%s: %s", feed_url, entry_id, exc)
+            return False
+
+    def sweep_failed_orphans(self, keep) -> int:
+        """Delete unrecoverable ``status='failed'`` archive rows.
+
+        A star enqueued for capture whose entry then left its feed window (and
+        whose star was later removed) leaves a failed row that can never succeed
+        — there is nothing to capture — which shows as a "failed" count in Stats
+        forever. ``keep(feed_url, entry_id) -> bool`` decides which failed rows to
+        *keep* (the caller keeps rows whose entry still exists or is starred, so a
+        transient capture failure can still be retried); the rest are deleted.
+        Returns the number removed. Used by the nightly maintenance."""
+        try:
+            with self._get_archive_connection() as conn:
+                failed = conn.execute(
+                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'failed'"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: sweep_failed_orphans read failed: %s", exc)
+            return 0
+        swept = 0
+        for row in failed:
+            feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+            try:
+                if keep(feed_url, entry_id):
+                    continue
+                if self.delete_archive(feed_url, entry_id):
+                    swept += 1
+            except Exception:  # noqa: BLE001 — one bad row must not abort the sweep
+                LOGGER.exception(
+                    "starred archive: sweep_failed_orphans failed for %s/%s", feed_url, entry_id
+                )
+        return swept
+
+    def rekey_archive(self, src_feed: str, src_id: str, dst_feed: str, dst_id: str) -> bool:
+        """Move a capture from one (feed, id) to another, preserving it.
+
+        Used when an article is filed onto its real feed and the target has no
+        capture of its own: re-point the archive row and its asset links rather
+        than deleting the only copy. If the target *already* has a complete
+        archive the source is redundant — the caller should delete_archive it
+        instead; this refuses to clobber, so a redundant re-key is a no-op-delete
+        of the source to avoid a duplicate-key collision."""
+        if (src_feed, src_id) == (dst_feed, dst_id):
+            return True
+        try:
+            with self._get_archive_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM archived_entry WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+                    (dst_feed, dst_id),
+                ).fetchone() is not None
+                if exists:
+                    # Target already captured — drop the source rows to dedupe.
+                    conn.execute(
+                        "DELETE FROM archived_asset_link WHERE feed_url = ? AND entry_id = ?",
+                        (src_feed, src_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM archived_entry WHERE feed_url = ? AND entry_id = ?",
+                        (src_feed, src_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE archived_entry SET feed_url = ?, entry_id = ? "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id, src_feed, src_id),
+                    )
+                    conn.execute(
+                        "UPDATE archived_asset_link SET feed_url = ?, entry_id = ? "
+                        "WHERE feed_url = ? AND entry_id = ?",
+                        (dst_feed, dst_id, src_feed, src_id),
+                    )
+            return True
+        except sqlite3.Error as exc:
+            LOGGER.warning(
+                "starred archive: rekey_archive failed %s/%s -> %s/%s: %s",
+                src_feed, src_id, dst_feed, dst_id, exc,
+            )
+            return False
 
     def get_archived_entry_detail(self, feed_url: str, entry_id: str) -> dict[str, Any] | None:
         """Return a render-shaped dict for an entry that lives only in the archive.
@@ -326,6 +457,28 @@ class StarredArchiveService:
 
         The reverse of backfill_missing_archives. Recovers from meta DB resets
         where starred_archive survived intact. Returns the number of rows inserted.
+
+        Two things it must *not* do, both learned the hard way:
+
+        **Never restore a star for an entry reader no longer holds.** An archive
+        row outlives its entry — moving a saved article to a real feed
+        hard-deletes the ``lectio:saved`` source but leaves its archive row
+        behind — so without this check every restart "restored" a star pointing
+        at a tombstone: invisible in the UI (the entry lookup returns nothing)
+        but inflating counts and adding work to every Saved-view query. That is
+        the whole of the orphaned-star-row mystery; it also made a one-off sweep
+        pointless, since the next startup re-created every row it deleted.
+
+        **Never restore a star for a manually tagged entry.** This function
+        infers "had a complete archive" ⇒ "was starred", which was true when it
+        was written and became false at the tag-as-keep flip: a tag now archives
+        too, so ``archived_entry`` is a superset of the starred set. Without the
+        check, retro-archiving tagged entries (Part C pass 1) silently converted
+        them into *starred* entries at the next boot — manufacturing exactly the
+        redundant stars that the "unstar tagged items" cleanup exists to remove.
+        An entry that is both starred and tagged is skipped too: this is a
+        disaster-recovery path, and failing to restore one real star is far
+        cheaper than inventing thousands.
         """
         try:
             with self._get_archive_connection() as conn:
@@ -339,13 +492,38 @@ class StarredArchiveService:
         if not rows:
             return 0
 
-        inserted = 0
         try:
-            with self._get_meta_connection() as meta_conn:
+            tagged = self._manually_tagged_keys() if self._manually_tagged_keys else set()
+        except Exception as exc:  # noqa: BLE001
+            # Without the tag set every tagged entry would be starred, so bail
+            # rather than guess — the recovery this function offers is worth far
+            # less than the damage of inventing stars.
+            LOGGER.warning(
+                "starred archive: backfill_saved_entries skipped, manual-tag lookup failed: %s", exc
+            )
+            return 0
+
+        inserted = 0
+        stale = 0
+        tag_explained = 0
+        try:
+            with self._get_meta_connection() as meta_conn, self._get_reader() as reader:
                 for row in rows:
+                    feed_url = str(row["feed_url"])
+                    entry_id = str(row["entry_id"])
+                    if (feed_url, entry_id) in tagged:
+                        tag_explained += 1
+                        continue
+                    try:
+                        entry = reader.get_entry((feed_url, entry_id), None)
+                    except Exception:  # noqa: BLE001
+                        entry = None
+                    if entry is None:
+                        stale += 1
+                        continue
                     cur = meta_conn.execute(
                         "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                        (str(row["feed_url"]), str(row["entry_id"])),
+                        (feed_url, entry_id),
                     )
                     if cur.rowcount:
                         inserted += 1
@@ -355,6 +533,15 @@ class StarredArchiveService:
 
         if inserted:
             LOGGER.info("starred archive: restored %d saved_entries row(s) from archive", inserted)
+        if stale:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) whose entry no longer exists", stale
+            )
+        if tag_explained:
+            LOGGER.info(
+                "starred archive: skipped %d archive row(s) explained by a manual tag, not a star",
+                tag_explained,
+            )
         return inserted
 
     def backfill_metadata_for_complete_rows(self) -> int:

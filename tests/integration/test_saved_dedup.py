@@ -126,6 +126,33 @@ def _seed_saved(reader) -> None:
                published=datetime(2026, 3, 1, tzinfo=timezone.utc))
 
 
+def test_shared_unclosed_logo_tag_is_not_same_content(configured):
+    """A capture of a whole page can lead with a site logo <img> whose src is
+    longer than the body-scan window, so the SQL substr cuts it off unclosed.
+    That identical fragment must not make unrelated articles false-match on
+    'same content' (the harrypotter.com/writing/* case)."""
+    # A logo <img> whose src exceeds the 2000-char scan window, so it's never
+    # closed inside the window — identical across all three pages.
+    logo = '<div><div class="header"><img alt="logo" src="https://site.test/logo-' + ("x" * 2100) + '"'
+    with main.get_reader() as reader:
+        saved_articles_service.ensure_saved_feed(reader)
+        for slug, title in [
+            ("the-potter-family", "The Potter Family"),
+            ("macusa", "The Magical Congress of the United States"),
+            ("ilvermorny", "Ilvermorny School of Witchcraft and Wizardry"),
+        ]:
+            _add_entry(reader, SAVED, f"https://site.test/writing/{slug}",
+                       link=f"https://site.test/writing/{slug}", title=title,
+                       content=logo + f'>{title} article body prose here.</div></div>')
+    with _client() as c:
+        data = c.get("/saved/duplicates").json()
+    for tier in ("confirmed", "possible"):
+        for g in data[tier]:
+            links = [e["link"] for e in g["entries"]]
+            assert not any("/writing/" in l for l in links), \
+                f"unrelated pages grouped by shared logo fragment: {g['reasons']}"
+
+
 def test_saved_duplicates_scan_groups_and_tiers(configured):
     with main.get_reader() as reader:
         _seed_saved(reader)
@@ -285,7 +312,8 @@ def test_check_saved_url_classification(configured, monkeypatch):
 
     _patch_probes(monkeypatch, 200)
     assert main._check_saved_url(url) == {
-        "status": 200, "alive": True, "dead": False, "final_url": url, "error": None}
+        "status": 200, "alive": True, "dead": False, "soft_dead": False,
+        "final_url": url, "error": None}
 
     _patch_probes(monkeypatch, 404, get_status=404)  # HEAD 4xx is confirmed with a GET
     assert main._check_saved_url(url)["dead"] is True

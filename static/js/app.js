@@ -809,6 +809,14 @@
       if (r.dead) {
         b.classList.add('saved-dedup-badge--dead');
         b.textContent = `dead (${r.status})`;
+      } else if (r.soft_dead) {
+        // 200, but the site redirected an article URL onto a section index —
+        // the page is gone and the server won't say so. Advisory only: this is
+        // a URL-shape guess, and _sdApplySelection arms on `dead` alone, so it
+        // never pre-checks a delete.
+        b.classList.add('saved-dedup-badge--soft-dead');
+        b.textContent = 'probably gone';
+        b.title = `Redirected to ${r.final_url} — the article URL no longer resolves to an article`;
       } else if (r.alive) {
         b.classList.add('saved-dedup-badge--alive');
         b.textContent = r.status === 200 ? 'alive' : `alive (${r.status})`;
@@ -1090,7 +1098,13 @@
         `<input type="checkbox" class="saved-autofile-check" data-host="${_mfEscape(c.host)}"` +
         ` id="${id}"${c.target_feed_url ? '' : ' disabled'}>` +
         `<span class="saved-autofile-count">${c.count}</span>` +
-        `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(c.host)}</span> ${note} ${notFeed}` +
+        `<span class="saved-dedup-main"><a class="saved-dedup-title saved-autofile-host-link" ` +
+          `href="https://${_mfEscape(c.host)}" target="_blank" rel="noopener noreferrer" ` +
+          `onclick="event.stopPropagation()" title="Open ${_mfEscape(c.host)} in a new tab to look for a feed">${_mfEscape(c.host)}</a>` +
+        `<a class="saved-autofile-review" data-host="${_mfEscape(c.host)}" href="#" ` +
+          `title="Open these ${c.count} saved article(s) in the Saved view to file them by hand">` +
+          `<span class="material-symbols-rounded" aria-hidden="true">search</span></a>` +
+        ` ${note} ${notFeed}` +
         (c.candidates.length
           ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
             ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
@@ -1099,7 +1113,9 @@
             `<button type="button" class="saved-autofile-notfeed saved-autofile-badfeed"` +
             ` data-feed="${_mfEscape(c.target_feed_url || '')}"` +
             ` title="This subscription isn't really a feed — never offer it as a destination">not a feed</button>` +
-            `<span class="saved-autofile-url">${_mfEscape(c.target_feed_url || '')}</span>`
+            `<a class="saved-autofile-url" href="${_mfEscape(c.target_feed_url || '')}" ` +
+            `target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" ` +
+            `title="Open this feed URL in a new tab">${_mfEscape(c.target_feed_url || '')}</a>`
           : '') +
         `</span></label>`;
     };
@@ -1165,6 +1181,24 @@
     };
 
     document.getElementById('saved-autofile-results')?.addEventListener('click', async (ev) => {
+      // Magnifying glass: close the dialog (via full navigation) and open the
+      // Saved Articles feed scoped to this host — only the *unfiled* saves (the
+      // synthetic lectio:saved feed holds articles not yet attached to a feed),
+      // narrowed by site:<host> so a multi-feed host (Medium, Ars Technica) that
+      // can't be auto-filed can be reviewed and filed by hand from there.
+      const reviewLink = ev.target.closest?.('.saved-autofile-review');
+      if (reviewLink) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const host = reviewLink.dataset.host;
+        if (!host) return;
+        const target = new URL('/', window.location.origin);
+        target.searchParams.set('list_feed_url', 'lectio:saved');
+        target.searchParams.set('read_filter', 'all');
+        target.searchParams.set('q', `site:${host}`);
+        window.location.assign(target.toString());
+        return;
+      }
       const btn = ev.target.closest?.('.saved-autofile-notfeed');
       if (!btn) return;
       ev.preventDefault();      // the row is a <label> — don't toggle its checkbox
@@ -2183,6 +2217,8 @@
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
+    const folderRemoveStarsButton = document.getElementById('ctx-folder-remove-stars');
+    const folderRemoveTagsButton = document.getElementById('ctx-folder-remove-tags');
     const youtubeSyncButton = document.getElementById('ctx-youtube-sync');
     const disableFeedButton = document.getElementById('ctx-disable-feed');
     const addFeedForm = document.getElementById('context-add-feed-form');
@@ -2246,9 +2282,11 @@
     const postAutomationButton = document.getElementById('ctx-post-automation');
     const postMoveToFeedButton = document.getElementById('ctx-post-move-to-feed');
     const postMoveVisibleButton = document.getElementById('ctx-post-move-visible');
+    const postRemoveTagShownButton = document.getElementById('ctx-post-remove-tag-shown');
     const postDeleteButton = document.getElementById('ctx-post-delete');
     const postEditDateButton = document.getElementById('ctx-post-edit-date');
     const postEditTitleButton = document.getElementById('ctx-post-edit-title');
+    const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
@@ -2283,6 +2321,12 @@
     const feedPropChangeUrlSave = document.getElementById('feed-prop-change-url-save');
     const feedPropChangeUrlCancel = document.getElementById('feed-prop-change-url-cancel');
     const feedPropChangeUrlStatus = document.getElementById('feed-prop-change-url-status');
+    const feedPropChangeWebsiteBtn = document.getElementById('feed-prop-change-website-btn');
+    const feedPropChangeWebsiteWrap = document.getElementById('feed-prop-change-website-wrap');
+    const feedPropChangeWebsiteInput = document.getElementById('feed-prop-change-website-input');
+    const feedPropChangeWebsiteSave = document.getElementById('feed-prop-change-website-save');
+    const feedPropChangeWebsiteCancel = document.getElementById('feed-prop-change-website-cancel');
+    const feedPropChangeWebsiteStatus = document.getElementById('feed-prop-change-website-status');
     const feedPropUpdatesLabel = document.getElementById('feed-prop-updates-label');
     const feedPropDisableBtn = document.getElementById('feed-prop-disable-btn');
     const feedPropDisableStatus = document.getElementById('feed-prop-disable-status');
@@ -2371,6 +2415,13 @@
     let contextPostFeedUrl = null;
     let contextPostEntryId = null;
     let contextPostRead = false;
+    // Whether the entry is a Lectio capture (added_by='user') rather than
+    // feed-provided. Gates Re-fetch, which follows the entry rather than the
+    // feed it sits on — auto-filing moves captures onto real feeds.
+    let contextPostCaptured = false;
+    // Whether the entry is starred — starred feed entries are re-fetchable too
+    // (enrich a truncated/imageless feed post; the content is pinned).
+    let contextPostSaved = false;
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -2694,7 +2745,15 @@
         // before the tag (carried in resume_read_filter) — mirroring how exiting
         // History returns to the prior filter. Drop the tag from the target.
         if (currentParams.get('tag')) {
-          const resume = currentParams.get('resume_read_filter') || 'unread';
+          // Restore the filter active before the tag (carried in
+          // resume_read_filter). When there is none — e.g. the Inbox opened
+          // straight from Saved, which has no prior filter — default to the
+          // view's own default: 'all' in the Saved/star_only view (it always
+          // defaults to All server-side), 'unread' in Feeds. Defaulting to
+          // 'unread' everywhere stamped read_filter=unread onto a folder opened
+          // from the Inbox.
+          const savedView = currentParams.get('star_only') === '1';
+          const resume = currentParams.get('resume_read_filter') || (savedView ? 'all' : 'unread');
           targetUrl.searchParams.set('read_filter', resume);
           targetUrl.searchParams.set('resume_read_filter', resume);
           for (const key of ['star_only', 'sort_by', 'sort_dir']) {
@@ -3766,6 +3825,10 @@
         if (feedPropChangeUrlWrap) feedPropChangeUrlWrap.hidden = true;
         if (feedPropChangeUrlInput) feedPropChangeUrlInput.value = '';
         if (feedPropChangeUrlStatus) feedPropChangeUrlStatus.textContent = '';
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteInput) feedPropChangeWebsiteInput.value = '';
+        if (feedPropChangeWebsiteStatus) feedPropChangeWebsiteStatus.textContent = '';
         {
           const updatesEnabled = data.updates_enabled !== false;
           if (feedPropUpdatesLabel) feedPropUpdatesLabel.textContent = updatesEnabled ? 'Active' : 'Disabled';
@@ -5119,6 +5182,56 @@
       }
     });
 
+    feedPropChangeWebsiteBtn?.addEventListener('click', () => {
+      if (!feedPropChangeWebsiteWrap || !feedPropChangeWebsiteInput) return;
+      const cur = (feedPropWebsite?.textContent || '').trim();
+      feedPropChangeWebsiteInput.value = cur === '-' ? '' : cur;
+      feedPropChangeWebsiteWrap.hidden = false;
+      feedPropChangeWebsiteBtn.hidden = true;
+      feedPropChangeWebsiteStatus.textContent = '';
+      feedPropChangeWebsiteInput.focus();
+      feedPropChangeWebsiteInput.select();
+    });
+    feedPropChangeWebsiteCancel?.addEventListener('click', () => {
+      if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+      if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+    });
+    feedPropChangeWebsiteSave?.addEventListener('click', async () => {
+      const feedUrl = feedPropXml?.textContent?.trim();
+      const newWebsite = feedPropChangeWebsiteInput?.value?.trim();
+      if (!feedUrl || !newWebsite) {
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        return;
+      }
+      feedPropChangeWebsiteSave.disabled = true;
+      feedPropChangeWebsiteStatus.textContent = 'Repointing…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, website: newWebsite });
+        const resp = await fetch('/feeds/set-website', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'Repoint failed');
+        // Reflect the corrected website in place.
+        if (feedPropWebsite) setFeedPropText(feedPropWebsite, json.website || newWebsite);
+        if (feedPropWebsiteOpen) {
+          const ws = (json.website || newWebsite).trim();
+          feedPropWebsiteOpen.href = safeHttpUrl(ws) || '#';
+          feedPropWebsiteOpen.hidden = !ws;
+        }
+        feedPropChangeWebsiteStatus.textContent =
+          json.unchanged ? 'Already on that domain.' : `Rewrote ${json.migrated || 0} post(s).`;
+        if (feedPropChangeWebsiteWrap) feedPropChangeWebsiteWrap.hidden = true;
+        if (feedPropChangeWebsiteBtn) feedPropChangeWebsiteBtn.hidden = false;
+        // Reload so the rewritten post links show immediately (brief pause to
+        // let the "Rewrote N post(s)" status register first).
+        if (!json.unchanged) setTimeout(() => window.location.reload(), 900);
+      } catch (err) {
+        feedPropChangeWebsiteStatus.textContent = `Error: ${err.message}`;
+      } finally {
+        feedPropChangeWebsiteSave.disabled = false;
+      }
+    });
+
     feedPropReparseBtn?.addEventListener('click', async () => {
       const feedUrl = feedPropXml?.textContent?.trim();
       if (!feedUrl) return;
@@ -5575,6 +5688,14 @@
         setMenuItemVisible(unsubscribeFeedButton, false);
         setMenuItemVisible(renameFolderButton, true);
         setMenuItemVisible(deleteFolderButton, true);
+        // Curation-clearing is a Saved-view action: only meaningful when the
+        // tree is showing starred/tagged items, and kept apart from Delete
+        // Folder (which unsubscribes feeds — a very different, destructive op).
+        {
+          const inSaved = !!document.querySelector('nav.tree.saved-mode');
+          setMenuItemVisible(folderRemoveStarsButton, inSaved);
+          setMenuItemVisible(folderRemoveTagsButton, inSaved);
+        }
         setMenuItemVisible(disableFeedButton, false);
         // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
         // so renaming the folder doesn't break "Sync Subscriptions". Fall back to an
@@ -5932,6 +6053,8 @@
           contextPostFeedUrl = entryPaneTitle.getAttribute('data-post-feed-url');
           contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
           contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
+          contextPostCaptured = entryPaneTitle.getAttribute('data-post-captured') === '1';
+          contextPostSaved = entryPaneTitle.getAttribute('data-post-saved') === '1';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
           contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
           contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
@@ -5945,8 +6068,11 @@
           setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
+          setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
+              && Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
+          setMenuItemVisible(postRemoveTagShownButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
           setMenuItemVisible(postMarkBelowReadButton, false);
           showPostContextMenu(event);
@@ -6286,6 +6412,8 @@
             contextPostFeedUrl = postItem.getAttribute('data-post-feed-url');
             contextPostEntryId = postItem.getAttribute('data-post-entry-id');
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
+            contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
+            contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
             contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
@@ -6299,8 +6427,22 @@
             setMenuItemVisible(postDeleteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, contextPostFeedUrl === SAVED_FEED_URL && Boolean(contextPostEntryId));
+            setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
+                && Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
+            // "Remove this tag from all shown": only in the Saved view filtered
+            // by a tag. Scoped server-side to the folder+tag, so it clears the
+            // whole filtered set, not just the paginated window on screen.
+            {
+              const _p = new URLSearchParams(window.location.search);
+              const _tag = (_p.get('tag') || '').trim();
+              const _show = _p.get('star_only') === '1' && !!_tag && !!(_p.get('folder_id'));
+              if (postRemoveTagShownButton && _show) {
+                postRemoveTagShownButton.textContent = `Remove tag “${_tag}” from all shown`;
+              }
+              setMenuItemVisible(postRemoveTagShownButton, _show);
+            }
             setMenuItemVisible(postMarkAboveReadButton, true);
             setMenuItemVisible(postMarkBelowReadButton, true);
             setMenuItemVisible(postClearImgCacheButton, true);
@@ -7042,10 +7184,22 @@
       hideAllContextMenus();
 
       try {
-        const formData = new FormData(postRangeReadForm);
+        // Scope the range to the LIVE view, read from the URL — the form's hidden
+        // folder_id/read_filter/sort are rendered once at page load and go stale
+        // after client-side navigation, which made "above/below" run against a
+        // different (often read_filter=all) list and miss the anchor entirely.
+        const cur = new URL(window.location.href).searchParams;
         const body = new URLSearchParams();
-        for (const [key, value] of formData.entries()) {
-          body.append(key, String(value));
+        body.set('feed_url', contextPostFeedUrl);
+        body.set('entry_id', contextPostEntryId);
+        body.set('direction', direction);
+        body.set('folder_id',
+          cur.get('folder_id')
+          || postRangeReadForm.querySelector('[name="folder_id"]')?.value
+          || '');
+        for (const k of ['list_feed_url', 'tag', 'sort_by', 'sort_dir', 'read_filter', 'star_only', 'resume_read_filter']) {
+          const v = cur.get(k);
+          if (v !== null && v !== '') body.set(k, v);
         }
 
         const response = await fetch(postRangeReadForm.action, {
@@ -7182,8 +7336,19 @@
           if (data.ok) {
             modal.setAttribute('hidden', '');
             showToastMessage(data.message || 'Moved.');
-            // Reload the list panes so star/tag badges and read state reflect the move.
-            loadScopePanesWithoutFullRefresh(window.location.href, false);
+            // Stay exactly where you are and just drop the moved rows from the
+            // list — they've left this scope (filed out of Saved / a search).
+            // Reloading the scope instead followed the moved entry to its new
+            // feed and lost the active search/filter you were working in.
+            // Keep rows whose source feed IS the target: the server skips those
+            // (a "move visible" over a folder includes the target's own posts).
+            const esc = (window.CSS && CSS.escape) ? (s) => CSS.escape(s) : (s) => s;
+            for (const e of entries) {
+              if (e.feedUrl === targetUrl) continue;   // skipped server-side, leave it
+              document.querySelectorAll(
+                `.posts .post-item[data-post-feed-url="${esc(e.feedUrl)}"][data-post-entry-id="${esc(e.entryId)}"]`
+              ).forEach((row) => row.remove());
+            }
             onDone?.(data);
           } else {
             showToastMessage(data.error || 'Move failed.');
@@ -7278,6 +7443,42 @@
       });
     });
 
+    postEditLinkButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const feedUrl = contextPostFeedUrl;
+      const entryId = contextPostEntryId;
+      const currentLink = contextPostLink;
+      hideAllContextMenus();
+      if (!feedUrl || !entryId) return;
+      openActionInputModal({
+        title: 'Edit URL',
+        // Repairs a dead or moved source link (e.g. a retired feedproxy URL).
+        // Only the link changes — the entry keeps its id, so star, tags and
+        // read state are untouched. Re-fetch content then pulls the article
+        // from the new address.
+        label: 'Source URL',
+        initialValue: currentLink,
+        submitLabel: 'Save',
+        onSubmit: async (value) => {
+          try {
+            const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId, link: value });
+            const resp = await fetch('/entries/set-link', { method: 'POST', body });
+            const data = await resp.json();
+            if (!data.ok) {
+              window.alert(data.error || 'Could not save the URL.');
+              return;
+            }
+            // Both the list row and the pane header render the link
+            // server-side; reload to reflect both, as Edit title does.
+            window.location.reload();
+          } catch (_) {
+            window.alert('Could not save the URL.');
+          }
+        },
+      });
+    });
+
     postDeleteButton?.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -7317,7 +7518,27 @@
         const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
         const data = await resp.json();
-        if (!data.ok) { window.alert(data.error || 'Re-fetch failed.'); return; }
+        if (!data.ok) {
+          // A dead source (404/410) will never re-fetch — offer to delete it
+          // right here instead of leaving the user retrying a gone URL.
+          if (data.dead && window.confirm(`${data.error}\n\nDelete this post? A tombstone stops the next refresh from re-adding it.`)) {
+            const delResp = await fetch('/entries/delete', {
+              method: 'POST', body: new URLSearchParams({ feed_url: feedUrl, entry_id: entryId }),
+            });
+            const delData = await delResp.json();
+            if (delData.ok) {
+              document.querySelector(
+                `.posts .post-item[data-post-entry-id="${window.CSS && CSS.escape ? CSS.escape(entryId) : entryId}"]`
+              )?.remove();
+              if (typeof showToastMessage === 'function') showToastMessage('Dead post deleted.');
+            } else {
+              window.alert(delData.error || 'Delete failed.');
+            }
+            return;
+          }
+          window.alert(data.error || 'Re-fetch failed.');
+          return;
+        }
         if (typeof showToastMessage === 'function') showToastMessage('Content re-fetched.');
         // If this entry is currently open, re-render the pane to show the fresh copy.
         const cur = new URL(window.location.href);
@@ -7326,6 +7547,37 @@
         }
       } catch (_) {
         window.alert('Re-fetch failed.');
+      }
+    });
+
+    postRemoveTagShownButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hideAllContextMenus();
+      const p = new URLSearchParams(window.location.search);
+      const tag = (p.get('tag') || '').trim();
+      const folderId = p.get('folder_id') || '';
+      if (!tag || !folderId) return;
+      if (!window.confirm(
+        `Remove the tag “${tag}” from every item shown in this view?\n\n` +
+        `Scoped to this folder + tag. Other tags and your feed subscriptions are untouched.`
+      )) return;
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, remove_tags: '1', tag });
+        const resp = await fetch('/saved/folder/clear-curation', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) { window.alert(data.error || 'Could not remove the tag.'); return; }
+        if (typeof showToastMessage === 'function') {
+          showToastMessage(`Removed “${tag}” from ${data.tags_removed} item(s).`);
+        }
+        // Don't reload into the now-empty tag=XYZ view (looks like everything
+        // vanished). Drop the tag filter so the folder's remaining Saved items
+        // show instead.
+        const dest = new URL(window.location.href);
+        dest.searchParams.delete('tag');
+        window.location.href = dest.toString();
+      } catch (_) {
+        window.alert('Could not remove the tag.');
       }
     });
 
@@ -7906,16 +8158,15 @@
             if (entries.length === 0) {
               entryList.textContent = 'No detail stored for this run.';
             } else {
-              entries.forEach(e => {
+              const makeRow = (e, inGroup) => {
                 const row = document.createElement('div');
                 row.className = 'hl-hist-entry-row';
                 if (e.role === 'kept') row.classList.add('hl-hist-entry-row--kept');
+                if (inGroup) row.classList.add('hl-hist-entry-row--in-group');
                 const feedEl = document.createElement('span');
                 feedEl.className = 'hl-hist-entry-feed';
                 feedEl.textContent = e.feed_title || e.feed_url || '';
-                const titleEl = e.link
-                  ? document.createElement('a')
-                  : document.createElement('span');
+                const titleEl = e.link ? document.createElement('a') : document.createElement('span');
                 titleEl.className = 'hl-hist-entry-title';
                 titleEl.textContent = e.title || '(untitled)';
                 if (e.link) { titleEl.href = e.link; titleEl.target = '_blank'; titleEl.rel = 'noopener noreferrer'; }
@@ -7928,8 +8179,32 @@
                   keptChip.title = 'Surviving copy — duplicates were matched against this entry';
                   row.appendChild(keptChip);
                 }
-                entryList.appendChild(row);
-              });
+                return row;
+              };
+              // Pair each duplicate with the kept copy it matched (matched_link),
+              // so a group reads "kept + its duplicates" instead of all-marked-
+              // then-all-kept. Older runs have no matched_link — flat fallback.
+              const kepts = entries.filter(e => e.role === 'kept');
+              const paired = kepts.length && entries.some(e => e.role !== 'kept' && e.matched_link);
+              if (paired) {
+                const marksByAnchor = new Map();
+                entries.filter(e => e.role !== 'kept').forEach(e => {
+                  const k = e.matched_link || '';
+                  if (!marksByAnchor.has(k)) marksByAnchor.set(k, []);
+                  marksByAnchor.get(k).push(e);
+                });
+                kepts.forEach(kept => {
+                  entryList.appendChild(makeRow(kept, false));
+                  (marksByAnchor.get(kept.link) || []).forEach(m => entryList.appendChild(makeRow(m, true)));
+                  marksByAnchor.delete(kept.link);
+                });
+                // Any duplicates whose keeper isn't in the sample — show after.
+                for (const marks of marksByAnchor.values()) {
+                  marks.forEach(m => entryList.appendChild(makeRow(m, false)));
+                }
+              } else {
+                entries.forEach(e => entryList.appendChild(makeRow(e, false)));
+              }
               const markedShown = entries.filter(e => e.role !== 'kept').length;
               if (n > markedShown) {
                 const moreEl = document.createElement('p');
@@ -11720,6 +11995,55 @@
       deleteFolderModal.removeAttribute('hidden');
     });
 
+    // Saved-view bulk curation clear: remove all stars OR all tags for a whole
+    // folder's items, without unsubscribing anything (unlike Delete Folder).
+    const clearFolderCuration = async (folderId, folderName, removeStars, removeTags) => {
+      const what = removeStars ? 'stars' : 'tags';
+      if (!window.confirm(
+        `Remove all ${what} from every item in "${folderName}"?\n\n` +
+        `This clears them from Saved but does NOT unsubscribe any feeds or delete the folder.`
+      )) { hideContextMenu(); return; }
+      try {
+        const body = new URLSearchParams({
+          folder_id: folderId,
+          remove_stars: removeStars ? '1' : '0',
+          remove_tags: removeTags ? '1' : '0',
+        });
+        const resp = await fetch('/saved/folder/clear-curation', { method: 'POST', body });
+        const data = await resp.json();
+        if (!data.ok) { window.alert(data.error || 'Could not clear curation.'); return; }
+        if (typeof showToastMessage === 'function') {
+          showToastMessage(`Removed ${data.stars_removed} star(s) and ${data.tags_removed} tag(s).`);
+        }
+        // Land on the folder's Saved view, not a now-empty tag-filtered one.
+        const dest = new URL(window.location.href);
+        dest.searchParams.delete('tag');
+        window.location.href = dest.toString();
+      } catch (_) {
+        window.alert('Could not clear curation.');
+      }
+    };
+
+    folderRemoveStarsButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId) return;
+      const name = contextFolderName;
+      const id = contextFolderId;
+      hideAllContextMenus();
+      clearFolderCuration(id, name, true, false);
+    });
+
+    folderRemoveTagsButton?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!contextFolderId) return;
+      const name = contextFolderName;
+      const id = contextFolderId;
+      hideAllContextMenus();
+      clearFolderCuration(id, name, false, true);
+    });
+
     deleteFolderConfirm?.addEventListener('click', () => {
       const action = deleteFolderModal?.querySelector('input[name="delete-folder-action"]:checked')?.value || 'unsub';
       const moveTo = deleteFolderTargetSelect?.value || '-1';
@@ -12219,6 +12543,80 @@
       loadScopePanesWithoutFullRefresh(currentUrl, false);
     });
 
+    // Existing manual-tag names, for tag-input autocomplete (page-load snapshot).
+    let lectioTagNames = [];
+    try {
+      lectioTagNames = JSON.parse(document.getElementById('lectio-tag-names')?.textContent || '[]');
+    } catch (_) { lectioTagNames = []; }
+
+    // Shared, token-aware tag autocomplete: suggests from getTags() as you type
+    // the current whitespace-separated token, keyboard-navigable. Reusable — the
+    // per-entry tag input uses it; the automation rule form can pass its own
+    // (feed-tag) source. Idempotent per input (data-tag-ac guard).
+    function attachTagAutocomplete(input, getTags) {
+      if (!(input instanceof HTMLInputElement) || input.dataset.tagAc) return;
+      input.dataset.tagAc = '1';
+      input.setAttribute('autocomplete', 'off');
+      const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const box = document.createElement('div');
+      box.className = 'tag-autocomplete';
+      box.hidden = true;
+      const host = input.parentElement || document.body;
+      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.appendChild(box);
+      let matches = [], active = -1;
+      const token = () => {
+        const v = input.value;
+        const caret = input.selectionStart ?? v.length;
+        const start = v.lastIndexOf(' ', caret - 1) + 1;
+        return { start, end: caret, text: v.slice(start, caret).replace(/^#+/, '').toLowerCase() };
+      };
+      const close = () => { box.hidden = true; matches = []; active = -1; };
+      const paint = () => {
+        box.innerHTML = matches.map((t, i) =>
+          `<div class="tag-autocomplete-item${i === active ? ' is-active' : ''}" data-i="${i}">#${esc(t)}</div>`
+        ).join('');
+      };
+      const update = () => {
+        const tk = token();
+        if (!tk.text) return close();
+        const have = new Set(input.value.toLowerCase().split(/\s+/).map((t) => t.replace(/^#+/, '')));
+        matches = (getTags() || []).filter((t) => t.startsWith(tk.text) && t !== tk.text && !have.has(t)).slice(0, 8);
+        if (!matches.length) return close();
+        box.style.top = (input.offsetTop + input.offsetHeight) + 'px';
+        box.style.left = input.offsetLeft + 'px';
+        box.style.minWidth = input.offsetWidth + 'px';
+        paint();
+        box.hidden = false;
+      };
+      const choose = (i) => {
+        if (i < 0 || i >= matches.length) return;
+        const tk = token();
+        const before = input.value.slice(0, tk.start);
+        const after = input.value.slice(tk.end);
+        const sep = after.length && !after.startsWith(' ') ? ' ' : '';
+        input.value = before + matches[i] + sep + after;
+        const caret = (before + matches[i]).length + (sep ? 1 : 0);
+        input.setSelectionRange(caret, caret);
+        close();
+      };
+      input.addEventListener('input', () => { active = -1; update(); });
+      input.addEventListener('keydown', (e) => {
+        if (box.hidden || !matches.length) return;
+        if (e.key === 'ArrowDown') { active = Math.min(active + 1, matches.length - 1); paint(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); paint(); e.preventDefault(); }
+        else if (e.key === 'Enter' && active >= 0) { choose(active); e.preventDefault(); }
+        else if (e.key === 'Tab') { choose(active >= 0 ? active : 0); e.preventDefault(); }
+        else if (e.key === 'Escape') { close(); }
+      });
+      box.addEventListener('mousedown', (e) => {
+        const item = e.target.closest('[data-i]');
+        if (item) { e.preventDefault(); choose(parseInt(item.dataset.i, 10)); }
+      });
+      input.addEventListener('blur', () => setTimeout(close, 150));
+    }
+    window.attachTagAutocomplete = attachTagAutocomplete;
+
     let entryTagAddBtn = document.getElementById('entry-tag-add-btn');
     let entryTagsForm = document.querySelector('.entry-tags-form');
     let entryTagsInput = document.getElementById('entry-tags-input');
@@ -12229,6 +12627,7 @@
       entryTagsForm = document.querySelector('.entry-tags-form');
       entryTagsInput = document.getElementById('entry-tags-input');
       entryTagsMergedInput = document.getElementById('entry-tags-input-merged');
+      if (entryTagsInput) attachTagAutocomplete(entryTagsInput, () => lectioTagNames);
     }
 
     function normalizeTagToken(token) {
@@ -12649,6 +13048,8 @@
       contextPostFeedUrl = postItem.getAttribute('data-post-feed-url') || null;
       contextPostEntryId = postItem.getAttribute('data-post-entry-id') || null;
       contextPostRead = postItem.getAttribute('data-post-read') === '1';
+      contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
+      contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
       contextPostLink = postItem.getAttribute('data-post-link') || '';
       return Boolean(contextPostFeedUrl && contextPostEntryId);
     }

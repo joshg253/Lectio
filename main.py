@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Sequence, cast
-from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
 import httpx
@@ -66,6 +66,7 @@ from services import podcast_feed_discovery
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
+from services import unstar_tagged as unstar_tagged_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
 from services import html_sanitize
@@ -1828,28 +1829,14 @@ async def lifespan(app: FastAPI):
     if backfill_disabled:
         LOGGER.warning("LECTIO_DISABLE_STARTUP_BACKFILL=1 — skipping FTS build, scheduled refresh, and backfill threads")
 
-    # Build reader's FTS search index off the startup path (the first build
-    # walks every entry — minutes on a large library; incremental afterwards).
-    # Searches fall back to the legacy scan until each user's index is ready.
-    def _build_search_indexes() -> None:
-        # reader's HTML-stripping emits spurious bs4 "looks like a URL/filename"
-        # warnings for short text fields — one per entry is log spam at 100k.
-        import warnings as _warnings
-        from bs4 import MarkupResemblesLocatorWarning as _MRLW
-        _warnings.filterwarnings("ignore", category=_MRLW)
-
-        def _one() -> None:
-            try:
-                with get_reader() as reader:
-                    reader.enable_search()
-                    reader.update_search()
-                mark_search_index_ready()
-                LOGGER.info("[search] FTS index ready for %s", tenancy.current_user_id())
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("[search] FTS index build failed for %s", tenancy.current_user_id())
-        _for_each_background_user("search index build", _one)
-    if not backfill_disabled:
-        threading.Thread(target=_build_search_indexes, name="search-index-build", daemon=True).start()
+    # reader's FTS index is no longer built or maintained: both search surfaces
+    # resolve in SQL (_search_entry_keys_in_sql, _filter_star_keys_by_search)
+    # because search_entries builds a highlighted snippet per result, which
+    # measured at ~95% of a 10-20s search. Keeping the index cost 1.3ms per new
+    # entry on every refresh plus a file about the size of the reader DB itself
+    # (564MB against 743MB on the live library) — all of it for an index no
+    # query touched. scripts/drop_search_index.py reclaims it on an existing
+    # install; a fresh one never creates it.
 
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
@@ -3213,6 +3200,21 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Re-fetched content for a STARRED feed entry (whose feed content lacked
+        # images or was truncated). Pinned here and reapplied after refresh, so
+        # the feed re-serving its own thinner content can't clobber the fuller
+        # copy the user deliberately pulled. Mirrors entry_link/title/date
+        # overrides. Content is reader's JSON content shape.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_content_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_read_state (
@@ -3220,6 +3222,22 @@ def ensure_meta_schema() -> None:
                 entry_id TEXT NOT NULL,
                 read_at TEXT NOT NULL,
                 PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        # "Fix URLs" automation: per-feed host aliases. When an author moves
+        # domains without updating their feed's <guid>/<link> (they keep emitting
+        # the old host), every entry lands with an old-domain id/link. A rule
+        # here rewrites from_host -> to_host at ingest so entries arrive with the
+        # current domain. Per-feed by design: an author's dead domains are only
+        # rewritten inside their own feed, never a legit link elsewhere.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_url_rewrites (
+                feed_url TEXT NOT NULL,
+                from_host TEXT NOT NULL,
+                to_host TEXT NOT NULL,
+                PRIMARY KEY(feed_url, from_host)
             )
             """
         )
@@ -3720,6 +3738,15 @@ def ensure_meta_schema() -> None:
             # 'marked' = entry was marked read; 'kept' = the surviving copy of a
             # dedup group, logged so run history shows what each duplicate matched.
             conn.execute("ALTER TABLE rule_run_log_entries ADD COLUMN role TEXT NOT NULL DEFAULT 'marked'")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        try:
+            # The kept copy a marked duplicate matched (its link), so dedup run
+            # history can pair each marked entry with its keeper for verification
+            # instead of listing all marked then all kept. NULL for non-dedup runs
+            # and for kept rows (which anchor their own group by their own link).
+            conn.execute("ALTER TABLE rule_run_log_entries ADD COLUMN matched_link TEXT")
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
@@ -4653,6 +4680,62 @@ def get_disabled_feed_urls(conn: sqlite3.Connection) -> set[str]:
     return {str(r["feed_url"]) for r in rows}
 
 
+def get_feed_url_rewrites(feed_url: str) -> list[tuple[str, str]]:
+    """[(from_host, to_host)] host-alias rules for *feed_url*, for the ingest
+    rewrite hook. Opens its own connection: called from the sanitizing parser,
+    which runs in the caller's tenancy context but has no meta connection."""
+    try:
+        conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
+        try:
+            return [
+                (str(f), str(t)) for f, t in conn.execute(
+                    "SELECT from_host, to_host FROM feed_url_rewrites WHERE feed_url = ?",
+                    (feed_url,),
+                )
+            ]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — a rewrite lookup must never break a parse
+        return []
+
+
+def get_dedupe_host_aliases() -> dict[str, str]:
+    """{from_host: to_host} across every feed's URL-rewrite rules, for the saved
+    dedupe scan.
+
+    A feed_url_rewrites rule is the user declaring "this author moved domains" —
+    ingest already stamps new entries with the current host, but articles saved
+    before the move keep the dead host, so an old sadh.life/post/x and a new
+    tush.ar/post/x are the same article the host-scoped dedupe key can't pair.
+    Folding the migrated host onto its target makes them one key. Because the
+    map is user-declared (not a heuristic), it can't false-match the way a
+    cross-host slug tier would."""
+    try:
+        conn = sqlite3.connect(str(tenancy.meta_db_path()), timeout=5.0)
+        try:
+            aliases: dict[str, str] = {}
+            for f, t in conn.execute(
+                "SELECT DISTINCT from_host, to_host FROM feed_url_rewrites"
+            ):
+                fh = str(f).lower().removeprefix("www.")
+                th = str(t).lower().removeprefix("www.")
+                if fh and th and fh != th:
+                    aliases[fh] = th
+            # Follow chained migrations (a -> b, b -> c) to the final host.
+            for src in list(aliases):
+                seen = {src}
+                dst = aliases[src]
+                while dst in aliases and dst not in seen:
+                    seen.add(dst)
+                    dst = aliases[dst]
+                aliases[src] = dst
+            return aliases
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — dedupe must degrade to host-scoped, not break
+        return {}
+
+
 def get_browser_ua_feed_urls(conn: sqlite3.Connection) -> set[str]:
     """Feeds whose fetch should use a browser identity (UA + headers).
 
@@ -4946,7 +5029,9 @@ def entry_effective_date(entry) -> datetime | None:
 _DEDUPE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
 
 
-def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
+def normalize_entry_link_for_dedupe(
+    link: str | None, host_aliases: dict[str, str] | None = None
+) -> str | None:
     """Canonical comparison key for an article link.
 
     The scheme and a leading ``www.`` are folded away: http/https and
@@ -4955,6 +5040,11 @@ def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
     slug was too generic for `_safe_dedup_entry_slug` to rescue the pair
     (``/index.html``, hyphen-free stubs). Only the host is lowercased — paths
     are case-sensitive.
+
+    ``host_aliases`` (a ``{from_host: to_host}`` map) additionally folds
+    user-declared domain migrations so an article saved under an author's old
+    host pairs with the same article on the new one; without it the key stays
+    strictly host-scoped. See `get_dedupe_host_aliases`.
 
     The result is a comparison key, not a URL: never fetch or display it.
     """
@@ -4969,6 +5059,8 @@ def normalize_entry_link_for_dedupe(link: str | None) -> str | None:
     host = host.lower()
     if host.startswith("www."):
         host = host[4:]
+    if host_aliases:
+        host = host_aliases.get(host, host)
     return f"{host}{sep}{rest}" or None
 
 
@@ -4997,6 +5089,16 @@ _SAFE_DEDUP_MIN_SLUG_LEN      = 4
 _SAFE_DEDUP_MIN_TITLE_WORDS   = 4
 _SAFE_DEDUP_MIN_SLUG_NO_HYPHEN = 16
 
+# Reddit truncates the title-slug in its permalinks to a fixed length, so two
+# different posts collide on the last path segment
+# (…/comments/<id>/amazon_..._harry_potter_and_the/ for both Sorcerer's Stone
+# and Prisoner of Azkaban). The unique thing id sits earlier in the path — use
+# it so different posts don't false-match and genuine cross-feed reposts of the
+# same thread still do.
+_REDDIT_THING_ID_RE = re.compile(
+    r"(?:reddit\.com/(?:r/[^/]+/)?comments/|redd\.it/)([a-z0-9]{4,})", re.IGNORECASE
+)
+
 _SAFE_DEDUP_SLUG_EXTS = frozenset({
     ".php", ".html", ".htm", ".asp", ".aspx", ".cgi", ".pl", ".jsp", ".cfm", ".shtml"
 })
@@ -5021,6 +5123,8 @@ _SAFE_DEDUP_UNICODE_TRANS = str.maketrans({
     ' ': ' ',
 })
 _SAFE_DEDUP_TAG_RE = re.compile(r"<[^>]+>")
+# A tag left unclosed because a fixed-size window truncated the HTML mid-tag.
+_SAFE_DEDUP_UNCLOSED_TAG_RE = re.compile(r"<[^>]*$")
 
 _SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
     frozenset({"slug", "title", "body"}),
@@ -5044,6 +5148,11 @@ _SAFE_DEDUP_COMBOS: frozenset[frozenset] = frozenset({
 def _safe_dedup_entry_slug(url: str | None) -> str | None:
     if not url:
         return None
+    # Reddit's truncated permalink slug collides across posts — key on the
+    # unique thing id instead (see _REDDIT_THING_ID_RE).
+    reddit = _REDDIT_THING_ID_RE.search(url)
+    if reddit:
+        return f"reddit:{reddit.group(1).lower()}"
     path = url.split("#")[0].split("?")[0].rstrip("/")
     slug = path.rsplit("/", 1)[-1].lower()
     for ext in _SAFE_DEDUP_SLUG_EXTS:
@@ -5570,12 +5679,14 @@ def _run_now_dedup(
         link_to_rec = {r["link"]: r for r in records if r["link"]}
         to_mark: set[tuple[str, str]] = set()
         kept_keys: set[tuple[str, str]] = set()
+        mark_to_keep: dict[tuple[str, str], str] = {}
         for (keep_link, mark_link), _modes in pair_modes.items():
             if keep_link + "||" + mark_link in false_matches:
                 continue
             mark_rec = link_to_rec.get(mark_link)
             if mark_rec:
                 to_mark.add((mark_rec["feed_url"], mark_rec["entry_id"]))
+                mark_to_keep[(mark_rec["feed_url"], mark_rec["entry_id"])] = keep_link
                 keep_rec = link_to_rec.get(keep_link)
                 if keep_rec:
                     kept_keys.add((keep_rec["feed_url"], keep_rec["entry_id"]))
@@ -5592,14 +5703,18 @@ def _run_now_dedup(
             _unread_counts_generation += 1
         rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
 
-        def _rec_info(fu: str, eid: str) -> dict:
+        def _rec_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
             return {"feed_url": fu, "entry_id": eid,
                     "title": rec_map.get((fu, eid), {}).get("title", ""),
                     "link": rec_map.get((fu, eid), {}).get("link", ""),
-                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", "")}
+                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", ""),
+                    "matched_link": matched_link}
 
-        matched_entries = [_rec_info(fu, eid) for fu, eid in to_mark]
-        kept_entries = [_rec_info(fu, eid) for fu, eid in kept_keys - to_mark]
+        matched_entries = [_rec_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
+        kept_entries = [
+            _rec_info(fu, eid, rec_map.get((fu, eid), {}).get("link", ""))
+            for fu, eid in kept_keys - to_mark
+        ]
         return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
     slug_index: dict[str, list[dict]] = {}
@@ -5645,6 +5760,9 @@ def _run_now_dedup(
 
         to_mark: set[tuple[str, str]] = set()
         kept_keys: set[tuple[str, str]] = set()
+        # (marked key) -> the kept copy's link it matched, so run history can pair
+        # each duplicate with its keeper. The keeper is always sorted_entries[0].
+        mark_to_keep: dict[tuple[str, str], str] = {}
 
         if match_method == "slug":
             for slug, entries in slug_index.items():
@@ -5654,6 +5772,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "title":
             for norm_title, entries in title_index.items():
@@ -5667,6 +5786,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "both":
             for (slug, norm_title), entries in combined_index.items():
@@ -5680,6 +5800,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "fuzzy":
             feed_list = [u for u in feed_urls if u in fuzzy_entries]
@@ -5698,6 +5819,7 @@ def _run_now_dedup(
                             older = ei if newer is ej else ej
                             to_mark.add((newer["feed_url"], newer["entry_id"]))
                             kept_keys.add((older["feed_url"], older["entry_id"]))
+                            mark_to_keep[(newer["feed_url"], newer["entry_id"])] = older.get("link", "")
 
         for feed_url, entry_id in to_mark:
             reader.mark_entry_as_read((feed_url, entry_id))
@@ -5719,14 +5841,20 @@ def _run_now_dedup(
     )
     entry_map = {(r["feed_url"], r["entry_id"]): r for sublist in all_info for r in sublist}
 
-    def _entry_info(fu: str, eid: str) -> dict:
+    def _entry_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
+        info = entry_map.get((fu, eid), {})
         return {"feed_url": fu, "entry_id": eid,
-                "title": entry_map.get((fu, eid), {}).get("title", ""),
-                "link": entry_map.get((fu, eid), {}).get("link", ""),
-                "feed_title": entry_map.get((fu, eid), {}).get("feed_title", "")}
+                "title": info.get("title", ""),
+                "link": info.get("link", ""),
+                "feed_title": info.get("feed_title", ""),
+                # marked: the kept copy it matched; kept: its own link (group anchor).
+                "matched_link": matched_link}
 
-    matched_entries = [_entry_info(fu, eid) for fu, eid in to_mark]
-    kept_entries = [_entry_info(fu, eid) for fu, eid in kept_keys - to_mark]
+    matched_entries = [_entry_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
+    kept_entries = [
+        _entry_info(fu, eid, entry_map.get((fu, eid), {}).get("link", ""))
+        for fu, eid in kept_keys - to_mark
+    ]
     return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
 
@@ -6105,10 +6233,10 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
     if rows and cur.lastrowid:
         conn.executemany(
             "INSERT INTO rule_run_log_entries"
-            " (log_id, feed_url, entry_id, title, link, feed_title, role)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(cur.lastrowid, e["feed_url"], e["entry_id"],
-              e["title"], e["link"], e["feed_title"], role)
+              e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
              for e, role in rows],
         )
 
@@ -7605,6 +7733,7 @@ def _store_feed_window(feed_url: str, entry_ids: list[str]) -> None:
 
 reader_sanitize.set_entry_tag_sink(feed_tag_service.record_entry_tags)
 reader_sanitize.set_feed_window_sink(_store_feed_window)
+reader_sanitize.set_url_rewrite_provider(get_feed_url_rewrites)
 
 lead_image_service = LeadImageService(
     get_meta_connection=get_meta_connection,
@@ -7640,6 +7769,10 @@ starred_archive_service = StarredArchiveService(
     # Lazy for the same reason: rewrites redirector entry links (feedproxy/
     # feedburner) to the canonical URL the capture's source fetch resolved to.
     on_canonical_link=lambda f, e, old, new: _apply_canonical_entry_link(f, e, old, new),
+    # Lazy for the same reason. Lets the star-restore backfill tell a
+    # tag-created archive from a star-created one — since tag-as-keep, an
+    # archive row alone no longer means the entry was starred.
+    manually_tagged_keys=lambda: _manually_tagged_entry_keys(),
 )
 
 
@@ -7823,6 +7956,121 @@ def delete_manual_tag_everywhere(tag: str | None) -> int:
     return removed
 
 
+def clear_folder_curation(
+    folder_id: int, remove_stars: bool, remove_tags: bool, only_tag: str | None = None
+) -> dict:
+    """Bulk-remove stars and/or manual tags from every entry in a folder's feeds,
+    so a whole folder drops out of the Saved/Kept view — without unsubscribing
+    anything (deleting the folder would). The Saved-view counterpart to
+    "move all visible", scoped to a folder so it is correct at any size.
+
+    *only_tag* (with remove_tags) strips just that one tag rather than all manual
+    tags — the "filter Saved by tag XYZ, remove XYZ from all shown" flow, scoped
+    server-side so it isn't bounded by the client's paginated window.
+
+    Releases the offline archive for any entry left with no curation, matching
+    the single unstar/untag lifecycle."""
+    result = {"stars_removed": 0, "tags_removed": 0, "entries_uncurated": 0}
+    only_tag = normalize_tag_value(only_tag) if only_tag else None
+    if not (remove_stars or remove_tags):
+        return result
+    with get_meta_connection() as conn:
+        feeds = get_folder_feed_urls(conn, folder_id)
+    if not feeds:
+        return result
+
+    affected: set[tuple[str, str]] = set()
+
+    if remove_stars:
+        with get_meta_connection() as conn:
+            starred = [
+                (str(f), str(i)) for f, i in conn.execute(
+                    "SELECT feed_url, entry_id FROM saved_entries"
+                ) if str(f) in feeds
+            ]
+            for start in range(0, len(starred), 400):
+                chunk = starred[start:start + 400]
+                ph = ",".join("(?,?)" for _ in chunk)
+                conn.execute(
+                    f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({ph})",
+                    [v for k in chunk for v in k],
+                )
+            conn.commit()
+        result["stars_removed"] = len(starred)
+        affected |= set(starred)
+
+    if remove_tags:
+        # Match a single tag key when only_tag is given, else any manual tag.
+        match_sql = "key = ?" if only_tag else "key LIKE ?"
+        match_val = f"{MANUAL_TAG_KEY_PREFIX}{only_tag}" if only_tag else f"{MANUAL_TAG_KEY_PREFIX}%"
+        feed_list = list(feeds)
+        tagged: set[tuple[str, str]] = set()
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0)
+        try:
+            for i in range(0, len(feed_list), 900):
+                fchunk = feed_list[i:i + 900]
+                fph = ",".join("?" for _ in fchunk)
+                for f, e in conn.execute(
+                    f"SELECT DISTINCT feed, id FROM entry_tags WHERE {match_sql} AND feed IN ({fph})",
+                    [match_val, *fchunk],
+                ):
+                    tagged.add((str(f), str(e)))
+        finally:
+            conn.close()
+        with get_reader() as reader:
+            for feed_url, entry_id in tagged:
+                for t in reader.get_tags((feed_url, entry_id)):
+                    key = t[0] if isinstance(t, tuple) else t
+                    if not key or not key.startswith(MANUAL_TAG_KEY_PREFIX):
+                        continue
+                    # only_tag: strip just that one; else strip every manual tag.
+                    if only_tag and key != f"{MANUAL_TAG_KEY_PREFIX}{only_tag}":
+                        continue
+                    try:
+                        reader.delete_tag((feed_url, entry_id), key, missing_ok=True)
+                        result["tags_removed"] += 1
+                    except Exception:  # noqa: BLE001
+                        LOGGER.warning("clear_folder_curation: untag failed %s", entry_id)
+        affected |= tagged
+
+    # Release archives for entries left with no curation (star or tag).
+    for feed_url, entry_id in affected:
+        try:
+            if not _entry_is_starred(feed_url, entry_id) and not get_manual_tags_for_entry(feed_url, entry_id):
+                starred_archive_service.enqueue_removal(feed_url, entry_id)
+                result["entries_uncurated"] += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+    if result["stars_removed"] or result["tags_removed"]:
+        invalidate_unread_counts_cache()
+        invalidate_has_manual_tags_cache()
+        invalidate_tag_counts_cache()
+    return result
+
+
+@app.post("/saved/folder/clear-curation")
+def clear_folder_curation_route(
+    folder_id: int = Form(...),
+    remove_stars: str = Form("0"),
+    remove_tags: str = Form("0"),
+    tag: str = Form(""),
+):
+    """Remove stars and/or manual tags from a folder's items in Saved.
+
+    With *tag*, removes only that one tag (the "filter Saved by tag XYZ, remove
+    XYZ from all shown" flow); without it, removes all manual tags. Either way
+    non-destructive to Feeds: the folder and subscriptions are untouched, only
+    curation is cleared, so items leave the Saved/Kept view. Deliberately *not*
+    folder deletion, which unsubscribes feeds."""
+    rs = remove_stars in ("1", "true", "on")
+    rt = remove_tags in ("1", "true", "on")
+    if not (rs or rt):
+        return JSONResponse({"ok": False, "error": "Nothing selected to remove."}, status_code=400)
+    result = clear_folder_curation(folder_id, rs, rt, only_tag=(tag.strip() or None))
+    return JSONResponse({"ok": True, **result})
+
+
 def rename_manual_tag_everywhere(old_tag: str | None, new_tag: str | None) -> tuple[int, bool]:
     """Rename a manual tag across every entry that carries it.
 
@@ -7918,6 +8166,26 @@ def get_manual_tags_for_entry(feed_url: str, entry_id: str) -> list[str]:
         return get_manual_tags_for_resource(reader, entry.resource_id)
 
 
+def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
+    """Every (feed_url, entry_id) carrying a manual tag, in one query.
+
+    Bulk because the caller (the starred-archive star-restore backfill) checks
+    thousands of rows at startup; a per-row lookup there would be a reader round
+    trip each time.
+    """
+    conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=10.0)
+    try:
+        return {
+            (str(feed), str(entry_id))
+            for feed, entry_id in conn.execute(
+                "SELECT feed, id FROM entry_tags WHERE key LIKE ?",
+                (f"{MANUAL_TAG_KEY_PREFIX}%",),
+            )
+        }
+    finally:
+        conn.close()
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table)."""
     try:
@@ -8000,6 +8268,35 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     return keys
 
 
+def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
+    """(feed_url, entry_id) of entries carrying manual tag *tag*, in the view's
+    feeds. Lets the Saved+tag view narrow to the tag in SQL before hydrating,
+    instead of hydrating the whole kept set and post-filtering in Python — the
+    latter fetched lead images for thousands of entries to render a tag view
+    that might match none (measured at ~38s for an empty `inbox` view)."""
+    keys: set[tuple[str, str]] = set()
+    key = f"{MANUAL_TAG_KEY_PREFIX}{tag}"
+    if not feed_urls:
+        return keys
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            feed_list = list(feed_urls)
+            for i in range(0, len(feed_list), 900):
+                chunk = feed_list[i:i + 900]
+                ph = ",".join("?" for _ in chunk)
+                for row in conn.execute(
+                    f"SELECT feed, id FROM entry_tags WHERE key = ? AND feed IN ({ph})",
+                    [key, *chunk],
+                ):
+                    keys.add((str(row[0]), str(row[1])))
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("get_entry_keys_for_manual_tag failed: %s", exc)
+    return keys
+
+
 def invalidate_tag_counts_cache() -> None:
     with tag_counts_cache_lock:
         tag_counts_cache.clear()
@@ -8055,6 +8352,29 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     with tag_counts_cache_lock:
         tag_counts_cache[key] = (now, result)
     return result
+
+
+def get_all_manual_tag_names() -> list[str]:
+    """Every distinct manual-tag name in the library, sorted — the source for
+    tag-input autocomplete. A cheap DISTINCT over the indexed key column; empty
+    when no manual tags exist at all (the common fast path)."""
+    if not has_any_manual_tags():
+        return []
+    prefix = MANUAL_TAG_KEY_PREFIX
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT key FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — autocomplete is a nicety, never fail the page
+        return []
+    return sorted({
+        name for (k,) in rows
+        if (name := str(k)[len(prefix):].strip().lower())
+    })
 
 
 def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
@@ -8324,7 +8644,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "title": getattr(feed_obj, "resolved_title", None) or getattr(feed_obj, "title", None) or feed_url,
             "user_title": getattr(feed_obj, "user_title", None),
             "real_title": getattr(feed_obj, "title", None),
-            "website": getattr(feed_obj, "link", None),
+            "website": _rewrite_url_host(getattr(feed_obj, "link", None), get_dedupe_host_aliases()),
             "added": format_datetime_for_ui(getattr(feed_obj, "added", None)),
             "last_updated": format_datetime_for_ui(getattr(feed_obj, "last_updated", None)),
             "last_received": format_datetime_for_ui(last_received_dt),
@@ -9851,6 +10171,132 @@ def probe_frameability(source_url: str) -> dict[str, object]:
         }
 
 
+# Comment threads are never article content, but they defeat extraction: a
+# blogspot/WordPress comments section carries hundreds of avatar/delete-icon
+# images and huge text, so readability scores it above the actual post and the
+# "more images = better content" fallback can't rescue it (the comic post-body
+# has *fewer* images than the comment avatars). Stripping the section before
+# extraction lets the real body win. Container-level selectors only — never a
+# broad `[class*=comment]`, which would catch content like "commentary" or a
+# "N comments" badge.
+_COMMENT_SECTION_SELECTORS = (
+    "#comments", ".comments", ".comments-area", ".comment-list",
+    ".comment-thread", ".comment-section", "#comment-holder",
+    "#disqus_thread", ".disqus", "#respond", ".comment-form", "#comment-form",
+)
+
+
+def _strip_comment_sections(raw_html: str) -> str:
+    """Remove comment-thread containers from page HTML before extraction."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in _COMMENT_SECTION_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001
+        return raw_html
+
+
+# In-body chrome that modern CMSes embed *inside* the article container, so it
+# survives a content-selector match (Future plc's #article-body carries the
+# social-share bar, follow/newsletter widgets, ad units and a related-posts
+# aside among the tab figures). Removed before extraction so neither readability
+# nor the selector/whole-body fallbacks drag it in. Kept to markers that are
+# never article prose: named share/newsletter/ad/affiliate widgets, tooltips,
+# and <aside> (tangential content by definition).
+_ARTICLE_CHROME_SELECTORS = (
+    '[class*="flexisites-social"]',   # Future plc social-share bar
+    '[class*="byline-social"]',
+    '.google-follow-us-button',
+    '[class*="hawk-root"]',           # Future plc affiliate/product widget
+    '[class*="social-share"]',
+    '[class*="share-buttons"]',
+    '[class*="sharing-buttons"]',
+    '[class*="newsletter"]', '[id*="newsletter"]',
+    '[class*="ad-unit"]',
+    '[class*="tooltip"]',
+    "aside",
+)
+
+
+def _strip_article_chrome(raw_html: str) -> str:
+    """Remove in-body share/newsletter/ad/related chrome before extraction.
+
+    See _ARTICLE_CHROME_SELECTORS — the containers a content selector would
+    otherwise keep because the CMS nests them inside the article body itself."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        removed = False
+        for sel in _ARTICLE_CHROME_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
+                removed = True
+        # JW Player video carousels ("Latest Videos From … Watch full video
+        # here:") sit in an unsemantic rounded card that also holds the header
+        # bar and an invisible "watch here" link — no single class covers all
+        # three. Climb from the player marker to that wrapper and drop the whole
+        # card. Fires only where a real player exists, so non-video content is
+        # untouched.
+        for marker in soup.select('[class*="jwp-carousel"], [class*="aspect-video"], [class*="jw-player"]'):
+            if marker.parent is None:
+                continue  # already removed as part of an earlier card
+            card = marker
+            for anc in marker.parents:
+                cls = " ".join(anc.get("class") or [])
+                if "overflow-hidden" in cls and "rounded" in cls:
+                    card = anc
+                    break
+                if anc.get("id") == "article-body" or anc.name in ("article", "main", "body"):
+                    break
+            card.decompose()
+            removed = True
+        return str(soup) if removed else raw_html
+    except Exception:  # noqa: BLE001
+        return raw_html
+
+
+_LEAD_IMAGE_SKIP_RE = re.compile(r"(?:logo|icon|avatar|sprite|placeholder|default|blank)", re.IGNORECASE)
+
+
+def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
+    """The page's hero image from social-preview metadata (og:image, then
+    twitter:image, then <link rel=image_src>).
+
+    readability extracts the article *body*, but a site's hero/featured image
+    lives in the page header outside it (Future plc's #article-body is all tab
+    figures, no hero), so captures lost the lead image the list thumbnail and
+    article view want. This recovers the URL the publisher itself nominates as
+    the article's representative image. Obvious non-content (SVGs, logo/icon/
+    placeholder names) is skipped so a site whose og:image is its logo doesn't
+    get a logo stamped on every capture."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        url = ""
+        for finder in (
+            lambda: soup.find("meta", property="og:image"),
+            lambda: soup.find("meta", attrs={"name": "twitter:image"}),
+            lambda: soup.find("link", rel="image_src"),
+        ):
+            tag = finder()
+            if tag:
+                url = (tag.get("content") or tag.get("href") or "").strip()
+                if url:
+                    break
+        if not url or url.lower().rsplit("?", 1)[0].endswith(".svg"):
+            return None
+        if _LEAD_IMAGE_SKIP_RE.search(url.rsplit("/", 1)[-1]):
+            return None
+        return urljoin(source_url, url)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _bs4_content_fallback(raw_html: str) -> str:
     """Extract article content via BS4 using known content-area selectors.
 
@@ -9863,6 +10309,7 @@ def _bs4_content_fallback(raw_html: str) -> str:
         for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
         for selector_type, value in [
+            ("id",    "article-body"),     # Future plc (guitarplayer/guitarworld/musicradar/…)
             ("class", "post-body"),       # Blogger
             ("class", "entry-content"),   # WordPress / Blogger
             ("class", "post-content"),    # Ghost, common themes
@@ -9872,6 +10319,8 @@ def _bs4_content_fallback(raw_html: str) -> str:
         ]:
             if selector_type == "class":
                 elem = soup.find(class_=lambda c, v=value: bool(c) and v in c.split())  # type: ignore[arg-type]
+            elif selector_type == "id":
+                elem = soup.find(id=value)
             else:
                 elem = soup.find(value)
             if elem:
@@ -10132,6 +10581,13 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
     return extract_readability_article(response.text, source_url)
 
 
+# Below this much extracted article text, readability is treated as having
+# failed — only then may the whole-body image rescue drag in the full page. A
+# real article this short with no images is rare; the chrome-only image-heavy
+# pages this guards against (Google Developers Blog) carry far more than this.
+_WHOLE_BODY_RESCUE_MIN_TEXT = 1200
+
+
 def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, str]:
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
@@ -10141,6 +10597,13 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    # Strip comment threads first — otherwise readability scores a big comments
+    # section above the post and no image-count fallback can recover the body.
+    raw_html = _strip_comment_sections(raw_html)
+    # Then the in-body share/newsletter/ad/related chrome CMSes nest inside the
+    # article container — otherwise a #article-body match keeps it (guitarplayer
+    # led every capture with a share bar and a newsletter signup).
+    raw_html = _strip_article_chrome(raw_html)
     _img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
     doc = Document(raw_html, url=source_url)
     title = doc.short_title() or source_url
@@ -10168,22 +10631,136 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             fallback = _bs4_content_fallback(raw_html)
             if fallback and fallback.lower().count("<img") > art_img_count:
                 article_html = sanitize_readability_html(fallback).strip()
-    article_html = html_sanitize.reapply_img_sizes(article_html, _img_sizes, base_url=source_url)
-    article_html = _dedupe_readability_images(article_html)
-    article_html = _strip_bandcamp_track_signature(article_html)
-    # Resolve any remaining relative src/href (esp. the BS4 fallback path,
-    # which returns its element verbatim) against the source page URL.
-    article_html = _absolutize_article_urls(article_html, source_url)
-    # Apply the same hotlink handling as the entry pane (runs after
-    # absolutization so host-matching sees absolute src): route known
-    # hotlink hosts through /api/img (e.g. fabiensanglard.net, whose .webp
-    # 403 a no-Referer browser load), and strip the Referer on the rest so
-    # foreign-Referer placeholder hosts serve the real image.
-    article_html = proxy_hotlink_images(article_html)
-    article_html = add_no_referrer_to_images(article_html)
+                art_img_count = article_html.lower().count("<img")
+            # Last resort: readability *and* the selector fallback both kept
+            # essentially no images on an image-heavy page — the catastrophic
+            # case, not mere trimming. guitarplayer lessons are the example:
+            # ~1 of ~54 images survive, and the dropped ones are the tablature
+            # figures that *are* the lesson, on a DOM no content selector
+            # matches. Take the whole body. Gated hard (≤1 kept, >10 present) so
+            # a page where readability kept a reasonable share is never widened
+            # into dragging in its chrome images.
+            #
+            # But only when readability failed to get the *text* either: a plain
+            # text article with no images (Google Developers Blog) is complete as
+            # readability returned it, and its page is "image-heavy" only from nav
+            # and footer chrome — widening would replace the clean article with
+            # the whole nav-laden page. So require readability's article to be
+            # thin as well before reaching for the whole body.
+            article_text_len = len(re.sub(r"<[^>]+>", "", article_html))
+            if art_img_count <= 1 and raw_img_count > 10 and article_text_len < _WHOLE_BODY_RESCUE_MIN_TEXT:
+                whole = _whole_body_content(raw_html)
+                if whole and whole.lower().count("<img") > art_img_count:
+                    article_html = whole
+    # Prepend the publisher's hero image when the body doesn't already open with
+    # it — the article's lead image lives in the page header, outside the content
+    # readability extracts (a #article-body of tab figures has no hero).
+    lead = _lead_image_from_html(raw_html, source_url)
+    if lead:
+        lead_seg = lead.rsplit("/", 1)[-1].split("?", 1)[0]
+        if lead not in article_html and (not lead_seg or lead_seg not in article_html):
+            article_html = f'<figure><img src="{html.escape(lead, quote=True)}"></figure>' + article_html
+    article_html = _finalize_article_html(article_html, source_url, _img_sizes)
     if not article_html:
         raise ValueError("No readable article content was found.")
     return title, article_html
+
+
+def _finalize_article_html(article_html: str, source_url: str, img_sizes) -> str:
+    """Shared post-processing for captured article HTML, whether readability-
+    extracted or full-page. Reapplies image sizes captured from the raw page,
+    resolves relative URLs against the source, and applies the entry pane's
+    hotlink handling (route known hotlink hosts through /api/img; strip the
+    Referer elsewhere so foreign-Referer placeholder hosts serve the real
+    image)."""
+    article_html = html_sanitize.reapply_img_sizes(article_html, img_sizes, base_url=source_url)
+    article_html = _dedupe_readability_images(article_html)
+    article_html = _strip_bandcamp_track_signature(article_html)
+    article_html = _absolutize_article_urls(article_html, source_url)
+    article_html = proxy_hotlink_images(article_html)
+    article_html = add_no_referrer_to_images(article_html)
+    return article_html
+
+
+def _page_title_from_html(raw_html: str, source_url: str) -> str:
+    """Best page title without running readability's body extraction: og:title,
+    then twitter:title, then <title>, then the first <h1>, then the URL."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for attrs in ({"property": "og:title"}, {"name": "twitter:title"}):
+            tag = soup.find("meta", attrs=attrs)
+            if tag and tag.get("content", "").strip():
+                return tag["content"].strip()
+        if soup.title and soup.title.string and soup.title.string.strip():
+            return soup.title.string.strip()
+        h1 = soup.find("h1")
+        if h1 and h1.get_text(strip=True):
+            return h1.get_text(strip=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return source_url
+
+
+def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]:
+    """Capture the whole page body instead of readability-extracting it.
+
+    The escape hatch for pages readability handles badly: a DocBook-style export
+    whose prose is scattered across low-scoring sibling divs, or an article whose
+    lead image sits in a text-free floated div that readability's cleaning drops
+    (the Blood Meridian case). Those are structural extraction failures, not bad
+    input — re-running readability just reproduces them, so this takes the whole
+    <body> through the same sanitizer and post-processing instead.
+
+    The tradeoff is deliberate and the opposite of readability's: on a blog-
+    shaped page this keeps nav/sidebar/footer chrome, which readability would
+    have stripped. It is for the document-shaped pages where that chrome is
+    absent and the prose is the body. Only ``<script>``/``<style>``/``<nav>``/
+    ``<header>``/``<footer>`` are removed, as obvious non-content that is never
+    the article even on a document page."""
+    raw_html = html_sanitize.lift_img_style_sizes(raw_html)
+    img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)
+    title = _page_title_from_html(raw_html, source_url)
+    article_html = _whole_body_content(raw_html)
+    article_html = _finalize_article_html(article_html, source_url, img_sizes)
+    if not article_html:
+        raise ValueError("The page had no usable content.")
+    return title, article_html
+
+
+def _whole_body_content(raw_html: str) -> str:
+    """Sanitized whole-page body with only obvious non-content removed
+    (script/style/nav/header/footer). Keeps everything readability would score
+    away — the shared core of full-page capture and the image-rescue last resort
+    in extract_readability_article."""
+    body_html = raw_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        # Comment threads are not article content, and a full-body capture would
+        # otherwise swallow a huge comments section (the whole point of the
+        # image-rescue was to keep content, not a wall of avatars).
+        for sel in _COMMENT_SECTION_SELECTORS:
+            for el in soup.select(sel):
+                el.decompose()
+        body = soup.body or soup
+        body_html = str(body)
+    except Exception:  # noqa: BLE001
+        pass
+    return html_sanitize.sanitize_html(body_html).strip()
+
+
+def fetch_full_page_article(source_url: str) -> tuple[str, str]:
+    """Fetch *source_url* and return ``(title, body_html)`` without readability
+    extraction — see extract_full_page_article. Markdown is still converted."""
+    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
+        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
+    response.raise_for_status()
+    if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        return markdown_to_article_html(response.text, source_url)
+    return extract_full_page_article(response.text, source_url)
 
 
 def build_readability_response(source_url: str) -> HTMLResponse:
@@ -10289,41 +10866,13 @@ def _display_title(entry) -> str:
     return ""
 
 
-# Per-user "FTS index is built" flags: searches use reader's search index
-# once the startup builder (or a refresh update) has populated it; before
-# that they fall back to the legacy full-scan.
-_search_index_ready: dict[str, bool] = {}
-
-
-def mark_search_index_ready() -> None:
-    _search_index_ready[tenancy.current_user_id()] = True
-
-
-def _fts_query(normalized_query: str) -> str:
-    """AND-of-quoted-tokens FTS5 query (quotes escaped) — mirrors the legacy
-    scan's all-terms-must-match semantics without exposing FTS operators."""
-    tokens = [t.replace('"', '""') for t in normalized_query.split()]
-    return " ".join(f'"{t}"' for t in tokens)
-
-
-def _search_entries_fts(reader, normalized_query: str, feed_urls: set[str], reader_read_filter):
-    """Resolve a search via reader's FTS index; None → caller falls back to
-    the scan (index not built yet, or the query broke FTS5 parsing)."""
-    if not _search_index_ready.get(tenancy.current_user_id()):
-        return None
-    try:
-        out = []
-        for r in reader.search_entries(_fts_query(normalized_query), read=reader_read_filter,
-                                       sort="recent", limit=2000):
-            if r.feed_url not in feed_urls:
-                continue
-            e = reader.get_entry((r.feed_url, r.id), None)
-            if e is not None:
-                out.append(e)
-        return out
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[search] FTS query failed, falling back to scan: %s", exc)
-        return None
+# reader's FTS index is retired. Both search surfaces resolve in SQL
+# (_search_entry_keys_in_sql for the Feeds view, _filter_star_keys_by_search for
+# Kept/Saved) because search_entries builds a highlighted snippet per result,
+# which measured at ~95% of a 10-20s search. Nothing queries the index, so it is
+# no longer built or updated: that cost 1.3ms per new entry on every refresh and
+# a file roughly the size of the reader DB (564MB against 743MB live).
+# scripts/drop_search_index.py reclaims the space on an existing install.
 
 
 def _filter_star_keys_by_search(
@@ -10394,6 +10943,88 @@ def _filter_star_keys_by_search(
     return matched
 
 
+def _search_entry_keys_in_sql(
+    search_terms: list[str],
+    feed_urls: set[str],
+    reader_read_filter: bool | None,
+    limit: int,
+) -> list[tuple[str, str]] | None:
+    """Resolve a Feeds-view search in SQL. None on any error → caller falls
+    back to the Python scan.
+
+    The Feeds-view counterpart to `_filter_star_keys_by_search`, and it exists
+    for the same reason that one avoids reader's FTS: `search_entries` builds a
+    highlighted snippet per result. Measured on the live library (134k entries,
+    2,888 feeds), snippet-building is ~95% of the cost and the query itself is
+    almost free:
+
+    | query  | FTS + hydrate | this |
+    |--------|---------------|------|
+    | python | 19.7s + 1.3s  | 1.6s |
+    | guitar |  8.2s + 1.2s  | 1.1s |
+    | coffee |  4.1s + 0.5s  | 1.3s |
+
+    It also *finds more*: the haystack includes stored content, so a phrase from
+    inside an article matches instead of only its metadata (coffee: 833 → 1,237).
+    That is the same behavior Saved search already has, so the two surfaces now
+    agree — previously one searched article text and the other didn't.
+
+    Same known tradeoff as the Saved path, inherited deliberately: content is
+    matched as stored, i.e. raw HTML, so a markup-ish term ("span", "http")
+    matches nearly everything. Fixing that needs a plain-text column maintained
+    at ingest; not worth a schema change until a real search is hurt.
+    """
+    if not search_terms:
+        return None
+
+    def _lit(term: str) -> str:
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    haystack = (
+        "lower(COALESCE(e.title,'') || ' ' || COALESCE(f.user_title, f.title, '')"
+        " || ' ' || COALESCE(e.feed,'') || ' ' || COALESCE(e.link,'')"
+        " || ' ' || COALESCE(e.author,'') || ' ' || COALESCE(e.summary,'')"
+        " || ' ' || COALESCE(e.content,''))"
+    )
+    where = [f"{haystack} LIKE ? ESCAPE '\\'" for _ in search_terms]
+    params: list = [f"%{_lit(t)}%" for t in search_terms]
+
+    read_clause = {
+        True: "e.read = 1",
+        False: "(e.read IS NULL OR e.read != 1)",
+    }.get(reader_read_filter)
+    if read_clause:
+        where.append(read_clause)
+
+    # Scope to the selected feeds in SQL when they fit under SQLite's
+    # 999-variable limit, so LIMIT applies to rows the user can actually see.
+    # Above that, match unscoped and let the caller drop out-of-scope feeds —
+    # the same shape the FTS path had, and the same under-fill caveat.
+    scoped = len(feed_urls) <= 900
+    if scoped:
+        placeholders = ",".join("?" for _ in feed_urls)
+        where.append(f"e.feed IN ({placeholders})")
+        params.extend(feed_urls)
+
+    params.append(limit)
+    try:
+        conn = sqlite3.connect(f"file:{tenancy.reader_db_path()}?mode=ro", uri=True, timeout=10.0)
+        try:
+            rows = conn.execute(
+                "SELECT e.feed, e.id FROM entries e "
+                "LEFT JOIN feeds f ON f.url = e.feed "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY COALESCE(e.published, e.first_updated) DESC LIMIT ?",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("[search] SQL search failed, falling back to scan: %s", exc)
+        return None
+    return [(str(r[0]), str(r[1])) for r in rows]
+
+
 def _sorted_star_key_window(
     keys: set[tuple[str, str]],
     *,
@@ -10443,6 +11074,34 @@ def _sorted_star_key_window(
     return [(f, i) for f, i, _sv in scored[:limit]]
 
 
+def _entry_link_site_host(entry) -> str:
+    """The bare host of an entry's link — no userinfo/port, leading www. folded."""
+    net = urlparse(str(getattr(entry, "link", "") or "")).netloc.split("@")[-1].split(":")[0].lower()
+    return net[4:] if net.startswith("www.") else net
+
+
+def _split_site_terms(terms: list[str]) -> tuple[list[str], list[str]]:
+    """Pull ``site:<host>`` tokens out of a term list → (regular_terms, hosts).
+
+    ``site:`` scopes a search to entries whose *link host* is that host or a
+    subdomain of it — precise where a bare host term also matches the host
+    appearing in an article's body or in another feed's post. Used by the
+    File-Saved "review this host" link so a multi-feed host's unfiled saves can
+    be listed exactly."""
+    regular: list[str] = []
+    sites: list[str] = []
+    for tok in terms:
+        if tok.startswith("site:") and len(tok) > 5:
+            host = tok[5:].lstrip("@").split("/")[0]
+            if host.startswith("www."):
+                host = host[4:]
+            if host:
+                sites.append(host)
+        else:
+            regular.append(tok)
+    return regular, sites
+
+
 def list_entries_for_feeds(
     feed_urls: set[str],
     limit: int = 250,
@@ -10464,6 +11123,9 @@ def list_entries_for_feeds(
     normalized_selected_tag = normalize_tag_value(selected_tag)
     normalized_search_query = normalize_search_query(search_query)
     search_terms = [token.lower() for token in normalized_search_query.split()] if normalized_search_query else []
+    # site:<host> narrows to entries on that link host; it never goes to the
+    # text-matching paths (SQL or haystack), only the link-host filter below.
+    search_terms, site_hosts = _split_site_terms(search_terms)
 
     reader_read_filter: bool | None = None
     if normalized_read_filter == "unread":
@@ -10551,7 +11213,7 @@ def list_entries_for_feeds(
 
         all_feed_entries = []
         fetch_limit = max(1, int(limit))
-        need_all = bool(search_terms or normalized_sort_dir == "asc")
+        need_all = bool(search_terms or site_hosts or normalized_sort_dir == "asc")
         # When a manual tag is selected, push the filter into reader's native
         # tags= argument so the match happens in SQL across the whole library.
         # Previously the tag was applied only as a post-filter on the newest-N
@@ -10578,6 +11240,13 @@ def list_entries_for_feeds(
             # shows nothing. kept_entries_set (star OR tag) is already restricted
             # to the view's feeds; point-lookup exactly those keys instead.
             star_keys: Iterable[tuple[str, str]] = kept_entries_set
+            if normalized_selected_tag:
+                # Narrow to the tag in SQL BEFORE hydrating. Without this the tag
+                # filter ran in Python after hydrating (and lead-image-fetching)
+                # the whole kept set — ~38s to render an empty `inbox` view.
+                star_keys = kept_entries_set & get_entry_keys_for_manual_tag(
+                    set(feed_urls), normalized_selected_tag
+                )
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -10585,15 +11254,16 @@ def list_entries_for_feeds(
                 # every kept key and filtered in Python — ~11k get_entry calls,
                 # measured at 28s per search on a real library, which reads as a
                 # search box that does nothing.
-                matched_keys = _filter_star_keys_by_search(kept_entries_set, search_terms)
+                matched_keys = _filter_star_keys_by_search(set(star_keys), search_terms)
                 if matched_keys is not None:
                     star_keys = matched_keys
                     search_terms = []  # already matched in SQL
-            if len(star_keys) > fetch_limit and not search_terms and not normalized_selected_tag:
+            if len(star_keys) > fetch_limit and not search_terms:
                 # Big backlog: hydrating every kept key costs seconds (6k
                 # get_entry calls ≈ 4s). Sort + read-filter + clip in SQL over
-                # the raw keys and hydrate only the visible window. Skipped for
-                # tag/search, which post-filter and need the whole set.
+                # the raw keys and hydrate only the visible window. The tag
+                # narrowing above already reduced the set, so this now applies to
+                # tag views too.
                 star_keys = _sorted_star_key_window(
                     star_keys,
                     sort_by=normalized_sort_by,
@@ -10606,14 +11276,21 @@ def list_entries_for_feeds(
                 if e is not None:
                     all_feed_entries.append(e)
         elif search_terms:
-            # Search fast path: reader's FTS5 index instead of scanning the
-            # whole library and building a haystack per entry (which took
-            # tens of seconds at ~100k entries). Falls back to the scan while
-            # the index is still building.
-            fts_entries = _search_entries_fts(reader, normalized_search_query, feed_urls, reader_read_filter)
-            if fts_entries is not None:
-                all_feed_entries = fts_entries
-                search_terms = []  # already matched by the index
+            # Search fast path: narrow to matching keys in SQL, then hydrate
+            # only the survivors. Replaces reader's FTS index, whose
+            # per-result highlighted snippet was ~95% of a ~10-20s search —
+            # see _search_entry_keys_in_sql. Falls back to the Python scan.
+            matched_keys = _search_entry_keys_in_sql(
+                search_terms, feed_urls, reader_read_filter, fetch_limit
+            )
+            if matched_keys is not None:
+                for furl, eid in matched_keys:
+                    if furl not in feed_urls:
+                        continue  # unscoped query (>900 feeds): drop out-of-scope
+                    e = reader.get_entry((furl, eid), None)
+                    if e is not None:
+                        all_feed_entries.append(e)
+                search_terms = []  # already matched in SQL
             else:
                 for entry in reader.get_entries(read=reader_read_filter):
                     if entry.feed_url not in feed_urls:
@@ -10780,6 +11457,10 @@ def list_entries_for_feeds(
             if read_dt is None:
                 read_dt = getattr(entry, "read_modified", None)
 
+            if site_hosts:
+                host = _entry_link_site_host(entry)
+                if not any(host == s or host.endswith("." + s) for s in site_hosts):
+                    continue
             title_text = _display_title(entry) or entry.title
             if search_terms:
                 search_haystack = " ".join(
@@ -10829,6 +11510,11 @@ def list_entries_for_feeds(
                     "link": html_sanitize.safe_link_url(entry.link or _derived_entry_link(entry)),
                     "read": is_read,
                     "saved": is_saved,
+                    # A Lectio capture rather than a feed-provided entry. Drives
+                    # the Re-fetch control, which must follow the *entry*, not
+                    # the feed it happens to sit on — auto-filing moves captures
+                    # onto real feeds and used to strip their re-fetch hatch.
+                    "captured": str(getattr(entry, "added_by", "") or "") == "user",
                     sort_key: sort_value,
                 }
             )
@@ -10852,6 +11538,10 @@ def list_entries_for_feeds(
     enrich_start = time.perf_counter()
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+    # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
+    # can't send correct entry links back to an author's dead domain still named
+    # in a feed's channel <link>. Loaded once — {} for the common no-rules case.
+    _host_aliases = get_dedupe_host_aliases()
     # Enrich the surviving (top-N) records with display fields.
     entries = []
     for rec in light_records:
@@ -10883,7 +11573,7 @@ def list_entries_for_feeds(
 
         # Rebase proxy-feed entry links (e.g. feedburner) to the real publisher host.
         if rec.get("link") and hasattr(entry, "feed"):
-            _ch = getattr(entry.feed, "link", None)
+            _ch = _rewrite_url_host(getattr(entry.feed, "link", None), _host_aliases)
             rec["link"] = _rebase_proxy_entry_link(str(rec["link"]), feed_url_str, _ch)
 
         _feed_prefs = _all_display_prefs.get(feed_url_str, _DISPLAY_PREF_DEFAULTS)
@@ -10934,7 +11624,7 @@ def list_entries_for_feeds(
                 "fill_zoom": float(_fill_zm) if _fill_zm is not None else None,
                 "thumb_strategy": _thumb_strategy or "",
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
-                "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
+                "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
                 "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
@@ -11159,6 +11849,11 @@ def filter_feed_urls(feed_urls: set[str], list_feed_url: str | None) -> set[str]
         return feed_urls
     if list_feed_url in feed_urls:
         return {list_feed_url}
+    # The Saved Articles feed is synthetic and absent from get_all_feed_urls, so
+    # it would never match above — but it is directly viewable (the File-Saved
+    # "review this host" link opens it, scoped by site:). Allow it explicitly.
+    if list_feed_url == saved_articles_service.SAVED_FEED_URL:
+        return {list_feed_url}
     return set()
 
 
@@ -11230,9 +11925,28 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
     }
 
 
+def _rewrite_url_host(url: str | None, aliases: dict[str, str]) -> str | None:
+    """Rewrite *url*'s host through a ``{from_host: to_host}`` alias map (a
+    leading ``www.`` folds). Returns *url* unchanged when nothing matches."""
+    if not url or not aliases:
+        return url
+    parsed = urlparse(str(url))
+    host = parsed.netloc.lower()
+    bare = host[4:] if host.startswith("www.") else host
+    new_host = aliases.get(bare)
+    if not new_host or new_host == parsed.netloc:
+        return url
+    return parsed._replace(netloc=new_host).geturl()
+
+
 def _rebase_proxy_entry_link(entry_link: str | None, feed_url: str, channel_link: str | None) -> str | None:
     """Rebase an entry link that points to a proxy host (e.g. feedburner) back to the
-    real publisher host stored in the feed's channel link element."""
+    real publisher host stored in the feed's channel link element.
+
+    The caller folds ``channel_link`` through the feed's declared host migrations
+    first (see `_rewrite_url_host` / `get_dedupe_host_aliases`): a feed whose
+    channel ``<link>`` still names the author's dead domain would otherwise rebase
+    already-correct entry links back onto it — the tush.ar/tushar.lol case."""
     if not entry_link or not channel_link:
         return entry_link
     ep = urlparse(str(entry_link))
@@ -11412,10 +12126,17 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+# Matches any iframe's src value, NOT just Bandcamp's — the marker test moved
+# into _fix below. Embedding the literal between two `[^"\']*` stars (the earlier
+# form) made the split point ambiguous, so a src carrying many repetitions of
+# `bandcamp.com/EmbeddedPlayer/` backtracked quadratically: 250 reps ≈ 19ms,
+# 2,000 ≈ 1.2s, and feed HTML is attacker-controlled. One unambiguous star has
+# no split to search.
 _BC_EMBED_IFRAME_RE = re.compile(
-    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*bandcamp\.com/EmbeddedPlayer/[^"\']*)(["\'])',
+    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*)(["\'])',
     re.I,
 )
+_BC_EMBED_SRC_MARKER = "bandcamp.com/embeddedplayer/"
 
 
 def _strip_bandcamp_track_signature(content_html: str) -> str:
@@ -11434,6 +12155,11 @@ def _strip_bandcamp_track_signature(content_html: str) -> str:
 
     def _fix(m: re.Match) -> str:
         src = m.group(2)
+        # The regex matches every iframe src; only Bandcamp embeds are rewritten
+        # (this test used to live in the pattern, where it cost quadratic
+        # backtracking — see _BC_EMBED_IFRAME_RE).
+        if _BC_EMBED_SRC_MARKER not in src.lower():
+            return m.group(0)
         src = re.sub(r"/tracks=[\w,]+", "", src)
         src = re.sub(r"/esig=[0-9a-f]+", "", src, flags=re.IGNORECASE)
         return m.group(1) + src + m.group(3)
@@ -12847,7 +13573,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
 
-        _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
+        # Fold the channel link through declared host migrations first, so a feed
+        # whose channel <link> still names a dead domain can't rebase a correct
+        # entry link back onto it (see _rebase_proxy_entry_link, the list view).
+        _channel_link = _rewrite_url_host(
+            getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None,
+            get_dedupe_host_aliases(),
+        )
         # Drop a feed-supplied javascript:/data:/etc link before it reaches the
         # entry pane's href / data-source-url attributes (see safe_link_url).
         _display_link = html_sanitize.safe_link_url(
@@ -12899,6 +13631,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "author": author_name,
             "read": bool(entry.read),
             "saved": is_saved,
+            # See the post-list builder: Re-fetch follows the entry, not the feed.
+            "captured": str(getattr(entry, "added_by", "") or "") == "user",
             "manual_tags": manual_tags,
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
@@ -13289,6 +14023,9 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
             args=(feed_url, _uid),
             daemon=True,
         ).start()
+    # The final stored URL (slash-normalized, or an existing variant reused) —
+    # the caller opens this feed, so it must be the key the view resolves.
+    return feed_url
 
 
 def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -13573,6 +14310,20 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     # Saved Articles forever, so the backlog never shrinks as you file it and
     # every later dupe scan re-reads rows that are no longer real saves.
     if saved_articles_service.is_saved_articles_feed(feed_url):
+        # The source archive capture must follow the entry, or it is orphaned:
+        # the Read/Saved view renders starred entries from archive rows, so a
+        # leftover lectio:saved capture shows as a phantom duplicate of the moved
+        # article (with its own, often worse, content). Re-key it onto the
+        # target so the capture is preserved; if the target already has one, the
+        # source is redundant and re-key deletes it. (This is the recurrence
+        # guard for the orphaned-archive-row cleanup in scripts/.)
+        try:
+            if starred_archive_service.has_complete_archive(target_url, target_id):
+                starred_archive_service.delete_archive(feed_url, entry_id)
+            else:
+                starred_archive_service.rekey_archive(feed_url, entry_id, target_url, target_id)
+        except Exception:  # noqa: BLE001 — never fail the move over archive housekeeping
+            LOGGER.exception("[move-entry] archive re-key failed for %s", entry_id)
         try:
             _hard_delete_entry(reader, feed_url, entry_id, src)
             result["source_deleted"] = True
@@ -13988,6 +14739,10 @@ def _start_background_update(feed_url: str) -> None:
 
 
 _FOLDER_CADENCE_LAST_REFRESH_PREFIX = "folder_cadence_last_refresh:"
+# Feeds in no folder ("Uncategorized") are invisible to the per-folder loop, so
+# they get their own attempt-clock at the global cadence. Without this a feed
+# added to Uncategorized never refreshes at all — no folder ever selects it.
+_UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY = "uncategorized_cadence_last_refresh"
 
 
 def _background_user_ids() -> list[str]:
@@ -14076,6 +14831,7 @@ def _scheduled_refresh_tick() -> None:
     # exclude paused feeds here ourselves (alongside Lectio's own disabled_feeds).
     with get_reader() as reader:
         paused = {str(f.url) for f in reader.get_feeds(updates_enabled=False)}
+        enabled_feed_urls = {str(f.url) for f in reader.get_feeds(updates_enabled=True)}
     with get_meta_connection() as conn:
         disabled = get_disabled_feed_urls(conn) | paused
         # Load all folders and their per-folder cadence settings.
@@ -14098,6 +14854,25 @@ def _scheduled_refresh_tick() -> None:
                 if url not in disabled:
                     feeds_to_refresh.add(url)
             folders_to_mark.append((key, str(now_ts)))
+
+        # Uncategorized feeds: those in no folder never appear above, so refresh
+        # them as one bucket on the global cadence. update_feeds still applies
+        # its own per-feed/domain/429 backoff, so this only decides candidacy.
+        foldered = {
+            str(row["feed_url"])
+            for row in conn.execute("SELECT DISTINCT feed_url FROM folder_feeds")
+        }
+        orphan_feeds = {
+            url for url in enabled_feed_urls
+            if url not in foldered and url not in disabled
+        }
+        if orphan_feeds:
+            last_ts_str = get_setting(conn, _UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY)
+            last_ts = float(last_ts_str) if last_ts_str else 0.0
+            if (now_ts - last_ts) >= global_minutes * 60:
+                feeds_to_refresh |= orphan_feeds
+                folders_to_mark.append((_UNCATEGORIZED_CADENCE_LAST_REFRESH_KEY, str(now_ts)))
+
         if folders_to_mark:
             for key, val in folders_to_mark:
                 set_setting(conn, key, val)
@@ -14291,6 +15066,25 @@ def _daily_maintenance_for_user() -> None:
         LOGGER.info("[maintenance] orphaned row cleanup done")
     except Exception:
         LOGGER.exception("[maintenance] orphan cleanup failed")
+
+    # 2b. Sweep unrecoverable failed-archive rows so the Stats "failed" count
+    # self-heals. A failed capture is only orphaned — never retryable — once its
+    # entry is gone from reader AND no star keeps it; a failed capture of a live,
+    # still-starred entry is left for a later retry.
+    try:
+        with get_reader() as reader, get_meta_connection() as conn:
+            def _keep(feed_url: str, entry_id: str) -> bool:
+                if conn.execute(
+                    "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone():
+                    return True
+                return reader.get_entry((feed_url, entry_id), None) is not None
+            swept = starred_archive_service.sweep_failed_orphans(_keep)
+        if swept:
+            LOGGER.info("[maintenance] archive orphan sweep: removed %d unrecoverable failed capture(s)", swept)
+    except Exception:
+        LOGGER.exception("[maintenance] archive orphan sweep failed")
 
     # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
     # vacuumed once in _run_global_maintenance).
@@ -16769,6 +17563,7 @@ def _home_inner(
         "feed_to_folder": feed_to_folder,
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
+        "all_tag_names": get_all_manual_tag_names(),
         "selected_folder_id": selected_folder_id,
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,
@@ -17715,7 +18510,7 @@ def create_feed(
     if auto_discovered:
         message = f"Feed added (discovered from {url})."
     try:
-        add_feed_to_folder(target_url, folder_id)
+        target_url = add_feed_to_folder(target_url, folder_id)
         # If the feed was only reachable with a browser identity, flag it so
         # reader's refresh fetch escalates too (otherwise it subscribes but never
         # updates). Good-citizen: only after an honest fetch was refused.
@@ -17737,8 +18532,20 @@ def create_feed(
         ).start()
     except Exception as exc:
         message = f"Feed add failed: {exc}"
+        return RedirectResponse(
+            url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+            status_code=303,
+        )
+    # Open the newly-added feed so its identity is obvious immediately (catching
+    # a wrong auto-discovery, e.g. a tag page that resolved to the site feed) and
+    # it's usable at once — e.g. as a move target while filing. read_filter=all
+    # since a brand-new feed's posts are unread anyway and the user wants to see
+    # what landed.
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+        url=(
+            f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}"
+            f"&read_filter=all&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 
@@ -17829,8 +18636,14 @@ def create_scraped_feed_route(
         )
 
     invalidate_meta_structure_cache()
+    # Open the new page feed (like Add Feed) so it's confirmed and immediately
+    # usable, rather than dropping back on the folder. read_filter=all since a
+    # fresh feed's items are unread and the user wants to see what it scraped.
     return RedirectResponse(
-        url=f"/?folder_id={target_folder_id}&message={quote_plus('Page feed created.')}",
+        url=(
+            f"/?folder_id={target_folder_id}&list_feed_url={quote_plus(file_url)}"
+            f"&read_filter=all&message={quote_plus('Page feed created.')}"
+        ),
         status_code=303,
     )
 
@@ -18642,9 +19455,11 @@ def rules_run_now_route(
         log_rows += [(e, "kept") for e in (result.get("kept") or [])]
         if log_rows and log_id:
             conn.executemany(
-                "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id, title, link, feed_title, role)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role)
+                "INSERT INTO rule_run_log_entries"
+                " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"],
+                  role, e.get("matched_link"))
                  for e, role in log_rows],
             )
     result["ok"] = True
@@ -18697,7 +19512,7 @@ def automation_history_route(
 def automation_history_entries_route(log_id: int):
     with get_meta_connection() as conn:
         rows = conn.execute(
-            "SELECT feed_url, entry_id, title, link, feed_title, role"
+            "SELECT feed_url, entry_id, title, link, feed_title, role, matched_link"
             " FROM rule_run_log_entries WHERE log_id = ? ORDER BY rowid",
             (log_id,),
         ).fetchall()
@@ -21607,6 +22422,212 @@ def set_entry_title_route(feed_url: str = Form(...), entry_id: str = Form(...), 
     return JSONResponse({"ok": True, "title": title})
 
 
+_ENTRY_LINK_MAX_LEN = 2000
+
+
+@app.post("/entries/set-link")
+def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), link: str = Form("")):
+    """Override a post's source URL (repairs a dead or moved link).
+
+    Same mechanism as /entries/set-title: the corrected link is written into
+    reader's `entries.link` column and a meta `entry_link_overrides` row lets
+    the refresh service re-pin it if the feed re-ingests the original. An empty
+    `link` clears the override.
+
+    **Only `link` changes — never the entry id.** For a Lectio capture the id
+    *is* the original URL, and it keys the star row, manual tags, and archive
+    rows; re-keying would scatter all three. Changing the link alone is enough:
+    the UI's "open original" and the Re-fetch path both read `link` first, so
+    correcting it here is what lets Re-fetch pull the article from its new home.
+
+    This is the manual counterpart to the archive worker's automatic
+    canonicalization (`_apply_canonical_entry_link`), which only fires for
+    redirector links it can resolve. Dead redirectors like feedproxy.google.com
+    can't be resolved by anything — the user finds the new location by hand and
+    pins it here.
+    """
+    link = link.strip()
+    with get_reader() as reader:
+        if reader.get_entry((feed_url, entry_id), None) is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        if not link:
+            with get_meta_connection() as conn:
+                conn.execute(
+                    "DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                )
+                conn.commit()
+            return JSONResponse({"ok": True, "cleared": True})
+        if len(link) > _ENTRY_LINK_MAX_LEN:
+            return JSONResponse({"ok": False, "error": "URL is too long."}, status_code=400)
+        # http(s) only. safe_link_url also passes mailto:/tel:, which are fine
+        # as hrefs but are not source URLs a re-fetch could ever follow.
+        parsed = urlparse(link)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return JSONResponse(
+                {"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400
+            )
+        if not html_sanitize.safe_link_url(link):
+            return JSONResponse({"ok": False, "error": "That URL isn't safe to link."}, status_code=400)
+        with get_meta_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_link_overrides (feed_url, entry_id, link) VALUES (?, ?, ?)",
+                (feed_url, entry_id, link),
+            )
+            conn.commit()
+        db = reader._storage.get_db()
+        db.execute(
+            "UPDATE entries SET link = ? WHERE feed = ? AND id = ?",
+            (link, feed_url, entry_id),
+        )
+        db.commit()
+    return JSONResponse({"ok": True, "link": link})
+
+
+def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
+    """Swap *url*'s bare host per ``{from_host: to_host}`` (case-insensitive,
+    ignores userinfo/port); scheme, path, query and fragment are preserved.
+    Shared by the Edit-Website route and the apply_feed_url_rewrites script."""
+    try:
+        p = urlsplit(url)
+    except ValueError:
+        return url
+    bare = (p.netloc or "").split("@")[-1].split(":")[0].lower()
+    to = host_map.get(bare)
+    return urlunsplit((p.scheme, to, p.path, p.query, p.fragment)) if to else url
+
+
+def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> str:
+    """Recreate one entry under its host-rewritten id, carrying the star
+    (+archived_at), manual tags, read state and offline archive, then delete the
+    old one. Returns "migrated" / "gone". Idempotent: an already-migrated entry
+    no longer matches a from_host. Must run with the ingest rewrite hook in place
+    so the feed re-serving the old guid updates the migrated entry, not a
+    resurrected old one."""
+    src = reader.get_entry((feed, old_id), None)
+    if src is None:
+        return "gone"
+    if reader.get_entry((feed, new_id), None) is None:
+        ed: dict = {"feed_url": feed, "id": new_id, "link": new_link or new_id,
+                    "title": src.title or ""}
+        if src.published:
+            ed["published"] = src.published
+        if getattr(src, "content", None):
+            ed["content"] = [{"value": src.content[0].value}]
+        elif src.summary:
+            ed["summary"] = src.summary
+        reader.add_entry(ed)
+    for t in reader.get_tags(src.resource_id):
+        key = t[0] if isinstance(t, tuple) else t
+        if key and key.startswith(MANUAL_TAG_KEY_PREFIX):
+            reader.set_tag((feed, new_id), key)
+            reader.delete_tag(src.resource_id, key, missing_ok=True)
+    row = conn.execute(
+        "SELECT saved_at, archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        (feed, old_id),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
+            "VALUES (?, ?, ?, ?)", (feed, new_id, row["saved_at"], row["archived_at"]),
+        )
+        conn.execute("DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    if src.read:
+        reader.mark_entry_as_read((feed, new_id))
+    conn.execute("DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    conn.commit()
+    starred_archive_service.rekey_archive(feed, old_id, feed, new_id)
+    _hard_delete_entry(reader, feed, old_id, src)
+    return "migrated"
+
+
+def migrate_feed_host_rewrite(feed_url: str, host_map: dict[str, str]) -> dict:
+    """Rewrite existing entries of one feed whose id/link host matches *host_map*.
+    The single-feed, inline counterpart of the apply_feed_url_rewrites script, so
+    an Edit-Website flips old links immediately instead of on the next refresh."""
+    import time as _time
+    from collections import Counter
+    stats: Counter[str] = Counter()
+    reader = get_reader()
+    with get_meta_connection() as conn:
+        conn.execute("PRAGMA busy_timeout = 20000")
+        for e in list(reader.get_entries(feed=feed_url)):
+            old_id = str(e.id)
+            new_id = _swap_host_in_url(old_id, host_map)
+            if new_id == old_id:
+                continue
+            stats["match"] += 1
+            new_link = _swap_host_in_url(str(e.link or old_id), host_map)
+            for attempt in range(4):
+                try:
+                    stats[migrate_entry_to_new_host(reader, conn, feed_url, old_id, new_id, new_link)] += 1
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" in str(exc).lower() and attempt < 3:
+                        _time.sleep(1.5)
+                        continue
+                    stats["locked"] += 1
+                    break
+    return dict(stats)
+
+
+@app.post("/feeds/set-website")
+def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
+    """Repoint a feed to a new site domain: seed a Fix-URLs rule (old host → new
+    host) and rewrite existing post links/ids onto the new host right away.
+
+    The old host is the one the feed itself advertises in its channel <link>;
+    if that's absent, the host most of its posts link to. Everything downstream
+    already honors feed_url_rewrites — the entry-link rebase, dupe scan, favicon
+    and re-fetch — so seeding the rule fixes the Website, the post links, and the
+    dead-domain rebase in one move. This is the front door to the rewrite engine
+    that previously had to be hand-seeded in the DB."""
+    website = website.strip()
+    parsed = urlparse(website)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return JSONResponse({"ok": False, "error": "Enter a valid http(s) URL."}, status_code=400)
+    to_host = parsed.netloc.split("@")[-1].split(":")[0].lower()
+
+    with get_reader() as reader:
+        feed_obj = reader.get_feed(feed_url, None)
+        if feed_obj is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        from_host = ""
+        if getattr(feed_obj, "link", None):
+            from_host = urlparse(str(feed_obj.link)).netloc.split("@")[-1].split(":")[0].lower()
+        # No channel link, or it already names the new host: fall back to the
+        # host most posts link to, so we migrate from wherever the posts live.
+        if not from_host or from_host == to_host:
+            from collections import Counter as _Counter
+            hosts = _Counter(
+                urlparse(str(e.link)).netloc.split("@")[-1].split(":")[0].lower()
+                for e in reader.get_entries(feed=feed_url) if getattr(e, "link", None)
+            )
+            hosts.pop(to_host, None)  # already-correct posts aren't a source
+            from_host = hosts.most_common(1)[0][0] if hosts else from_host
+
+    # Nothing to migrate from (empty feed, or already all on the new host).
+    if not from_host or from_host == to_host:
+        return JSONResponse({"ok": True, "website": website, "migrated": 0, "unchanged": True})
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+            (feed_url, from_host, to_host),
+        )
+        conn.commit()
+    stats = migrate_feed_host_rewrite(feed_url, {from_host: to_host})
+    invalidate_unread_counts_cache()
+    invalidate_meta_structure_cache()
+    return JSONResponse({
+        "ok": True,
+        "website": f"{parsed.scheme}://{parsed.netloc}/",
+        "from_host": from_host,
+        "to_host": to_host,
+        "migrated": stats.get("migrated", 0),
+    })
+
+
 @app.post("/entries/move-to-feed")
 def move_entry_to_feed_route(
     feed_url: str = Form(...),
@@ -22044,7 +23065,7 @@ def _saved_dup_groups(records: list[dict], keys: tuple[str, ...]) -> list[list[d
     return [g for g in groups.values() if len(g) > 1]
 
 
-def _saved_dup_host_slug(link: str) -> str | None:
+def _saved_dup_host_slug(link: str, host_aliases: dict[str, str] | None = None) -> str | None:
     """Host-scoped slug key for the saved scan's confirmed tier.
 
     `_safe_dedup_entry_slug` is host-blind — it returns the last path segment
@@ -22063,7 +23084,7 @@ def _saved_dup_host_slug(link: str) -> str | None:
     slug = _safe_dedup_entry_slug(link)
     if not slug:
         return None
-    canon = normalize_entry_link_for_dedupe(link)
+    canon = normalize_entry_link_for_dedupe(link, host_aliases)
     host = canon.partition("/")[0] if canon else ""
     return f"{host}/{slug}" if host else None
 
@@ -22096,6 +23117,7 @@ def get_saved_duplicates():
     """
     import html as _html
 
+    host_aliases = get_dedupe_host_aliases()
     saved_url = saved_articles_service.SAVED_FEED_URL
     with get_reader() as reader:
         if reader.get_feed(saved_url, None) is None:
@@ -22115,6 +23137,13 @@ def get_saved_duplicates():
         body = ""
         if body_head:
             body = _SAFE_DEDUP_TAG_RE.sub(" ", body_head)
+            # The 2000-char SQL window can cut off inside a tag, leaving an
+            # unclosed "<img …src="…long-url" fragment that _SAFE_DEDUP_TAG_RE
+            # (which needs a closing >) can't strip. That fragment is the site
+            # logo — byte-identical across every page on the site — so it made
+            # unrelated articles (harrypotter.com/writing/*) false-match on
+            # "same content". Drop a residual unclosed tag.
+            body = _SAFE_DEDUP_UNCLOSED_TAG_RE.sub("", body)
             body = _html.unescape(body)
             body = " ".join(body.split())[:_SAVED_DUP_BODY_HEAD_CHARS].lower()
         ntitle = normalize_entry_title_for_dedupe(title)
@@ -22125,8 +23154,8 @@ def get_saved_duplicates():
             "published": str(published or ""),
             "read": bool(read),
             "has_content": body_head is not None,
-            "_canon": normalize_entry_link_for_dedupe(link),
-            "_slug": _saved_dup_host_slug(link),
+            "_canon": normalize_entry_link_for_dedupe(link, host_aliases),
+            "_slug": _saved_dup_host_slug(link, host_aliases),
             "_ntitle": ntitle if len(ntitle.split()) >= _SAFE_DEDUP_MIN_TITLE_WORDS else "",
             "_body": body if len(body) >= _SAFE_DEDUP_MIN_BODY_CHARS else "",
         })
@@ -22223,6 +23252,75 @@ _SAVED_DUP_CHECK_TIMEOUT = 8.0
 _SAVED_DUP_CHECK_PAUSE = 0.3  # between requests in one group — usually same host
 
 
+_SOFT_404_PATH_NAMES = frozenset({
+    "", "index", "index.html", "index.php", "index.htm", "home", "default.aspx",
+    "404", "not-found", "notfound", "error", "search", "blog", "news", "articles",
+})
+
+
+def _normalize_probe_path(url: str) -> list[str]:
+    """Path segments of *url*, lowercased, with empties and a trailing
+    index-file dropped — the shape used to compare a redirect's start and end."""
+    try:
+        path = urlparse(url).path or "/"
+    except ValueError:
+        return []
+    segs = [s.lower() for s in path.split("/") if s]
+    if segs and segs[-1] in {"index.html", "index.htm", "index.php", "default.aspx"}:
+        segs.pop()
+    return segs
+
+
+def _looks_like_soft_404(original: str, final: str) -> bool:
+    """True if a 200 response looks like the article is gone and the site
+    quietly redirected to an index instead.
+
+    `_check_saved_url` only counts 404/410, so this whole class reads as alive:
+    probing 8 guitarplayer.com articles returned 200 for all of them while 4 had
+    been redirected to the bare `/lessons` index. The article is gone; the site
+    just won't say so.
+
+    Deliberately narrow — it fires only when a redirect *lost* path depth, i.e.
+    the destination is an ancestor of where we started (or the root, or an
+    obviously index-ish name). A redirect that merely reshapes a URL at the same
+    depth (`/2019/post-name` → `/blog/post-name`) is a site reorganization, not
+    a soft 404, and must not trip this: it is the case where the article is
+    still there. Same-page redirects (http→https, adding `www`, adding a
+    trailing slash) never count, since the path is unchanged.
+    """
+    try:
+        o_host = (urlparse(original).netloc or "").lower().removeprefix("www.")
+        f_host = (urlparse(final).netloc or "").lower().removeprefix("www.")
+    except ValueError:
+        return False
+    # A cross-domain redirect is a migration or a parking page — too ambiguous
+    # to call from the URL alone, and not what this is for.
+    if o_host != f_host:
+        return False
+
+    o_segs = _normalize_probe_path(original)
+    f_segs = _normalize_probe_path(final)
+    # Needs an article-shaped starting point (2+ segments) to have lost
+    # anything: probing a section page says nothing about a missing article.
+    if len(o_segs) < 2 or f_segs == o_segs:
+        return False
+    if len(f_segs) >= len(o_segs):
+        return False  # same depth or deeper — a reshape, not a disappearance
+    # Landed on the root.
+    if not f_segs:
+        return True
+    # Collapsed onto a top-level section page. This is the observed shape and
+    # the ancestor test misses it, because sites redirect *across* sections:
+    # guitarplayer.com sends /technique/<article> to /lessons, so the
+    # destination shares no prefix with the original and isn't named like an
+    # index either. A single remaining segment on the same host is a section
+    # landing page, not an article.
+    if len(f_segs) == 1:
+        return True
+    # Deeper destination that is still a strict ancestor, or index-ish.
+    return o_segs[:len(f_segs)] == f_segs or f_segs[-1] in _SOFT_404_PATH_NAMES
+
+
 def _check_saved_url(url: str) -> dict:
     """Liveness probe for one saved article URL. Honest UA, SSRF-guarded,
     redirects followed with per-hop validation. Never raises.
@@ -22230,7 +23328,12 @@ def _check_saved_url(url: str) -> dict:
     Classification is deliberately conservative: only 404/410 count as dead
     (the keeper auto-flip acts on it); 403/429/5xx are bot-walls or hiccups,
     not proof the page is gone. A HEAD failure is retried once as a GET —
-    some servers reject or mishandle HEAD but serve the page fine."""
+    some servers reject or mishandle HEAD but serve the page fine.
+
+    `soft_dead` is reported separately and never folded into `dead`: it is a
+    URL-shape heuristic (see `_looks_like_soft_404`), and `dead` is what arms a
+    deletion. Same rule as the dupe scan's probe arming — a guess may inform the
+    user, never pre-check a destructive box."""
     headers = {"User-Agent": LECTIO_HONEST_USER_AGENT}
     status: int | None = None
     final_url = url
@@ -22242,14 +23345,16 @@ def _check_saved_url(url: str) -> dict:
                 resp = url_guard.safe_get(client, url)
             status, final_url = resp.status_code, str(resp.url)
     except url_guard.UnsafeURLError:
-        return {"status": None, "alive": False, "dead": False, "final_url": url, "error": "unsafe URL"}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
+                "final_url": url, "error": "unsafe URL"}
     except Exception as exc:  # noqa: BLE001 — DNS failure, timeout, TLS, ...
-        return {"status": None, "alive": False, "dead": False, "final_url": url,
-                "error": type(exc).__name__}
+        return {"status": None, "alive": False, "dead": False, "soft_dead": False,
+                "final_url": url, "error": type(exc).__name__}
     return {
         "status": status,
         "alive": status < 400,
         "dead": status in (404, 410),
+        "soft_dead": status < 400 and _looks_like_soft_404(url, final_url),
         "final_url": final_url,
         "error": None,
     }
@@ -22383,22 +23488,21 @@ def _autofile_excluded_targets(feed_urls: Iterable[str], conn=None) -> frozenset
     return frozenset(excluded)
 
 
-@app.get("/saved/autofile/preview")
-def preview_saved_autofile():
-    """Propose a home feed for each unfiled saved article, grouped by host.
+def _current_autofile_plan(restrict_to: set[str] | None = None) -> tuple[list[dict], list[dict], dict]:
+    """Assemble the autofile plan for the current user.
 
-    Read-only. Saved articles imported from a read-later service are mostly
-    articles from feeds already subscribed to, so they can be filed onto their
-    real feed — which also collapses cross-feed duplicates, since the move
-    matches into the target by GUID else normalized link.
+    Returns ``(plan, marked, titles)`` — the worklist, the clusters whose host
+    the user has marked "not a feed" (settled business, reported separately),
+    and feed_url → display title.
 
-    The client reviews and approves per host; see services/saved_autofile for
-    why a lone candidate feed isn't automatically a trustworthy one.
+    *restrict_to* limits the saved articles considered to those entry ids, which
+    is how the Instapaper importer reports what a fresh import could file
+    without re-scanning the whole backlog.
     """
     saved_url = saved_articles_service.SAVED_FEED_URL
     with get_reader() as reader:
         if reader.get_feed(saved_url, None) is None:
-            return JSONResponse({"plan": [], "totals": saved_autofile_service.plan_totals([])})
+            return [], [], {}
         titles = {}
         # A feed declares its host twice: its own URL, and the site it
         # advertises. Both count — a FeedBurner feed's URL host says nothing
@@ -22431,7 +23535,7 @@ def preview_saved_autofile():
             for i, l in db.execute(
                 "SELECT id, link FROM entries WHERE feed = ?", (saved_url,)
             )
-            if str(i) in kept
+            if str(i) in kept and (restrict_to is None or str(i) in restrict_to)
         ]
         feed_links = [
             (str(f), str(l))
@@ -22453,6 +23557,22 @@ def preview_saved_autofile():
     # reappearing unresolved on every pass. Reported so they can be reviewed.
     marked = [c for c in plan if c["host"] in non_feed]
     plan = [c for c in plan if c["host"] not in non_feed]
+    return plan, marked, titles
+
+
+@app.get("/saved/autofile/preview")
+def preview_saved_autofile():
+    """Propose a home feed for each unfiled saved article, grouped by host.
+
+    Read-only. Saved articles imported from a read-later service are mostly
+    articles from feeds already subscribed to, so they can be filed onto their
+    real feed — which also collapses cross-feed duplicates, since the move
+    matches into the target by GUID else normalized link.
+
+    The client reviews and approves per host; see services/saved_autofile for
+    why a lone candidate feed isn't automatically a trustworthy one.
+    """
+    plan, marked, _titles = _current_autofile_plan()
     # entry_ids are only needed server-side on apply; sending 4k of them per
     # host would bloat the preview for no benefit.
     slim = [{k: v for k, v in c.items() if k != "entry_ids"} for c in plan]
@@ -22466,6 +23586,106 @@ def preview_saved_autofile():
             ({"host": c["host"], "count": c["count"]} for c in marked),
             key=lambda c: (-c["count"], c["host"]),
         ),
+    })
+
+
+def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
+    """Assemble the unstar-tagged plan for the current user.
+
+    Reads the star rows, every manual tag, and the archived-at set, and hands
+    them to the pure decision layer. Read-only.
+    """
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        tags_by_key: dict[tuple[str, str], list[str]] = {}
+        for feed, eid, key in db.execute(
+            "SELECT feed, id, key FROM entry_tags WHERE key LIKE ?",
+            (f"{MANUAL_TAG_KEY_PREFIX}%",),
+        ):
+            tags_by_key.setdefault((str(feed), str(eid)), []).append(
+                str(key)[len(MANUAL_TAG_KEY_PREFIX):]
+            )
+    with get_meta_connection() as conn:
+        starred = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries"
+            )
+        }
+        archived = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
+            )
+        }
+    plan = unstar_tagged_service.build_unstar_plan(
+        starred, tags_by_key, archived=archived, keep_tags=keep_tags,
+    )
+    plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags(
+        {row["tag"] for row in plan["per_tag"]}
+    )
+    return plan
+
+
+@app.get("/saved/unstar-tagged/preview")
+def preview_unstar_tagged(keep_tags: str = Query("")):
+    """Preview which starred+tagged entries would be unstarred.
+
+    Read-only. After tag-as-keep a tag already keeps an entry, so a star on a
+    tagged entry is redundant clutter in the read-later queue. *keep_tags* is a
+    comma-separated opt-out; any entry carrying one of those tags is protected.
+
+    The per-tag breakdown and the suggested queue-like opt-outs let the reviewer
+    keep aspirational reading queues (`games-to-play`, `books`) starred while
+    clearing topical filing tags. The entry-id lists aren't sent — the preview
+    only needs counts, and apply recomputes the set under the same keep_tags.
+    """
+    keep = {t.strip() for t in keep_tags.split(",") if t.strip()}
+    plan = _current_unstar_tagged_plan(keep)
+    return JSONResponse({
+        "totals": plan["totals"],
+        "per_tag": plan["per_tag"],
+        "queue_like_tags": plan["queue_like_tags"],
+    })
+
+
+@app.post("/saved/unstar-tagged")
+async def apply_unstar_tagged(request: Request):
+    """Unstar every starred entry that carries a manual tag, minus opt-outs.
+
+    Body (JSON): {"keep_tags": [...]}. Recomputes the plan server-side under the
+    given opt-outs rather than trusting a client-supplied id list — the preview
+    is advisory, the decision is made here against live data.
+
+    Only the star row is deleted. Manual tags, read state, and the offline
+    archive are untouched: a tagged entry keeps its capture (the unstar route's
+    archive-removal is gated on having no tags, and this bypasses that path
+    entirely, so nothing is ever enqueued for removal).
+    """
+    body = await request.json()
+    keep = {str(t).strip() for t in body.get("keep_tags", []) if str(t).strip()}
+    plan = _current_unstar_tagged_plan(keep)
+    to_unstar = plan["to_unstar"]
+    if not to_unstar:
+        return JSONResponse({"ok": True, "unstarred": 0, "archived_at_lost": 0})
+
+    deleted = 0
+    with get_meta_connection() as conn:
+        for start in range(0, len(to_unstar), 400):
+            chunk = to_unstar[start:start + 400]
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            flat = [v for key in chunk for v in key]
+            cur = conn.execute(
+                f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({placeholders})",
+                flat,
+            )
+            deleted += cur.rowcount
+        conn.commit()
+
+    # A behind-the-back delete leaves the generation-guarded counts stale.
+    invalidate_unread_counts_cache()
+    return JSONResponse({
+        "ok": True,
+        "unstarred": deleted,
+        "archived_at_lost": plan["totals"]["archived_at_lost"],
     })
 
 
@@ -23177,6 +24397,17 @@ def toggle_entry_saved(
             # Only release the archive when no keep signal remains — a manually
             # tagged entry keeps its capture even after it's unstarred.
             starred_archive_service.enqueue_removal(feed_url, entry_id)
+            # A Saved Article that is now neither starred nor tagged is a husk —
+            # the read-later pile should hold only kept items. It's user-added
+            # and deletable, so remove it outright rather than leaving invisible
+            # cruft (which the host-review view would surface). Mirrors the
+            # source cleanup Move already does; a tag keeping it is handled above.
+            if saved_articles_service.is_saved_articles_feed(feed_url):
+                with get_reader() as reader:
+                    entry = reader.get_entry((feed_url, entry_id), None)
+                    if entry is not None:
+                        _hard_delete_entry(reader, feed_url, entry_id, entry)
+                invalidate_unread_counts_cache()
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
 
@@ -23223,14 +24454,49 @@ async def refresh_saved_article_content(
     request: Request,
     feed_url: str = Form(...),
     entry_id: str = Form(...),
+    mode: str = Form("readability"),
 ):
-    """Re-fetch + re-extract a saved article's content, replacing the stored copy
-    and bumping it to the top. Fixes a bad initial capture (e.g. readability
+    """Re-fetch + re-extract a captured article's content, replacing the stored
+    copy and bumping it to the top. Fixes a bad initial capture (e.g. readability
     grabbed a fragment, or a broken import) without deleting and re-adding.
-    Saved-articles feed only — the entry id there is the source URL."""
+
+    Works for any Lectio capture, wherever it lives, and always re-fetches the
+    entry's current **link** rather than its id. Two bugs made that necessary:
+
+    - Gating on feed identity stripped the hatch from every article auto-filing
+      moved out of `lectio:saved` (~3,900 of them).
+    - Re-fetching by entry id ignored an **Edit URL** correction entirely: a
+      capture's id is the address it was first saved from and never changes, so
+      a repointed article kept re-fetching the dead URL and reporting success.
+
+    *mode* ``"full"`` re-captures the whole page instead of readability-
+    extracting — for a page readability mangles (prose scattered across
+    low-scoring divs, or a lead image dropped by its cleaning). The save-path
+    fallback below is readability-only; a full-page re-capture needs an entry to
+    already exist, which after any real capture it does.
+
+    The save path is kept only as a fallback for the case it is actually good
+    at — a saved URL with no entry behind it yet."""
+    result = await run_in_threadpool(
+        _refresh_captured_article_for_current_user, feed_url, entry_id, mode
+    )
+    if result.get("ok"):
+        return JSONResponse({
+            "ok": True,
+            "refreshed": bool(result.get("refreshed")),
+            "extracted": bool(result.get("extracted")),
+            "title": result.get("title"),
+            "feed_url": feed_url,
+            "entry_id": entry_id,
+            "url": result.get("source_url") or entry_id,
+        })
+    # Only the saved feed has a meaningful fallback: re-running the save path
+    # can create the entry when it is genuinely absent. Anywhere else, the
+    # in-place result is the answer.
     if not saved_articles_service.is_saved_articles_feed(feed_url):
         return JSONResponse(
-            {"ok": False, "error": "Re-fetch is only available for saved articles."},
+            {"ok": False, "error": result.get("error") or "Re-fetch failed.",
+             "dead": bool(result.get("dead"))},
             status_code=400,
         )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
@@ -23288,15 +24554,53 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
         # The Saved Articles feed just appeared — surface it in the sidebar tree.
         invalidate_meta_structure_cache()
         invalidate_problematic_feeds_cache()
-    if result.get("ok") and not result.get("duplicate"):
+    # Invalidate on a new save OR a resurface: a resurface un-archives and marks
+    # a *duplicate* unread, which changes the unread counts and the Saved Inbox
+    # list — gating only on "not duplicate" left those stale, so a re-saved
+    # article never appeared in the Inbox until the cache expired.
+    if result.get("ok") and (not result.get("duplicate") or result.get("resurfaced")):
         invalidate_unread_counts_cache()
-    if result.get("ok") and _search_index_ready.get(tenancy.current_user_id()):
-        # Make the save searchable immediately (incremental; guarded by the
-        # ready flag so this can never trigger the expensive first build).
-        try:
-            reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[search] post-save index update failed: %s", exc)
+        # Land the save in the Saved Inbox: tag it 'inbox', the same bucket the
+        # auto-save rule uses. A manual save (extension/bookmarklet/modal) never
+        # got this, so saves were starred but invisible in the Inbox tag view.
+        # Only on a new save or a resurface — never re-tag a duplicate the user
+        # has deliberately filed out of the Inbox.
+        eid = result.get("entry_id")
+        if eid:
+            try:
+                existing = get_manual_tags_for_entry(saved_articles_service.SAVED_FEED_URL, eid)
+                if _SAVE_ARTICLE_INBOX_TAG not in existing:
+                    set_manual_tags_for_entry(
+                        saved_articles_service.SAVED_FEED_URL, eid,
+                        " ".join(existing + [_SAVE_ARTICLE_INBOX_TAG]),
+                    )
+                    invalidate_tag_counts_cache()
+                    invalidate_has_manual_tags_cache()
+            except Exception:  # noqa: BLE001 — the save landed; the tag is a nicety
+                LOGGER.warning("[save-article] inbox tag failed for %s", eid)
+    return result
+
+
+def _refresh_captured_article_for_current_user(
+    feed_url: str, entry_id: str, mode: str = "readability"
+) -> dict:
+    """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
+    with the current tenancy's reader/meta DB.
+
+    *mode* ``"full"`` captures the whole page body instead of readability-
+    extracting it — the escape hatch for pages readability mangles. See
+    extract_full_page_article."""
+    extract = fetch_full_page_article if mode == "full" else fetch_readability_article
+    reader = get_reader()
+    with get_meta_connection() as conn:
+        result = saved_articles_service.refresh_captured_article(
+            reader,
+            conn,
+            feed_url,
+            entry_id,
+            extract=extract,
+            enqueue_archive=starred_archive_service.enqueue_archive,
+        )
     return result
 
 
@@ -23659,6 +24963,11 @@ def rename_manual_tag(
     return RedirectResponse(url="/", status_code=303)
 
 
+# Effectively unbounded: a range action must see the whole current view to place
+# the anchor. A folder's own post count is the practical bound.
+_RANGE_READ_LIMIT = 1_000_000
+
+
 @app.post("/entries/mark-range-read")
 def mark_entries_range_read(
     request: Request,
@@ -23684,8 +24993,13 @@ def mark_entries_range_read(
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
+    # "Above/below" needs the anchor's position in the *whole* current view, so
+    # the list must not be clipped to the default page (250) — a post past that
+    # cutoff read as "not in the current view". _RANGE_READ_LIMIT is effectively
+    # unbounded; the folder's own size is the real bound.
     posts = list_entries_for_feeds(
         filtered_feed_urls,
+        limit=_RANGE_READ_LIMIT,
         sort_by=normalized_sort_by,
         sort_dir=normalized_sort_dir,
         read_filter=normalized_read_filter,
@@ -23704,6 +25018,7 @@ def mark_entries_range_read(
     if anchor_index is None and normalized_read_filter != "all":
         posts = list_entries_for_feeds(
             filtered_feed_urls,
+            limit=_RANGE_READ_LIMIT,
             sort_by=normalized_sort_by,
             sort_dir=normalized_sort_dir,
             read_filter="all",
@@ -24627,11 +25942,27 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
     if summary["tagged"]:
         invalidate_has_manual_tags_cache()
         invalidate_tag_counts_cache()
-    if _search_index_ready.get(tenancy.current_user_id()):
-        try:
-            reader.update_search()
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("[search] post-import index update failed: %s", exc)
+
+    # Run the autofile matcher over just what we imported, so the summary can
+    # say how much of it belongs to feeds already subscribed to. An import that
+    # lands silently in Uncategorized is how a 4,000-article backlog gets built
+    # without anyone noticing.
+    #
+    # Deliberately reports rather than files. "Exactly one candidate feed" is
+    # not the same as a trustworthy one — guitarplayer.com's only candidate was
+    # a scraped single-article stub that would have swallowed 303 articles — so
+    # filing stays behind the per-host review in Settings → Feeds, where the
+    # evidence for each target is visible and nothing is pre-checked.
+    try:
+        imported_ids = {bm.url for bm in plan}
+        matched, _marked, _titles = _current_autofile_plan(restrict_to=imported_ids)
+        totals = saved_autofile_service.plan_totals(matched)
+        summary["filable"] = totals["confident_articles"]
+        summary["filable_hosts"] = totals["confident_hosts"]
+    except Exception:  # noqa: BLE001 — a reporting extra must never fail an import
+        LOGGER.exception("instapaper import: autofile match failed")
+        summary["filable"] = 0
+        summary["filable_hosts"] = 0
     return summary
 
 
@@ -24653,6 +25984,14 @@ async def instapaper_import(request: Request, instapaper_file: Annotated[UploadF
         if summary["tagged"]:
             bits.append(f"{summary['tagged']} tagged")
         msg = "Instapaper import: " + ", ".join(bits) + ". Article text is being fetched in the background."
+        if summary.get("filable"):
+            # Signpost the review rather than filing silently — see
+            # _import_instapaper_for_current_user for why this doesn't auto-file.
+            msg += (
+                f" {summary['filable']} of these match feeds you already follow"
+                f" ({summary['filable_hosts']} site(s)) — review under"
+                " Settings → Feeds → Utilities → File saved articles."
+            )
     return RedirectResponse(url=f"/?message={quote_plus(msg)}", status_code=303)
 
 

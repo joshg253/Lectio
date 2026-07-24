@@ -115,7 +115,7 @@ invariant is enforced in the write paths: `add_feed_to_folder` clears a feed's
 other memberships before inserting, and the dedup/format-upgrade paths delete the
 survivor's stale rows before re-inserting the chosen folders (earlier they added
 without removing, which let feeds drift across folders). Pre-existing drift is
-repaired by **Settings → Feeds → Utilities → Fix multi-folder feeds**
+repaired by **Settings → Utilities → Fix multi-folder feeds**
 (`GET /feeds/multi-folder` reports feeds with >1 row; `POST
 /feeds/multi-folder/resolve` keeps only the user-chosen folder per feed).
 
@@ -728,6 +728,24 @@ re-fetching. The on-star destination fan-out is deliberately **not** fired —
 saving *into* Lectio shouldn't re-send the article to external read-later
 services.
 
+**Re-fetch follows the entry, not the feed.** `POST /articles/refresh-content`
+re-fetches and re-extracts a capture, replacing its stored content in place. It
+has two paths because a capture does not stay in `lectio:saved`: auto-filing
+(Settings → Feeds → File saved articles) moves it onto the feed that actually
+publishes the article, where it remains a capture (`added_by='user'`, entry id =
+source URL) on someone else's feed. For a still-unfiled article the route reuses
+`save_article(refresh_content=True)`; for a filed one it calls
+`refresh_filed_article`, which updates the entry where it now lives. Routing the
+filed case through the save path instead would write into `lectio:saved` and
+re-create the duplicate that filing removed — hence the split, and hence
+`_replace_entry_content` taking the feed as a parameter rather than assuming the
+saved feed. Feed-provided entries are refused: their content belongs to the
+publisher and the next refresh would overwrite it anyway.
+
+The UI gates the control the same way, on a per-entry `captured` flag
+(`data-post-captured`) rather than on feed identity. Gating on the feed is what
+silently stripped the escape hatch from every article the filer moved.
+
 Entry points: the **+ Save Article** modal (session `POST /articles/save`), a
 bookmarklet (`GET /articles/save?url=…` — a top-level navigation, so the
 SameSite=Lax session cookie rides along and an unauthenticated hit round-trips
@@ -853,8 +871,7 @@ the survivors are hydrated: ~1.2s for the same queries.
 reader's own FTS index is deliberately **not** used for this. `search_entries`
 builds a highlighted snippet per result, measured at ~7.8ms/row — 76s for one
 common term across 133k entries — so routing the kept view through it was *worse*
-than the scan it replaced (97s end to end). The same cost is why a Feeds-view
-search still takes ~10s; that path is a separate, known target. The SQL predicate
+than the scan it replaced (97s end to end). The SQL predicate
 covers title, resolved feed title, feed URL, link, author, summary **and the
 stored content**, so a Saved search reaches the article's text — the point of a
 read-later archive. Content is matched as stored (raw HTML), so a markup-ish term
@@ -863,7 +880,41 @@ maintained at ingest, which isn't worth a schema change yet. On any SQL error th
 helper returns `None` and the caller keeps the full key set and post-filters in
 Python, so a failure degrades to the old behavior instead of showing no posts.
 
-**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from Settings → Feeds → **Utilities**; the two duplicate scanners sit on their own **Dupes** tab, since both are long-running, produce long reviewable lists, and are worked in repeated passes rather than fired once). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
+**Searching the Feeds view** (`_search_entry_keys_in_sql`) now works the same
+way, for the same reason. It previously used the FTS index, and the snippet cost
+above turned out to be ~95% of the time — measured on the live library (134k
+entries, 2,888 feeds): `search_entries` took 19.7s for `python` against 1.3s to
+hydrate the results. Narrowing to matching keys in SQL and hydrating only the
+survivors took the same search to **1.45s**, and `guitar` from 9.3s to 1.3s.
+
+Two consequences worth knowing. First, the two search surfaces now share a
+predicate, so they finally agree: a Feeds search reaches article text rather than
+only metadata (`coffee`: 833 → 1,237 hits), and inherits the same raw-HTML
+caveat. Second, when the selected feed set fits under SQLite's 999-variable limit
+the scope goes into the query, so `LIMIT` applies to rows the user can actually
+see; above that it matches unscoped and the caller drops out-of-scope feeds — the
+same shape (and the same under-fill caveat) the FTS path had.
+
+**reader's FTS index is retired.** Both surfaces resolve in SQL, so nothing
+called `search_entries` — and maintaining the index was not free: 1.3ms per new
+entry on every refresh (`update_search()` ran at the end of each refresh batch,
+on every save, and after imports), plus a file roughly the size of the reader DB
+itself — **564MB against 743MB** on the live library. It is no longer built,
+enabled, or updated, and the startup index-build thread is gone with it, so a
+fresh install no longer spends its first minutes walking every entry.
+
+`scripts/drop_search_index.py` reclaims the space on an existing install.
+`disable_search()` alone does *not* reclaim it: the DROPs land in the WAL and
+SQLite never shrinks a file on its own, so a naive drop briefly **doubles** disk
+use (measured: 564MB index + 567MB WAL). The script checkpoints and VACUUMs,
+taking the index to 4KB.
+
+The index is derived, not user data — `enable_search()` + `update_search()`
+rebuilds it from the entries table should a future ranked search want it. That
+rebuild walks every entry and takes minutes on a large library, which is why
+dropping it is a deliberate script rather than a startup side effect.
+
+**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from the top-level Settings → **Utilities** tab, which also holds the two duplicate scanners and the one-shot maintenance actions; it was promoted out of a Feeds sub-tab so the scanners — long-running, long reviewable lists, worked in repeated passes — sit alongside the rest rather than behind an extra click). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
 
 Matching is by **article host**, from two independent signals. The evidential one is which subscribed feed already carries entries whose links are on that host — a feed's own URL often lives elsewhere than the articles it publishes (`rss.beehiiv.com` serving `joanwestenberg.com`). The declarative one is the hosts a feed *advertises*: its own URL host and its `link` (site) host. Entry links alone are not enough, because two common cases produce no usable evidence at all — a feed **subscribed but not yet fetched** has no entries, so a feed added specifically to receive a backlog would never be offered for it; and a **link-proxying feed** (FeedBurner rewrites every entry link to `feeds.feedburner.com`) points its evidence at the wrong host entirely. Measured here, 696 of 2,881 feeds advertise a site on a different host than their feed URL. Adding the declarative signal took unmatched articles from 698 to 66.
 
@@ -886,6 +937,8 @@ The service is pure (it takes extracted rows, not a reader) so the guards are te
 **Nothing in the plan is ever pre-checked.** It files thousands of rows at a time and is meant to be worked in passes — file a batch, re-scan, continue — so the `confident` flag drives a *label* ("strong match — N posts from this host"), never a selection. Same rule as the Saved duplicate dialog: a scan result is a claim, not an instruction.
 
 **Barred targets** (`_autofile_excluded_targets`, applied on *both* preview and apply so a stale plan can't route around it): Saved Articles itself, and every YouTube feed. A saved page is never really a video-channel post, and channels routinely share a name with the blog they accompany — with only feed titles on screen, a YouTube feed is precisely the target a reviewer would pick by mistake. For the same reason the picker shows each candidate's **feed URL**, inline and as a hover title: feed titles are frequently and deliberately unlike their URLs (`rss.beehiiv.com/feeds/XYZ.xml` titled "The Woodshed"), so the title alone is not enough to identify what you are filing into. When two candidates for one host share a title (a feed and its format variant, or a blog and its companion channel) the URL is folded into the option label itself — otherwise the dropdown offers choices that read identically and the pick cannot be made at all.
+
+**Reviewing an ambiguous host by hand.** A host with more than one on-host feed (Medium, Ars Technica) is `ambiguous` — the filer can't pick a destination, so those saves stall in the worklist. Each row carries a magnifying-glass link that opens exactly those saves: `list_feed_url=lectio:saved&read_filter=all&q=site:<host>`. Two pieces make it precise. The **Saved Articles feed** (`lectio:saved`) holds only articles *not yet attached to a feed* — filing moves them onto the real feed and out of this synthetic one — so scoping the view to it drops the host's already-filed posts; it is synthetic and absent from `get_all_feed_urls`, so `filter_feed_urls` allows it through explicitly. The **`site:<host>`** search operator (`_split_site_terms`) matches an entry's *link host* (apex or subdomain, boundary-checked) rather than a bare substring, so a mention of the host in some article's body doesn't pull that article in. `site:` never reaches the text-matching SQL/haystack paths — it is a link-host filter applied during hydration, and forces the full-scan path (`need_all`) so nothing is clipped before it runs. From there each is filed by hand with the per-post **Move to feed** action. Frontend-only wiring; the `site:` operator and the synthetic-feed allowance are the only server changes.
 
 **Moving a saved article deletes its source.** `_move_entry_to_feed` normally leaves the source entry in place — reader can't delete feed-provided entries, so it settles for marking them read and stripping star/tags. That rationale does not apply to `lectio:saved`, whose entries are `added_by='user'` and therefore properly deletable, so the saved source is hard-deleted (tombstoned, via the shared `_hard_delete_entry`) once the move succeeds. Without this the Saved Articles feed kept a read, unstarred husk per filed article: the backlog never shrank as it was filed, and every later duplicate scan re-read rows that were no longer real saves.
 
@@ -977,6 +1030,12 @@ The entry context menu's **Delete post…** (`POST /entries/delete`) hard-remove
 **Edit title…** (`POST /entries/set-title`) is the same mechanism aimed at `entries.title` (`entry_title_overrides`, re-pinned by `reapply_entry_title_overrides`): it fixes "(untitled)" posts and garbage feed titles, and renames saved articles whose readability-extracted title is off (for `lectio:saved` entries the feed never refreshes, so the direct column write alone would already stick; the override row is kept anyway for uniformity).
 
 **Canonical entry links** (`entry_link_overrides`, re-pinned by `reapply_entry_link_overrides`) rewrite feed-redirector links — FeedBurner's feedproxy.google.com / feeds.feedburner.com and CNAMEd burner domains (the `/~r/` path signature), FeedsPortal — to the URL the redirect resolves to, so the title's href outlives the redirector service (feedproxy is already dead). Detection lives in `services/link_canonical.py`. Three write paths: (1) the **starred-archive capture** already fetches the source page on every star, so its `on_canonical_link` hook canonicalizes at zero extra requests (and the archive row + relative-URL resolution follow the final URL); (2) **Save Article** pre-resolves redirector URLs before storing; (3) the **Inoreader importer** picks whichever of an item's `canonical`/`alternate` hrefs isn't a redirector. For stars whose redirector died before any of this existed, `scripts/backfill_canonical_links.py` recovers the real URL from the starred archive's captured page HTML (`rel=canonical` / `og:url`) — dry-run by default, `--live-resolve` for still-alive redirectors. Ordinary redirects (http→https, trailing slash) are never rewritten: only known-redirector sources qualify.
+
+**Edit URL…** (`POST /entries/set-link`) is the manual write path into that same `entry_link_overrides` table, and exists because every automatic path can fail at once. Measured on the live library (2026-07-22): of 37 starred redirector links, **zero** were recoverable — no captured archive HTML to mine, feedproxy.google.com answers 404 with no redirect chain, and Archive.org holds no snapshot of the redirector URLs. 22 of the 37 are opaque ids (`~3/vGL5XCHkyww/`) with not even a slug to reconstruct from. When the machine can't resolve it, the user can: find the article's new home by hand, pin it here, then **Re-fetch content** to pull the body from that address.
+
+**Only `link` changes — never the entry id.** For a Lectio capture the id *is* the original URL, and it keys the `saved_entries` star row, manual tags, and archive rows; re-keying would scatter all three. Changing the link alone suffices because both the "open original" href and `refresh_filed_article` read `link` first, falling back to the id. The route accepts http(s) only — `safe_link_url` also passes `mailto:`/`tel:`, which are legitimate hrefs but not source URLs a re-fetch could follow.
+
+**Edit Website…** (`POST /feeds/set-website`) is the *feed*-level counterpart, for an author who moved domains without updating their feed's `<guid>`/`<link>`. Unlike Edit URL, the id here *must* change: the feed keeps re-serving the old-domain guid, so a link-only override is undone every refresh. Editing the Website seeds a `feed_url_rewrites` rule (old channel-link host → new Website host) — which rewrites the host at *ingest*, before reader derives ids — and migrates the existing posts inline via `migrate_feed_host_rewrite`/`migrate_entry_to_new_host` (recreate under the rewritten id, carry star+archived_at, manual tags, read state and the offline archive, delete the old). The batch `scripts/apply_feed_url_rewrites.py` now imports that same per-entry logic from `main`, so the one-off and the UI share one implementation. A subtlety this surfaced: the list/pane link **rebase** (`_rebase_proxy_entry_link`, built to move feedburner-proxied entry links onto the publisher host named in the feed's channel `<link>`) would take a feed whose channel link still names the *dead* host and rewrite already-correct entry links back onto it. The caller now folds the channel link through the declared migrations (`get_dedupe_host_aliases` → `_rewrite_url_host`) before rebasing, so a declared migration wins; the same fold corrects the Feed Properties Website field and the favicon lookup.
 
 ## Entry sort window (Pub Old / Pub New)
 

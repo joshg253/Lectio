@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from urllib.parse import urlsplit, urlunsplit
 
 # Use the EXACT feedparser module reader uses (it may be the vendored copy,
 # reader._vendor.feedparser). reader's _process_feed decides which bozo
@@ -93,6 +94,59 @@ def _collect_entry_tags(url, result, entries) -> None:
         LOGGER.warning("entry tag capture failed for %s", url, exc_info=True)
 
 
+# Injected provider for per-feed host-rewrite rules: fn(feed_url) -> [(from,to)].
+# Lets the parser rewrite an old author domain to the current one at ingest, so
+# entries arrive with the current-domain id/link instead of a dead one. The
+# rewrite runs on the RAW feedparser result before _process_feed, so reader's id
+# derivation, tag collection, and the feed window all see the rewritten values
+# consistently (rewriting after _process_feed would desync ids from the raw
+# entries that tag collection matches against).
+_url_rewrite_provider = None
+
+
+def set_url_rewrite_provider(fn) -> None:
+    global _url_rewrite_provider
+    _url_rewrite_provider = fn
+
+
+def _swap_host(url: str, host_map: dict[str, str]) -> str:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    bare = (parts.netloc or "").split("@")[-1].split(":")[0].lower()
+    to = host_map.get(bare)
+    if not to:
+        return url
+    return urlunsplit((parts.scheme, to, parts.path, parts.query, parts.fragment))
+
+
+def _rewrite_raw_urls(url, result) -> None:
+    """Rewrite old-domain hosts in the raw feedparser entries, in place."""
+    if _url_rewrite_provider is None:
+        return
+    try:
+        rules = _url_rewrite_provider(url)
+    except Exception:  # noqa: BLE001
+        return
+    if not rules:
+        return
+    host_map = {str(f).lower(): str(t) for f, t in rules}
+    for entry in getattr(result, "entries", None) or []:
+        for key in ("id", "guid", "link"):
+            val = entry.get(key)
+            if isinstance(val, str) and val:
+                new = _swap_host(val, host_map)
+                if new != val:
+                    entry[key] = new
+        for link in entry.get("links", []) or []:
+            href = link.get("href")
+            if isinstance(href, str) and href:
+                new = _swap_host(href, host_map)
+                if new != href:
+                    link["href"] = new
+
+
 def _sanitize_entry(entry):
     """Return ``entry`` with its content/summary run through html_sanitize."""
     changed = {}
@@ -121,6 +175,9 @@ class SanitizingFeedparserParser(FeedparserParser):
             sanitize_html=False,  # Lectio sanitizes instead (keeps safe embeds)
             response_headers=headers or {},
         )
+        # Rewrite old author domains -> current, on the raw result, so reader's
+        # id derivation and everything downstream see the current-domain values.
+        _rewrite_raw_urls(url, result)
         feed, entries = _process_feed(url, result)
         entries = [_sanitize_entry(e) for e in entries]
         _collect_entry_tags(url, result, entries)

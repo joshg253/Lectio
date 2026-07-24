@@ -2709,6 +2709,30 @@ button:hover, .button-link:hover {
   align-items: center;
 }
 
+.tag-autocomplete {
+  position: absolute;
+  z-index: 10060;
+  max-height: 12rem;
+  overflow-y: auto;
+  background: var(--field-bg, var(--bg, #fff));
+  border: 1px solid var(--field-border, var(--line));
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  font-size: 0.85rem;
+  padding: 0.15rem;
+}
+.tag-autocomplete-item {
+  padding: 0.22rem 0.55rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.tag-autocomplete-item.is-active,
+.tag-autocomplete-item:hover {
+  background: var(--accent-soft, rgba(127, 127, 127, 0.18));
+}
+
 .entry-tags-input {
   width: 12ch;
   min-width: 8ch;
@@ -3628,9 +3652,12 @@ body.resizing {
 .context-menu {
   position: fixed;
   z-index: 50;
-  width: 210px;
+  /* Grow to fit the widest item (long labels like "Remove tag X from all
+     shown" overflowed the old fixed 210px), capped so it stays a menu; items
+     longer than the cap wrap rather than run off the side. */
+  width: max-content;
   min-width: 210px;
-  max-width: 210px;
+  max-width: 300px;
   background: var(--elevated-bg);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3651,7 +3678,9 @@ body.resizing {
   color: var(--ink);
   padding: 0.45rem 0.55rem;
   border-radius: 6px;
-  white-space: nowrap;
+  /* Wrap long labels within the menu instead of overflowing off the side. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .context-menu-item:hover {
@@ -3667,9 +3696,9 @@ body.resizing {
 }
 
 #post-context-menu {
-  width: 170px;
-  min-width: 170px;
-  max-width: 170px;
+  width: max-content;
+  min-width: 190px;
+  max-width: 300px;
 }
 
 .context-submenu-wrap {
@@ -5075,6 +5104,14 @@ body[data-keyboard-open="1"] .action-modal-panel {
   white-space: nowrap;
 }
 .saved-autofile-notfeed:hover { color: var(--fg, inherit); }
+.saved-autofile-review {
+  color: var(--muted);
+  text-decoration: none;
+  vertical-align: middle;
+  margin: 0 0.15rem 0 0.3rem;
+}
+.saved-autofile-review:hover { color: var(--fg, inherit); }
+.saved-autofile-review .material-symbols-rounded { font-size: 1rem; line-height: 1; }
 .saved-autofile-nonfeed { margin-top: 0.6rem; color: var(--muted); }
 .saved-autofile-nonfeed summary { cursor: pointer; font-size: 0.85rem; }
 .saved-autofile-nfrow {
@@ -5133,6 +5170,9 @@ body[data-keyboard-open="1"] .action-modal-panel {
 }
 .saved-dedup-badge--dead { color: var(--danger, #c0392b); border-color: currentColor; }
 .saved-dedup-badge--alive { color: var(--accent, #2c7); border-color: currentColor; }
+/* Soft 404: served 200 but redirected to a section index. Amber, not red —
+   it's a URL-shape heuristic and never arms a delete, unlike a real 404. */
+.saved-dedup-badge--soft-dead { color: var(--warning, #b8860b); border-color: currentColor; }
 .saved-dedup-same-dest { margin-left: 0.4rem; }
 .saved-dedup-compare {
   display: grid;
@@ -6014,6 +6054,15 @@ a.hl-hist-entry-title:hover { text-decoration: underline; color: var(--link, #20
 .hl-hist-entry-more { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--muted, #888); font-style: italic; }
 /* Dedup "kept" rows: the surviving copy each duplicate was matched against */
 .hl-hist-entry-row--kept .hl-hist-entry-title { color: var(--muted, #888); }
+/* A kept row anchors a group; its matched duplicates are nested beneath it so
+   marked & kept read together for verification. */
+.hl-hist-entry-row--kept { margin-top: 0.5rem; }
+.hl-hist-entry-row--kept:first-child { margin-top: 0; }
+.hl-hist-entry-row--in-group {
+  margin-left: 0.9rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--line, #ddd);
+}
 .hl-hist-entry-kept-chip {
   align-self: flex-start;
   font-size: 0.65rem;

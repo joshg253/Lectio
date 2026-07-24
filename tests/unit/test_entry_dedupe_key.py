@@ -45,6 +45,30 @@ def test_distinct_articles_keep_distinct_keys(a, b):
     assert norm(a) != norm(b)
 
 
+def test_host_aliases_fold_a_declared_domain_migration():
+    """A feed_url_rewrites rule declares an author moved hosts. Passing that map
+    pairs an article saved under the dead host with the same path on the new one
+    (Tushar Sadhwani: sadh.life/tushar.lol -> tush.ar), which the strictly
+    host-scoped key otherwise splits across two saved copies."""
+    aliases = {"sadh.life": "tush.ar", "tushar.lol": "tush.ar"}
+    old = norm("https://sadh.life/post/dunders/", aliases)
+    new = norm("https://tush.ar/post/dunders/", aliases)
+    assert old == new == "tush.ar/post/dunders"
+    # The slug tier folds through the same map.
+    assert (main._saved_dup_host_slug("https://tushar.lol/post/packaged/", aliases)
+            == main._saved_dup_host_slug("https://tush.ar/post/packaged/", aliases))
+
+
+def test_host_aliases_do_not_merge_unrelated_hosts():
+    """Only hosts named in the map fold; everything else stays host-scoped, so
+    two publishers on one topic still don't collide."""
+    aliases = {"sadh.life": "tush.ar"}
+    assert (norm("https://guitarworld.com/x", aliases)
+            != norm("https://guitarmasterclass.net/x", aliases))
+    # No map at all == the old strict behavior.
+    assert norm("https://sadh.life/post/dunders/") == "sadh.life/post/dunders"
+
+
 def test_key_is_not_a_url():
     """Callers compare keys; none fetch or render them. Guard the shape so a
     future caller can't mistake one for a link."""
@@ -86,6 +110,31 @@ def test_slug_key_still_matches_one_article_moved_on_the_same_site():
 ])
 def test_generic_slugs_still_produce_no_key(link):
     assert main._saved_dup_host_slug(link) is None
+
+
+def test_reddit_posts_key_on_the_thing_id_not_the_truncated_slug():
+    """Reddit truncates its permalink slug to a fixed length, so different posts
+    collide on the last path segment (both Harry Potter soundtracks became
+    …/amazon_..._harry_potter_and_the/). Key on the unique thing id instead."""
+    sorcerers = "https://old.reddit.com/r/VinylDeals/comments/1ukcin6/amazon_john_williams_harry_potter_and_the/"
+    azkaban = "https://www.reddit.com/r/VinylDeals/comments/1uezt72/amazon_alexandre_desplat_harry_potter_and_the/"
+    ks = main._safe_dedup_entry_slug(sorcerers)
+    ka = main._safe_dedup_entry_slug(azkaban)
+    assert ks == "reddit:1ukcin6"
+    assert ka == "reddit:1uezt72"
+    assert ks != ka  # the false match is gone
+
+
+def test_reddit_same_post_across_feeds_still_matches():
+    """The same thread linked from two feeds (old vs www, different trailing
+    slug) must still dedupe — that's what the slug key is for."""
+    a = "https://www.reddit.com/r/VinylDeals/comments/1uezt72/some_slug/"
+    b = "https://old.reddit.com/r/VinylDeals/comments/1uezt72/a_totally_different_slug/"
+    assert main._safe_dedup_entry_slug(a) == main._safe_dedup_entry_slug(b) == "reddit:1uezt72"
+
+
+def test_reddit_short_link_shares_the_key():
+    assert main._safe_dedup_entry_slug("https://redd.it/1uezt72") == "reddit:1uezt72"
 
 
 def test_build_entry_dedupe_key_folds_through_to_the_render_time_key():

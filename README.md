@@ -66,6 +66,8 @@ The short version:
   **starring** is the lightweight "needs dealing with" marker. A post is kept
   (never auto-pruned, archived offline) whenever it's starred **or** tagged; the
   unified **Saved** view browses everything kept, filterable per feed and per tag.
+  Typing a tag **autocompletes from your existing tags**, so they stay consistent
+  instead of sprouting near-duplicates.
 - **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
   sheets), or a browser extension that ships the rendered page past paywalls;
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
@@ -75,11 +77,16 @@ The short version:
   **Check URLs** arms a copy for deletion, and only when that copy's link is
   provably dead. Titles are editable inline in the dialog (✎), for saved copies
   whose title has drifted from the live post; **Re-fetch content** re-extracts a saved
-  article in place to repair a bad initial capture; **File saved articles** matches
+  article in place to repair a bad initial capture — available for any article
+  Lectio captured, including ones already filed onto a real feed, and worth
+  trying when a capture came out wrong, since a page that extracted badly once
+  often extracts correctly later; **File saved articles** matches
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later
   library built from feeds; an **Instapaper CSV import**
-  brings your whole library over with tags and archive state.
+  brings your whole library over with tags and archive state — and tells you how
+  much of it belongs to feeds you already follow, so a fresh import doesn't
+  quietly become an unfiled backlog.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).
@@ -91,7 +98,15 @@ The short version:
   duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —
   unsubscribing a feed that has starred/tagged posts defaults to **keeping**
   them: the feed leaves the tree but its curated items stay browsable per feed
-  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title.
+  in Saved. Per-post fixes: delete (tombstoned), edit date, edit title, and
+  **edit URL** — repoint a post at a moved or dead source link (a retired
+  feedproxy/FeedBurner redirector, or a site reorganization), then **Re-fetch
+  content** to pull the article from its new home. The star, tags and read
+  state are kept: only the link changes. Per-feed, **edit Website** in Feed
+  Properties when an author moved domains without updating their feed's
+  `<guid>`/`<link>`: it rewrites every post link onto the new domain (carrying
+  stars/tags/read state), records the rule so re-ingested items stay corrected,
+  and fixes the site link, favicon and duplicate-scan pairing too.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can

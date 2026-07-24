@@ -334,3 +334,110 @@ class TestPinboardRewrite:
         # Pasting the feed URL itself must pass through unchanged.
         url = "https://feeds.pinboard.in/rss/popular/"
         assert rewrite_known_site_url(url) == url
+
+
+class TestArtstationFeedRewrite:
+    """ArtStation walls the subdomain feed and the profile page (403 even to a
+    browser), but www.artstation.com/<user>.rss serves the feed. Map both
+    profile forms onto it."""
+
+    EXPECTED = "https://www.artstation.com/sidre1.rss"
+
+    def test_profile_www(self):
+        assert rewrite_known_site_url("https://www.artstation.com/sidre1") == self.EXPECTED
+
+    def test_profile_bare_host(self):
+        assert rewrite_known_site_url("https://artstation.com/sidre1") == self.EXPECTED
+
+    def test_subdomain(self):
+        assert rewrite_known_site_url("https://sidre1.artstation.com/") == self.EXPECTED
+
+    def test_subdomain_rss_path(self):
+        # The blocked subdomain /rss form still resolves to the working www feed.
+        assert rewrite_known_site_url("https://sidre1.artstation.com/rss") == self.EXPECTED
+
+    def test_already_rss_passes_through(self):
+        url = "https://www.artstation.com/sidre1.rss"
+        assert rewrite_known_site_url(url) == url
+
+    def test_reserved_site_pages_unchanged(self):
+        for path in ("search", "jobs", "prints", "marketplace", "learning", "2d"):
+            url = f"https://www.artstation.com/{path}"
+            assert rewrite_known_site_url(url) == url
+
+    def test_deep_paths_unchanged(self):
+        # A specific artwork, not a profile — leave it for generic discovery.
+        url = "https://www.artstation.com/artwork/abc123"
+        assert rewrite_known_site_url(url) == url
+
+    def test_www_subdomain_not_treated_as_user(self):
+        assert rewrite_known_site_url("https://www.artstation.com/") == \
+            "https://www.artstation.com/"
+
+
+class TestBehanceFeedRewrite:
+    """Behance per-user feeds live at www.behance.net/<user>.rss; the profile
+    page is HTML. Map the profile URL onto the .rss form."""
+
+    EXPECTED = "https://www.behance.net/polibear.rss"
+
+    def test_profile_www(self):
+        assert rewrite_known_site_url("https://www.behance.net/polibear") == self.EXPECTED
+
+    def test_profile_bare_host(self):
+        assert rewrite_known_site_url("https://behance.net/polibear") == self.EXPECTED
+
+    def test_already_rss_passes_through(self):
+        url = "https://www.behance.net/polibear.rss"
+        assert rewrite_known_site_url(url) == url
+
+    def test_feeds_user_form_untouched(self):
+        url = "https://www.behance.net/feeds/user?username=polibear"
+        assert rewrite_known_site_url(url) == url
+
+    def test_reserved_pages_unchanged(self):
+        for path in ("search", "galleries", "joblist", "hire", "for_you"):
+            url = f"https://www.behance.net/{path}"
+            assert rewrite_known_site_url(url) == url
+
+    def test_deep_path_unchanged(self):
+        url = "https://www.behance.net/gallery/12345/Project-Name"
+        assert rewrite_known_site_url(url) == url
+
+
+class TestFreeCodeCampFeedRewrite:
+    """freeCodeCamp News (Ghost) has a feed per collection at <path>/rss/, but a
+    tag/author page advertises the site-wide feed — so a tag page must be mapped
+    to its own feed, not the firehose."""
+
+    def test_tag_page_maps_to_tag_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/advanced-mathematics/") == \
+            "https://www.freecodecamp.org/news/tag/advanced-mathematics/rss/"
+
+    def test_tag_page_without_trailing_slash(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/tag/python") == \
+            "https://www.freecodecamp.org/news/tag/python/rss/"
+
+    def test_author_page_maps_to_author_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/author/quincy/") == \
+            "https://www.freecodecamp.org/news/author/quincy/rss/"
+
+    def test_news_root_maps_to_site_feed(self):
+        assert rewrite_known_site_url("https://www.freecodecamp.org/news/") == \
+            "https://www.freecodecamp.org/news/rss/"
+
+    def test_already_a_feed_passes_through(self):
+        for url in (
+            "https://www.freecodecamp.org/news/rss/",
+            "https://www.freecodecamp.org/news/tag/python/rss/",
+        ):
+            assert rewrite_known_site_url(url) == url
+
+    def test_article_url_falls_through(self):
+        # An article has no feed — leave it for generic discovery, don't 404 on /rss/.
+        url = "https://www.freecodecamp.org/news/how-to-learn-python/"
+        assert rewrite_known_site_url(url) == url
+
+    def test_non_news_path_unchanged(self):
+        url = "https://www.freecodecamp.org/learn/"
+        assert rewrite_known_site_url(url) == url

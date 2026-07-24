@@ -633,6 +633,7 @@
           data-post-entry-id="{{ post.id }}"
           data-post-read="{{ 1 if post.read else 0 }}"
           data-post-saved="{{ 1 if post.saved else 0 }}"
+          data-post-captured="{{ 1 if post.captured else 0 }}"
           data-post-link="{{ post.link or '' }}"
           data-post-title="{{ post.title or '' }}"
           data-post-folder-id="{{ feed_to_folder.get(post.feed_url, selected_folder_id) }}"
@@ -1337,6 +1338,8 @@
     <button type="button" id="ctx-disable-feed" class="context-menu-item" hidden>Disable Feed</button>
     <button type="button" id="ctx-unsubscribe-feed" class="context-menu-item danger" hidden>Unsubscribe</button>
     <button type="button" id="ctx-delete-folder" class="context-menu-item danger" hidden>Delete Folder</button>
+    <button type="button" id="ctx-folder-remove-stars" class="context-menu-item danger" hidden>Remove all stars in folder</button>
+    <button type="button" id="ctx-folder-remove-tags" class="context-menu-item danger" hidden>Remove all tags in folder</button>
   </div>
 
   <div id="root-context-menu" class="context-menu" hidden>
@@ -1353,9 +1356,11 @@
     <button type="button" id="ctx-post-copy-url" class="context-menu-item">Copy URL</button>
     <button type="button" id="ctx-post-move-to-feed" class="context-menu-item">Move to feed…</button>
     <button type="button" id="ctx-post-move-visible" class="context-menu-item">Move visible to feed…</button>
+    <button type="button" id="ctx-post-remove-tag-shown" class="context-menu-item danger" hidden>Remove this tag from all shown</button>
     <button type="button" id="ctx-post-automation" class="context-menu-item">Automation…</button>
     <button type="button" id="ctx-post-edit-date" class="context-menu-item">Edit date…</button>
     <button type="button" id="ctx-post-edit-title" class="context-menu-item">Edit title…</button>
+    <button type="button" id="ctx-post-edit-link" class="context-menu-item">Edit URL…</button>
     <button type="button" id="ctx-post-refetch" class="context-menu-item" hidden>Re-fetch content</button>
     <button type="button" id="ctx-post-delete" class="context-menu-item danger">Delete post…</button>
     {% if debug_mode %}<button type="button" id="ctx-post-clear-img-cache" class="context-menu-item debug-item">Clear image cache</button>{% endif %}
@@ -1642,6 +1647,7 @@
         <button type="button" class="hl-tab-btn" data-settings-tab="feeds" role="tab" aria-selected="false">Feeds</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="automation" role="tab" aria-selected="false">Automation</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="importexport" role="tab" aria-selected="false">Import/Export</button>
+        <button type="button" class="hl-tab-btn" data-settings-tab="utilities" role="tab" aria-selected="false">Utilities</button>
         <button type="button" class="hl-tab-btn" data-settings-tab="stats" role="tab" aria-selected="false">Stats</button>
       </div>
 
@@ -1932,8 +1938,6 @@
           <button type="button" class="feeds-tab-btn" data-feeds-view="failing" role="tab" aria-selected="false">Failing{% if failing_feeds %} <span class="feeds-tab-count">{{ failing_feeds | length }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="deactivated" role="tab" aria-selected="false">Deactivated{% if inactive_feed_count > 0 %} <span class="feeds-tab-count">{{ inactive_feed_count }}</span>{% endif %}</button>
           <button type="button" class="feeds-tab-btn" data-feeds-view="stale" role="tab" aria-selected="false">Stale</button>
-          <button type="button" class="feeds-tab-btn" data-feeds-view="dupes" role="tab" aria-selected="false">Dupes</button>
-          <button type="button" class="feeds-tab-btn" data-feeds-view="duplicates" role="tab" aria-selected="false">Utilities</button>
         </div>
 
         <div class="feeds-tab-panel" data-feeds-panel="folders">
@@ -2082,92 +2086,6 @@
           </div>
         </div>
 
-        {# Duplicate scanning lives on its own tab: both scans are long, produce
-           long reviewable lists, and are worked in repeated passes, so they sit
-           badly among the one-shot utilities. #}
-        <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="dupes" hidden>
-          <div class="feeds-dedup-controls">
-            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
-            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
-          </div>
-          <div id="dedup-inline-results" hidden>
-            <p class="action-modal-label dedup-modal-intro"></p>
-            <div class="dedup-modal-list"></div>
-            <div class="dedup-cross-section" hidden>
-              <p class="action-modal-label dedup-cross-intro"></p>
-              <div class="dedup-cross-list"></div>
-            </div>
-            <div class="dedup-upgrade-section" hidden>
-              <p class="action-modal-label dedup-upgrade-intro"></p>
-              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
-              <div class="dedup-upgrade-list"></div>
-            </div>
-            <div class="dedup-inline-actions">
-              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
-                <input type="checkbox" id="dedup-rescue-unread" checked>
-                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
-              </label>
-              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
-            </div>
-          </div>
-          <div id="saved-dedup-results" hidden>
-            <p class="action-modal-label saved-dedup-intro"></p>
-            <div class="saved-dedup-confirmed-list"></div>
-            <div class="saved-dedup-possible-section" hidden>
-              <p class="action-modal-label saved-dedup-possible-intro"></p>
-              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
-              <div class="saved-dedup-possible-list"></div>
-            </div>
-            <div class="dedup-inline-actions">
-              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
-              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="feeds-tab-panel feeds-dedup-panel" data-feeds-panel="duplicates" hidden>
-          <div class="feeds-dedup-controls">
-            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
-            <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
-            <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
-            <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
-            <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
-          </div>
-          <div id="purge-old-panel" hidden>
-            <p class="action-modal-label">Delete posts older than a date from the selected folders. Starred and manually tagged posts are never deleted.</p>
-            <div class="purge-old-controls">
-              <select id="purge-folders" multiple size="6" class="feed-prop-strategy-select" aria-label="Folders to purge">
-                {% for opt in folder_options if opt.depth > 0 %}
-                <option value="{{ opt.id }}">{{ opt.name }}</option>
-                {% endfor %}
-              </select>
-              <div class="purge-old-opts">
-                <label>Older than <input type="date" id="purge-before" class="feed-prop-title-input" style="width:auto"></label>
-                <label class="dedup-rescue-label"><input type="checkbox" id="purge-include-unread"> Also delete unread posts</label>
-                <div class="dedup-inline-actions">
-                  <button type="button" id="purge-preview-btn" class="settings-secondary-btn">Preview</button>
-                  <button type="button" id="purge-run-btn" class="danger" disabled>Purge</button>
-                </div>
-                <p id="purge-result" class="action-modal-hint"></p>
-              </div>
-            </div>
-          </div>
-          <div id="multi-folder-results" hidden>
-            <p class="action-modal-label multi-folder-intro"></p>
-            <div class="multi-folder-list"></div>
-            <div class="dedup-inline-actions">
-              <button type="button" id="multi-folder-ok" class="danger" hidden>Keep selected folders</button>
-            </div>
-          </div>
-          <div id="saved-autofile-results" hidden>
-            <p class="action-modal-label saved-autofile-intro"></p>
-            <p class="action-modal-hint">Nothing is preselected — check the hosts you want to file. Largest first, and each row says how strong the match is. Filing a batch and re-scanning is the intended way to work through this.</p>
-            <div class="saved-autofile-list"></div>
-            <div class="dedup-inline-actions">
-              <button type="button" id="saved-autofile-ok" class="settings-secondary-btn" hidden>File selected</button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- Import/Export tab -->
@@ -2328,6 +2246,88 @@
       </div>
 
       <!-- Stats tab -->
+      <!-- Utilities tab -->
+      <div id="settings-tab-utilities" class="settings-tab-panel" hidden>
+        <div class="feeds-dedup-panel">
+          <div class="feeds-dedup-controls">
+            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
+            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
+            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
+            <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
+            <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
+            <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
+            <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
+          </div>
+          <div id="dedup-inline-results" hidden>
+            <p class="action-modal-label dedup-modal-intro"></p>
+            <div class="dedup-modal-list"></div>
+            <div class="dedup-cross-section" hidden>
+              <p class="action-modal-label dedup-cross-intro"></p>
+              <div class="dedup-cross-list"></div>
+            </div>
+            <div class="dedup-upgrade-section" hidden>
+              <p class="action-modal-label dedup-upgrade-intro"></p>
+              <p class="action-modal-hint dedup-upgrade-hint">Read history will reset for upgraded feeds — existing entries will reappear as unread after the next refresh.</p>
+              <div class="dedup-upgrade-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <label id="dedup-rescue-label" class="dedup-rescue-label" hidden>
+                <input type="checkbox" id="dedup-rescue-unread" checked>
+                Rescue unread posts — mark entries in the surviving feed as unread if the removed feed had them unread
+              </label>
+              <button type="button" id="dedup-modal-ok" class="danger" hidden>Remove duplicates</button>
+            </div>
+          </div>
+          <div id="saved-dedup-results" hidden>
+            <p class="action-modal-label saved-dedup-intro"></p>
+            <div class="saved-dedup-confirmed-list"></div>
+            <div class="saved-dedup-possible-section" hidden>
+              <p class="action-modal-label saved-dedup-possible-intro"></p>
+              <p class="action-modal-hint">Nothing below is preselected — check the copies you want removed.</p>
+              <div class="saved-dedup-possible-list"></div>
+            </div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — dead links are flagged and selected for deletion; live and inconclusive copies are left alone">Check all URLs</button>
+              <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete selected copies</button>
+            </div>
+          </div>
+          <div id="purge-old-panel" hidden>
+            <p class="action-modal-label">Delete posts older than a date from the selected folders. Starred and manually tagged posts are never deleted.</p>
+            <div class="purge-old-controls">
+              <select id="purge-folders" multiple size="6" class="feed-prop-strategy-select" aria-label="Folders to purge">
+                {% for opt in folder_options if opt.depth > 0 %}
+                <option value="{{ opt.id }}">{{ opt.name }}</option>
+                {% endfor %}
+              </select>
+              <div class="purge-old-opts">
+                <label>Older than <input type="date" id="purge-before" class="feed-prop-title-input" style="width:auto"></label>
+                <label class="dedup-rescue-label"><input type="checkbox" id="purge-include-unread"> Also delete unread posts</label>
+                <div class="dedup-inline-actions">
+                  <button type="button" id="purge-preview-btn" class="settings-secondary-btn">Preview</button>
+                  <button type="button" id="purge-run-btn" class="danger" disabled>Purge</button>
+                </div>
+                <p id="purge-result" class="action-modal-hint"></p>
+              </div>
+            </div>
+          </div>
+          <div id="multi-folder-results" hidden>
+            <p class="action-modal-label multi-folder-intro"></p>
+            <div class="multi-folder-list"></div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="multi-folder-ok" class="danger" hidden>Keep selected folders</button>
+            </div>
+          </div>
+          <div id="saved-autofile-results" hidden>
+            <p class="action-modal-label saved-autofile-intro"></p>
+            <p class="action-modal-hint">Nothing is preselected — check the hosts you want to file. Largest first, and each row says how strong the match is. Filing a batch and re-scanning is the intended way to work through this.</p>
+            <div class="saved-autofile-list"></div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="saved-autofile-ok" class="settings-secondary-btn" hidden>File selected</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="settings-tab-stats" class="settings-tab-panel" hidden>
         <dl class="feed-properties-grid">
           <dt>Feeds</dt><dd id="stat-feed-count">—</dd>
@@ -2390,6 +2390,13 @@
           <dd id="feed-prop-website-row">
             <span id="feed-prop-website">-</span>
             <a id="feed-prop-website-open" href="#" target="_blank" rel="noopener noreferrer" class="feed-prop-inline-btn feed-prop-open-btn" hidden title="Open in new tab">&#x2197;</a>
+            <button type="button" id="feed-prop-change-website-btn" class="feed-prop-inline-btn" title="Repoint this feed to a new site domain and rewrite its post links">Edit</button>
+            <span id="feed-prop-change-website-wrap" hidden>
+              <input type="url" id="feed-prop-change-website-input" class="feed-prop-url-input" placeholder="New site URL (e.g. https://newdomain.com/)" autocomplete="off" />
+              <button type="button" id="feed-prop-change-website-save" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Save</button>
+              <button type="button" id="feed-prop-change-website-cancel" class="feed-prop-inline-btn">Cancel</button>
+              <span id="feed-prop-change-website-status" class="feed-prop-inline-status"></span>
+            </span>
           </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">
@@ -2676,6 +2683,8 @@
     </div>
   </div>
 
+  <!-- Existing manual-tag names, for tag-input autocomplete (see attachTagAutocomplete). -->
+  <script id="lectio-tag-names" type="application/json">{{ all_tag_names | tojson }}</script>
   <script src="/static/js/app.js?v={{ static_asset_version }}"></script>
 
   <!-- Persistent global audio player. Lives outside the entry-pane swap target
