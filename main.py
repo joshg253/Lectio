@@ -24902,6 +24902,11 @@ def rename_manual_tag(
     return RedirectResponse(url="/", status_code=303)
 
 
+# Effectively unbounded: a range action must see the whole current view to place
+# the anchor. A folder's own post count is the practical bound.
+_RANGE_READ_LIMIT = 1_000_000
+
+
 @app.post("/entries/mark-range-read")
 def mark_entries_range_read(
     request: Request,
@@ -24927,8 +24932,13 @@ def mark_entries_range_read(
         feed_urls = get_folder_feed_urls(conn, folder_id)
 
     filtered_feed_urls = filter_feed_urls(feed_urls, list_feed_url)
+    # "Above/below" needs the anchor's position in the *whole* current view, so
+    # the list must not be clipped to the default page (250) — a post past that
+    # cutoff read as "not in the current view". _RANGE_READ_LIMIT is effectively
+    # unbounded; the folder's own size is the real bound.
     posts = list_entries_for_feeds(
         filtered_feed_urls,
+        limit=_RANGE_READ_LIMIT,
         sort_by=normalized_sort_by,
         sort_dir=normalized_sort_dir,
         read_filter=normalized_read_filter,
@@ -24947,6 +24957,7 @@ def mark_entries_range_read(
     if anchor_index is None and normalized_read_filter != "all":
         posts = list_entries_for_feeds(
             filtered_feed_urls,
+            limit=_RANGE_READ_LIMIT,
             sort_by=normalized_sort_by,
             sort_dir=normalized_sort_dir,
             read_filter="all",

@@ -7184,10 +7184,22 @@
       hideAllContextMenus();
 
       try {
-        const formData = new FormData(postRangeReadForm);
+        // Scope the range to the LIVE view, read from the URL — the form's hidden
+        // folder_id/read_filter/sort are rendered once at page load and go stale
+        // after client-side navigation, which made "above/below" run against a
+        // different (often read_filter=all) list and miss the anchor entirely.
+        const cur = new URL(window.location.href).searchParams;
         const body = new URLSearchParams();
-        for (const [key, value] of formData.entries()) {
-          body.append(key, String(value));
+        body.set('feed_url', contextPostFeedUrl);
+        body.set('entry_id', contextPostEntryId);
+        body.set('direction', direction);
+        body.set('folder_id',
+          cur.get('folder_id')
+          || postRangeReadForm.querySelector('[name="folder_id"]')?.value
+          || '');
+        for (const k of ['list_feed_url', 'tag', 'sort_by', 'sort_dir', 'read_filter', 'star_only', 'resume_read_filter']) {
+          const v = cur.get(k);
+          if (v !== null && v !== '') body.set(k, v);
         }
 
         const response = await fetch(postRangeReadForm.action, {
