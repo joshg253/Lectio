@@ -72,9 +72,11 @@ def _replace_entry_content(
     title: str,
     article_html: str,
     feed_url: str = SAVED_FEED_URL,
+    *,
+    bump_date: bool = True,
+    pin_content: bool = False,
 ) -> None:
-    """Replace a captured article's stored content with a fresh extraction and
-    bump it to the top of the backlog (published/saved_at = now).
+    """Replace a captured article's stored content with a fresh extraction.
 
     reader has no public setter for entry content (EntryData is ingest-owned),
     so this writes the column directly in reader's own JSON shape. The title
@@ -84,17 +86,28 @@ def _replace_entry_content(
     *feed_url* defaults to the saved feed but must be passed for an article that
     has been filed onto a real feed: auto-filing moves the entry out of
     ``lectio:saved`` while leaving it a Lectio capture, and re-fetching such an
-    article has to update it where it now lives. Writing to the saved feed
-    instead would silently miss (wrong key) or re-create the Uncategorized
-    duplicate that filing removed."""
+    article has to update it where it now lives.
+
+    *bump_date* pushes published/saved_at to now (top of the backlog) — right for
+    a capture the user just re-pulled, but wrong for a *feed* entry being
+    enriched, which should keep its chronological position. *pin_content* writes
+    an ``entry_content_overrides`` row so a later feed refresh can't clobber the
+    re-fetched content with the feed's own thinner copy — set for feed entries,
+    which reader re-ingests (a capture's feed never refreshes)."""
     now = datetime.now(timezone.utc)
     stored_published = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
     content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
     db = reader._storage.get_db()
-    db.execute(
-        "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
-        (content_json, stored_published, feed_url, entry_id),
-    )
+    if bump_date:
+        db.execute(
+            "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
+            (content_json, stored_published, feed_url, entry_id),
+        )
+    else:
+        db.execute(
+            "UPDATE entries SET content = ? WHERE feed = ? AND id = ?",
+            (content_json, feed_url, entry_id),
+        )
     title_pinned = False
     try:
         title_pinned = conn.execute(
@@ -109,6 +122,17 @@ def _replace_entry_content(
             (title, feed_url, entry_id),
         )
     db.commit()
+    if pin_content:
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO entry_content_overrides (feed_url, entry_id, content) "
+                "VALUES (?, ?, ?)", (feed_url, entry_id, content_json),
+            )
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            LOGGER.warning("save-article: content pin failed for %s: %s", entry_id, exc)
+    if not bump_date:
+        return
     # The saved_at bump is cosmetic ordering — never let a transient lock
     # (e.g. the archive worker writing at the same instant) fail the save
     # after the content is already committed.
@@ -153,9 +177,12 @@ def refresh_captured_article(
     such an article instead of updating it in place would resurrect the
     Uncategorized duplicate that filing removed.
 
-    Refuses feed-provided entries: their content is the publisher's and is
-    re-written by the next refresh, so replacing it would be both wrong and
-    silently undone.
+    Also enriches a **starred feed entry**: a feed whose content is text-only or
+    truncated (paizo, guitarplayer) leaves a starred article missing its images.
+    Re-fetching pulls the full source and *pins* it (entry_content_overrides), so
+    the feed re-serving its thinner copy can't clobber it. A feed entry keeps its
+    chronological position (no date bump). Refuses an entry that is neither a
+    capture nor starred — a plain feed entry's content is the publisher's.
     """
     result: dict = {
         "ok": False,
@@ -172,8 +199,13 @@ def refresh_captured_article(
     if entry is None:
         result["error"] = "Entry not found."
         return result
-    if str(getattr(entry, "added_by", "") or "") != "user":
-        result["error"] = "Re-fetch is only available for articles Lectio captured."
+    is_capture = str(getattr(entry, "added_by", "") or "") == "user"
+    is_starred = conn.execute(
+        "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ? LIMIT 1",
+        (feed_url, entry_id),
+    ).fetchone() is not None
+    if not is_capture and not is_starred:
+        result["error"] = "Re-fetch is available for captured or starred articles."
         return result
 
     result["title"] = entry.title or entry_id
@@ -194,7 +226,13 @@ def refresh_captured_article(
         return result
 
     try:
-        _replace_entry_content(reader, conn, entry_id, new_title, article_html, feed_url=feed_url)
+        # A feed entry keeps its date and gets its content pinned against the
+        # next refresh; a capture bumps to the top and needs no pin (its feed
+        # never refreshes).
+        _replace_entry_content(
+            reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
+            bump_date=is_capture, pin_content=not is_capture,
+        )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("refresh-capture: content replace failed for %s: %s", entry_id, exc)
         result["error"] = "Could not store the re-fetched content."

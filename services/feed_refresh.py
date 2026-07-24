@@ -623,6 +623,7 @@ class FeedRefreshService:
         self.reapply_entry_date_overrides(feed_url_list)
         self.reapply_entry_title_overrides(feed_url_list)
         self.reapply_entry_link_overrides(feed_url_list)
+        self.reapply_entry_content_overrides(feed_url_list)
         # reader's FTS index is retired — both search surfaces resolve in SQL,
         # so refresh no longer pays 1.3ms/entry to maintain an index nothing
         # queries. See main._search_entry_keys_in_sql.
@@ -783,6 +784,40 @@ class FeedRefreshService:
             db.commit()
         if applied:
             self._logger.info("[refresh] re-pinned %d canonicalized entry link(s)", applied)
+        return applied
+
+    def reapply_entry_content_overrides(self, feed_urls: Iterable[str]) -> int:
+        """Re-pin re-fetched content (meta ``entry_content_overrides``) onto
+        reader's ``entries.content`` after a refresh — the feed re-serves its own
+        thinner content and would otherwise clobber the fuller copy the user
+        pulled for a starred entry. Returns the number re-pinned."""
+        feed_url_list = list(feed_urls)
+        if not feed_url_list:
+            return 0
+        try:
+            with self._get_meta_connection() as conn:
+                placeholders = ",".join("?" for _ in feed_url_list)
+                rows = conn.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query
+                    f"SELECT feed_url, entry_id, content FROM entry_content_overrides WHERE feed_url IN ({placeholders})",
+                    feed_url_list,
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if not rows:
+            return 0
+        applied = 0
+        with self._get_reader() as reader:
+            db = reader._storage.get_db()
+            for row in rows:
+                cur = db.execute(
+                    "UPDATE entries SET content = ? WHERE feed = ? AND id = ?"
+                    " AND (content IS NULL OR content != ?)",
+                    (row["content"], row["feed_url"], row["entry_id"], row["content"]),
+                )
+                applied += cur.rowcount
+            db.commit()
+        if applied:
+            self._logger.info("[refresh] re-pinned %d re-fetched entry content(s)", applied)
         return applied
 
     def enhance_feeds(self, feed_urls: Iterable[str]) -> None:

@@ -3200,6 +3200,21 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Re-fetched content for a STARRED feed entry (whose feed content lacked
+        # images or was truncated). Pinned here and reapplied after refresh, so
+        # the feed re-serving its own thinner content can't clobber the fuller
+        # copy the user deliberately pulled. Mirrors entry_link/title/date
+        # overrides. Content is reader's JSON content shape.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_content_overrides (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS entry_read_state (

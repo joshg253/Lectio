@@ -2391,6 +2391,9 @@
     // feed-provided. Gates Re-fetch, which follows the entry rather than the
     // feed it sits on — auto-filing moves captures onto real feeds.
     let contextPostCaptured = false;
+    // Whether the entry is starred — starred feed entries are re-fetchable too
+    // (enrich a truncated/imageless feed post; the content is pinned).
+    let contextPostSaved = false;
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -5961,6 +5964,7 @@
           contextPostEntryId = entryPaneTitle.getAttribute('data-post-entry-id');
           contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
           contextPostCaptured = entryPaneTitle.getAttribute('data-post-captured') === '1';
+          contextPostSaved = entryPaneTitle.getAttribute('data-post-saved') === '1';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
           contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
           contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
@@ -5975,7 +5979,7 @@
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
+          setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
               && Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postRemoveTagShownButton, false);
@@ -6319,6 +6323,7 @@
             contextPostEntryId = postItem.getAttribute('data-post-entry-id');
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
             contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
+            contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
             contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
@@ -6333,7 +6338,7 @@
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured)
+            setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
                 && Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postMoveVisibleButton, true);
             // "Remove this tag from all shown": only in the Saved view filtered
@@ -12813,6 +12818,7 @@
       contextPostEntryId = postItem.getAttribute('data-post-entry-id') || null;
       contextPostRead = postItem.getAttribute('data-post-read') === '1';
       contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
+      contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
       contextPostLink = postItem.getAttribute('data-post-link') || '';
       return Boolean(contextPostFeedUrl && contextPostEntryId);
     }

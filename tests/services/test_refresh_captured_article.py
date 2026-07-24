@@ -54,6 +54,16 @@ def meta_conn():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE entry_content_overrides (
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            PRIMARY KEY(feed_url, entry_id)
+        )
+        """
+    )
     try:
         yield conn
     finally:
@@ -170,6 +180,49 @@ def test_refuses_a_feed_provided_entry(reader, meta_conn):
 
     assert result["ok"] is False
     assert "captured" in result["error"]
+
+
+def _add_starred_feed_entry(reader, meta_conn, *, published=None):
+    """A feed-provided (added_by='feed') entry the user has starred."""
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Feed Post",
+        "published": published or datetime(2020, 1, 1, tzinfo=timezone.utc),
+        "content": [{"value": "<p>Thin feed content, no images.</p>"}],
+    })
+    db = reader._storage.get_db()
+    db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
+    db.commit()
+    meta_conn.execute(
+        "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (REAL_FEED, ARTICLE)
+    )
+    meta_conn.commit()
+
+
+def test_starred_feed_entry_is_refetched_and_pinned(reader, meta_conn):
+    """A starred feed entry whose feed content is thin/imageless can be enriched;
+    the fuller content is pinned so a later refresh can't clobber it."""
+    _add_starred_feed_entry(reader, meta_conn)
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    assert result["ok"] is True
+    assert "familiar story" in _stored_content(reader, REAL_FEED, ARTICLE)
+    # Pinned:
+    pin = meta_conn.execute(
+        "SELECT content FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()
+    assert pin is not None and "familiar story" in pin[0]
+
+
+def test_starred_feed_entry_keeps_its_date(reader, meta_conn):
+    """Unlike a capture, an enriched feed entry keeps its chronological position
+    (no bump to the top)."""
+    original = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    _add_starred_feed_entry(reader, meta_conn, published=original)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    pub = reader.get_entry((REAL_FEED, ARTICLE)).published
+    assert pub.year == 2020  # not bumped to now
 
 
 def test_missing_entry_is_reported(reader, meta_conn):
