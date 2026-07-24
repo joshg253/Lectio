@@ -8025,16 +8025,15 @@
             if (entries.length === 0) {
               entryList.textContent = 'No detail stored for this run.';
             } else {
-              entries.forEach(e => {
+              const makeRow = (e, inGroup) => {
                 const row = document.createElement('div');
                 row.className = 'hl-hist-entry-row';
                 if (e.role === 'kept') row.classList.add('hl-hist-entry-row--kept');
+                if (inGroup) row.classList.add('hl-hist-entry-row--in-group');
                 const feedEl = document.createElement('span');
                 feedEl.className = 'hl-hist-entry-feed';
                 feedEl.textContent = e.feed_title || e.feed_url || '';
-                const titleEl = e.link
-                  ? document.createElement('a')
-                  : document.createElement('span');
+                const titleEl = e.link ? document.createElement('a') : document.createElement('span');
                 titleEl.className = 'hl-hist-entry-title';
                 titleEl.textContent = e.title || '(untitled)';
                 if (e.link) { titleEl.href = e.link; titleEl.target = '_blank'; titleEl.rel = 'noopener noreferrer'; }
@@ -8047,8 +8046,32 @@
                   keptChip.title = 'Surviving copy — duplicates were matched against this entry';
                   row.appendChild(keptChip);
                 }
-                entryList.appendChild(row);
-              });
+                return row;
+              };
+              // Pair each duplicate with the kept copy it matched (matched_link),
+              // so a group reads "kept + its duplicates" instead of all-marked-
+              // then-all-kept. Older runs have no matched_link — flat fallback.
+              const kepts = entries.filter(e => e.role === 'kept');
+              const paired = kepts.length && entries.some(e => e.role !== 'kept' && e.matched_link);
+              if (paired) {
+                const marksByAnchor = new Map();
+                entries.filter(e => e.role !== 'kept').forEach(e => {
+                  const k = e.matched_link || '';
+                  if (!marksByAnchor.has(k)) marksByAnchor.set(k, []);
+                  marksByAnchor.get(k).push(e);
+                });
+                kepts.forEach(kept => {
+                  entryList.appendChild(makeRow(kept, false));
+                  (marksByAnchor.get(kept.link) || []).forEach(m => entryList.appendChild(makeRow(m, true)));
+                  marksByAnchor.delete(kept.link);
+                });
+                // Any duplicates whose keeper isn't in the sample — show after.
+                for (const marks of marksByAnchor.values()) {
+                  marks.forEach(m => entryList.appendChild(makeRow(m, false)));
+                }
+              } else {
+                entries.forEach(e => entryList.appendChild(makeRow(e, false)));
+              }
               const markedShown = entries.filter(e => e.role !== 'kept').length;
               if (n > markedShown) {
                 const moreEl = document.createElement('p');

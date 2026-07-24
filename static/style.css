@@ -6022,6 +6022,15 @@ a.hl-hist-entry-title:hover { text-decoration: underline; color: var(--link, #20
 .hl-hist-entry-more { margin: 0.2rem 0 0; font-size: 0.75rem; color: var(--muted, #888); font-style: italic; }
 /* Dedup "kept" rows: the surviving copy each duplicate was matched against */
 .hl-hist-entry-row--kept .hl-hist-entry-title { color: var(--muted, #888); }
+/* A kept row anchors a group; its matched duplicates are nested beneath it so
+   marked & kept read together for verification. */
+.hl-hist-entry-row--kept { margin-top: 0.5rem; }
+.hl-hist-entry-row--kept:first-child { margin-top: 0; }
+.hl-hist-entry-row--in-group {
+  margin-left: 0.9rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--line, #ddd);
+}
 .hl-hist-entry-kept-chip {
   align-self: flex-start;
   font-size: 0.65rem;

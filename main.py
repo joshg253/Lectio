@@ -3741,6 +3741,15 @@ def ensure_meta_schema() -> None:
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
+        try:
+            # The kept copy a marked duplicate matched (its link), so dedup run
+            # history can pair each marked entry with its keeper for verification
+            # instead of listing all marked then all kept. NULL for non-dedup runs
+            # and for kept rows (which anchor their own group by their own link).
+            conn.execute("ALTER TABLE rule_run_log_entries ADD COLUMN matched_link TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS dedup_false_matches (
@@ -5607,12 +5616,14 @@ def _run_now_dedup(
         link_to_rec = {r["link"]: r for r in records if r["link"]}
         to_mark: set[tuple[str, str]] = set()
         kept_keys: set[tuple[str, str]] = set()
+        mark_to_keep: dict[tuple[str, str], str] = {}
         for (keep_link, mark_link), _modes in pair_modes.items():
             if keep_link + "||" + mark_link in false_matches:
                 continue
             mark_rec = link_to_rec.get(mark_link)
             if mark_rec:
                 to_mark.add((mark_rec["feed_url"], mark_rec["entry_id"]))
+                mark_to_keep[(mark_rec["feed_url"], mark_rec["entry_id"])] = keep_link
                 keep_rec = link_to_rec.get(keep_link)
                 if keep_rec:
                     kept_keys.add((keep_rec["feed_url"], keep_rec["entry_id"]))
@@ -5629,14 +5640,18 @@ def _run_now_dedup(
             _unread_counts_generation += 1
         rec_map = {(r["feed_url"], r["entry_id"]): r for r in records}
 
-        def _rec_info(fu: str, eid: str) -> dict:
+        def _rec_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
             return {"feed_url": fu, "entry_id": eid,
                     "title": rec_map.get((fu, eid), {}).get("title", ""),
                     "link": rec_map.get((fu, eid), {}).get("link", ""),
-                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", "")}
+                    "feed_title": rec_map.get((fu, eid), {}).get("feed_title", ""),
+                    "matched_link": matched_link}
 
-        matched_entries = [_rec_info(fu, eid) for fu, eid in to_mark]
-        kept_entries = [_rec_info(fu, eid) for fu, eid in kept_keys - to_mark]
+        matched_entries = [_rec_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
+        kept_entries = [
+            _rec_info(fu, eid, rec_map.get((fu, eid), {}).get("link", ""))
+            for fu, eid in kept_keys - to_mark
+        ]
         return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
     slug_index: dict[str, list[dict]] = {}
@@ -5682,6 +5697,9 @@ def _run_now_dedup(
 
         to_mark: set[tuple[str, str]] = set()
         kept_keys: set[tuple[str, str]] = set()
+        # (marked key) -> the kept copy's link it matched, so run history can pair
+        # each duplicate with its keeper. The keeper is always sorted_entries[0].
+        mark_to_keep: dict[tuple[str, str], str] = {}
 
         if match_method == "slug":
             for slug, entries in slug_index.items():
@@ -5691,6 +5709,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "title":
             for norm_title, entries in title_index.items():
@@ -5704,6 +5723,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "both":
             for (slug, norm_title), entries in combined_index.items():
@@ -5717,6 +5737,7 @@ def _run_now_dedup(
                 kept_keys.add((sorted_entries[0]["feed_url"], sorted_entries[0]["entry_id"]))
                 for e in sorted_entries[1:]:
                     to_mark.add((e["feed_url"], e["entry_id"]))
+                    mark_to_keep[(e["feed_url"], e["entry_id"])] = sorted_entries[0].get("link", "")
 
         if match_method == "fuzzy":
             feed_list = [u for u in feed_urls if u in fuzzy_entries]
@@ -5735,6 +5756,7 @@ def _run_now_dedup(
                             older = ei if newer is ej else ej
                             to_mark.add((newer["feed_url"], newer["entry_id"]))
                             kept_keys.add((older["feed_url"], older["entry_id"]))
+                            mark_to_keep[(newer["feed_url"], newer["entry_id"])] = older.get("link", "")
 
         for feed_url, entry_id in to_mark:
             reader.mark_entry_as_read((feed_url, entry_id))
@@ -5756,14 +5778,20 @@ def _run_now_dedup(
     )
     entry_map = {(r["feed_url"], r["entry_id"]): r for sublist in all_info for r in sublist}
 
-    def _entry_info(fu: str, eid: str) -> dict:
+    def _entry_info(fu: str, eid: str, matched_link: str | None = None) -> dict:
+        info = entry_map.get((fu, eid), {})
         return {"feed_url": fu, "entry_id": eid,
-                "title": entry_map.get((fu, eid), {}).get("title", ""),
-                "link": entry_map.get((fu, eid), {}).get("link", ""),
-                "feed_title": entry_map.get((fu, eid), {}).get("feed_title", "")}
+                "title": info.get("title", ""),
+                "link": info.get("link", ""),
+                "feed_title": info.get("feed_title", ""),
+                # marked: the kept copy it matched; kept: its own link (group anchor).
+                "matched_link": matched_link}
 
-    matched_entries = [_entry_info(fu, eid) for fu, eid in to_mark]
-    kept_entries = [_entry_info(fu, eid) for fu, eid in kept_keys - to_mark]
+    matched_entries = [_entry_info(fu, eid, mark_to_keep.get((fu, eid))) for fu, eid in to_mark]
+    kept_entries = [
+        _entry_info(fu, eid, entry_map.get((fu, eid), {}).get("link", ""))
+        for fu, eid in kept_keys - to_mark
+    ]
     return {"count": len(to_mark), "entries": matched_entries, "kept": kept_entries}
 
 
@@ -6142,10 +6170,10 @@ def _log_auto_run(conn: sqlite3.Connection, now: str, rule_type: str, scope: str
     if rows and cur.lastrowid:
         conn.executemany(
             "INSERT INTO rule_run_log_entries"
-            " (log_id, feed_url, entry_id, title, link, feed_title, role)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(cur.lastrowid, e["feed_url"], e["entry_id"],
-              e["title"], e["link"], e["feed_title"], role)
+              e["title"], e["link"], e["feed_title"], role, e.get("matched_link"))
              for e, role in rows],
         )
 
@@ -19093,9 +19121,11 @@ def rules_run_now_route(
         log_rows += [(e, "kept") for e in (result.get("kept") or [])]
         if log_rows and log_id:
             conn.executemany(
-                "INSERT INTO rule_run_log_entries (log_id, feed_url, entry_id, title, link, feed_title, role)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"], role)
+                "INSERT INTO rule_run_log_entries"
+                " (log_id, feed_url, entry_id, title, link, feed_title, role, matched_link)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(log_id, e["feed_url"], e["entry_id"], e["title"], e["link"], e["feed_title"],
+                  role, e.get("matched_link"))
                  for e, role in log_rows],
             )
     result["ok"] = True
@@ -19148,7 +19178,7 @@ def automation_history_route(
 def automation_history_entries_route(log_id: int):
     with get_meta_connection() as conn:
         rows = conn.execute(
-            "SELECT feed_url, entry_id, title, link, feed_title, role"
+            "SELECT feed_url, entry_id, title, link, feed_title, role, matched_link"
             " FROM rule_run_log_entries WHERE log_id = ? ORDER BY rowid",
             (log_id,),
         ).fetchall()
