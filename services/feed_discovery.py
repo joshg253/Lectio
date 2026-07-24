@@ -140,7 +140,41 @@ def _pinboard_feed_url(url: str) -> str | None:
     return "https://feeds.pinboard.in/rss/" + "/".join(segments) + "/"
 
 
-_SITE_FEED_REWRITES = [_pinboard_feed_url]
+# Single-segment artstation.com paths that are site pages, not usernames — never
+# rewrite these to a bogus <seg>.rss.
+_ARTSTATION_RESERVED = frozenset({
+    "artwork", "search", "jobs", "blogs", "prints", "marketplace", "learning",
+    "contests", "channels", "guilds", "about", "terms", "privacy", "podcast",
+    "magazine", "studios", "schools", "wallpapers", "2d", "3d", "login", "signup",
+    "users", "explore", "following", "notifications", "messages",
+})
+
+
+def _artstation_feed_url(url: str) -> str | None:
+    """ArtStation feeds live at ``www.artstation.com/<user>.rss``.
+
+    The subdomain form (``<user>.artstation.com/rss``) and the profile page both
+    403 any fetch — even a browser identity — but the www ``.rss`` form serves
+    the feed with our honest UA. Map both profile forms onto it so Add Feed
+    resolves an artist URL instead of failing on the bot-wall."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    user = None
+    if host.endswith(".artstation.com") and host != "www.artstation.com":
+        sub = host[:-len(".artstation.com")]
+        if sub and "." not in sub:
+            user = sub
+    elif host in ("artstation.com", "www.artstation.com"):
+        segments = [s for s in parsed.path.split("/") if s]
+        if len(segments) == 1 and not segments[0].lower().endswith(".rss"):
+            if segments[0].lower() not in _ARTSTATION_RESERVED:
+                user = segments[0]
+    if not user:
+        return None
+    return f"https://www.artstation.com/{user}.rss"
+
+
+_SITE_FEED_REWRITES = [_pinboard_feed_url, _artstation_feed_url]
 
 
 def rewrite_known_site_url(url: str) -> str:

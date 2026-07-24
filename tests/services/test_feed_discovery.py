@@ -334,3 +334,42 @@ class TestPinboardRewrite:
         # Pasting the feed URL itself must pass through unchanged.
         url = "https://feeds.pinboard.in/rss/popular/"
         assert rewrite_known_site_url(url) == url
+
+
+class TestArtstationFeedRewrite:
+    """ArtStation walls the subdomain feed and the profile page (403 even to a
+    browser), but www.artstation.com/<user>.rss serves the feed. Map both
+    profile forms onto it."""
+
+    EXPECTED = "https://www.artstation.com/sidre1.rss"
+
+    def test_profile_www(self):
+        assert rewrite_known_site_url("https://www.artstation.com/sidre1") == self.EXPECTED
+
+    def test_profile_bare_host(self):
+        assert rewrite_known_site_url("https://artstation.com/sidre1") == self.EXPECTED
+
+    def test_subdomain(self):
+        assert rewrite_known_site_url("https://sidre1.artstation.com/") == self.EXPECTED
+
+    def test_subdomain_rss_path(self):
+        # The blocked subdomain /rss form still resolves to the working www feed.
+        assert rewrite_known_site_url("https://sidre1.artstation.com/rss") == self.EXPECTED
+
+    def test_already_rss_passes_through(self):
+        url = "https://www.artstation.com/sidre1.rss"
+        assert rewrite_known_site_url(url) == url
+
+    def test_reserved_site_pages_unchanged(self):
+        for path in ("search", "jobs", "prints", "marketplace", "learning", "2d"):
+            url = f"https://www.artstation.com/{path}"
+            assert rewrite_known_site_url(url) == url
+
+    def test_deep_paths_unchanged(self):
+        # A specific artwork, not a profile — leave it for generic discovery.
+        url = "https://www.artstation.com/artwork/abc123"
+        assert rewrite_known_site_url(url) == url
+
+    def test_www_subdomain_not_treated_as_user(self):
+        assert rewrite_known_site_url("https://www.artstation.com/") == \
+            "https://www.artstation.com/"
