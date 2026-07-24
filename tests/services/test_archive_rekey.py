@@ -99,6 +99,22 @@ def test_delete_keeps_assets_shared_with_another_entry(archive):
     assert _entries(archive) == {(REAL, EID)}
 
 
+def test_sweep_failed_orphans_removes_only_the_unkept(archive):
+    _add(archive, REAL, "gone", status="failed")        # orphan: entry gone, unstarred
+    _add(archive, REAL, "still-here", status="failed")  # failed but keep() says live/starred
+    _add(archive, REAL, "done", status="complete")      # not failed — never touched
+    kept = {(REAL, "still-here")}
+    swept = _svc(archive).sweep_failed_orphans(lambda f, e: (f, e) in kept)
+    assert swept == 1
+    assert _entries(archive) == {(REAL, "still-here"), (REAL, "done")}
+
+
+def test_sweep_failed_orphans_no_failed_rows_is_a_noop(archive):
+    _add(archive, REAL, EID, status="complete")
+    assert _svc(archive).sweep_failed_orphans(lambda f, e: False) == 0
+    assert _entries(archive) == {(REAL, EID)}
+
+
 def test_rekey_moves_the_capture_when_target_has_none(archive):
     _add(archive, SAVED, EID, asset="h1")
     _svc(archive).rekey_archive(SAVED, EID, REAL, EID)

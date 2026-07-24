@@ -15032,6 +15032,25 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] orphan cleanup failed")
 
+    # 2b. Sweep unrecoverable failed-archive rows so the Stats "failed" count
+    # self-heals. A failed capture is only orphaned — never retryable — once its
+    # entry is gone from reader AND no star keeps it; a failed capture of a live,
+    # still-starred entry is left for a later retry.
+    try:
+        with get_reader() as reader, get_meta_connection() as conn:
+            def _keep(feed_url: str, entry_id: str) -> bool:
+                if conn.execute(
+                    "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone():
+                    return True
+                return reader.get_entry((feed_url, entry_id), None) is not None
+            swept = starred_archive_service.sweep_failed_orphans(_keep)
+        if swept:
+            LOGGER.info("[maintenance] archive orphan sweep: removed %d unrecoverable failed capture(s)", swept)
+    except Exception:
+        LOGGER.exception("[maintenance] archive orphan sweep failed")
+
     # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
     # vacuumed once in _run_global_maintenance).
     for label, path in [

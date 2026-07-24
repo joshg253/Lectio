@@ -238,6 +238,38 @@ class StarredArchiveService:
             LOGGER.warning("starred archive: delete_archive failed for %s/%s: %s", feed_url, entry_id, exc)
             return False
 
+    def sweep_failed_orphans(self, keep) -> int:
+        """Delete unrecoverable ``status='failed'`` archive rows.
+
+        A star enqueued for capture whose entry then left its feed window (and
+        whose star was later removed) leaves a failed row that can never succeed
+        — there is nothing to capture — which shows as a "failed" count in Stats
+        forever. ``keep(feed_url, entry_id) -> bool`` decides which failed rows to
+        *keep* (the caller keeps rows whose entry still exists or is starred, so a
+        transient capture failure can still be retried); the rest are deleted.
+        Returns the number removed. Used by the nightly maintenance."""
+        try:
+            with self._get_archive_connection() as conn:
+                failed = conn.execute(
+                    "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'failed'"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            LOGGER.warning("starred archive: sweep_failed_orphans read failed: %s", exc)
+            return 0
+        swept = 0
+        for row in failed:
+            feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+            try:
+                if keep(feed_url, entry_id):
+                    continue
+                if self.delete_archive(feed_url, entry_id):
+                    swept += 1
+            except Exception:  # noqa: BLE001 — one bad row must not abort the sweep
+                LOGGER.exception(
+                    "starred archive: sweep_failed_orphans failed for %s/%s", feed_url, entry_id
+                )
+        return swept
+
     def rekey_archive(self, src_feed: str, src_id: str, dst_feed: str, dst_id: str) -> bool:
         """Move a capture from one (feed, id) to another, preserving it.
 
