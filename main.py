@@ -24336,6 +24336,17 @@ def toggle_entry_saved(
             # Only release the archive when no keep signal remains — a manually
             # tagged entry keeps its capture even after it's unstarred.
             starred_archive_service.enqueue_removal(feed_url, entry_id)
+            # A Saved Article that is now neither starred nor tagged is a husk —
+            # the read-later pile should hold only kept items. It's user-added
+            # and deletable, so remove it outright rather than leaving invisible
+            # cruft (which the host-review view would surface). Mirrors the
+            # source cleanup Move already does; a tag keeping it is handled above.
+            if saved_articles_service.is_saved_articles_feed(feed_url):
+                with get_reader() as reader:
+                    entry = reader.get_entry((feed_url, entry_id), None)
+                    if entry is not None:
+                        _hard_delete_entry(reader, feed_url, entry_id, entry)
+                invalidate_unread_counts_cache()
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
 
