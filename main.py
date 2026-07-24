@@ -10558,6 +10558,13 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
     return extract_readability_article(response.text, source_url)
 
 
+# Below this much extracted article text, readability is treated as having
+# failed — only then may the whole-body image rescue drag in the full page. A
+# real article this short with no images is rare; the chrome-only image-heavy
+# pages this guards against (Google Developers Blog) carry far more than this.
+_WHOLE_BODY_RESCUE_MIN_TEXT = 1200
+
+
 def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, str]:
     """Readability-extract ``(title, article_html)`` from already-obtained page
     HTML — e.g. a rendered DOM captured by the user's browser (extension save),
@@ -10610,7 +10617,15 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
             # matches. Take the whole body. Gated hard (≤1 kept, >10 present) so
             # a page where readability kept a reasonable share is never widened
             # into dragging in its chrome images.
-            if art_img_count <= 1 and raw_img_count > 10:
+            #
+            # But only when readability failed to get the *text* either: a plain
+            # text article with no images (Google Developers Blog) is complete as
+            # readability returned it, and its page is "image-heavy" only from nav
+            # and footer chrome — widening would replace the clean article with
+            # the whole nav-laden page. So require readability's article to be
+            # thin as well before reaching for the whole body.
+            article_text_len = len(re.sub(r"<[^>]+>", "", article_html))
+            if art_img_count <= 1 and raw_img_count > 10 and article_text_len < _WHOLE_BODY_RESCUE_MIN_TEXT:
                 whole = _whole_body_content(raw_html)
                 if whole and whole.lower().count("<img") > art_img_count:
                     article_html = whole

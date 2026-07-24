@@ -55,6 +55,30 @@ def test_leaves_a_reasonable_extraction_alone():
     assert count < 8 + 6       # did NOT drag in all the chrome
 
 
+def test_text_article_on_a_chrome_heavy_page_is_not_widened():
+    """A plain text article (no images) whose page is image-heavy only from nav/
+    footer chrome must keep readability's clean extraction. The whole-body rescue
+    fires on ≤1 kept image + >10 present, but here that would replace a real
+    article with the entire nav-laden page — the Google Developers Blog case. The
+    text-length guard keeps it out."""
+    chrome = "".join(f'<img src="https://cdn.test/navicon{i}.png" width="16">' for i in range(20))
+    prose = "".join(
+        f"<p>Paragraph {i}: {'the future of java 8 language features on android ' * 6}</p>"
+        for i in range(8)
+    )
+    page = (
+        "<html><head><title>Java 8</title></head><body>"
+        f"<header><nav>{chrome}</nav></header>"
+        f'<div class="post">{prose}</div>'
+        f"<footer>{chrome}</footer>"
+        "</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "future of java" in html.lower()          # the real article survived
+    assert "navicon0.png" not in html                # chrome not dragged in
+    assert html.lower().count("<img") <= 2           # not the 40 nav/footer icons
+
+
 def test_last_resort_needs_an_image_heavy_page():
     """A page with only a couple of images that readability drops is not the
     catastrophic case — the >10-image gate keeps the whole body out of it."""
