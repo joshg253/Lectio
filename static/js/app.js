@@ -1100,7 +1100,12 @@
         `<span class="saved-autofile-count">${c.count}</span>` +
         `<span class="saved-dedup-main"><a class="saved-dedup-title saved-autofile-host-link" ` +
           `href="https://${_mfEscape(c.host)}" target="_blank" rel="noopener noreferrer" ` +
-          `onclick="event.stopPropagation()" title="Open ${_mfEscape(c.host)} in a new tab to look for a feed">${_mfEscape(c.host)}</a> ${note} ${notFeed}` +
+          `onclick="event.stopPropagation()" title="Open ${_mfEscape(c.host)} in a new tab to look for a feed">${_mfEscape(c.host)}</a>` +
+        `<a class="saved-autofile-review" data-host="${_mfEscape(c.host)}" href="#" ` +
+          `onclick="event.stopPropagation()" ` +
+          `title="Open these ${c.count} saved article(s) in the Saved view to file them by hand">` +
+          `<span class="material-symbols-rounded" aria-hidden="true">search</span></a>` +
+        ` ${note} ${notFeed}` +
         (c.candidates.length
           ? `<br><select class="saved-autofile-target" title="${_mfEscape(c.target_feed_url || '')}"` +
             ` aria-label="Target feed for ${_mfEscape(c.host)}">${opts}</select>` +
@@ -1177,6 +1182,23 @@
     };
 
     document.getElementById('saved-autofile-results')?.addEventListener('click', async (ev) => {
+      // Magnifying glass: close the dialog (via full navigation) and open the
+      // Saved view searched for this host, as if you'd searched Saved for the
+      // domain — so a multi-feed host (Medium, Ars Technica) that can't be
+      // auto-filed can be reviewed and filed by hand from there.
+      const reviewLink = ev.target.closest?.('.saved-autofile-review');
+      if (reviewLink) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const host = reviewLink.dataset.host;
+        if (!host) return;
+        const savedAll = document.querySelector('.saved-all-item');
+        const target = new URL(savedAll ? savedAll.getAttribute('href') : '/?star_only=1', window.location.origin);
+        target.searchParams.set('q', host);
+        target.searchParams.set('read_filter', 'all');
+        window.location.assign(target.toString());
+        return;
+      }
       const btn = ev.target.closest?.('.saved-autofile-notfeed');
       if (!btn) return;
       ev.preventDefault();      // the row is a <label> — don't toggle its checkbox

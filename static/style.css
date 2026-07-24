@@ -5080,6 +5080,14 @@ body[data-keyboard-open="1"] .action-modal-panel {
   white-space: nowrap;
 }
 .saved-autofile-notfeed:hover { color: var(--fg, inherit); }
+.saved-autofile-review {
+  color: var(--muted);
+  text-decoration: none;
+  vertical-align: middle;
+  margin: 0 0.15rem 0 0.3rem;
+}
+.saved-autofile-review:hover { color: var(--fg, inherit); }
+.saved-autofile-review .material-symbols-rounded { font-size: 1rem; line-height: 1; }
 .saved-autofile-nonfeed { margin-top: 0.6rem; color: var(--muted); }
 .saved-autofile-nonfeed summary { cursor: pointer; font-size: 0.85rem; }
 .saved-autofile-nfrow {
