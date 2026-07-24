@@ -12126,10 +12126,17 @@ def _youtube_embed_html(video_id: str) -> str:
     )
 
 
+# Matches any iframe's src value, NOT just Bandcamp's — the marker test moved
+# into _fix below. Embedding the literal between two `[^"\']*` stars (the earlier
+# form) made the split point ambiguous, so a src carrying many repetitions of
+# `bandcamp.com/EmbeddedPlayer/` backtracked quadratically: 250 reps ≈ 19ms,
+# 2,000 ≈ 1.2s, and feed HTML is attacker-controlled. One unambiguous star has
+# no split to search.
 _BC_EMBED_IFRAME_RE = re.compile(
-    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*bandcamp\.com/EmbeddedPlayer/[^"\']*)(["\'])',
+    r'(<iframe\b[^>]*\bsrc=["\'])([^"\']*)(["\'])',
     re.I,
 )
+_BC_EMBED_SRC_MARKER = "bandcamp.com/embeddedplayer/"
 
 
 def _strip_bandcamp_track_signature(content_html: str) -> str:
@@ -12148,6 +12155,11 @@ def _strip_bandcamp_track_signature(content_html: str) -> str:
 
     def _fix(m: re.Match) -> str:
         src = m.group(2)
+        # The regex matches every iframe src; only Bandcamp embeds are rewritten
+        # (this test used to live in the pattern, where it cost quadratic
+        # backtracking — see _BC_EMBED_IFRAME_RE).
+        if _BC_EMBED_SRC_MARKER not in src.lower():
+            return m.group(0)
         src = re.sub(r"/tracks=[\w,]+", "", src)
         src = re.sub(r"/esig=[0-9a-f]+", "", src, flags=re.IGNORECASE)
         return m.group(1) + src + m.group(3)

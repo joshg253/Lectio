@@ -243,3 +243,35 @@ def test_strip_bandcamp_leaves_plain_album_untouched():
 
 def test_strip_bandcamp_noop_without_embed():
     assert main._strip_bandcamp_track_signature("<p>no embeds</p>") == "<p>no embeds</p>"
+
+
+def test_strip_bandcamp_leaves_other_iframes_untouched():
+    """The pattern now matches every iframe src and filters in Python, so a
+    non-Bandcamp embed must come back byte-identical even when it carries the
+    `tracks=` token that arms the function."""
+    html_in = '<iframe src="https://youtube.com/embed/abc?tracks=1"></iframe>'
+    assert main._strip_bandcamp_track_signature(html_in) == html_in
+
+
+def test_strip_bandcamp_is_linear_not_quadratic():
+    """Regression for a polynomial-ReDoS (CodeQL py/polynomial-redos).
+
+    The literal used to sit between two `[^"']*` stars, so the split point was
+    ambiguous and a src repeating `bandcamp.com/EmbeddedPlayer/` backtracked
+    quadratically — 2,000 repetitions took ~1.2s of CPU on attacker-supplied
+    feed HTML. Assert the work stays roughly linear: 4x the input must cost far
+    less than the 16x a quadratic blowup would.
+    """
+    import time
+
+    def _elapsed(reps: int) -> float:
+        html = '<iframe src="' + "bandcamp.com/EmbeddedPlayer/" * reps + ' tracks=1'
+        start = time.perf_counter()
+        main._strip_bandcamp_track_signature(html)
+        return time.perf_counter() - start
+
+    _elapsed(200)  # warm up, so import/JIT costs don't land in the baseline
+    base = max(_elapsed(500), 1e-4)   # floor: guards against a ~0 baseline
+    quad = _elapsed(2000)             # 4x the input
+    # Linear predicts ~4x, quadratic ~16x. 8x splits them with room for noise.
+    assert quad < base * 8, f"non-linear: {base * 1000:.2f}ms -> {quad * 1000:.2f}ms"
