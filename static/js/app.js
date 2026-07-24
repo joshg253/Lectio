@@ -12543,6 +12543,80 @@
       loadScopePanesWithoutFullRefresh(currentUrl, false);
     });
 
+    // Existing manual-tag names, for tag-input autocomplete (page-load snapshot).
+    let lectioTagNames = [];
+    try {
+      lectioTagNames = JSON.parse(document.getElementById('lectio-tag-names')?.textContent || '[]');
+    } catch (_) { lectioTagNames = []; }
+
+    // Shared, token-aware tag autocomplete: suggests from getTags() as you type
+    // the current whitespace-separated token, keyboard-navigable. Reusable — the
+    // per-entry tag input uses it; the automation rule form can pass its own
+    // (feed-tag) source. Idempotent per input (data-tag-ac guard).
+    function attachTagAutocomplete(input, getTags) {
+      if (!(input instanceof HTMLInputElement) || input.dataset.tagAc) return;
+      input.dataset.tagAc = '1';
+      input.setAttribute('autocomplete', 'off');
+      const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const box = document.createElement('div');
+      box.className = 'tag-autocomplete';
+      box.hidden = true;
+      const host = input.parentElement || document.body;
+      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      host.appendChild(box);
+      let matches = [], active = -1;
+      const token = () => {
+        const v = input.value;
+        const caret = input.selectionStart ?? v.length;
+        const start = v.lastIndexOf(' ', caret - 1) + 1;
+        return { start, end: caret, text: v.slice(start, caret).replace(/^#+/, '').toLowerCase() };
+      };
+      const close = () => { box.hidden = true; matches = []; active = -1; };
+      const paint = () => {
+        box.innerHTML = matches.map((t, i) =>
+          `<div class="tag-autocomplete-item${i === active ? ' is-active' : ''}" data-i="${i}">#${esc(t)}</div>`
+        ).join('');
+      };
+      const update = () => {
+        const tk = token();
+        if (!tk.text) return close();
+        const have = new Set(input.value.toLowerCase().split(/\s+/).map((t) => t.replace(/^#+/, '')));
+        matches = (getTags() || []).filter((t) => t.startsWith(tk.text) && t !== tk.text && !have.has(t)).slice(0, 8);
+        if (!matches.length) return close();
+        box.style.top = (input.offsetTop + input.offsetHeight) + 'px';
+        box.style.left = input.offsetLeft + 'px';
+        box.style.minWidth = input.offsetWidth + 'px';
+        paint();
+        box.hidden = false;
+      };
+      const choose = (i) => {
+        if (i < 0 || i >= matches.length) return;
+        const tk = token();
+        const before = input.value.slice(0, tk.start);
+        const after = input.value.slice(tk.end);
+        const sep = after.length && !after.startsWith(' ') ? ' ' : '';
+        input.value = before + matches[i] + sep + after;
+        const caret = (before + matches[i]).length + (sep ? 1 : 0);
+        input.setSelectionRange(caret, caret);
+        close();
+      };
+      input.addEventListener('input', () => { active = -1; update(); });
+      input.addEventListener('keydown', (e) => {
+        if (box.hidden || !matches.length) return;
+        if (e.key === 'ArrowDown') { active = Math.min(active + 1, matches.length - 1); paint(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); paint(); e.preventDefault(); }
+        else if (e.key === 'Enter' && active >= 0) { choose(active); e.preventDefault(); }
+        else if (e.key === 'Tab') { choose(active >= 0 ? active : 0); e.preventDefault(); }
+        else if (e.key === 'Escape') { close(); }
+      });
+      box.addEventListener('mousedown', (e) => {
+        const item = e.target.closest('[data-i]');
+        if (item) { e.preventDefault(); choose(parseInt(item.dataset.i, 10)); }
+      });
+      input.addEventListener('blur', () => setTimeout(close, 150));
+    }
+    window.attachTagAutocomplete = attachTagAutocomplete;
+
     let entryTagAddBtn = document.getElementById('entry-tag-add-btn');
     let entryTagsForm = document.querySelector('.entry-tags-form');
     let entryTagsInput = document.getElementById('entry-tags-input');
@@ -12553,6 +12627,7 @@
       entryTagsForm = document.querySelector('.entry-tags-form');
       entryTagsInput = document.getElementById('entry-tags-input');
       entryTagsMergedInput = document.getElementById('entry-tags-input-merged');
+      if (entryTagsInput) attachTagAutocomplete(entryTagsInput, () => lectioTagNames);
     }
 
     function normalizeTagToken(token) {

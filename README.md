@@ -66,6 +66,8 @@ The short version:
   **starring** is the lightweight "needs dealing with" marker. A post is kept
   (never auto-pruned, archived offline) whenever it's starred **or** tagged; the
   unified **Saved** view browses everything kept, filterable per feed and per tag.
+  Typing a tag **autocompletes from your existing tags**, so they stay consistent
+  instead of sprouting near-duplicates.
 - **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
   sheets), or a browser extension that ships the rendered page past paywalls;
   saved articles get offline capture, tags, and an e-ink **Read Mode** at

@@ -1323,10 +1323,12 @@ for what actually changed and why the `normalize_article_url` half was dropped.*
 
 **Tags**
 
-- **Autocomplete while typing** — auto-list matching existing tags during tag
-  entry. Broader than the deferred rule-form autocomplete noted under "Tag
-  filtering for firehose feeds"; if built, do it once as a shared control and
-  cover both the rule form and normal per-entry tagging.
+- **Autocomplete while typing** — per-entry tagging SHIPPED 2026-07-24. A shared
+  token-aware control (`attachTagAutocomplete`, exposed on `window`) suggests from
+  `get_all_manual_tag_names()` as you type each whitespace-separated tag; the
+  names are a page-load JSON snapshot (`#lectio-tag-names`). **Still to do:** wire
+  the same control into the automation rule form, fed from `entry_feed_tags`
+  (feed-provided tags) rather than manual tags — a different source, same widget.
 
 ### Instapaper-alternative: reader-only view for saved/starred items
 

@@ -2709,6 +2709,30 @@ button:hover, .button-link:hover {
   align-items: center;
 }
 
+.tag-autocomplete {
+  position: absolute;
+  z-index: 10060;
+  max-height: 12rem;
+  overflow-y: auto;
+  background: var(--field-bg, var(--bg, #fff));
+  border: 1px solid var(--field-border, var(--line));
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  font-size: 0.85rem;
+  padding: 0.15rem;
+}
+.tag-autocomplete-item {
+  padding: 0.22rem 0.55rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.tag-autocomplete-item.is-active,
+.tag-autocomplete-item:hover {
+  background: var(--accent-soft, rgba(127, 127, 127, 0.18));
+}
+
 .entry-tags-input {
   width: 12ch;
   min-width: 8ch;

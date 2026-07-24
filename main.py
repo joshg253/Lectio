@@ -8354,6 +8354,29 @@ def get_tag_counts_for_feeds(feed_urls: set[str]) -> list[dict[str, int | str]]:
     return result
 
 
+def get_all_manual_tag_names() -> list[str]:
+    """Every distinct manual-tag name in the library, sorted — the source for
+    tag-input autocomplete. A cheap DISTINCT over the indexed key column; empty
+    when no manual tags exist at all (the common fast path)."""
+    if not has_any_manual_tags():
+        return []
+    prefix = MANUAL_TAG_KEY_PREFIX
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT key FROM entry_tags WHERE key LIKE ?", [f"{prefix}%"]
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — autocomplete is a nicety, never fail the page
+        return []
+    return sorted({
+        name for (k,) in rows
+        if (name := str(k)[len(prefix):].strip().lower())
+    })
+
+
 def get_favicon_url(feed_url: str, site_url: str | None = None) -> str | None:
     url_for_host = site_url or feed_url
     host = urlparse(url_for_host).hostname
@@ -17528,6 +17551,7 @@ def _home_inner(
         "feed_to_folder": feed_to_folder,
         "push_feed_urls": get_push_active_feed_urls(),
         "tag_rows": tag_rows,
+        "all_tag_names": get_all_manual_tag_names(),
         "selected_folder_id": selected_folder_id,
         "selected_feed_url": selected_feed_url,
         "selected_tag": selected_tag,

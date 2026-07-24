@@ -2683,6 +2683,8 @@
     </div>
   </div>
 
+  <!-- Existing manual-tag names, for tag-input autocomplete (see attachTagAutocomplete). -->
+  <script id="lectio-tag-names" type="application/json">{{ all_tag_names | tojson }}</script>
   <script src="/static/js/app.js?v={{ static_asset_version }}"></script>
 
   <!-- Persistent global audio player. Lives outside the entry-pane swap target
