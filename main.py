@@ -8621,7 +8621,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "title": getattr(feed_obj, "resolved_title", None) or getattr(feed_obj, "title", None) or feed_url,
             "user_title": getattr(feed_obj, "user_title", None),
             "real_title": getattr(feed_obj, "title", None),
-            "website": getattr(feed_obj, "link", None),
+            "website": _rewrite_url_host(getattr(feed_obj, "link", None), get_dedupe_host_aliases()),
             "added": format_datetime_for_ui(getattr(feed_obj, "added", None)),
             "last_updated": format_datetime_for_ui(getattr(feed_obj, "last_updated", None)),
             "last_received": format_datetime_for_ui(last_received_dt),
@@ -11551,7 +11551,7 @@ def list_entries_for_feeds(
                 "fill_zoom": float(_fill_zm) if _fill_zm is not None else None,
                 "thumb_strategy": _thumb_strategy or "",
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
-                "feed_icon_url": get_favicon_url(feed_url_str, feed_site_map.get(feed_url_str)),
+                "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
                 "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
@@ -13483,7 +13483,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         image_title_text = _apply_caption_source_pref(image_title_text, _disp, entry, content_html)
 
-        _channel_link = getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None
+        # Fold the channel link through declared host migrations first, so a feed
+        # whose channel <link> still names a dead domain can't rebase a correct
+        # entry link back onto it (see _rebase_proxy_entry_link, the list view).
+        _channel_link = _rewrite_url_host(
+            getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None,
+            get_dedupe_host_aliases(),
+        )
         # Drop a feed-supplied javascript:/data:/etc link before it reaches the
         # entry pane's href / data-source-url attributes (see safe_link_url).
         _display_link = html_sanitize.safe_link_url(
