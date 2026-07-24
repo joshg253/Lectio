@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Callable, Iterable, Sequence, cast
-from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -10213,9 +10213,65 @@ def _strip_article_chrome(raw_html: str) -> str:
             for el in soup.select(sel):
                 el.decompose()
                 removed = True
+        # JW Player video carousels ("Latest Videos From … Watch full video
+        # here:") sit in an unsemantic rounded card that also holds the header
+        # bar and an invisible "watch here" link — no single class covers all
+        # three. Climb from the player marker to that wrapper and drop the whole
+        # card. Fires only where a real player exists, so non-video content is
+        # untouched.
+        for marker in soup.select('[class*="jwp-carousel"], [class*="aspect-video"], [class*="jw-player"]'):
+            if marker.parent is None:
+                continue  # already removed as part of an earlier card
+            card = marker
+            for anc in marker.parents:
+                cls = " ".join(anc.get("class") or [])
+                if "overflow-hidden" in cls and "rounded" in cls:
+                    card = anc
+                    break
+                if anc.get("id") == "article-body" or anc.name in ("article", "main", "body"):
+                    break
+            card.decompose()
+            removed = True
         return str(soup) if removed else raw_html
     except Exception:  # noqa: BLE001
         return raw_html
+
+
+_LEAD_IMAGE_SKIP_RE = re.compile(r"(?:logo|icon|avatar|sprite|placeholder|default|blank)", re.IGNORECASE)
+
+
+def _lead_image_from_html(raw_html: str, source_url: str) -> str | None:
+    """The page's hero image from social-preview metadata (og:image, then
+    twitter:image, then <link rel=image_src>).
+
+    readability extracts the article *body*, but a site's hero/featured image
+    lives in the page header outside it (Future plc's #article-body is all tab
+    figures, no hero), so captures lost the lead image the list thumbnail and
+    article view want. This recovers the URL the publisher itself nominates as
+    the article's representative image. Obvious non-content (SVGs, logo/icon/
+    placeholder names) is skipped so a site whose og:image is its logo doesn't
+    get a logo stamped on every capture."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        url = ""
+        for finder in (
+            lambda: soup.find("meta", property="og:image"),
+            lambda: soup.find("meta", attrs={"name": "twitter:image"}),
+            lambda: soup.find("link", rel="image_src"),
+        ):
+            tag = finder()
+            if tag:
+                url = (tag.get("content") or tag.get("href") or "").strip()
+                if url:
+                    break
+        if not url or url.lower().rsplit("?", 1)[0].endswith(".svg"):
+            return None
+        if _LEAD_IMAGE_SKIP_RE.search(url.rsplit("/", 1)[-1]):
+            return None
+        return urljoin(source_url, url)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _bs4_content_fallback(raw_html: str) -> str:
@@ -10558,6 +10614,14 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
                 whole = _whole_body_content(raw_html)
                 if whole and whole.lower().count("<img") > art_img_count:
                     article_html = whole
+    # Prepend the publisher's hero image when the body doesn't already open with
+    # it — the article's lead image lives in the page header, outside the content
+    # readability extracts (a #article-body of tab figures has no hero).
+    lead = _lead_image_from_html(raw_html, source_url)
+    if lead:
+        lead_seg = lead.rsplit("/", 1)[-1].split("?", 1)[0]
+        if lead not in article_html and (not lead_seg or lead_seg not in article_html):
+            article_html = f'<figure><img src="{html.escape(lead, quote=True)}"></figure>' + article_html
     article_html = _finalize_article_html(article_html, source_url, _img_sizes)
     if not article_html:
         raise ValueError("No readable article content was found.")

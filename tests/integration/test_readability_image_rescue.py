@@ -110,3 +110,52 @@ def test_future_plc_in_body_chrome_is_stripped():
     assert "Subscribe to our newsletter" not in html     # newsletter gone
     assert "You may like" not in html                    # related aside gone
     assert "Follow us" not in html
+
+
+def test_future_plc_video_carousel_card_is_stripped():
+    """The JW Player 'Latest Videos From … Watch full video here:' carousel sits
+    in an unsemantic rounded card that also holds a header bar and an invisible
+    watch-here link. Climbing from the player marker to the card removes all of
+    it, while a real tab figure outside the card survives."""
+    tabs = "".join(f'<img src="https://cdn.test/tab{i}.jpg" width="600">' for i in range(15))
+    page = (
+        "<html><head><title>Slurs</title></head><body>"
+        '<div id="article-body">'
+        "<p>Hammer-ons and pull-offs let you sound fast without playing fast.</p>"
+        '<div class="my-6 w-full overflow-hidden rounded-[10px]">'
+        '  <div class="jwp-carousel-title-desktop">Latest Videos From</div>'
+        '  <div class="aspect-video"><img src="https://cdn.test/vidthumb.jpg"></div>'
+        '  <div class="bg-zinc-900"><a class="invisible">Watch full video here:</a></div>'
+        "</div>"
+        f"{tabs}</div></body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "Latest Videos From" not in html
+    assert "Watch full video here" not in html
+    assert "vidthumb.jpg" not in html      # the video's own thumbnail went with it
+    assert "tab0.jpg" in html              # the lesson's tab figures stayed
+
+
+def test_lead_image_prepended_from_og_when_absent():
+    """A site's hero image lives in the page header, outside the content
+    readability extracts, so captures lost it. og:image is prepended when the
+    body doesn't already open with it — but a logo/svg og:image is skipped."""
+    body = (
+        "<div id='article-body'>"
+        "<p>The article body has plenty of prose to extract cleanly here.</p>"
+        '<img src="https://cdn.test/inline.jpg" width="500">'
+        "</div>"
+    )
+    page = (
+        '<html><head><meta property="og:image" '
+        'content="https://cdn.test/hero-700-80.png"></head>'
+        f"<body>{body}</body></html>"
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "hero-700-80.png" in html
+    assert html.find("hero-700-80.png") < html.find("inline.jpg")  # hero leads
+
+    # A logo og:image must NOT be stamped onto the capture.
+    logo_page = page.replace("hero-700-80.png", "site-logo.png")
+    _t, logo_html = main.extract_readability_article(logo_page, URL)
+    assert "site-logo.png" not in logo_html
