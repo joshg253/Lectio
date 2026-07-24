@@ -115,7 +115,7 @@ invariant is enforced in the write paths: `add_feed_to_folder` clears a feed's
 other memberships before inserting, and the dedup/format-upgrade paths delete the
 survivor's stale rows before re-inserting the chosen folders (earlier they added
 without removing, which let feeds drift across folders). Pre-existing drift is
-repaired by **Settings → Feeds → Utilities → Fix multi-folder feeds**
+repaired by **Settings → Utilities → Fix multi-folder feeds**
 (`GET /feeds/multi-folder` reports feeds with >1 row; `POST
 /feeds/multi-folder/resolve` keeps only the user-chosen folder per feed).
 
@@ -914,7 +914,7 @@ rebuilds it from the entries table should a future ranked search want it. That
 rebuild walks every entry and takes minutes on a large library, which is why
 dropping it is a deliberate script rather than a startup side effect.
 
-**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from Settings → Feeds → **Utilities**; the two duplicate scanners sit on their own **Dupes** tab, since both are long-running, produce long reviewable lists, and are worked in repeated passes rather than fired once). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
+**Auto-filing saved articles** (`services/saved_autofile.py`, `GET /saved/autofile/preview`, `POST /saved/autofile`, driven from the top-level Settings → **Utilities** tab, which also holds the two duplicate scanners and the one-shot maintenance actions; it was promoted out of a Feeds sub-tab so the scanners — long-running, long reviewable lists, worked in repeated passes — sit alongside the rest rather than behind an extra click). A read-later library imported from a feed reader is mostly articles from feeds already subscribed to, so they can be filed onto their real feed — which also collapses cross-feed duplicates for free, because `_move_entry_to_feed` matches into the target by GUID else normalized link.
 
 Matching is by **article host**, from two independent signals. The evidential one is which subscribed feed already carries entries whose links are on that host — a feed's own URL often lives elsewhere than the articles it publishes (`rss.beehiiv.com` serving `joanwestenberg.com`). The declarative one is the hosts a feed *advertises*: its own URL host and its `link` (site) host. Entry links alone are not enough, because two common cases produce no usable evidence at all — a feed **subscribed but not yet fetched** has no entries, so a feed added specifically to receive a backlog would never be offered for it; and a **link-proxying feed** (FeedBurner rewrites every entry link to `feeds.feedburner.com`) points its evidence at the wrong host entirely. Measured here, 696 of 2,881 feeds advertise a site on a different host than their feed URL. Adding the declarative signal took unmatched articles from 698 to 66.
 

@@ -13988,6 +13988,9 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> None:
             args=(feed_url, _uid),
             daemon=True,
         ).start()
+    # The final stored URL (slash-normalized, or an existing variant reused) —
+    # the caller opens this feed, so it must be the key the view resolves.
+    return feed_url
 
 
 def feed_curation_counts(reader, conn: sqlite3.Connection, feed_url: str) -> dict:
@@ -18452,7 +18455,7 @@ def create_feed(
     if auto_discovered:
         message = f"Feed added (discovered from {url})."
     try:
-        add_feed_to_folder(target_url, folder_id)
+        target_url = add_feed_to_folder(target_url, folder_id)
         # If the feed was only reachable with a browser identity, flag it so
         # reader's refresh fetch escalates too (otherwise it subscribes but never
         # updates). Good-citizen: only after an honest fetch was refused.
@@ -18474,8 +18477,20 @@ def create_feed(
         ).start()
     except Exception as exc:
         message = f"Feed add failed: {exc}"
+        return RedirectResponse(
+            url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+            status_code=303,
+        )
+    # Open the newly-added feed so its identity is obvious immediately (catching
+    # a wrong auto-discovery, e.g. a tag page that resolved to the site feed) and
+    # it's usable at once — e.g. as a move target while filing. read_filter=all
+    # since a brand-new feed's posts are unread anyway and the user wants to see
+    # what landed.
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+        url=(
+            f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}"
+            f"&read_filter=all&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 
