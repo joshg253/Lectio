@@ -287,12 +287,20 @@ def _advertised_feed_dead(url: str, *, headers: dict | None) -> bool:
 
 
 def _probe_conventional_paths(final_url: str, *, headers: dict | None) -> list[dict]:
-    """HEAD-probe the conventional feed paths — from the site root first, then
-    relative to the page path. Returns the first hit as [{"url", "title"}]."""
+    """HEAD-probe the conventional feed paths — relative to the page path first,
+    then from the site root. Returns the first hit as [{"url", "title"}].
+
+    Page path first because the *more specific* feed is the one the user asked
+    for. Multisite WordPress puts a whole blog under a path
+    (devblogs.microsoft.com/oldnewthing/) while the root serves a firehose of
+    every blog on the domain; probing the root first meant subscribing to
+    "The Old New Thing" silently handed back "Microsoft for Developers".
+    A page path with no feed of its own still falls through to the root.
+    """
     parsed = urlparse(final_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     page_dir = parsed.path.rstrip("/")
-    prefixes = [""] + ([page_dir] if page_dir else [])
+    prefixes = ([page_dir] if page_dir else []) + [""]
     for prefix in prefixes:
         for suffix in _COMMON_FEED_PATHS:
             probe = origin + prefix + suffix

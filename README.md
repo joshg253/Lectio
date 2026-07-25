@@ -103,7 +103,9 @@ The short version:
   resurrecting (swept only after they leave the publisher's feed window).
   Starred and tagged posts are never auto-deleted.
 - **Feed management** — OPML, resilient RSS/Atom auto-discovery (survives
-  stale autodiscovery links and schemeless input), Page Feeds for feedless
+  stale autodiscovery links and schemeless input, and prefers a blog's own feed
+  over the domain-wide firehose on multisite hosts like
+  `devblogs.microsoft.com/<blog>/`), Page Feeds for feedless
   sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
   recovery, per-folder refresh cadence, feed compare, fetch history,
   duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —

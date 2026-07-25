@@ -273,6 +273,52 @@ class TestDeadAdvertisedFallback:
         assert result == ["https://example.com/rss"]
 
 
+class TestMultisitePathScopedFeeds:
+    """Multisite WordPress puts a whole blog under a path
+    (devblogs.microsoft.com/oldnewthing/) while the domain root serves a
+    firehose of every blog on it. The conventional-path probe used to try the
+    root first, so subscribing to "The Old New Thing" silently handed back
+    "Microsoft for Developers" — reported from the live site 2026-07-25.
+    """
+
+    HTML = "<html><head><title>The Old New Thing</title></head><body>" + ("x" * 600) + "</body></html>"
+
+    @staticmethod
+    def _head(alive_paths):
+        def fake_head(url, **_kwargs):
+            for path, ct in alive_paths.items():
+                if url == f"https://devblogs.microsoft.com{path}":
+                    return _mock_response(url, ct)
+            return _mock_response(url, "text/html", status=404)
+        return fake_head
+
+    def _probe(self, page, alive):
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response(page, "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(alive)):
+                return probe_url(page)
+
+    def test_path_scoped_feed_beats_the_root_firehose(self):
+        result = self._probe(
+            "https://devblogs.microsoft.com/oldnewthing/",
+            {"/oldnewthing/feed": "application/rss+xml", "/feed": "application/rss+xml"},
+        )
+        assert result["feeds"] == [
+            {"url": "https://devblogs.microsoft.com/oldnewthing/feed", "title": None}
+        ]
+
+    def test_root_feed_still_found_when_the_path_has_none(self):
+        result = self._probe(
+            "https://devblogs.microsoft.com/nosuchblog/",
+            {"/feed": "application/rss+xml"},
+        )
+        assert result["feeds"] == [{"url": "https://devblogs.microsoft.com/feed", "title": None}]
+
+    def test_root_url_is_unaffected(self):
+        result = self._probe("https://devblogs.microsoft.com/", {"/feed": "application/rss+xml"})
+        assert result["feeds"] == [{"url": "https://devblogs.microsoft.com/feed", "title": None}]
+
+
 class TestPinboardRewrite:
     """pinboard.in pages have no <link rel=alternate>; page URLs map directly
     to feeds.pinboard.in feed URLs (same u:/t:/from: segment grammar)."""
