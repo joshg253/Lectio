@@ -308,20 +308,37 @@ def _advertised_feed_dead(url: str, *, headers: dict | None) -> bool:
     the link outright: a stale tag is often an ``http://`` URL, and stopping at
     its 301 hid the 404 behind it — so discovery offered a feed that the add
     then refused, with no way for the user to tell which was right."""
+    return _advertised_feed_status(url, headers=headers) is not None
+
+
+# "The feed is not there" — as opposed to "the server refused to tell us"
+# (401/403/429/5xx), which a real GET from reader may well get past. Only the
+# former is certain enough to stop offering the link at all.
+_FEED_GONE_STATUSES = frozenset({404, 410})
+
+
+def _advertised_feed_status(url: str, *, headers: dict | None) -> int | None:
+    """Confirmed failing status for an advertised feed URL, else None.
+
+    None means "inconclusive, treat the link as live" — a 405/501 HEAD-hostile
+    server, a redirect loop, a network error, or an SSRF-blocked target. A
+    number means both the current identity *and* a browser-identity retry
+    agreed the URL fails, and its value lets the caller separate *gone* (404,
+    410) from *refused* (403 and friends).
+    """
     def _confirms_dead(resp) -> bool:
         return resp is not None and resp.status_code >= 400 and resp.status_code not in (405, 501)
 
     try:
         head = _head_following_redirects(url, timeout=3.0, headers=headers)
         if head is None or not _confirms_dead(head):
-            return False
+            return None
         if headers is _BROWSER_HEADERS:
-            return True
-        return _confirms_dead(
-            _head_following_redirects(url, timeout=3.0, headers=_BROWSER_HEADERS)
-        )
+            return int(head.status_code)
+        retry = _head_following_redirects(url, timeout=3.0, headers=_BROWSER_HEADERS)
+        return int(retry.status_code) if _confirms_dead(retry) else None
     except Exception:
-        return False
+        return None
 
 
 def _probe_conventional_paths(final_url: str, *, headers: dict | None) -> list[dict]:
@@ -438,18 +455,25 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         feeds.append({"url": absolute, "title": attrs.get("title", "").strip() or None})
 
     stale_advertised: list[dict] = []
+    gone_advertised: list[dict] = []
     if feeds:
-        live = [f for f in feeds if not _advertised_feed_dead(f["url"], headers=_probe_headers)]
+        live: list[dict] = []
+        for f in feeds:
+            status = _advertised_feed_status(f["url"], headers=_probe_headers)
+            if status is None:
+                live.append(f)
+            elif status in _FEED_GONE_STATUSES:
+                gone_advertised.append(f)
+            else:
+                # Refused rather than absent (403 bot-wall, 5xx): reader's real
+                # GET may still succeed, so this stays a last resort.
+                stale_advertised.append(f)
         if live:
             return {
                 "status": "feed" if len(live) == 1 else "feeds",
                 "feeds": live,
                 "message": "",
             }
-        # Every advertised link is confirmed dead — fall through to the
-        # conventional-path probes, keeping the advertised links as a last
-        # resort so a fully bot-walled site behaves exactly as before.
-        stale_advertised = feeds
         _LOGGER.info("discovery: all %d advertised feed link(s) on %s look dead; probing conventional paths",
                      len(feeds), final_url)
 
@@ -485,11 +509,27 @@ def probe_url(url: str, *, timeout: float = 10.0) -> dict:
         }
 
     if stale_advertised:
-        # Nothing better found — surface the advertised links after all.
+        # Nothing better found, and these were *refused* rather than absent —
+        # surface them so a bot-walled site can still be subscribed.
         return {
             "status": "feed" if len(stale_advertised) == 1 else "feeds",
             "feeds": stale_advertised,
             "message": "",
+        }
+
+    if gone_advertised:
+        # The site advertises a feed that is provably gone (404/410 through the
+        # whole redirect chain, under both identities) and nothing else answers.
+        # Offering it would hand back a URL the add route then rejects — which
+        # reads as "it found my feed" followed by a feed that isn't there.
+        # Common on static-site blogs whose old posts still carry the tag.
+        return {
+            "status": "none",
+            "feeds": [],
+            "message": (
+                f"This site advertises a feed at {gone_advertised[0]['url']}, but that address "
+                "is gone (404) and no other feed answers. Subscribe as a Page Feed instead."
+            ),
         }
 
     return {"status": "none", "feeds": [], "message": "No RSS/Atom feed found at this URL."}
@@ -535,33 +575,33 @@ def discover_feed_urls_ex(url: str, *, timeout: float = 10.0) -> tuple[list[str]
             if absolute not in candidates:
                 candidates.append(absolute)
 
+    # This mirrors probe_url's rules deliberately: probe_url previews what the
+    # Add dialog shows, but the Add route itself re-discovers through here, so
+    # any divergence means the dialog promises one feed and the button
+    # subscribes to another. Both the page-path-before-root ordering and the
+    # gone/refused split therefore run off the same helpers.
     stale_candidates: list[str] = []
     if candidates:
-        live = [c for c in candidates if not _advertised_feed_dead(c, headers=probe_headers)]
+        live: list[str] = []
+        for c in candidates:
+            status = _advertised_feed_status(c, headers=probe_headers)
+            if status is None:
+                live.append(c)
+            elif status not in _FEED_GONE_STATUSES:
+                stale_candidates.append(c)  # refused, not absent — last resort
         if live:
             return live, escalated
-        # All advertised links confirmed dead (stale autodiscovery) — probe the
-        # conventional paths; keep the advertised ones as a last resort.
-        stale_candidates = candidates
         candidates = []
 
-    # Probe common path suffixes: first from the site root, then relative to the page path.
     parsed = urlparse(final_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     page_dir = parsed.path.rstrip("/")
-    prefixes = [""] + ([page_dir] if page_dir else [])
-    for prefix in prefixes:
-        for suffix in _COMMON_FEED_PATHS:
-            probe_candidate = origin + prefix + suffix
-            try:
-                head = _guarded_head(probe_candidate, timeout=3.0, headers=probe_headers)
-                if head is not None and head.is_success and _ct_is_feed(head.headers.get("content-type", "")):
-                    resolved = str(head.url)
-                    if resolved not in candidates:
-                        candidates.append(resolved)
-                    return candidates, escalated
-            except Exception:
-                continue
+    path_hit = _probe_conventional_paths(final_url, headers=probe_headers)
+    if path_hit:
+        for hit in path_hit:
+            if hit["url"] not in candidates:
+                candidates.append(hit["url"])
+        return candidates, escalated
 
     # Also try WordPress-style query-param variants on the page URL itself.
     if page_dir:

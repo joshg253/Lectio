@@ -218,11 +218,26 @@ class TestDeadAdvertisedFallback:
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
-    def test_discover_keeps_dead_link_when_no_alternative(self):
+    def test_discover_drops_a_gone_link_when_no_alternative(self):
+        """A 404 advertised link with nothing else on the site is reported as
+        "no feed" rather than handed back. Offering it produced the worst
+        outcome: the dialog says it found a feed, the add then refuses it, and
+        nothing appears in the feed list (leereilly.net, 2026-07-25)."""
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
                 result = discover_feed_urls("https://example.com/")
-        assert result == ["https://example.com/rss"]  # last resort — unchanged behavior
+        assert result == []
+
+    def test_discover_keeps_a_refused_link_when_no_alternative(self):
+        """403 is the server refusing to answer a HEAD, not proof the feed is
+        absent — reader's real GET may well get through, so it is still
+        offered. This is the bot-walled case the last resort exists for."""
+        def refused(url, **_kwargs):
+            return _mock_response(str(url), "text/html", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=refused):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
 
     def test_probe_url_falls_back_to_common_path(self):
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
@@ -231,9 +246,20 @@ class TestDeadAdvertisedFallback:
         assert result["status"] == "feed"
         assert result["feeds"] == [{"url": "https://example.com/feed.xml", "title": None}]
 
-    def test_probe_url_keeps_dead_link_when_no_alternative(self):
+    def test_probe_url_drops_a_gone_link_and_points_at_page_feed(self):
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
+                result = probe_url("https://example.com/")
+        assert result["status"] == "none"
+        assert result["feeds"] == []
+        assert "https://example.com/rss" in result["message"]
+        assert "Page Feed" in result["message"]
+
+    def test_probe_url_keeps_a_refused_link_when_no_alternative(self):
+        def refused(url, **_kwargs):
+            return _mock_response(str(url), "text/html", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=refused):
                 result = probe_url("https://example.com/")
         assert result["status"] == "feed"
         assert result["feeds"][0]["url"] == "https://example.com/rss"

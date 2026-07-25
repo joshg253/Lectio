@@ -1059,6 +1059,19 @@ Saving or reverting re-renders **only the article pane**, via `window.lectioRelo
 
 Deferred: promoting a recorded removal into a per-feed rule. That rule belongs at render time inside `_apply_feed_content_cleanups`, *not* as a bulk rewrite of stored bodies — feed-wide it would touch hundreds of entries irreversibly, and the render-time form covers old and new posts alike and can be switched off.
 
+## Feed discovery: which feed a page actually means
+
+Two entry points share one set of rules, and must: `probe_url` previews what the Add dialog shows, while the Add route itself re-discovers through `discover_feed_urls_ex`. Any divergence means the dialog promises one feed and the button subscribes to another — which is exactly what happened when the page-path fix below landed in only one of them.
+
+**Page path before site root.** Multisite WordPress puts a whole blog under a path (`devblogs.microsoft.com/oldnewthing/`) while the domain root serves a firehose of every blog on it. Probing the root first meant subscribing to "The Old New Thing" silently handed back "Microsoft for Developers". The more specific feed is the one the user asked for; a path with no feed of its own still falls through to the root.
+
+**Gone vs refused.** A stale `<link rel="alternate">` is discarded only when positively confirmed dead — 4xx/5xx under the current identity *and* a browser-identity retry, with 405/501 and network errors left alone. Redirects are now followed one guarded hop at a time (re-running the SSRF check per hop, so no probe is ever bounced blind to an internal address): a stale tag is often an `http://` URL whose 301 hid the 404 behind it.
+
+When every advertised link is dead and nothing else answers, what happens next depends on *why*:
+
+- **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
+- **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
+
 ## Combining feeds carries the offline captures
 
 `_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
