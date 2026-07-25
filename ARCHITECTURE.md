@@ -1059,6 +1059,12 @@ Saving or reverting re-renders **only the article pane**, via `window.lectioRelo
 
 Deferred: promoting a recorded removal into a per-feed rule. That rule belongs at render time inside `_apply_feed_content_cleanups`, *not* as a bulk rewrite of stored bodies — feed-wide it would touch hundreds of entries irreversibly, and the render-time form covers old and new posts alike and can be switched off.
 
+## Combining feeds carries the offline captures
+
+`_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).
+
+Two subtleties the fix has to respect. The migration loop walks *curation*, not entries, so a capture on an entry carrying neither star nor tag is never visited — a sweep after the loop re-keys those, but only when the article exists on the survivor; synthesizing an entry purely to host a capture would put an uncurated row in the survivor, and the orphan view is already that capture's home. And the archived id set is read **once** up front, because the per-entry alternative opens an archive connection for every entry just to learn that most have nothing to move.
+
 ## Entry sort window (Pub Old / Pub New)
 
 `reader` only sorts newest-first, so for large folders (`> PER_FEED_QUERY_THRESHOLD`

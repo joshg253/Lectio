@@ -1149,6 +1149,25 @@ The script stays in the tree because the recovery source (starred archive
 `published_at`, cross-checked against reader's `recent_sort`) is generic — if any
 other path is ever found bumping published, re-run the dry-run first.
 
+### 8d. Tushar feed consolidation — DONE 2026-07-25
+
+Two subscriptions to one blog (`sadh.life/rss`, dead; `tush.ar/rss.xml`, live).
+Josh ran Edit Website twice on the old feed (seeding `sadh.life → tush.ar` and
+`tushar.lol → tush.ar`, migrating 14 then 1) and then Combine — which matched by
+GUID and synthesized nothing. Survivor: 18 entries, 16 stars, 15 manual tags, no
+orphaned star rows, no entry left on a dead host.
+
+Fallout, since fixed: the combine stranded the offline captures (see
+ARCHITECTURE "Combining feeds carries the offline captures"). 85 orphaned
+archive rows library-wide — not just this feed — repaired with
+`scripts/repair_orphaned_archives.py --apply`; undo snapshot (with blobs) at
+`data/users/u_40208f374ac18038598b39/repaired_orphan_archives_20260725-071313.json`.
+A follow-up dry-run reports 0.
+
+Still open: `tusharsadhwani.dev` and `tushar.bio` are two more dead domains of
+his with **no** entries in the library. Nothing to migrate; declaring them via
+Feed Properties → Other domains only future-proofs the dedupe alias map.
+
 ### 8c. Flaky test: `test_tampered_hash_fails` (~1.3% failure rate)
 
 `tests/services/test_passwords.py::test_tampered_hash_fails` flips the **last**

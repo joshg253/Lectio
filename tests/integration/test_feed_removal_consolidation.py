@@ -518,7 +518,7 @@ class TestMigrateCuration:
             with main.get_meta_connection() as conn:
                 counts = main._migrate_curation(reader, conn, FEED2, FEED)
 
-        assert counts == {"tags": 1, "stars": 1, "synth": 1}
+        assert counts == {"tags": 1, "stars": 1, "synth": 1, "archives": 0}
         with main.get_reader() as reader:
             keys = [main._extract_tag_key(t) for t in reader.get_tags((FEED, "e1"))]
         assert f"{main.MANUAL_TAG_KEY_PREFIX}python" in keys
@@ -558,4 +558,4 @@ class TestMigrateCuration:
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 counts = main._migrate_curation(reader, conn, FEED2, FEED)
-        assert counts == {"tags": 0, "stars": 0, "synth": 0}
+        assert counts == {"tags": 0, "stars": 0, "synth": 0, "archives": 0}

@@ -14130,9 +14130,22 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     source entry is synthesized into the survivor feed so its tag/star has a home.
     Moved stars are removed from the source feed's saved_entries rows.
 
-    Returns {"tags": n, "stars": n, "synth": n}.
+    Returns {"tags": n, "stars": n, "synth": n, "archives": n}.
     """
-    counts = {"tags": 0, "stars": 0, "synth": 0}
+    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0}
+
+    # Which source entries actually hold an offline capture. Read once: the loop
+    # below would otherwise open an archive connection per entry just to
+    # discover that most have nothing to move.
+    try:
+        with get_starred_archive_connection() as _ac:
+            src_archived_ids = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (remove_url,)
+                )
+            }
+    except sqlite3.OperationalError:
+        src_archived_ids = set()
 
     # Ensure the survivor feed exists so synthesized entries have a home.
     try:
@@ -14168,7 +14181,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     }
 
     ids = set(src_tags) | set(src_stars)
-    if not ids:
+    if not ids and not src_archived_ids:
         return counts
 
     def _resolve(sid: str) -> tuple[str, bool]:
@@ -14209,6 +14222,18 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
                 counts["tags"] += 1
             except Exception:  # noqa: BLE001
                 LOGGER.exception("[dedup] set_tag failed %s on %s", key, target_id)
+        # Carry the offline capture across too. Without this the archive row
+        # stays keyed to a feed that is about to be deleted, and the Saved view
+        # then renders it as an archive-only *orphan* — from the archive's own
+        # stale link, which is how this surfaced: combined feeds still showing
+        # their old, dead URLs. rekey_archive moves the asset links with it and
+        # refuses to clobber an existing capture on the target.
+        if sid in src_archived_ids:
+            try:
+                starred_archive_service.rekey_archive(remove_url, sid, keep_url, target_id)
+                counts["archives"] += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] archive rekey failed %s -> %s/%s", sid, keep_url, target_id)
         if sid in src_stars:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
@@ -14216,6 +14241,23 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             )
             if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
                 counts["stars"] += 1
+
+    # Captures on entries carrying neither a star nor a tag are never visited by
+    # the loop above — it walks curation, not entries — yet they strand exactly
+    # the same way once this feed is deleted (a star removed later leaves the
+    # capture behind; that is what an "archive-only orphan" is). Re-key any whose
+    # article exists on the survivor. One with no counterpart there is left
+    # alone: synthesizing an entry purely to host a capture would put an
+    # uncurated row in the survivor, and the orphan view is already its home.
+    for aid in src_archived_ids - ids:
+        _target_id, _synth = _resolve(aid)
+        if _synth:
+            continue
+        try:
+            starred_archive_service.rekey_archive(remove_url, aid, keep_url, _target_id)
+            counts["archives"] += 1
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[dedup] archive rekey failed %s -> %s/%s", aid, keep_url, _target_id)
 
     # The source feed is about to be deleted; drop its now-migrated star rows.
     conn.execute("DELETE FROM saved_entries WHERE feed_url = ?", (remove_url,))
@@ -14471,11 +14513,11 @@ def purge_orphaned_feed(
     # dedup/upgrade consolidation never drops curation.
     if migrate_curation_to:
         migrated = _migrate_curation(reader, conn, feed_url, migrate_curation_to)
-        if migrated["tags"] or migrated["stars"] or migrated["synth"]:
+        if migrated["tags"] or migrated["stars"] or migrated["synth"] or migrated["archives"]:
             LOGGER.info(
-                "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized",
+                "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized, %d archives",
                 feed_url, migrate_curation_to,
-                migrated["tags"], migrated["stars"], migrated["synth"],
+                migrated["tags"], migrated["stars"], migrated["synth"], migrated["archives"],
             )
 
     # Step 3 — dispatch the delete via the appropriate path.
