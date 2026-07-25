@@ -1123,25 +1123,23 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
-### 8b. Restore the 101 publish dates a re-fetch overwrote — NEEDS GO-AHEAD
+### 8b. Publish dates a re-fetch overwrote — FIXED + REPAIRED 2026-07-25
 
-Cause fixed 2026-07-25: `replace_entry_content` bumped `entries.published` to now
-to surface a re-pulled capture, which is wrong twice over (Pub is a publication
-date, not a last-touched date; and under the Pub-oldest sort in use the bump
-*buried* the article instead of surfacing it). It now bumps **Received** instead.
+Cause fixed: `replace_entry_content` bumped `entries.published` to now to surface
+a re-pulled capture, which is wrong twice over (Pub is a publication date, not a
+last-touched date; and under the Pub-oldest sort in use the bump *buried* the
+article instead of surfacing it). It now bumps **Received** instead.
 
-The damage is already in the DB. `scripts/restore_bumped_publish_dates.py`
-recovers the original date from the starred archive's `published_at`,
-cross-checked against reader's `recent_sort`. Dry-run 2026-07-25 on the live
-library: **101 candidates, 101 corroborated, 0 uncorroborated** (second user: 0).
-Drift runs up to 16 years — e.g. LWN "What every programmer should know about
-memory, Part 1" reading 2026-07-25 instead of 2012-05-03. DB-only change, so it
-waits for an explicit go-ahead:
+Damage repaired the same day with `scripts/restore_bumped_publish_dates.py
+--apply`: **101 restored, 101 corroborated, 0 uncorroborated** (second user: 0).
+Drift ran up to 16 years — LWN "What every programmer should know about memory,
+Part 1" read 2026-07-25 instead of 2012-05-03. Undo snapshot at
+`data/users/u_40208f374ac18038598b39/restored_publish_dates_20260725-054213.json`;
+a follow-up dry-run reports 0 candidates.
 
-    uv run scripts/restore_bumped_publish_dates.py --apply
-
-Re-run the dry-run first — the guitarworld batch (~20 rows re-fetched 2026-07-24)
-shows this accrues whenever a bulk re-fetch runs, so the count moves.
+The script stays in the tree because the recovery source (starred archive
+`published_at`, cross-checked against reader's `recent_sort`) is generic — if any
+other path is ever found bumping published, re-run the dry-run first.
 
 ### 8c. Flaky test: `test_tampered_hash_fails` (~1.3% failure rate)
 

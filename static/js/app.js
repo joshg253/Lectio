@@ -3150,6 +3150,12 @@
       });
     }
 
+    // Exposed for static/js/cleanup.js, which re-renders the pane after a body
+    // edit. A full reload would also re-render the list, moving the reader's
+    // place in it for an edit the list doesn't even show.
+    window.lectioReloadEntryPane = (url, pushHistory) =>
+      loadEntryPaneWithoutFullRefresh(url || window.location.href, pushHistory === true);
+
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
       const token = ++entryPaneRequestToken;
       let currentUrlHasEntry = false;

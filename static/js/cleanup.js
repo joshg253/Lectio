@@ -246,12 +246,25 @@
     state = null;
   }
 
+  // Re-render just the article pane. A full page reload would rebuild the post
+  // list too and move the reader's place in it — for an edit the list doesn't
+  // display. Falls back to a reload if app.js hasn't exposed the loader.
+  function refreshPane() {
+    if (typeof window.lectioReloadEntryPane === 'function') {
+      try {
+        window.lectioReloadEntryPane().catch(function () { window.location.reload(); });
+        return;
+      } catch (_e) { /* fall through */ }
+    }
+    window.location.reload();
+  }
+
   function cancel() {
-    // Everything so far was a live DOM mutation; reloading the pane is the
+    // Everything so far was a live DOM mutation; re-rendering the pane is the
     // cheapest honest way back to the stored article.
     var dirty = state && state.ops.length > 0;
     teardown();
-    if (dirty) window.location.reload();
+    if (dirty) refreshPane();
   }
 
   async function save() {
@@ -278,7 +291,7 @@
           + ' those elements are added when the page renders, so there is nothing to remove.');
       }
       teardown();
-      window.location.reload();
+      refreshPane();
     } catch (_e) {
       window.alert('Could not save the cleanup.');
       if (state) {
@@ -332,7 +345,7 @@
         window.alert(data.error || 'Could not revert the cleanup.');
         return;
       }
-      window.location.reload();
+      refreshPane();
     } catch (_e) {
       window.alert('Could not revert the cleanup.');
     }

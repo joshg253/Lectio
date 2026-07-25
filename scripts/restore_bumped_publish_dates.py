@@ -27,6 +27,7 @@ Usage (inside the app container):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sqlite3
 import sys
@@ -112,6 +113,13 @@ def run_for_user(apply: bool, include_uncorroborated: bool, verbose: bool) -> di
 
     restored = 0
     if apply and candidates:
+        # Snapshot every row before touching it. The originals are recoverable
+        # from the archive anyway, but an undo file makes reversing this one
+        # command instead of an argument about which record to trust.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        undo_path = tenancy.user_data_dir() / f"restored_publish_dates_{stamp}.json"
+        undo_path.write_text(json.dumps(candidates, indent=1))
+        print(f"    undo snapshot: {undo_path}")
         with main.get_reader() as reader:
             db = reader._storage.get_db()
             db.execute("PRAGMA busy_timeout = 20000")
