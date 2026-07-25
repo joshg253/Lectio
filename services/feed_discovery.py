@@ -263,6 +263,37 @@ def _body_is_feed(text: str) -> bool:
     return bool(_FEED_BODY_RE.search(text[:1024]))
 
 
+_MAX_PROBE_REDIRECTS = 3
+
+
+def _head_following_redirects(url: str, *, timeout: float, headers: dict | None):
+    """HEAD that resolves redirects one *guarded* hop at a time.
+
+    _guarded_head deliberately refuses to follow redirects, so a probe can't be
+    bounced to an internal address after the SSRF pre-check. Re-running the
+    guard on every hop keeps exactly that property while letting the caller see
+    where an advertised feed actually lands — which matters because a stale
+    autodiscovery tag is often an ``http://`` URL whose 301 hides the 404 behind
+    it (leereilly.net advertising http://leereilly.net/feed.xml, reported
+    2026-07-25). Returns None when the chain is unsafe, broken, or too long,
+    which callers read as "inconclusive".
+    """
+    seen: set[str] = set()
+    for _ in range(_MAX_PROBE_REDIRECTS + 1):
+        resp = _guarded_head(url, timeout=timeout, headers=headers)
+        if resp is None or not resp.is_redirect:
+            return resp
+        location = resp.headers.get("location")
+        if not location:
+            return resp
+        nxt = str(httpx.URL(url).join(location))
+        if nxt in seen:
+            return resp  # redirect loop — treat as inconclusive
+        seen.add(nxt)
+        url = nxt
+    return None
+
+
 def _advertised_feed_dead(url: str, *, headers: dict | None) -> bool:
     """Positively confirm an advertised feed URL is broken (stale autodiscovery
     tag — sites move a feed and leave the old <link rel="alternate"> behind,
@@ -270,18 +301,25 @@ def _advertised_feed_dead(url: str, *, headers: dict | None) -> bool:
 
     Conservative on purpose: an advertised link is only discarded when a HEAD
     comes back 4xx/5xx with the current identity AND after a browser-identity
-    retry. 405/501 (HEAD-hostile servers), redirects, network errors, and
-    SSRF-blocked URLs all keep the link."""
+    retry. 405/501 (HEAD-hostile servers), network errors, and SSRF-blocked URLs
+    all keep the link.
+
+    Redirects are *followed* (guarded, one hop at a time) rather than keeping
+    the link outright: a stale tag is often an ``http://`` URL, and stopping at
+    its 301 hid the 404 behind it — so discovery offered a feed that the add
+    then refused, with no way for the user to tell which was right."""
     def _confirms_dead(resp) -> bool:
         return resp is not None and resp.status_code >= 400 and resp.status_code not in (405, 501)
 
     try:
-        head = _guarded_head(url, timeout=3.0, headers=headers)
+        head = _head_following_redirects(url, timeout=3.0, headers=headers)
         if head is None or not _confirms_dead(head):
             return False
         if headers is _BROWSER_HEADERS:
             return True
-        return _confirms_dead(_guarded_head(url, timeout=3.0, headers=_BROWSER_HEADERS))
+        return _confirms_dead(
+            _head_following_redirects(url, timeout=3.0, headers=_BROWSER_HEADERS)
+        )
     except Exception:
         return False
 

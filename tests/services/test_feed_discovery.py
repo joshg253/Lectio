@@ -273,6 +273,70 @@ class TestDeadAdvertisedFallback:
         assert result == ["https://example.com/rss"]
 
 
+class TestRedirectingAdvertisedFeed:
+    """A stale autodiscovery tag is often an ``http://`` URL. The dead-link
+    probe used to stop at its 301 and keep the link, never seeing the 404
+    behind it — so discovery offered a feed the add then refused
+    (leereilly.net, reported 2026-07-25).
+    """
+
+    HTML = (
+        '<html><head>'
+        '<link rel="alternate" type="application/rss+xml" href="http://example.com/feed.xml" />'
+        '</head><body>' + ("x" * 600) + '</body></html>'
+    )
+
+    @staticmethod
+    def _head(status_by_url):
+        def fake_head(url, **_kwargs):
+            url = str(url)
+            spec = status_by_url.get(url)
+            if spec is None:
+                return _mock_response(url, "text/html", status=404)
+            if isinstance(spec, tuple):  # (status, location)
+                resp = _mock_response(url, "text/html", status=spec[0])
+                resp.headers = {"location": spec[1]}
+                resp.is_redirect = True
+                return resp
+            return _mock_response(url, spec)
+        return fake_head
+
+    def test_dead_link_behind_a_redirect_loses_to_a_working_alternative(self):
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": None,          # 404 — the truth
+            "https://example.com/rss": "application/rss+xml",  # the live feed
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
+
+    def test_live_feed_behind_a_redirect_is_kept(self):
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": "application/rss+xml",
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["http://example.com/feed.xml"]
+
+    def test_redirect_loop_keeps_the_link(self):
+        """Inconclusive, so the conservative default stands."""
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": (301, "http://example.com/feed.xml"),
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["http://example.com/feed.xml"]
+
+
 class TestMultisitePathScopedFeeds:
     """Multisite WordPress puts a whole blog under a path
     (devblogs.microsoft.com/oldnewthing/) while the domain root serves a
