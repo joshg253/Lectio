@@ -73,7 +73,7 @@ def replace_entry_content(
     article_html: str,
     feed_url: str = SAVED_FEED_URL,
     *,
-    bump_date: bool = True,
+    bump_received: bool = True,
     pin_content: bool = False,
 ) -> None:
     """Replace a captured article's stored content with a fresh extraction.
@@ -88,20 +88,30 @@ def replace_entry_content(
     ``lectio:saved`` while leaving it a Lectio capture, and re-fetching such an
     article has to update it where it now lives.
 
-    *bump_date* pushes published/saved_at to now (top of the backlog) — right for
-    a capture the user just re-pulled, but wrong for a *feed* entry being
-    enriched, which should keep its chronological position. *pin_content* writes
-    an ``entry_content_overrides`` row so a later feed refresh can't clobber the
-    re-fetched content with the feed's own thinner copy — set for feed entries,
-    which reader re-ingests (a capture's feed never refreshes)."""
+    *bump_received* surfaces the re-pulled article at the top of the backlog by
+    moving its **Received** date (and saved_at) to now. It used to move
+    ``published`` instead, which was wrong twice over: Pub means the date the
+    article was published, and a re-fetch does not republish it; and under a
+    Pub-oldest sort the bump buried the article at the far end of the list
+    rather than surfacing it. Measured on the live library 2026-07-25: 105
+    entries had lost their real publish dates this way. Received is the honest
+    home for "when this content arrived", and needs no new per-entry field.
+
+    Both received columns move together: ``first_updated`` backs ``Entry.added``
+    (what the UI shows and the render-path sort reads) and ``recent_sort`` backs
+    the list's SQL fast path. *pin_content* writes an ``entry_content_overrides``
+    row so a later feed refresh can't clobber the re-fetched content with the
+    feed's own thinner copy — set for feed entries, which reader re-ingests (a
+    capture's feed never refreshes)."""
     now = datetime.now(timezone.utc)
-    stored_published = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
+    stored_received = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
     content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
     db = reader._storage.get_db()
-    if bump_date:
+    if bump_received:
         db.execute(
-            "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
-            (content_json, stored_published, feed_url, entry_id),
+            "UPDATE entries SET content = ?, first_updated = ?, recent_sort = ?"
+            " WHERE feed = ? AND id = ?",
+            (content_json, stored_received, stored_received, feed_url, entry_id),
         )
     else:
         db.execute(
@@ -131,7 +141,7 @@ def replace_entry_content(
             conn.commit()
         except sqlite3.OperationalError as exc:
             LOGGER.warning("save-article: content pin failed for %s: %s", entry_id, exc)
-    if not bump_date:
+    if not bump_received:
         return
     # The saved_at bump is cosmetic ordering — never let a transient lock
     # (e.g. the archive worker writing at the same instant) fail the save
@@ -265,7 +275,7 @@ def refresh_captured_article(
         # never refreshes).
         replace_entry_content(
             reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
-            bump_date=is_capture, pin_content=not is_capture,
+            bump_received=is_capture, pin_content=not is_capture,
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("refresh-capture: content replace failed for %s: %s", entry_id, exc)

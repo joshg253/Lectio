@@ -203,10 +203,14 @@ def test_saved_entries_are_protected_from_updates(reader, meta_conn):
     assert reader.get_entry((SAVED_FEED_URL, "https://example.com/post")) is not None
 
 
-def test_resave_with_refresh_replaces_content_and_bumps(reader, meta_conn):
+def test_resave_with_refresh_replaces_content_and_bumps_received_not_published(reader, meta_conn):
     """A captured-DOM re-save (e.g. the page was cleaned up in-browser first)
-    replaces the stored content and bumps the entry to the top of the backlog;
-    URL-only re-saves stay light no-ops (covered above)."""
+    replaces the stored content and surfaces the entry at the top of the
+    backlog; URL-only re-saves stay light no-ops (covered above).
+
+    The surfacing moves **Received**, never **Pub**: a re-fetch does not
+    republish the article, and under a Pub-oldest sort bumping published buried
+    the entry at the far end of the list instead of surfacing it."""
     save_article(reader, meta_conn, "https://example.com/post", extract=_extract_ok)
     old = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
 
@@ -221,8 +225,11 @@ def test_resave_with_refresh_replaces_content_and_bumps(reader, meta_conn):
     fresh = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
     assert fresh.content[0].value == "<p>Aardvark-cleaned body.</p>"
     assert fresh.title == "Cleaned Title"
+    assert fresh.published == old.published, "Pub is the publication date, not the last-touched date"
     from datetime import timedelta
-    assert fresh.published >= old.published - timedelta(seconds=1)  # bumped to now (stored w/o microseconds)
+    # Received is stored in reader's naive-UTC format, i.e. without microseconds,
+    # so a bump inside the same second reads as marginally earlier.
+    assert fresh.added >= old.added - timedelta(seconds=1), "Received carries the re-fetch instead"
 
 
 def test_resave_refresh_respects_pinned_title(reader, meta_conn):

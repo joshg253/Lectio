@@ -746,6 +746,12 @@ The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
 
+**A re-fetch moves Received, never Pub.** Surfacing a re-pulled capture at the top of the backlog used to be done by writing `entries.published = now` — which corrupted the data it sorted by. Pub means the date the article was published, and re-fetching does not republish it; worse, under a **Pub oldest** sort the bump did the opposite of surfacing, sending the article to the far end of the list. Measured on the live library 2026-07-25: **101 entries** had lost their real publish dates this way, some by 16 years. `replace_entry_content(bump_received=...)` now moves the Received date instead — which is honest ("this content arrived just now"), sorts correctly in both directions, and needs no new per-entry field. Both received columns move together: `first_updated` backs `Entry.added`, which the UI displays and the render-path sort reads, and `recent_sort` backs the list's SQL fast path.
+
+`scripts/restore_bumped_publish_dates.py` repairs entries already damaged. The original date is recovered from the starred archive (`archived_entry.published_at`), which snapshots each entry's dates at capture and is untouched by a content re-fetch, and is cross-checked against reader's own `recent_sort` (the entry's original sort position, likewise untouched). Only forward drift qualifies — a bump can only move a date later — and by default only rows where the two independent records agree are restored; on the live library that was all 101, with zero disagreements.
+
+Worth knowing when touching the received sort: the two list paths read **different columns** for it. The SQL fast path orders by `recent_sort`; the render path sorts on `received_timestamp`, i.e. `Entry.added`/`first_updated`. They agree for ordinary ingested entries and can disagree for entries written outside the normal path, which is why the bump above writes both.
+
 Entry points: the **+ Save Article** modal (session `POST /articles/save`), a
 bookmarklet (`GET /articles/save?url=…` — a top-level navigation, so the
 SameSite=Lax session cookie rides along and an unauthenticated hit round-trips

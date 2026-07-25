@@ -1123,6 +1123,36 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
+### 8b. Restore the 101 publish dates a re-fetch overwrote — NEEDS GO-AHEAD
+
+Cause fixed 2026-07-25: `replace_entry_content` bumped `entries.published` to now
+to surface a re-pulled capture, which is wrong twice over (Pub is a publication
+date, not a last-touched date; and under the Pub-oldest sort in use the bump
+*buried* the article instead of surfacing it). It now bumps **Received** instead.
+
+The damage is already in the DB. `scripts/restore_bumped_publish_dates.py`
+recovers the original date from the starred archive's `published_at`,
+cross-checked against reader's `recent_sort`. Dry-run 2026-07-25 on the live
+library: **101 candidates, 101 corroborated, 0 uncorroborated** (second user: 0).
+Drift runs up to 16 years — e.g. LWN "What every programmer should know about
+memory, Part 1" reading 2026-07-25 instead of 2012-05-03. DB-only change, so it
+waits for an explicit go-ahead:
+
+    uv run scripts/restore_bumped_publish_dates.py --apply
+
+Re-run the dry-run first — the guitarworld batch (~20 rows re-fetched 2026-07-24)
+shows this accrues whenever a bulk re-fetch runs, so the count moves.
+
+### 8c. Flaky test: `test_tampered_hash_fails` (~1.3% failure rate)
+
+`tests/services/test_passwords.py::test_tampered_hash_fails` flips the **last**
+base64 character of a scrypt digest and asserts verification fails. Measured
+2026-07-25: 4 failures in 300 hashes — when the digest length leaves slack bits
+in the final base64 character, the flipped string decodes to the *same* bytes and
+verification correctly succeeds. The test is wrong, not the code. Fix is one
+line: flip a character in the middle of the digest, or assert on decoded bytes.
+Same family as the other CI flakes tracked under Code health.
+
 ### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements

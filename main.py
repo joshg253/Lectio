@@ -22584,7 +22584,7 @@ def clean_entry_content_route(
             conn.commit()
             saved_articles_service.replace_entry_content(
                 reader, conn, entry_id, "", new_html, feed_url=feed_url,
-                bump_date=False, pin_content=True,
+                bump_received=False, pin_content=True,
             )
     return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
 

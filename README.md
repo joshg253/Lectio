@@ -80,7 +80,9 @@ The short version:
   article in place to repair a bad initial capture — available for any article
   Lectio captured, including ones already filed onto a real feed, and worth
   trying when a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later; **File saved articles** matches
+  often extracts correctly later (a re-fetch updates the article's **Received**
+  date, never its **Pub** date — Pub stays the date it was published);
+  **File saved articles** matches
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later
   library built from feeds; an **Instapaper CSV import**
