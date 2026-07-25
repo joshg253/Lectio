@@ -8690,6 +8690,13 @@ def get_feed_properties(feed_url: str) -> dict:
             "devto_feed_id": _devto_id,
             "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
+            # Declared domain migrations for this feed. Rendered as the "Other
+            # domains" list under Website, which is the only way to see them —
+            # they otherwise act invisibly at ingest and in the global dedupe
+            # alias map.
+            "url_rewrites": [
+                {"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)
+            ],
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -22759,6 +22766,97 @@ def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
         "to_host": to_host,
         "migrated": stats.get("migrated", 0),
     })
+
+
+def _normalize_alias_host(value: str) -> str:
+    """Accept a pasted URL or a bare hostname, return the bare host.
+
+    Users copy what's in the address bar, so ``https://tushar.bio/`` has to work
+    as readily as ``tushar.bio``. A leading ``www.`` is dropped to match
+    get_dedupe_host_aliases, which stores and compares keys without it."""
+    host = (value or "").strip().lower()
+    if not host:
+        return ""
+    if "//" in host:
+        host = urlparse(host).netloc or ""
+    host = host.split("@")[-1].split(":")[0].strip("/")
+    host = host.removeprefix("www.")
+    # A host has no path or spaces and needs at least one dot to be a domain.
+    if not host or "/" in host or " " in host or "." not in host:
+        return ""
+    return host
+
+
+@app.post("/feeds/url-rewrites")
+def add_feed_url_rewrite_route(
+    feed_url: str = Form(...), from_host: str = Form(...), to_host: str = Form(""),
+):
+    """Declare another domain this feed's author used, from Feed Properties.
+
+    Edit Website can only seed a rule for a host it can *infer* (the channel
+    <link>, or the host most posts link to), so an author's older dead domain
+    with no surviving entries had no way in at all — the reason this exists.
+    *to_host* defaults to the feed's current Website host.
+
+    Existing entries on the old host are migrated inline, exactly as Edit
+    Website does; a dead domain with nothing on it simply reports 0 migrated
+    and the rule stands for the future (ingest rewrites, and the global dedupe
+    alias map pairs a saved article from the old domain with its twin here).
+    """
+    from_norm = _normalize_alias_host(from_host)
+    if not from_norm:
+        return JSONResponse({"ok": False, "error": "Enter a domain like example.com."}, status_code=400)
+
+    with get_reader() as reader:
+        feed_obj = reader.get_feed(feed_url, None)
+        if feed_obj is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        to_norm = _normalize_alias_host(to_host)
+        if not to_norm:
+            to_norm = _normalize_alias_host(str(getattr(feed_obj, "link", "") or ""))
+        if not to_norm:
+            to_norm = _normalize_alias_host(feed_url)
+    if not to_norm:
+        return JSONResponse(
+            {"ok": False, "error": "This feed has no Website set — set one first."}, status_code=400
+        )
+    if from_norm == to_norm:
+        return JSONResponse({"ok": False, "error": "That's already this feed's domain."}, status_code=400)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+            (feed_url, from_norm, to_norm),
+        )
+        conn.commit()
+    stats = migrate_feed_host_rewrite(feed_url, {from_norm: to_norm})
+    invalidate_unread_counts_cache()
+    invalidate_meta_structure_cache()
+    return JSONResponse({
+        "ok": True, "from_host": from_norm, "to_host": to_norm,
+        "migrated": stats.get("migrated", 0),
+    })
+
+
+@app.post("/feeds/url-rewrites/delete")
+def delete_feed_url_rewrite_route(feed_url: str = Form(...), from_host: str = Form(...)):
+    """Drop a declared domain alias.
+
+    Only future rewrites stop — entries already migrated keep their new ids and
+    links, because the old id is gone and re-deriving it would scatter the star,
+    tags and archive rows that followed it across. The UI says so before asking.
+    """
+    from_norm = _normalize_alias_host(from_host) or (from_host or "").strip().lower()
+    with get_meta_connection() as conn:
+        removed = conn.execute(
+            "DELETE FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+            (feed_url, from_norm),
+        ).rowcount
+        conn.commit()
+    if not removed:
+        return JSONResponse({"ok": False, "error": "That alias is no longer set."}, status_code=404)
+    invalidate_meta_structure_cache()
+    return JSONResponse({"ok": True, "removed": removed})
 
 
 @app.post("/entries/move-to-feed")

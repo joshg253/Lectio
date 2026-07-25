@@ -5,6 +5,14 @@ this file only tracks what's still open.
 
 ## Now (priority order)
 
+**Rule-management UI shipped 2026-07-25** — Feed Properties → **Other domains**
+lists a feed's declared domain aliases with add/remove (`POST
+/feeds/url-rewrites`, `…/delete`). Closes the deferral below: Edit Website can
+only seed a rule for a host it can *infer*, so an author's older dead domain
+(Tushar's `tusharsadhwani.dev` / `tushar.bio`, neither with a surviving entry)
+had no way into `feed_url_rewrites`, no way to be seen, and no way to be removed
+short of SQL.
+
 **Shipped 2026-07-23 (engines done, rule-management UI deferred to a browser
 session):**
 - **"Fix URLs" per-feed host rewrite** — for an author who moved domains without

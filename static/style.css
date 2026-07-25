@@ -5675,6 +5675,18 @@ mark.highlight-mark {
   box-shadow: 0 0 0 1px var(--field-focus-ring);
 }
 .feed-prop-inline-status { font-size: 0.78rem; color: var(--danger, #c0392b); }
+
+/* Feed Properties -> "Other domains": declared domain migrations. */
+.feed-prop-alias-list { margin: 0 0 0.3rem; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.2rem; }
+.feed-prop-alias-item { display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; }
+.feed-prop-alias-item code { font-size: 0.78rem; }
+.feed-prop-alias-arrow { color: var(--muted, #888); }
+.feed-prop-alias-del { padding: 0 0.35rem; line-height: 1.4; }
+.feed-prop-alias-del:hover { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+.feed-prop-alias-empty { font-size: 0.8rem; color: var(--muted, #888); margin-right: 0.4rem; }
+.feed-prop-alias-empty[hidden] { display: none; }
+#feed-prop-alias-add-wrap { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+#feed-prop-alias-status { color: var(--muted, #888); }
 .unsub-migrate-select-all-row { font-size: 0.85rem; margin: 0.35rem 0 0; }
 .unsub-migrate-items { margin: 0.35rem 0 0.6rem; max-height: 11rem; overflow-y: auto; font-size: 0.85rem; }
 .unsub-migrate-item-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.2rem; }

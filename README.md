@@ -117,7 +117,13 @@ The short version:
   Properties when an author moved domains without updating their feed's
   `<guid>`/`<link>`: it rewrites every post link onto the new domain (carrying
   stars/tags/read state), records the rule so re-ingested items stay corrected,
-  and fixes the site link, favicon and duplicate-scan pairing too.
+  and fixes the site link, favicon and duplicate-scan pairing too. For an author
+  who moved more than once, **Other domains** in the same dialog lists every
+  domain declared for that feed and lets you add or remove one by hand — needed
+  because edit Website can only declare a domain it can still see in the feed,
+  which leaves an *older* dead domain with no way in. Adding one migrates any
+  posts still on it; a domain with none left is still worth declaring, since it
+  pairs old saved links with their current twins in the duplicate scan.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can
