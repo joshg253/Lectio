@@ -10234,6 +10234,11 @@ def _strip_comment_sections(raw_html: str) -> str:
 # nor the selector/whole-body fallbacks drag it in. Kept to markers that are
 # never article prose: named share/newsletter/ad/affiliate widgets, tooltips,
 # and <aside> (tangential content by definition).
+# A chrome match holding at least this share of the page's text is treated as
+# the article itself and kept. Share bars and signup boxes run a few percent;
+# an article container runs most of the page, so anything in between is safe.
+_CHROME_MAX_TEXT_SHARE = 0.4
+
 _ARTICLE_CHROME_SELECTORS = (
     '[class*="flexisites-social"]',   # Future plc social-share bar
     '[class*="byline-social"]',
@@ -10258,8 +10263,18 @@ def _strip_article_chrome(raw_html: str) -> str:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
         removed = False
+        # Chrome is small next to the article it decorates. A match holding most
+        # of the page's text is therefore not chrome — it's the article wearing
+        # a word this list happens to look for. selfh.st's Self-Host Weekly is
+        # a *newsletter*, so its body container matches [class*="newsletter"]
+        # and stripping it took 99.9% of the page, leaving Readability view with
+        # a lead image and nothing else.
+        total_text = len(soup.get_text(" ", strip=True))
         for sel in _ARTICLE_CHROME_SELECTORS:
             for el in soup.select(sel):
+                if total_text and len(el.get_text(" ", strip=True)) >= total_text * _CHROME_MAX_TEXT_SHARE:
+                    LOGGER.info("[extract] keeping %s: holds most of the page's text, not chrome", sel)
+                    continue
                 el.decompose()
                 removed = True
         # JW Player video carousels ("Latest Videos From … Watch full video
