@@ -1263,6 +1263,47 @@ Rate was never pinned down — seen failing in a full run, reproduced at 4/300
 hashes once, then 0/400 in a later sample. The fix removes the class rather than
 narrowing the odds, which matters more now that CI is the only reviewer.
 
+### 8g. Extension save should MERGE into the existing post, not add a copy
+
+**The goal, in Josh's words (2026-07-26):** "open any article webpage, save it via
+extension, and that would get merged into the post, with no loss of data."
+
+Today an extension save always creates a *new* `lectio:saved` entry, even when
+the article is already subscribed. One Medium article ended up in three places —
+the feed's own `/p/<hash>` copy (15KB **plus the five feed tags**), an empty
+auto-filed capture, and the 44KB extension capture — with the body on one, the
+tags on another, and nothing joining them. Moving copies around then lost the
+body outright (fixed 2026-07-26, "carry the body when the target copy is
+emptier"), but the copies themselves are the real problem.
+
+**Matching is already solved, which is the good news.** Both Medium copies carry
+the *same* `link` (the long article URL) even though their ids differ, so
+`normalize_entry_link_for_dedupe` — with `get_dedupe_host_aliases` for declared
+domain migrations — pairs them exactly. No per-site logic needed.
+
+Design sketch:
+
+- On save, look for an existing entry whose normalized link matches, across all
+  feeds, before creating anything. Prefer the **feed-provided** entry as the
+  survivor: it keeps updating, and it is the one carrying `entry_feed_tags`.
+- Merge rather than replace: longest body wins (the extension capture usually,
+  pinned via `entry_content_overrides` so refresh can't thin it), union of feed
+  tags and manual tags, star set, earliest real **Pub** date kept (not the save
+  time — see the Received/Pub fix), existing title kept unless pinned.
+- Only when nothing matches does a new `lectio:saved` entry get created, exactly
+  as now.
+
+This subsumes several open items: the empty-capture case, tags-stranded-on-a-twin,
+and much of the cross-feed duplicate work in #6 — a save that merges is a
+duplicate that never happens. It is also the natural home for the entry-level
+merge tool #6 wants ("keep the better body, union the tags"), since both need the
+same primitive.
+
+Worth pairing with a **time-to-read estimate** (Josh, same day): word count over
+~220 wpm. Cheap to compute, but decide first whether it is derived at render or
+stamped at ingest into a column (sortable/filterable later), and whether it shows
+in the post list, the article header, or both.
+
 ### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
 
 Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
