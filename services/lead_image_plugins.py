@@ -1023,7 +1023,51 @@ class AnalogueLeadImagePlugin:
         return None
 
 
+@dataclass(frozen=True)
+class TinyviewPlugin:
+    """tinyview.com — a JS app whose served HTML is a loading skeleton.
+
+    The generic scan found `Tinyview_skeleton-animation.gif` and cached it as
+    the lead image, so the reader rendered the site's pre-hydration skeleton
+    where the comic should be. The panels *are* in that HTML though: every one
+    is an absolute cdn.tinyview.com URL under the entry's own path
+    (cdn.tinyview.com/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg), so no
+    rendering is needed — only knowing where to look.
+
+    Strips are multi-panel; this returns the first panel as the lead image.
+    Turn on the feed's "inject source images" preference to show them all.
+    """
+
+    host: str = "tinyview.com"
+    _CDN: str = "cdn.tinyview.com"
+    # Everything under assets.tinyview.com is site chrome: the skeleton
+    # animation, the wordmark, the icons8 button set, favicons.
+    _ASSETS: str = "assets.tinyview.com"
+
+    def _is_target(self, url: str) -> bool:
+        return self.host in urlparse(url).netloc.lower()
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        if not self._is_target(entry_link):
+            return False
+        return self._CDN not in urlparse(cached_url).netloc.lower()
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        if not self._is_target(source_url):
+            return 0
+        host = urlparse(resolved_url).netloc.lower()
+        if self._ASSETS in host:
+            return -200
+        if self._CDN in host:
+            return 100
+        return 0
+
+
 DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
+    TinyviewPlugin(),
     AnalogueLeadImagePlugin(),
     StandardEbooksLeadImagePlugin(),
     FutureSiteLeadImagePlugin(),

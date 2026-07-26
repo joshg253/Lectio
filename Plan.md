@@ -1187,7 +1187,28 @@ while the article's own `<img>` came from the feed body and rendered fine.
   The detector is generic: a panel is unique per strip, so an image cached as the
   lead for many entries of one webcomic feed is chrome by definition.
 
-**Still open:**
+**Closed 2026-07-26** — all four reported comics resolve to their panel
+(atomic-robo 1.2MB `…494`, gunnerkrigg, smbc, whomp). Three further causes were
+found behind the first: the blind `/comicsthumbs/`→`/comics/` rewrite existed in
+*two* places (thumbnail path as well as body), five `_fetch_source_lead_image`
+call sites on the render/revalidate paths never passed `is_webcomic` (so a page
+scanned there returned site chrome), and `_derive_article_lead_image` bypassed
+the cache for webcomic feeds, showing the inline thumbnail instead of the cached
+panel. **tinyview** now has a plugin (`TinyviewPlugin`) — its panels were in the
+served HTML all along as `cdn.tinyview.com` URLs; the scan was picking
+`assets.tinyview.com` chrome. Its feed also has `inject_source_images` on so all
+panels render, not just the first.
+
+**DeviantArt mature images — FIXED 2026-07-26, but it recurs.** Not an age gate:
+DA signs mature deviations' image URLs with a ~7-day JWT and **every** variant
+shares the expiry (checked live: `content.src` and both thumbs all
+`exp=1785040938`), so there is no permanent thumbnail to prefer — the fix first
+proposed would not have worked. `scripts/refresh_expired_deviantart_images.py`
+re-fetches expired ones from the API and rewrites the stored HTML; 4 refreshed,
+0 stale after. **Worth scheduling**: each refresh buys about another week, so
+mature deviations rot again without a periodic pass.
+
+**Superseded — the old open list:**
 
 1. **tinyview** — a different animal. It is a JS app, and what got scraped is
    `Tinyview_skeleton-animation.gif`, the pre-hydration loading skeleton, which
