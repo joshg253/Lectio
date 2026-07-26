@@ -1,6 +1,8 @@
 """Unit tests for services/passwords.py."""
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from services import passwords
@@ -52,8 +54,17 @@ def test_needs_rehash_across_schemes():
 def test_tampered_hash_fails():
     h = passwords.hash_password("pw", "scrypt")
     scheme, params, salt, digest = h.split("$", 3)
-    # Flip a character in the stored digest.
-    tampered = "$".join([scheme, params, salt, digest[:-1] + ("A" if digest[-1] != "A" else "B")])
+    # Flip a bit in the decoded digest, not a character in its base64. This used
+    # to flip the digest's *last* character, which is not always a real change:
+    # when the digest length leaves slack bits in that character, several values
+    # decode to identical bytes, so verification correctly succeeded and the test
+    # failed on working code. It was seen failing in a full run and reproduced at
+    # 4/300 hashes once; a later 400-hash sample showed none, so the rate is
+    # unclear — but flipping a decoded bit always changes the bytes, which
+    # removes the question rather than narrowing it.
+    raw = bytearray(base64.b64decode(digest.encode("ascii")))
+    raw[0] ^= 0x01
+    tampered = "$".join([scheme, params, salt, base64.b64encode(bytes(raw)).decode("ascii")])
     assert not passwords.verify_password("pw", tampered)
 
 

@@ -1251,15 +1251,17 @@ mature deviations rot again without a periodic pass.
    at all**, so neither image nor thumb can exist. Suspect the DA sync silently
    drops mature items (scope/param on the API call). Needs its own pass.
 
-### 8c. Flaky test: `test_tampered_hash_fails` (~1.3% failure rate)
+### 8c. Flaky test `test_tampered_hash_fails` — FIXED 2026-07-26
 
-`tests/services/test_passwords.py::test_tampered_hash_fails` flips the **last**
-base64 character of a scrypt digest and asserts verification fails. Measured
-2026-07-25: 4 failures in 300 hashes — when the digest length leaves slack bits
-in the final base64 character, the flipped string decodes to the *same* bytes and
-verification correctly succeeds. The test is wrong, not the code. Fix is one
-line: flip a character in the middle of the digest, or assert on decoded bytes.
-Same family as the other CI flakes tracked under Code health.
+The test flipped the **last** base64 character of a scrypt digest, which is not
+always a real change: when the digest length leaves slack bits in that
+character, several values decode to identical bytes, so verification correctly
+succeeded and the test failed on working code. It now flips a bit in the
+*decoded* digest, which always changes the bytes.
+
+Rate was never pinned down — seen failing in a full run, reproduced at 4/300
+hashes once, then 0/400 in a later sample. The fix removes the class rather than
+narrowing the odds, which matters more now that CI is the only reviewer.
 
 ### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
 
