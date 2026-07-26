@@ -10608,14 +10608,44 @@ def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
     return title, article_html
 
 
+# Statuses that mean "refused", not "absent" — the cue to retry once with a
+# browser identity before believing the answer. Medium answers a *live* article
+# with 404 or 403 depending on the URL when it doesn't like the client, and a
+# 404 taken at face value told the user the article was gone and offered to
+# delete it. Mirrors feed_discovery's escalation policy.
+_READABILITY_REFUSAL_STATUSES = frozenset({401, 403, 404, 405, 410, 429, 451, 503})
+_READABILITY_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
 def fetch_readability_article(source_url: str) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
     route and save-article capture. Raises on fetch/extraction failure.
     Markdown documents (text/markdown, or .md/.md.txt paths served as plain
-    text) are converted instead of readability-extracted."""
-    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
+    text) are converted instead of readability-extracted.
+
+    An honest fetch is tried first; only if the host refuses does it retry once
+    with a browser identity. That retry is not about winning an arms race — a
+    host that blocks by IP still refuses — but about not *mistaking a refusal
+    for a deletion*: the caller flags 404/410 as "the article is gone", and a
+    bot-wall answering 404 turned a live article into a delete prompt."""
+    headers = {"User-Agent": READABILITY_USER_AGENT}
+    with url_guard.build_client(timeout=12.0, headers=headers) as client:
+        response = url_guard.safe_get(client, source_url, headers=headers)
+    if response.status_code in _READABILITY_REFUSAL_STATUSES:
+        retry_headers = {"User-Agent": _READABILITY_BROWSER_UA}
+        try:
+            with url_guard.build_client(timeout=12.0, headers=retry_headers) as client:
+                retried = url_guard.safe_get(client, source_url, headers=retry_headers)
+            # Keep the retry only if it actually did better; otherwise the
+            # honest response is the one worth reporting.
+            if retried.is_success or retried.status_code != response.status_code:
+                response = retried
+        except Exception:  # noqa: BLE001 — the first response still stands
+            LOGGER.debug("readability: browser-identity retry failed for %s", source_url, exc_info=True)
     response.raise_for_status()
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
         return markdown_to_article_html(response.text, source_url)
@@ -24999,9 +25029,17 @@ async def refresh_saved_article_content(
         )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
     result = await run_in_threadpool(_save_article_for_current_user, url, None, True)
-    if not result.get("ok"):
+    # save_article treats extraction failure as non-fatal — right when *saving*
+    # (the bookmark is still worth keeping and the archive worker can retry),
+    # but wrong here: a re-fetch that extracted nothing changed nothing, and
+    # reporting ok made the button look like it worked while the article sat
+    # untouched (treblezine, reported 2026-07-26 as "refetches nothing but no
+    # error"). Only a real extraction counts as a successful re-fetch.
+    if not result.get("ok") or not result.get("extracted"):
         return JSONResponse(
-            {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+            {"ok": False,
+             "error": result.get("error") or "Re-fetch got nothing back from the page.",
+             "dead": bool(result.get("dead"))},
             status_code=400,
         )
     return JSONResponse({

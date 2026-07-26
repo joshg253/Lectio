@@ -29,6 +29,11 @@ from urllib.parse import urldefrag, urlparse
 
 LOGGER = logging.getLogger(__name__)
 
+# Statuses that mean the host refused *us*, not that the article is missing.
+# Kept distinct from 404/410 because those flag the entry as dead and offer a
+# delete — a bot-wall must never be able to trigger that for a live article.
+_BLOCKED_STATUSES = frozenset({401, 403, 429, 451, 503})
+
 SAVED_FEED_URL = "lectio:saved"
 SAVED_FEED_TITLE = "Saved Articles"
 
@@ -260,6 +265,15 @@ def refresh_captured_article(
         if status in (404, 410):
             result["error"] = f"The source article is gone (HTTP {status}) — nothing to re-fetch."
             result["dead"] = True
+        elif status in _BLOCKED_STATUSES:
+            # Refused, not absent. Say which, and point at the way through:
+            # the extension posts the page your own browser already loaded, so
+            # a host that blocks this server (Medium blocks datacenter IPs
+            # outright, browser identity or not) is no obstacle.
+            result["error"] = (
+                f"{urlparse(source_url).netloc or 'The site'} blocked the fetch (HTTP {status}). "
+                "Open it in your browser and save it with the Lectio extension instead."
+            )
         elif status is not None:
             result["error"] = f"Could not fetch the article (HTTP {status})."
         else:
