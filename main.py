@@ -15052,6 +15052,85 @@ def _run_daily_maintenance() -> None:
     LOGGER.info("[maintenance] daily maintenance complete")
 
 
+# NOT wired into nightly maintenance, deliberately. Measured 2026-07-26: a
+# freshly-signed mature-deviation URL expires in about **15 minutes**, not the
+# week the first sample suggested — so a 3am re-sign hands back images that are
+# dead by 3:15. Re-signing has to happen when the post is actually opened; this
+# routine stays as the building block for that (and for a manual catch-up via
+# scripts/refresh_expired_deviantart_images.py, which does make the image work
+# right now).
+# Bound one run's API calls. Mature deviations are a small slice of a library
+# and each needs its own request; anything beyond this waits for tomorrow rather
+# than hammering DeviantArt in one burst.
+_DA_IMAGE_REFRESH_MAX_PER_RUN = 100
+
+
+def refresh_expiring_deviantart_images(
+    *, within_seconds: float = 0.0, max_entries: int = _DA_IMAGE_REFRESH_MAX_PER_RUN,
+    apply: bool = True,
+) -> dict:
+    """Re-sign stored DeviantArt image URLs whose token has expired or is close to.
+
+    Matches on the *stored HTML* rather than a maturity flag: is_mature isn't
+    recorded, and the token is the thing that actually breaks. Runs for the
+    currently-bound tenancy user. Returns {"stale", "refreshed"}.
+    """
+    cutoff = time.time() + max(0.0, within_seconds)
+    stale: list[tuple[str, str, str]] = []  # (feed, entry_id, column)
+    with get_reader() as reader:
+        rows = reader._storage.get_db().execute(
+            "SELECT feed, id, summary, content FROM entries"
+            " WHERE COALESCE(summary, '') LIKE '%wixmp%token=%'"
+            "    OR COALESCE(content, '') LIKE '%wixmp%token=%'"
+        ).fetchall()
+    for feed, entry_id, summary, content in rows:
+        for column, body in (("summary", summary), ("content", content)):
+            if not body or "wixmp" not in body:
+                continue
+            exp = deviantart_service.image_token_expiry(body)
+            if exp is not None and exp < cutoff:
+                stale.append((str(feed), str(entry_id), column))
+                break
+    if not apply or not stale:
+        return {"stale": len(stale), "refreshed": 0}
+
+    # Not the raw stored value: DA access tokens last an hour, so a nightly job
+    # reading app_settings directly would 401 on almost every run. This is the
+    # same accessor the watch-list sync uses, refreshing from the refresh token
+    # when needed and returning "" when the session is dead.
+    token = get_deviantart_user_token()
+    if not token:
+        LOGGER.info("[deviantart] %d image(s) need re-signing but no usable access token "
+                    "(not connected, or reconnect required)", len(stale))
+        return {"stale": len(stale), "refreshed": 0}
+
+    refreshed = 0
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        for feed, entry_id, column in stale[:max_entries]:
+            # For DeviantArt feeds the stored entry id *is* the deviation id.
+            fresh = deviantart_service.fetch_fresh_image_url(entry_id, token)
+            if not fresh:
+                continue
+            body_row = db.execute(
+                f"SELECT {column} FROM entries WHERE feed = ? AND id = ?",  # nosemgrep: column is a literal
+                (feed, entry_id),
+            ).fetchone()
+            if not body_row or not body_row[0]:
+                continue
+            old = re.search(r'src="([^"]*wixmp[^"]*)"', body_row[0])
+            if not old:
+                continue
+            db.execute(
+                f"UPDATE entries SET {column} = ? WHERE feed = ? AND id = ?",  # nosemgrep: column is a literal
+                (body_row[0].replace(old.group(1), fresh.replace("&", "&amp;")), feed, entry_id),
+            )
+            refreshed += 1
+            time.sleep(0.3)  # stay a polite API client
+        db.commit()
+    return {"stale": len(stale), "refreshed": refreshed}
+
+
 def _daily_maintenance_for_user() -> None:
     """Per-user nightly cleanup for the currently-bound tenancy user."""
 

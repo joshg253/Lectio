@@ -1199,7 +1199,33 @@ served HTML all along as `cdn.tinyview.com` URLs; the scan was picking
 `assets.tinyview.com` chrome. Its feed also has `inject_source_images` on so all
 panels render, not just the first.
 
-**DeviantArt mature images — FIXED 2026-07-26, but it recurs.** Not an age gate:
+### 8f. DeviantArt mature images expire in ~15 minutes — needs render-time re-signing
+
+Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*
+deviations' wixmp URLs with a very short life: a freshly-signed URL expires in
+**~15 minutes** (0.01 days), and every variant shares the expiry, so there is no
+permanent thumbnail to prefer. Ordinary deviations are signed permanently
+(21,564 of 21,568 entries).
+
+**Nightly maintenance cannot fix this** — a 3am re-sign yields images dead by
+3:15 — so the hook was written, measured, and deliberately removed rather than
+shipped. What exists now:
+
+- `main.refresh_expiring_deviantart_images(within_seconds=…, apply=…)` — finds
+  entries whose stored image token has expired and re-signs them via the API,
+  using `get_deviantart_user_token()` (DA access tokens last an hour, so reading
+  `app_settings` directly 401s on any scheduled run).
+- `services.deviantart.image_token_expiry` / `fetch_fresh_image_url`.
+- `scripts/refresh_expired_deviantart_images.py` — manual catch-up; makes the
+  image work *right now*, which is all a batch pass can promise.
+
+**The real fix** is to re-sign when the post is opened: on entry-detail render for
+a DA feed, if the body's image token is expired, fetch a fresh URL and rewrite
+before serving. One API call per stale view, and the image is live for the
+minutes the reader is looking at it. Caching the bytes through `/api/img` while
+the token is briefly valid is the alternative worth weighing.
+
+**Superseded note (kept for the reasoning):** Not an age gate:
 DA signs mature deviations' image URLs with a ~7-day JWT and **every** variant
 shares the expiry (checked live: `content.src` and both thumbs all
 `exp=1785040938`), so there is no permanent thumbnail to prefer — the fix first
