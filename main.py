@@ -13400,6 +13400,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         lead_image_url, _pending_lead_image = _resolve_article_lead_image(
             entry, video_id, _show_lead_in_article
         )
+        # The lead image is what the article actually displays, and it comes from
+        # the lead-image cache rather than the body — so a DeviantArt URL here
+        # needs the same expiry check the body gets, or the post shows nothing
+        # while its (re-signed) body image would have been fine.
+        if isinstance(lead_image_url, str) and "wixmp" in lead_image_url:
+            _fresh_lead = _resign_expired_deviantart_url(lead_image_url, entry_id)
+            if _fresh_lead and _fresh_lead != lead_image_url:
+                lead_image_url = _fresh_lead
+                lead_image_service.persist_lead_image_async(feed_url, entry_id, _fresh_lead)
 
         # Remove inline images whose src URL is a logo, tracker, or avatar — these
         # are typically brand assets or analytics pixels embedded by feed publishers
@@ -15156,6 +15165,27 @@ def _img_cache_has(url: str) -> bool:
         return False
 
 
+def _resign_expired_deviantart_url(url: str | None, entry_id: str) -> str | None:
+    """Re-sign one expired DeviantArt image URL, or return it unchanged.
+
+    The single place that decides *whether* a re-sign is warranted, so the body
+    HTML and the lead image (resolved on a different path, from the lead-image
+    cache) can't drift apart — they did: the body was re-signed while the lead
+    image, which is what the article actually displays, kept its dead token.
+    """
+    if not url or "wixmp" not in url:
+        return url
+    exp = deviantart_service.image_token_expiry(url)
+    if exp is None or exp > time.time():
+        return url  # permanent, or still valid
+    if _img_cache_has(url):
+        return url  # the proxy holds the bytes; the token no longer matters
+    token = get_deviantart_user_token()
+    if not token:
+        return url
+    return deviantart_service.fetch_fresh_image_url(entry_id, token) or url
+
+
 def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id: str) -> str:
     """Re-sign a DeviantArt image whose URL token has already expired.
 
@@ -15173,25 +15203,14 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
     """
     if not content_html or "wixmp" not in content_html:
         return content_html
-    token: str | None = None
     replaced: dict[str, str] = {}
 
     def _sub(m: re.Match) -> str:
-        nonlocal token
         url = html.unescape(m.group(2))
-        exp = deviantart_service.image_token_expiry(url)
-        if exp is None or exp > time.time():
-            return m.group(0)  # permanent, or still valid
-        if _img_cache_has(url):
-            return m.group(0)  # proxy already holds the bytes; the token is moot
         if url in replaced:
             return f"{m.group(1)}{html.escape(replaced[url], quote=True)}{m.group(3)}"
-        if token is None:
-            token = get_deviantart_user_token()
-        if not token:
-            return m.group(0)
-        fresh = deviantart_service.fetch_fresh_image_url(entry_id, token)
-        if not fresh:
+        fresh = _resign_expired_deviantart_url(url, entry_id)
+        if not fresh or fresh == url:
             return m.group(0)
         replaced[url] = fresh
         return f"{m.group(1)}{html.escape(fresh, quote=True)}{m.group(3)}"
