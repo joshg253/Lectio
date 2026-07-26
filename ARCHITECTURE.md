@@ -1072,6 +1072,16 @@ When every advertised link is dead and nothing else answers, what happens next d
 - **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
 - **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
 
+## DeviantArt mature images: signed for minutes, cached for good
+
+DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are signed permanently; **mature** ones are signed for about **15 minutes**, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.
+
+Nothing scheduled can fix that: a nightly re-sign yields images dead a quarter of an hour later. The re-sign therefore happens **on open** — `_resign_expired_deviantart_images`, run in `get_entry_detail` just before the hotlink-proxy rewrite.
+
+What keeps it cheap is the proxy's byte cache, which was already most of the answer: `wixmp.com` is in `_HOTLINK_IMG_HOSTS`, so these images render through `/api/img`, and `_img_cache_key_url` strips `token`/`sig`/`exp` (`_IMG_CACHE_VOLATILE_PARAMS`) from the cache key. Once the bytes are cached under *any* valid token they answer for every later one. So the re-sign fires only when a token has already expired **and** the cache has no copy — one API call per image over its lifetime, not one per view — and a permanently-signed image (21,564 of 21,568 on the live library) never reaches the API at all. The fresh URL is persisted back onto the entry so the list thumbnail starts from it too.
+
+`scripts/refresh_expired_deviantart_images.py` remains as a manual catch-up over the same routine. Note it must use `get_deviantart_user_token()` rather than reading `deviantart_access_token` directly: DA access tokens last an hour, so any batch reading the stored value 401s on almost every run.
+
 ## Combining feeds carries the offline captures
 
 `_migrate_curation` moves a removed feed's manual tags and stars onto the survivor, and now its **starred-archive rows** too (`rekey_archive`, which carries the asset links and refuses to clobber a capture the survivor already has). Without that the captures stayed keyed to a feed that was about to be deleted: the articles were fine, but their offline copies became unreachable and the Saved view rendered them as archive-only *orphans* — from the archive row's own stale `link`, which is how it surfaced, as a combined feed's articles still showing their old dead URLs. Measured on the live library 2026-07-25, past combines had stranded **85** of them; `scripts/repair_orphaned_archives.py` re-attached them (64 re-keyed, 3 where the stranded row was the *better* capture and replaced a thinner twin, 18 redundant drops, 14 links refreshed).

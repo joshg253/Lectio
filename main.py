@@ -13635,6 +13635,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # hotlink hosts (e.g. nanolx.org) through the /api/img proxy so a
         # browser-cached placeholder under the original URL is bypassed. Skip
         # locally-served starred assets (same-origin, no hotlink concern).
+        # DeviantArt signs mature deviations' images for ~15 minutes, so a stored
+        # URL is usually dead by the time it is read. Re-sign on open, before the
+        # proxy rewrite below — the proxy's byte cache then holds the image for
+        # good, so this costs one API call per image, not per view.
+        if isinstance(content_html, str) and content_html:
+            content_html = _resign_expired_deviantart_images(content_html, feed_url, entry_id)
+
         if isinstance(content_html, str) and content_html and not is_saved:
             content_html = proxy_hotlink_images(content_html)
             content_html = add_no_referrer_to_images(content_html)
@@ -15129,6 +15136,93 @@ def refresh_expiring_deviantart_images(
             time.sleep(0.3)  # stay a polite API client
         db.commit()
     return {"stale": len(stale), "refreshed": refreshed}
+
+
+_WIXMP_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*")([^"]*wixmp[^"]*)(")', re.IGNORECASE)
+
+
+def _img_cache_has(url: str) -> bool:
+    """Is this image already in the proxy's byte cache? The cache key drops the
+    signing token (_img_cache_key_url), so a copy fetched under one token still
+    answers for every later one — which is what makes an expired DeviantArt URL
+    keep rendering."""
+    try:
+        key = hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest()
+        with get_img_cache_connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM img_cache WHERE cache_key = ? LIMIT 1", (key,)
+            ).fetchone() is not None
+    except Exception:  # noqa: BLE001 — a cache miss is the safe answer
+        return False
+
+
+def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id: str) -> str:
+    """Re-sign a DeviantArt image whose URL token has already expired.
+
+    Mature deviations are signed for only ~15 minutes, so a stored URL is dead
+    long before it is read and the post loses both image and thumbnail. A
+    scheduled re-sign can't help at that lifetime — the moment that matters is
+    when the post is opened, which is here.
+
+    Two things keep this cheap. The proxy's byte cache is consulted first: once
+    an image has been fetched under *any* valid token it answers forever (the
+    cache key drops the token), so a re-sign happens at most once per image
+    rather than once per view. And a still-valid token is left alone, so
+    ordinary permanently-signed deviations — 21,564 of 21,568 on the live
+    library — never reach the API at all.
+    """
+    if not content_html or "wixmp" not in content_html:
+        return content_html
+    token: str | None = None
+    replaced: dict[str, str] = {}
+
+    def _sub(m: re.Match) -> str:
+        nonlocal token
+        url = html.unescape(m.group(2))
+        exp = deviantart_service.image_token_expiry(url)
+        if exp is None or exp > time.time():
+            return m.group(0)  # permanent, or still valid
+        if _img_cache_has(url):
+            return m.group(0)  # proxy already holds the bytes; the token is moot
+        if url in replaced:
+            return f"{m.group(1)}{html.escape(replaced[url], quote=True)}{m.group(3)}"
+        if token is None:
+            token = get_deviantart_user_token()
+        if not token:
+            return m.group(0)
+        fresh = deviantart_service.fetch_fresh_image_url(entry_id, token)
+        if not fresh:
+            return m.group(0)
+        replaced[url] = fresh
+        return f"{m.group(1)}{html.escape(fresh, quote=True)}{m.group(3)}"
+
+    updated = _WIXMP_IMG_SRC_RE.sub(_sub, content_html)
+    if replaced:
+        # Persist so a later view (and the list thumbnail) starts from the fresh
+        # URL. It expires again in minutes, but by then the proxy has the bytes.
+        try:
+            with get_reader() as reader:
+                db = reader._storage.get_db()
+                for column in ("summary", "content"):
+                    row = db.execute(
+                        f"SELECT {column} FROM entries WHERE feed = ? AND id = ?",  # nosemgrep: literal
+                        (feed_url, entry_id),
+                    ).fetchone()
+                    if not row or not row[0] or "wixmp" not in row[0]:
+                        continue
+                    body = row[0]
+                    for old, new in replaced.items():
+                        body = body.replace(html.escape(old, quote=True), html.escape(new, quote=True))
+                        body = body.replace(old, new)
+                    db.execute(
+                        f"UPDATE entries SET {column} = ? WHERE feed = ? AND id = ?",  # nosemgrep: literal
+                        (body, feed_url, entry_id),
+                    )
+                db.commit()
+        except Exception:  # noqa: BLE001 — the served page is already correct
+            LOGGER.exception("[deviantart] could not persist re-signed image for %s", entry_id)
+        LOGGER.info("[deviantart] re-signed %d expired image URL(s) on open for %s", len(replaced), entry_id)
+    return updated
 
 
 def _daily_maintenance_for_user() -> None:

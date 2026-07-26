@@ -1219,11 +1219,15 @@ shipped. What exists now:
 - `scripts/refresh_expired_deviantart_images.py` — manual catch-up; makes the
   image work *right now*, which is all a batch pass can promise.
 
-**The real fix** is to re-sign when the post is opened: on entry-detail render for
-a DA feed, if the body's image token is expired, fetch a fresh URL and rewrite
-before serving. One API call per stale view, and the image is live for the
-minutes the reader is looking at it. Caching the bytes through `/api/img` while
-the token is briefly valid is the alternative worth weighing.
+**Shipped 2026-07-26:** `_resign_expired_deviantart_images` runs on entry-detail
+render, just before the hotlink-proxy rewrite. It re-signs only an image whose
+token has *already* expired **and** whose bytes the `/api/img` cache does not
+already hold — the cache key drops the signing token
+(`_img_cache_key_url`/`_IMG_CACHE_VOLATILE_PARAMS`, and `wixmp.com` was already
+in `_HOTLINK_IMG_HOSTS`), so once an image has been fetched under any valid
+token it answers forever. That makes it one API call per *image*, not per view,
+and the 21,564 permanently-signed images never reach the API at all. The fresh
+URL is persisted so the list thumbnail starts from it too.
 
 **Superseded note (kept for the reasoning):** Not an age gate:
 DA signs mature deviations' image URLs with a ~7-day JWT and **every** variant
