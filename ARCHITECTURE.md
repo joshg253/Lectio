@@ -1072,6 +1072,16 @@ When every advertised link is dead and nothing else answers, what happens next d
 - **Gone (404/410)** — report "no feed found", naming the dead address and pointing at Page Feed. Handing the link back produced the worst outcome available: the dialog says it found a feed, the add route then refuses it, and nothing appears in the feed list. The failure toast already offers a "Create page feed" button, so this lands the user where they need to be.
 - **Refused (403, 429, 5xx)** — still offered. The server declined to answer a HEAD; that is not proof the feed is absent, and reader's real GET may get through. This is the bot-walled case the last resort exists for.
 
+## Saving an article you already subscribe to
+
+An extension save used to create a `lectio:saved` entry unconditionally, so an article you already follow ended up as two posts — and they were never equivalent. The feed entry carries the publisher's tags (`entry_feed_tags`) and keeps updating; the capture carries a body the server often cannot fetch at all (Medium and treblezine refuse this host outright). Split apart you get an article with tags and no text beside one with text and no tags, which is exactly what happened to a Medium post on 2026-07-26 — before a "move to feed" onto the empty twin dropped its 44KB body entirely.
+
+`save_article` now takes an injected `find_existing_entry`. `main._find_subscribed_entry_for_url` resolves an article URL to an entry in another feed by **canonical link**, not id: the two rarely agree (Medium's guid is `/p/<hash>` while the URL is the long slug) but both carry the same `link`, and `get_dedupe_host_aliases` folds declared domain migrations in. A feed-provided entry wins the tie — it keeps updating and holds the tags a capture cannot supply.
+
+The merge keeps whichever body is longer, pinned through `entry_content_overrides` so the feed's thinner copy can't overwrite it on the next refresh, then applies the resurface a save already implies: star, un-archive, mark unread. A save that finds nothing behaves exactly as before. Without the hook — any caller that doesn't pass it — behavior is unchanged, which is what keeps the service testable in isolation.
+
+This is the primitive the cross-feed duplicate work (Plan #6) needs as well: a save that merges is a duplicate that never happens.
+
 ## DeviantArt mature images: signed for minutes, cached for good
 
 DeviantArt serves images from wixmp with a signed JWT in the query string. Ordinary deviations are signed permanently; **mature** ones are signed for about **15 minutes**, and every variant (`content.src` and every thumb) shares the expiry — so there is no long-lived variant to prefer, and a stored URL is normally dead by the time the post is read, showing neither image nor thumbnail.

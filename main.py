@@ -25091,6 +25091,61 @@ def _resolve_redirector_url(url: str) -> str:
     return url
 
 
+def _find_subscribed_entry_for_url(article_url: str) -> tuple[str, str] | None:
+    """An existing entry for this article in some *other* feed, or None.
+
+    Matched on the canonical link rather than the id, because the two rarely
+    agree: Medium's feed uses a `/p/<hash>` guid while the article URL is the
+    long slug, yet both entries carry the same `link`. Declared domain
+    migrations fold in through get_dedupe_host_aliases, so an author's old host
+    still pairs with their current one.
+
+    Prefers a feed-provided entry: it keeps updating and it is the one carrying
+    the publisher's tags, which is precisely what a capture cannot supply.
+    """
+    aliases = get_dedupe_host_aliases()
+    target = normalize_entry_link_for_dedupe(article_url, aliases)
+    if not target:
+        return None
+    # Candidate spellings for an indexed equality match; the normalized compare
+    # below is what actually decides, so this only has to be generous enough.
+    bare = article_url.split("#")[0].rstrip("/")
+    variants = {bare, bare + "/"}
+    for scheme_a, scheme_b in (("https://", "http://"), ("http://", "https://")):
+        if bare.startswith(scheme_a):
+            swapped = scheme_b + bare[len(scheme_a):]
+            variants |= {swapped, swapped + "/"}
+    for v in list(variants):
+        if "://www." in v:
+            variants.add(v.replace("://www.", "://", 1))
+        else:
+            variants.add(v.replace("://", "://www.", 1))
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            placeholders = ",".join("?" for _ in variants)
+            rows = conn.execute(
+                f"SELECT feed, id, link, added_by FROM entries WHERE link IN ({placeholders})",
+                list(variants),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — never block a save on the lookup
+        LOGGER.exception("[save] subscribed-entry lookup failed for %s", article_url)
+        return None
+
+    best: tuple[str, str] | None = None
+    for feed, entry_id, link, added_by in rows:
+        if str(feed) == saved_articles_service.SAVED_FEED_URL:
+            continue  # its own saved copy is handled by the normal duplicate path
+        if normalize_entry_link_for_dedupe(str(link or ""), aliases) != target:
+            continue
+        if str(added_by) == "feed":
+            return (str(feed), str(entry_id))  # the survivor we want
+        best = best or (str(feed), str(entry_id))
+    return best
+
+
 def _save_article_for_current_user(url: str, extract=None, refresh_content: bool = False) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
     DB, wiring in readability extraction and the starred-archive enqueue.
@@ -25108,6 +25163,7 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
             extract=extract or fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
             refresh_content=refresh_content,
+            find_existing_entry=_find_subscribed_entry_for_url,
         )
     if result.get("created_feed"):
         # The Saved Articles feed just appeared — surface it in the sidebar tree.

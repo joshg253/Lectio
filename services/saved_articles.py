@@ -309,6 +309,86 @@ def refresh_captured_article(
     return result
 
 
+def _merge_save_into_entry(
+    reader,
+    conn: sqlite3.Connection,
+    clean_url: str,
+    target: tuple[str, str],
+    *,
+    extract: Callable[[str], tuple[str, str]],
+    enqueue_archive: Callable[[str, str], None] | None,
+    result: dict,
+) -> dict:
+    """Fold a save into an article that already exists in another feed.
+
+    The survivor is the entry we found: a feed-provided post keeps updating and
+    carries the publisher's tags (``entry_feed_tags``), neither of which a
+    capture can offer. What the capture *does* offer is a body the server often
+    cannot fetch at all — so the merge keeps whichever body is longer, pinned so
+    the feed's own thinner copy can't overwrite it on the next refresh.
+
+    Everything else is the resurface behavior a save already implies: star it,
+    un-archive it, mark it unread so it lands back in the Inbox.
+    """
+    target_feed, target_id = target
+    result["feed_url"], result["entry_id"] = target_feed, target_id
+    result["merged"] = True
+
+    entry = reader.get_entry((target_feed, target_id), None)
+    if entry is None:  # vanished between lookup and merge
+        result["error"] = "The matching article disappeared; try saving again."
+        return result
+    result["title"] = entry.title or clean_url
+
+    try:
+        new_title, article_html = extract(clean_url)
+    except Exception as exc:  # noqa: BLE001 — the star/resurface below still applies
+        LOGGER.warning("save-article: merge extraction failed for %s: %s", clean_url, exc)
+        new_title, article_html = "", ""
+
+    if article_html:
+        current = (entry.content[0].value if getattr(entry, "content", None) else "") or entry.summary or ""
+        if len(article_html) > len(current):
+            try:
+                replace_entry_content(
+                    reader, conn, target_id, "", article_html, feed_url=target_feed,
+                    bump_received=False, pin_content=True,
+                )
+                result["extracted"] = True
+                result["title"] = new_title or result["title"]
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("save-article: merge content write failed for %s: %s", target_id, exc)
+
+    conn.execute(
+        "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+        (target_feed, target_id),
+    )
+    try:
+        conn.execute(
+            "UPDATE saved_entries SET archived_at = NULL"
+            " WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
+            (target_feed, target_id),
+        )
+        conn.execute(
+            "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+            (target_feed, target_id),
+        )
+        conn.commit()
+        reader.mark_entry_as_unread((target_feed, target_id))
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("save-article: merge resurface failed for %s: %s", target_id, exc)
+    conn.commit()
+
+    if enqueue_archive is not None:
+        try:
+            enqueue_archive(target_feed, target_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("save-article: merge archive enqueue failed for %s: %s", target_id, exc)
+
+    result["ok"] = True
+    return result
+
+
 def save_article(
     reader,
     conn: sqlite3.Connection,
@@ -317,6 +397,7 @@ def save_article(
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
     refresh_content: bool = False,
+    find_existing_entry: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> dict:
     """Save *url* as a starred entry in the Saved Articles feed.
 
@@ -330,6 +411,17 @@ def save_article(
     backlog (published = now, saved_at = now). Set when the save carries a
     browser-captured DOM — the user deliberately re-captured the page (e.g.
     after cleaning it up in-browser); URL-only re-saves stay light no-ops.
+
+    *find_existing_entry*: resolves an article URL to an entry that already
+    exists in some other feed, so saving a page you are subscribed to **merges
+    into that post** instead of adding a second copy. Injected because the
+    canonical-link matching lives in main. Without it, behavior is unchanged.
+
+    Merging matters because the copies were never equivalent: a feed entry
+    carries the publisher's tags and keeps updating, while an extension capture
+    carries the body the server cannot fetch. Split across two entries you get
+    an article with tags and no text beside one with text and no tags — which is
+    exactly what happened to a Medium post (2026-07-26).
     """
     result: dict = {
         "ok": False,
@@ -347,6 +439,21 @@ def save_article(
     result["entry_id"] = clean_url
 
     created = ensure_saved_feed(reader)
+
+    # Already subscribed to this article somewhere? Enrich that post instead of
+    # creating a rival copy. Only when there is no saved entry yet — an existing
+    # saved copy is this article's home and keeps its history.
+    if find_existing_entry is not None and reader.get_entry((SAVED_FEED_URL, clean_url), None) is None:
+        target = None
+        try:
+            target = find_existing_entry(clean_url)
+        except Exception:  # noqa: BLE001 — a failed lookup must not block the save
+            LOGGER.exception("save-article: existing-entry lookup failed for %s", clean_url)
+        if target:
+            return _merge_save_into_entry(
+                reader, conn, clean_url, target, extract=extract,
+                enqueue_archive=enqueue_archive, result=result,
+            )
 
     existing = reader.get_entry((SAVED_FEED_URL, clean_url), None)
     if existing is not None:
