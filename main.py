@@ -12063,6 +12063,19 @@ def _derive_article_lead_image(entry) -> str | None:
     # article showed no image AND persisted a negative on open, poisoning the thumb.
     if strategy in ("inline", "webcomic"):
         primary = lead_image_service.extract_inline_thumb_url(entry)
+        if strategy == "webcomic":
+            # ComicControl-style feeds (atomic-robo, smbc, misfile) ship only a
+            # small /comicsthumbs/ image inline, while the full panel is what the
+            # source-page scan already cached — so the inline-first rule above
+            # showed the thumbnail and the article never got the readable comic.
+            # Prefer a cached *positive*; a cached negative still loses to the
+            # inline image, which is the stale-negative case this bypass exists
+            # for (claycomix ships the strip inline and is unaffected either way).
+            _cached_full = lead_image_service.get_cached_lead_image_url(
+                feed_url, str(getattr(entry, "id", "") or "")
+            )
+            if _cached_full:
+                primary = _cached_full
     elif strategy == "media_rss":
         primary = lead_image_service.extract_media_rss_thumb_url(entry)
     else:

@@ -1119,7 +1119,7 @@ class LeadImageService:
 
         if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
             try:
-                source_image = self._fetch_source_lead_image(entry_link)
+                source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                 if source_image and self._is_image_url_acceptable(source_image, None, None):
                     return source_image
             except Exception:
@@ -1299,7 +1299,7 @@ class LeadImageService:
                                 return plugin_preferred
                             # plugin confirms cached value — skip source fetch
                         else:
-                            source_image = self._fetch_source_lead_image(entry_link)
+                            source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                             if source_image and source_image != cached:
                                 return source_image
                     inline_candidate = None
@@ -1314,7 +1314,7 @@ class LeadImageService:
                                 return plugin_preferred
                             # plugin confirms cached value — skip source fetch
                         else:
-                            source_image = self._fetch_source_lead_image(entry_link)
+                            source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                             if source_image and source_image != cached:
                                 return source_image
                     return cached
@@ -1331,7 +1331,7 @@ class LeadImageService:
                 return plugin_fallback
 
             if not skip_source and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
-                source_image = self._fetch_source_lead_image(entry_link)
+                source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                 if source_image:
                     return source_image
 
@@ -1427,7 +1427,7 @@ class LeadImageService:
                         entry_link = str(getattr(entry, "link", "") or "")
                         if not entry_link:
                             continue
-                        source_image = self._fetch_source_lead_image(entry_link)
+                        source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                         if source_image:
                             self.store_entry_lead_image(feed_url_str, entry_id_str, source_image)
                         else:
