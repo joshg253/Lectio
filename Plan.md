@@ -1168,6 +1168,38 @@ Still open: `tusharsadhwani.dev` and `tushar.bio` are two more dead domains of
 his with **no** entries in the library. Nothing to migrate; declaring them via
 Feed Properties → Other domains only future-proofs the dedupe alias map.
 
+### 8e. Comic thumbnails — FIXED 2026-07-25; tinyview + DA mature still open
+
+Reported as "the comic image loads but there's no thumb". Cause: the cached
+**lead image** (which is what the list thumbnail derives from) was site chrome,
+while the article's own `<img>` came from the feed body and rendered fine.
+
+- **gunnerkrigg** was a real code bug: the panel is `class="comic_image"` and the
+  webcomic class pattern listed hyphen spellings only, so the Archives banner won
+  the scan for 49 strips. Fixed; the id pattern already accepted both spellings.
+- **smbc / misfile** extracted correctly already — their rows were just stale,
+  from before the webcomic strategy was set. Confirmed by both fixing themselves
+  once re-derived.
+- `scripts/reset_webcomic_chrome_lead_images.py --apply` cleared **202 rows
+  across 19 images** on webcomic feeds (gunnerkrigg 49, qwantz 39, webtoons 20,
+  harkavagrant, tethered, badmachinery…). Undo snapshot at
+  `data/users/u_40208f374ac18038598b39/reset_webcomic_lead_images_20260726-000945.json`.
+  The detector is generic: a panel is unique per strip, so an image cached as the
+  lead for many entries of one webcomic feed is chrome by definition.
+
+**Still open:**
+
+1. **tinyview** — a different animal. It is a JS app, and what got scraped is
+   `Tinyview_skeleton-animation.gif`, the pre-hydration loading skeleton, which
+   renders as "a mockup of the whole webpage sans images". Its rows were cleared
+   with the rest, but re-derivation will find the same skeleton until the site
+   gets a plugin/adapter (`services/lead_image_plugins.py`) that knows where the
+   panel lives — or the feed is treated as needing a rendered fetch.
+2. **DeviantArt mature deviations** — a separate bug, not a lead-image one: the
+   entry (`CC48A953-…`, "Tifa and Aerith - Hot Spring") has **no stored content
+   at all**, so neither image nor thumb can exist. Suspect the DA sync silently
+   drops mature items (scope/param on the API call). Needs its own pass.
+
 ### 8c. Flaky test: `test_tampered_hash_fails` (~1.3% failure rate)
 
 `tests/services/test_passwords.py::test_tampered_hash_fails` flips the **last**
