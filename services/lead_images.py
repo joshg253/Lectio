@@ -324,7 +324,12 @@ class LeadImageService:
         # wp-post-image is WordPress's featured-image class — on a webcomic-strategy
         # feed the featured image IS the comic panel (e.g. claycomix), so recognize
         # it alongside the explicit comic-* classes.
-        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic|wp-post-image)\b',
+        #
+        # Hyphen *and* underscore: gunnerkrigg.com marks its panel
+        # class="comic_image", which the hyphen-only pattern missed, so the site's
+        # Archives banner won the scan and became the lead image for every strip.
+        # The id pattern already accepted both spellings; these now agree.
+        r'\b(?:comic[-_]image|comic[-_]strip|comic[-_]img|comicImg|webcomic|wp-post-image)\b',
         re.IGNORECASE,
     )
 
