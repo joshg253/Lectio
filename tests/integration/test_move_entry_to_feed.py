@@ -215,3 +215,54 @@ def test_a_feed_provided_source_is_still_kept(env):
     with main.get_reader() as reader:
         assert reader.get_entry((SRC, "e1"), None) is not None
     assert _saved_rows(SRC) == 0
+
+
+def _body_len(feed_url: str, entry_id: str) -> int:
+    with main.get_reader() as reader:
+        e = reader.get_entry((feed_url, entry_id), None)
+        if e is None:
+            return -1
+        return len((e.content[0].value if getattr(e, "content", None) else "") or e.summary or "")
+
+
+def test_move_carries_the_body_onto_an_empty_twin(env):
+    """Matching by GUID can land on a copy that exists but is *empty* — an
+    auto-filed capture whose source was bot-walled. Migrating only curation put
+    the star on a blank entry and dropped the populated source: a 44KB
+    extension capture of a Medium article became an empty post (2026-07-26)."""
+    with main.get_reader() as reader:
+        reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
+                          "link": "https://example.test/a",
+                          "content": [{"value": "<p>" + ("the real article " * 200) + "</p>"}]})
+        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post",
+                          "link": "https://example.test/a"})  # the empty twin
+
+    with main.get_reader() as reader, main.get_meta_connection() as conn:
+        result = main._move_entry_to_feed(reader, conn, SRC, "e1", DST)
+
+    assert result["ok"] is True
+    assert result["content_moved"] is True
+    assert _body_len(DST, "e1") > 1000, "the target must not be left emptier than the source"
+
+
+def test_move_does_not_overwrite_a_richer_target(env):
+    """The other direction: a target that already has the better body keeps it."""
+    rich = "<p>" + ("target body " * 300) + "</p>"
+    with main.get_reader() as reader:
+        reader.add_feed(SRC, allow_invalid_url=True, exist_ok=True)
+        reader.add_feed(DST, allow_invalid_url=True, exist_ok=True)
+        reader.add_entry({"feed_url": SRC, "id": "e1", "title": "Post",
+                          "link": "https://example.test/a",
+                          "content": [{"value": "<p>short</p>"}]})
+        reader.add_entry({"feed_url": DST, "id": "e1", "title": "Post",
+                          "link": "https://example.test/a",
+                          "content": [{"value": rich}]})
+
+    with main.get_reader() as reader, main.get_meta_connection() as conn:
+        result = main._move_entry_to_feed(reader, conn, SRC, "e1", DST)
+
+    assert result["ok"] is True
+    assert result["content_moved"] is False
+    assert _body_len(DST, "e1") == len(rich)

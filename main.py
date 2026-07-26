@@ -14360,7 +14360,8 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
 
     Returns {"ok": bool, "synth": bool, "tags": n, "star": bool, "error": str|None}.
     """
-    result = {"ok": False, "synth": False, "tags": 0, "star": False, "error": None}
+    result = {"ok": False, "synth": False, "tags": 0, "star": False,
+              "content_moved": False, "error": None}
     src = reader.get_entry((feed_url, entry_id), None)
     if src is None:
         result["error"] = "Entry not found."
@@ -14405,6 +14406,28 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             return result
         target_id = entry_id
         result["synth"] = True
+
+    # Carry the body when the target's is thinner. Matching by GUID/link can
+    # land on a copy that exists but is *empty* — an auto-filed capture whose
+    # source was bot-walled, say — and migrating only curation then moved the
+    # star onto a blank entry while the populated source was dropped. That is
+    # how a 44KB extension capture of a Medium article became an empty post
+    # (reported 2026-07-26). The move must never leave the reader on less than
+    # they had; pinned so the target feed's own refresh can't undo it.
+    try:
+        _src_body = (src.content[0].value if getattr(src, "content", None) else "") or src.summary or ""
+        _tgt = reader.get_entry((target_url, target_id), None)
+        _tgt_body = ""
+        if _tgt is not None:
+            _tgt_body = (_tgt.content[0].value if getattr(_tgt, "content", None) else "") or _tgt.summary or ""
+        if _src_body and len(_src_body) > len(_tgt_body):
+            saved_articles_service.replace_entry_content(
+                reader, conn, target_id, "", _src_body, feed_url=target_url,
+                bump_received=False, pin_content=True,
+            )
+            result["content_moved"] = True
+    except Exception:  # noqa: BLE001 — curation still migrates; body is best-effort
+        LOGGER.exception("[move-entry] could not carry content onto %s/%s", target_url, target_id)
 
     # Manual tags: re-key onto the target resource, then clear from the source.
     keys = [_extract_tag_key(t) for t in reader.get_tags(src.resource_id)]
