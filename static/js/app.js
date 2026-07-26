@@ -7798,10 +7798,24 @@
       markReadFolderIdInput.value = contextFolderId;
       hideContextMenu();
       const isRootFolder = !!document.querySelector(`.root-item[data-folder-id="${CSS.escape(contextFolderId)}"]`);
-      const folderFeedFilter = isRootFolder ? null : new Set(
+      let folderFeedFilter = isRootFolder ? null : new Set(
         Array.from(document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(contextFolderId)}"]`))
           .map(el => el.getAttribute('data-feed-url')).filter(Boolean)
       );
+      // The filter comes from the folder's feed links *in the sidebar*, which
+      // aren't in the DOM while the folder is collapsed — leaving an empty Set
+      // that matches no post, so the server marked everything read while the
+      // list sat there undimmed until a manual refresh. When the set is empty
+      // but the list on screen IS this folder's, dim everything visible
+      // instead. Marking some *other* folder read still dims nothing, which is
+      // correct: none of its posts are on screen.
+      if (folderFeedFilter && folderFeedFilter.size === 0) {
+        const viewedFolderId = new URLSearchParams(window.location.search).get('folder_id');
+        const viewingThisFolder = viewedFolderId != null
+          && String(viewedFolderId) === String(contextFolderId)
+          && !new URLSearchParams(window.location.search).get('feed_url');
+        if (viewingThisFolder) folderFeedFilter = null;
+      }
       submitMarkReadAsync(markReadFolderForm, folderFeedFilter);
       // Zero any remaining sidebar counts (covers off-screen unread posts)
       clearFolderBadges(contextFolderId, isRootFolder);
