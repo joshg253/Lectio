@@ -900,13 +900,23 @@ class LeadImageService:
         return self._promote_known_thumbnail(cached)
 
     def _promote_known_thumbnail(self, url: str | None) -> str | None:
-        """Promote a known small-thumbnail URL to its full-resolution equivalent.
+        """Return a small-thumbnail URL unchanged.
 
-        Currently handles the ComicControl /comicsthumbs/ → /comics/ convention.
-        Idempotent and a no-op for unrelated URLs."""
-        if not url or "comicsthumbs" not in url.lower():
-            return url
-        return self._COMICCONTROL_THUMB_RE.sub("comics", url)
+        This used to rewrite ComicControl's /comicsthumbs/<ts>-<file> to
+        /comics/<ts>-<file>, but the two carry *different* cache-bust
+        timestamps, so the rewritten URL names a file that does not exist and
+        ComicControl answers it with a 200 placeholder image — atomic-robo's
+        real panel is 1.2MB at …494 while the swapped …495 is an 11KB
+        placeholder. The promotion is only safe against the panel URL actually
+        read from the page, which is what _fetch_source_lead_image returns and
+        what main._promote_comicsthumbs_in_content matches on; doing it blind
+        here poisoned the cached lead image, and with it the thumbnail and the
+        article's lead display.
+
+        Kept as a named seam (rather than deleting the call sites) so the next
+        site-specific promotion has an obvious home — one that verifies first.
+        """
+        return url
 
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         return self._promote_known_thumbnail(

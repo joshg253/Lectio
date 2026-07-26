@@ -116,9 +116,14 @@ def test_extract_thumbnail_uses_youtube_thumbnail(tmp_path: Path):
     assert thumb == "https://i.ytimg.com/vi/ABCDEFGHIJK/hqdefault.jpg"
 
 
-def test_comiccontrol_thumb_promoted_to_full_res(tmp_path: Path):
-    # ComicControl feeds (atomic-robo, everblue) ship a small /comicsthumbs/
-    # image; the full panel is the same filename under /comics/.
+def test_comiccontrol_thumb_is_left_alone(tmp_path: Path):
+    # ComicControl feeds ship a small /comicsthumbs/<ts>-<file> image, but the
+    # full panel carries a DIFFERENT cache-bust timestamp — so swapping only the
+    # directory names a file that does not exist, and the site answers it with a
+    # 200 placeholder (atomic-robo: 1.2MB panel at …494, 11KB placeholder at
+    # …495). Blind promotion poisoned the cached lead image and with it the
+    # thumbnail; promotion is only safe against the panel URL read from the page
+    # (see main._promote_comicsthumbs_in_content).
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
         feed_url="https://www.atomic-robo.com/atomicrobo/rss",
@@ -129,7 +134,7 @@ def test_comiccontrol_thumb_promoted_to_full_res(tmp_path: Path):
 
     thumb = service.extract_entry_thumbnail_url(entry)
 
-    assert thumb == "https://www.atomic-robo.com/comics/1781025836-ARV1701_01.jpg"
+    assert thumb == "https://www.atomic-robo.com/comicsthumbs/1781025836-ARV1701_01.jpg"
 
 
 def test_standard_ebooks_cover_on_fast_path(tmp_path: Path):
@@ -158,9 +163,8 @@ def test_promote_known_thumbnail_is_noop_for_other_urls(tmp_path: Path):
     assert service._promote_known_thumbnail(None) is None
 
 
-def test_inline_thumb_url_promotes_comiccontrol(tmp_path: Path):
-    # Webcomic-strategy feeds derive the article lead from the inline image; the
-    # ComicControl thumb must be promoted there too (not just the cache path).
+def test_inline_thumb_url_keeps_comiccontrol_thumb(tmp_path: Path):
+    # Same reasoning as above: a small correct thumbnail beats a big broken one.
     service = _build_service(tmp_path / "meta.sqlite", [])
     entry = _FakeEntry(
         feed_url="https://www.atomic-robo.com/atomicrobo/rss",
@@ -168,7 +172,7 @@ def test_inline_thumb_url_promotes_comiccontrol(tmp_path: Path):
         link="https://www.atomic-robo.com/atomicrobo/17ch1-page-1",
         content_html='<a href="x"><img src="https://www.atomic-robo.com/comicsthumbs/1-ARV.jpg"/></a>',
     )
-    assert service.extract_inline_thumb_url(entry) == "https://www.atomic-robo.com/comics/1-ARV.jpg"
+    assert service.extract_inline_thumb_url(entry) == "https://www.atomic-robo.com/comicsthumbs/1-ARV.jpg"
 
 
 def test_inline_thumb_url_promotes_bare_plaintext_image_url(tmp_path: Path):
