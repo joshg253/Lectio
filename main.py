@@ -13070,11 +13070,17 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
     ComicControl gives the thumbnail and the full panel DIFFERENT cache-bust
     timestamp prefixes (e.g. comicsthumbs/1782426356-X.jpg vs comics/1782426355-X.jpg),
     so a naive /comicsthumbs/ -> /comics/ swap keeps the thumb's timestamp — and
-    ComicControl answers that nonexistent timestamp with a 200 *HTML* page, not the
+    ComicControl answers that nonexistent timestamp with a 200 placeholder, not the
     image, breaking the comic. When the resolved lead image (the real /comics/<ts>-<file>
     read from the page) shares the same timestamp-stripped filename, substitute it
-    directly. Otherwise fall back to the directory swap (correct whenever the thumb
-    and panel happen to share a timestamp)."""
+    directly.
+
+    Otherwise the image is left exactly as the feed served it. The naive swap used
+    to run as a fallback, which meant the *first* view of a new strip — before the
+    lead image has been derived and cached — replaced a working 31KB thumbnail
+    with a 11KB placeholder, so the comic appeared broken until a reload
+    (atomic-robo, reported 2026-07-26). A small correct comic beats a big broken
+    one, and the promotion still happens on every later view."""
     lead_name = (
         _comiccontrol_stable_name(full_lead_url)
         if full_lead_url and "/comics/" in full_lead_url
@@ -13085,8 +13091,7 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
         src = m.group(2)
         if lead_name and _comiccontrol_stable_name(src).lower() == lead_name.lower():
             return f"{m.group(1)}{full_lead_url}{m.group(3)}"
-        swapped = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", src, flags=re.IGNORECASE)
-        return f"{m.group(1)}{swapped}{m.group(3)}"
+        return m.group(0)  # unverifiable — keep the feed's own thumbnail
 
     return _COMICSTHUMBS_IMG_SRC_RE.sub(_sub, content_html)
 
