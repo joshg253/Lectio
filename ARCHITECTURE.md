@@ -1016,9 +1016,38 @@ CSRF token, then advance to `data-next`. This **Archive** is *not* the offline
 first (`_resolve_archived_readability_html`, shared with `/entries/readability` —
 offline HTML with `/starred-asset/` URLs, survives dead sources), then a live
 readability extraction, then the stored feed content — all already sanitized, so
-no new sanitization surface. Opening an entry marks it read off the request path
-via `_mark_entry_read_background` (the tenancy-rebinding daemon the entry pane
-also uses).
+no new sanitization surface.
+
+**Mark-read is earned by reaching the last page, not by opening the article.**
+Serving the reader page marks nothing. In an e-ink browse loop opening an item
+is how you decide whether you want it, so marking on render turned every peek
+into a read — the whole saved backlog could be cleared by scrolling through it.
+`static/reader.js` posts to `/entries/read` once the last page is reached, which
+is the first moment the whole article has been on screen; a one-page article
+qualifies immediately, because there it is true. The post reuses the route's
+existing async branch (`X-Requested-With: lectio-entry-read-toggle`) rather than
+adding an endpoint — that branch already writes read state, `entry_read_state`
+and read history from a tenancy-rebinding daemon thread, which is exactly what
+the old on-render `_mark_entry_read_background` call did.
+
+The client holds the mark until pagination has **settled**, and settling is a
+readiness check rather than a delay. On a cold load a 12-page article measures as
+**one page** until its stylesheet and images arrive — which satisfies "last page
+reached" and marks an article read the instant it is opened. That was observed in
+testing, not theorised, and a fixed timeout cannot fix it because the wait is a
+race against however long those resources take. So `trySettle` re-measures every
+`SETTLE_POLL_MS` and only trusts the count once `document.readyState` is
+`complete` *and* every `<img>` reports `.complete` (which covers errored images —
+they are settled, they just contribute no height). `SETTLE_MAX_TRIES` caps the
+wait at ~5s so an image that never resolves can't block mark-read forever.
+
+Only the **one-page** case actually needs this guard: a multi-page article can't
+be marked without the reader genuinely paging to the end, whenever that happens.
+The guard exists because a wrong measurement makes every article look one-page.
+
+Both scopes follow this rule: the peek problem is identical in each, and the
+scope isn't visible from inside the reader, so splitting the rule would make
+"did that count as read?" unpredictable.
 
 **Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
 with the Archive axis. `feeds` is ordinary **unread feed reading**:

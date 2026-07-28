@@ -16255,7 +16255,10 @@ def build_reader_page(
     )
     # Archive shows a filled box when already archived (tap = un-archive). Saved
     # actions (Archive/Delete) only apply to the saved scope; the feeds scope is
-    # ordinary unread reading (marked read on open).
+    # ordinary unread reading. Both scopes now mark read on reaching the last
+    # page rather than on open — the peek problem is the same in either, and
+    # splitting the rule by scope would make "did that count as read?"
+    # unpredictable from inside the reader, where the scope isn't visible.
     archive_glyph = "&#9635;" if is_archived else "&#9634;"
     archive_title = "Un-archive" if is_archived else "Archive"
     saved_actions = (
@@ -16723,10 +16726,13 @@ def reader_view(
     cur_title = str(current.get("title") or current.get("link") or "(untitled)")
     cur_link = str(current.get("link") or "")
 
-    if not current.get("read", False):
-        _mark_entry_read_background(
-            cur_feed, cur_id, cur_title, cur_link, str(current.get("feed_title") or "")
-        )
+    # Deliberately NOT marked read here. Serving the page only means the article
+    # was opened, and in an e-ink browse loop opening is how you find out whether
+    # you want to read something — marking on render turned every peek into a
+    # read. The reader posts to /entries/read once pagination settles and the
+    # last page has actually been reached (static/reader.js), which is the first
+    # moment the whole article has been on screen. A one-page article qualifies
+    # immediately, because there it is true.
 
     article_html = resolve_reader_article_html(cur_feed, cur_id, cur_link)
     is_archived = (not is_feeds) and (cur_feed, cur_id) in get_archived_saved_keys()
