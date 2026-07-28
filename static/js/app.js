@@ -1296,6 +1296,176 @@
       document.getElementById('saved-autofile-btn')?.click();  // re-scan
     });
 
+    // --- Unstar tagged articles -------------------------------------------
+    // After the tag-as-keep flip a tag keeps an article on its own, so a star on
+    // a tagged article is redundant clutter in the read-later queue.
+    //
+    // The checkbox selects a tag to CLEAR. The endpoint's `keep_tags` is the
+    // opposite (an opt-out), so the selection is inverted before every call —
+    // see the note on the panel markup for why it isn't rendered the API's way.
+    let _utAllTags = [];      // every tag in the affected set
+    let _utQueueLike = [];    // tags that look like a reading queue
+    let _utCountToken = 0;    // guards against an out-of-order preview reply
+
+    const _utSelected = () =>
+      [...document.querySelectorAll('.unstar-tagged-check')]
+        .filter(cb => cb.checked).map(cb => cb.dataset.tag);
+
+    // Entries are protected if they carry ANY kept tag, so an article tagged
+    // both `python` and `books` survives unless both are selected. That means
+    // the per-tag counts cannot be added up to predict the result — only the
+    // server can say. Every selection change re-previews for the real number.
+    const _utRefreshCount = async () => {
+      const btn = document.getElementById('unstar-tagged-ok');
+      const warn = document.querySelector('.unstar-tagged-warning');
+      if (!btn) return;
+      const selected = _utSelected();
+      if (!selected.length) {
+        btn.textContent = 'Unstar selected';
+        btn.disabled = true;
+        if (warn) warn.hidden = true;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Counting…';
+      const keep = _utAllTags.filter(t => !selected.includes(t));
+      const token = ++_utCountToken;
+      let data;
+      try {
+        const resp = await fetch(
+          '/saved/unstar-tagged/preview?keep_tags=' + encodeURIComponent(keep.join(',')));
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        if (token !== _utCountToken) return;
+        // Say why, but stay disabled. dataset.count still holds the total from
+        // the last successful preview, so re-enabling here would let a click
+        // unstar a set the label no longer describes — and the count is the
+        // only thing standing between the reviewer and the wrong articles.
+        // Clearing it makes a stale total unusable even if something else
+        // re-enables the button later. Changing the selection retries.
+        delete btn.dataset.count;
+        btn.textContent = 'Count unavailable';
+        btn.disabled = true;
+        if (warn) {
+          warn.hidden = false;
+          warn.textContent =
+            'Could not check how many articles this would affect (' + err +
+            '). Nothing has changed — adjust the selection to try again.';
+        }
+        return;
+      }
+      if (token !== _utCountToken) return;  // a later click already superseded this
+      const n = data.totals?.to_unstar || 0;
+      const lost = data.totals?.archived_at_lost || 0;
+      btn.dataset.count = String(n);
+      btn.textContent = n ? `Unstar ${n} article(s)` : 'Nothing to unstar';
+      btn.disabled = !n;
+      if (warn) {
+        warn.hidden = !lost;
+        warn.textContent = lost
+          ? `${lost} of these carry Read Mode progress (archived_at), which is stored on the star row and will be lost. The offline copy itself is kept.`
+          : '';
+      }
+    };
+
+    document.getElementById('unstar-tagged-btn')?.addEventListener('click', async () => {
+      const results = document.getElementById('unstar-tagged-results');
+      const intro = results.querySelector('.unstar-tagged-intro');
+      const list = results.querySelector('.unstar-tagged-list');
+      const okBtn = document.getElementById('unstar-tagged-ok');
+      const allBtn = document.getElementById('unstar-tagged-selectall');
+      results.hidden = false;
+      intro.textContent = 'Scanning starred articles…';
+      list.innerHTML = '';
+      okBtn.hidden = true;
+      allBtn.hidden = true;
+      results.querySelector('.unstar-tagged-warning').hidden = true;
+      let data;
+      try {
+        const resp = await fetch('/saved/unstar-tagged/preview');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        intro.textContent = 'Scan failed: ' + err;
+        return;
+      }
+      const perTag = data.per_tag || [];
+      const t = data.totals || {};
+      if (!perTag.length) {
+        intro.textContent = 'No starred article carries a tag — nothing to clean up.';
+        return;
+      }
+      _utAllTags = perTag.map(r => r.tag);
+      _utQueueLike = data.queue_like_tags || [];
+      intro.textContent =
+        `${t.affected} of ${t.starred} starred article(s) also carry a tag, across ` +
+        `${t.distinct_tags} tag(s) — nothing is selected.` +
+        (_utQueueLike.length
+          ? ` ${_utQueueLike.length} tag(s) look like a reading queue and are left out of "select all".`
+          : '');
+      list.innerHTML = perTag.map(r => {
+        const queueish = _utQueueLike.includes(r.tag);
+        return `<label class="dedup-pair-row unstar-tagged-row">` +
+          `<input type="checkbox" class="unstar-tagged-check" data-tag="${_mfEscape(r.tag)}"` +
+          `${queueish ? ' data-queue-like="1"' : ''}>` +
+          `<span class="saved-autofile-count">${r.count}</span>` +
+          `<span class="saved-dedup-main"><span class="saved-dedup-title">${_mfEscape(r.tag)}</span>` +
+          (queueish
+            ? ` <span class="unstar-tagged-queue" title="This name suggests a reading queue, where the star is the queue rather than redundant">looks like a queue</span>`
+            : '') +
+          `</span></label>`;
+      }).join('');
+      okBtn.hidden = false;
+      allBtn.hidden = false;
+      _utRefreshCount();
+    });
+
+    document.getElementById('unstar-tagged-selectall')?.addEventListener('click', () => {
+      // 58 tags is too many to click through, but a blanket select would sweep
+      // up the queue-like ones — which are exactly the stars worth keeping.
+      const boxes = [...document.querySelectorAll('.unstar-tagged-check')];
+      const topical = boxes.filter(cb => !cb.dataset.queueLike);
+      const turningOn = topical.some(cb => !cb.checked);
+      topical.forEach(cb => { cb.checked = turningOn; });
+      _utRefreshCount();
+    });
+
+    document.getElementById('unstar-tagged-results')?.addEventListener('change', (ev) => {
+      if (ev.target.closest?.('.unstar-tagged-check')) _utRefreshCount();
+    });
+
+    document.getElementById('unstar-tagged-ok')?.addEventListener('click', async () => {
+      const btn = document.getElementById('unstar-tagged-ok');
+      const selected = _utSelected();
+      if (!selected.length) { alert('Nothing selected.'); return; }
+      const n = Number(btn.dataset.count || 0);
+      if (!n) return;
+      if (!confirm(`Remove the star from ${n} article(s) tagged ` +
+                   `${selected.length} selected tag(s)? The tags, the archived ` +
+                   `copy and read state are kept — only the star is removed.`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Unstarring…';
+      const keep = _utAllTags.filter(t => !selected.includes(t));
+      let data;
+      try {
+        const resp = await fetch('/saved/unstar-tagged', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keep_tags: keep }),
+        });
+        data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      } catch (err) {
+        btn.disabled = false;
+        _utRefreshCount();
+        alert('Unstarring failed: ' + err);
+        return;
+      }
+      alert(`Unstarred ${data.unstarred || 0} article(s).`);
+      document.getElementById('unstar-tagged-btn')?.click();  // re-scan
+    });
+
     // ── Purge old posts utility ────────────────────────────────────────────
     document.getElementById('purge-old-btn')?.addEventListener('click', () => {
       const panel = document.getElementById('purge-old-panel');

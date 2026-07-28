@@ -924,14 +924,32 @@ Note this also supersedes most of the single-post-page workaround (see "Single-p
 pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
 which is exactly what this does.
 
-### 5. Unstar items that carry tags — service + API DONE 2026-07-22, UI pending
+### 5. Unstar items that carry tags — DONE 2026-07-28
 
 Built as `services/unstar_tagged.py` (pure decision layer) +
 `GET /saved/unstar-tagged/preview` + `POST /saved/unstar-tagged`. Read-only
 preview returns per-tag counts, the archived_at-loss count, and suggested
 queue-like opt-outs; apply recomputes server-side under the given `keep_tags`
-and deletes only the star row. **No UI yet — deferred until browser testing is
-possible** (Josh was phone-only on 2026-07-22).
+and deletes only the star row.
+
+**UI shipped 2026-07-28** — Settings → Utilities → **Unstar tagged articles**,
+verified in a browser against a seeded instance. Two decisions worth keeping:
+
+- **The panel inverts the API's opt-out.** Rendering `keep_tags` directly would
+  arrive with all 58 tags checked, making "unstar everything" the default and
+  unchecking the destructive act — against the no-preselected-bulk-actions rule.
+  The panel selects tags to *clear* and derives `keep_tags = all − selected`.
+- **The button count comes from the server, not from summing rows.** An entry is
+  protected by *any* kept tag, so an article tagged `python`+`books` survives a
+  `python`-only selection despite being counted in the `python` row. Each
+  selection change re-previews for the honest total.
+
+Queue-like tags are flagged and excluded from "select all topical tags"; the
+archived_at warning fires before a one-way loss of Read Mode progress.
+
+**Not yet run against live data** — the live set was ~1,603 stars across 58 tags
+at last measure, and those numbers are now days old. Re-run the scan and review
+the tag list before applying anything.
 
 Dry-run on live data at build time: **1,767 affected across 60 tags, 24 carrying
 archived_at, zero queue-like names.** The count includes the ~166 tag-created
@@ -1330,6 +1348,35 @@ What's left:
 - Open question worth measuring before building: how many removals a real feed
   actually repeats. If share widgets and footers dominate, promotion is high
   value; if most cleanups are one-offs, this stays deferred.
+
+**MEASURED 2026-07-28 — stays deferred, and the design needs one change first.**
+Corpus is only 4 edited entries / 67 ops (Phase 1 shipped 07-24), so the repeat
+rate itself is *unmeasurable*, not proven low — but two findings don't depend on
+sample size:
+
+| finding | number |
+|---|---|
+| edited entries | 4, across 4 **distinct hosts** |
+| ...of those, filed under `lectio:saved` | **3** |
+| ops carrying a promotable `tag.class` | 47 / 67 (70%) |
+| ops that are **tag-only** (no id, no class) | **20 / 67 (30%)** |
+| selectors recurring across entries | **0** |
+
+- **⚠ `feed_url` is the wrong rule key.** Three of the four edits are on
+  `lectio:saved`, which is a pseudo-feed holding saved articles from everywhere —
+  currentaffairs.org, dummies.com and reactormag.com all share that one
+  `feed_url`. A `feed_content_rules` row keyed on it would apply one site's strip
+  to unrelated sites. **Key on the entry-link host instead**, with the feed as a
+  secondary scope for real feeds. This also fits the six hand-coded per-site
+  strips better — those are per-*site* already.
+- **30% of ops can't be promoted at all**, confirming the derivation caveat
+  above: they have no id and no class, so `tag.class` degenerates to a bare tag
+  that would match every `<p>`/`<svg>` on the site. The matcher must skip these,
+  which means a promotion UI has to show "12 of 49 removals are promotable" or it
+  will look broken.
+- Re-measure once there are edits on **≥3 entries of the same real feed** —
+  that's the shape that would actually justify building this. Until then the
+  hand-cleanup from Phase 1 is doing the job.
 
 ### 9. Tag-as-keep — Part C: pass 1 DONE 2026-07-22, pass 2 still deferred
 

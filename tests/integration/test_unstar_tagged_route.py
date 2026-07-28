@@ -111,3 +111,57 @@ def test_kept_tag_protects_its_entries(configured):
 
     # b (books) keeps its star; a (python) loses it.
     assert _stars() == {"b", "c"}
+
+
+def test_selecting_tags_to_clear_is_the_inverse_of_keep_tags(configured):
+    """The Utilities panel selects tags to *clear*, not to keep.
+
+    Rendering the API's opt-out directly would mean every tag arrives checked
+    and unchecking is the destructive act — "unstar everything" as the default.
+    So the panel inverts: keep_tags = every affected tag minus the selected
+    ones. This pins that round-trip, because the inversion looks redundant and
+    is the kind of thing a later cleanup would "simplify" away.
+    """
+    plan = main._current_unstar_tagged_plan(set())
+    all_tags = [row["tag"] for row in plan["per_tag"]]
+    assert sorted(all_tags) == ["books", "python"]
+
+    selected = ["python"]
+    keep = [t for t in all_tags if t not in selected]
+    body = _apply(keep)
+
+    # Only the python-tagged star goes; books is protected by omission.
+    assert body["unstarred"] == 1
+    assert _stars() == {"b", "c"}
+
+
+def test_selecting_every_tag_keeps_nothing_back(configured):
+    """Selecting all tags inverts to an empty keep list — the full sweep."""
+    plan = main._current_unstar_tagged_plan(set())
+    keep = [t for t in (row["tag"] for row in plan["per_tag"]) if t not in ["python", "books"]]
+    assert keep == []
+
+    body = _apply(keep)
+    assert body["unstarred"] == 2
+    assert _stars() == {"c"}  # the untagged star, the real queue, survives
+
+
+def test_preview_under_a_partial_selection_reports_the_real_total(configured):
+    """The panel's button count comes from the server, not from summing rows.
+
+    Per-tag counts can't be added up: an entry is protected by *any* kept tag,
+    so a multi-tagged entry survives a partial selection even though its tag's
+    row count includes it. The preview under the same keep_tags is the only
+    honest number, and this is the case that would expose a client-side sum.
+    """
+    with main.get_reader() as reader:
+        reader.set_tag((FEED, "b"), f"{MTAG}python")  # b is now books + python
+
+    # Selecting only `python` must NOT promise b: it still carries books.
+    plan = main._current_unstar_tagged_plan({"books"})
+    per_tag = {row["tag"]: row["count"] for row in plan["per_tag"]}
+    assert per_tag["python"] == 2          # a and b both carry python
+    assert plan["totals"]["to_unstar"] == 1  # but only a is actually cleared
+
+    assert _apply(["books"])["unstarred"] == 1
+    assert _stars() == {"b", "c"}
