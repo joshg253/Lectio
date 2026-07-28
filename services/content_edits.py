@@ -210,6 +210,8 @@ def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]
         raise ContentEditError("this entry has no HTML body to clean")
     soup = BeautifulSoup(f"<div>{content_html}</div>", "html.parser")
     root = soup.div
+    if root is None:  # the wrapper is a literal <div>, so only a parser failure gets here
+        raise ContentEditError("this entry's HTML could not be parsed")
     applied = 0
     unmatched: list[dict] = []
 

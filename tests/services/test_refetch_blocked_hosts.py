@@ -54,7 +54,12 @@ class _Resp:
 
 def _raise(status: int):
     def _extract(url):
-        raise httpx.HTTPStatusError("refused", request=None, response=_Resp(status))  # type: ignore[arg-type]
+        # Deliberate test doubles: the code under test only reads
+        # exc.response.status_code, so a real Request/Response is needless
+        # ceremony. ty checks the constructor signature, hence the suppression.
+        raise httpx.HTTPStatusError(
+            "refused", request=None, response=_Resp(status),  # ty: ignore[invalid-argument-type]
+        )
     return _extract
 
 
