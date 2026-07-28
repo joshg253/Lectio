@@ -88,7 +88,16 @@ The short version:
   library built from feeds; an **Instapaper CSV import**
   brings your whole library over with tags and archive state — and tells you how
   much of it belongs to feeds you already follow, so a fresh import doesn't
-  quietly become an unfiled backlog.
+  quietly become an unfiled backlog; **Unstar tagged articles** clears stars that
+  a tag has made redundant — since a tag keeps an article on its own, a star on
+  a tagged article is just clutter in the read-later queue. You pick which tags
+  to clear, tag by tag, and nothing is preselected. Tags whose names suggest a
+  reading queue (`to-read`, `later`) are flagged and left out of "select all",
+  because there the star *is* the queue rather than a redundant copy. Only the
+  star is removed: the tag, the article, its read state and its offline copy all
+  stay. An article carrying several tags keeps its star until every one of those
+  tags is selected, so the count on the button is the honest total rather than
+  the sum of the rows.
 - **Clean up article** (🧹 in the reading pane) — an Aardvark-style editor for a
   post's body. Hovering outlines the element under the cursor and clicking
   removes it; `W`/`N` widen and narrow the selection, `I` isolates (keeps only

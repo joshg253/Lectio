@@ -2254,6 +2254,7 @@
             <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
+            <button type="button" id="unstar-tagged-btn" class="settings-secondary-btn" title="Find starred articles that also carry a tag — the tag already keeps them, so the star is redundant">Unstar tagged articles</button>
             <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
             <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
@@ -2315,6 +2316,22 @@
             <div class="multi-folder-list"></div>
             <div class="dedup-inline-actions">
               <button type="button" id="multi-folder-ok" class="danger" hidden>Keep selected folders</button>
+            </div>
+          </div>
+          <!-- Unstar tagged: the checkbox selects a tag to CLEAR, not to keep.
+               The API takes an opt-out (keep_tags), but rendering 58 tags
+               pre-checked would make "unstar everything" the default action and
+               unchecking the destructive act. Positive selection keeps the
+               bulk-action rule intact: nothing checked, nothing happens. The JS
+               inverts the selection into keep_tags before calling. -->
+          <div id="unstar-tagged-results" hidden>
+            <p class="action-modal-label unstar-tagged-intro"></p>
+            <p class="action-modal-hint">Nothing is preselected — check the tags whose articles should lose their star. The tag still keeps the article: it stays archived, tagged, and safe from pruning. Only the star is removed.</p>
+            <p class="action-modal-hint unstar-tagged-warning" hidden></p>
+            <div class="unstar-tagged-list"></div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="unstar-tagged-selectall" class="settings-secondary-btn" hidden title="Check every topical tag, leaving any queue-like tag unchecked">Select all topical tags</button>
+              <button type="button" id="unstar-tagged-ok" class="danger" hidden disabled>Unstar selected</button>
             </div>
           </div>
           <div id="saved-autofile-results" hidden>

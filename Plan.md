@@ -924,14 +924,32 @@ Note this also supersedes most of the single-post-page workaround (see "Single-p
 pages" in Later): Josh's instinct is to file such pages into *a related real feed*,
 which is exactly what this does.
 
-### 5. Unstar items that carry tags — service + API DONE 2026-07-22, UI pending
+### 5. Unstar items that carry tags — DONE 2026-07-28
 
 Built as `services/unstar_tagged.py` (pure decision layer) +
 `GET /saved/unstar-tagged/preview` + `POST /saved/unstar-tagged`. Read-only
 preview returns per-tag counts, the archived_at-loss count, and suggested
 queue-like opt-outs; apply recomputes server-side under the given `keep_tags`
-and deletes only the star row. **No UI yet — deferred until browser testing is
-possible** (Josh was phone-only on 2026-07-22).
+and deletes only the star row.
+
+**UI shipped 2026-07-28** — Settings → Utilities → **Unstar tagged articles**,
+verified in a browser against a seeded instance. Two decisions worth keeping:
+
+- **The panel inverts the API's opt-out.** Rendering `keep_tags` directly would
+  arrive with all 58 tags checked, making "unstar everything" the default and
+  unchecking the destructive act — against the no-preselected-bulk-actions rule.
+  The panel selects tags to *clear* and derives `keep_tags = all − selected`.
+- **The button count comes from the server, not from summing rows.** An entry is
+  protected by *any* kept tag, so an article tagged `python`+`books` survives a
+  `python`-only selection despite being counted in the `python` row. Each
+  selection change re-previews for the honest total.
+
+Queue-like tags are flagged and excluded from "select all topical tags"; the
+archived_at warning fires before a one-way loss of Read Mode progress.
+
+**Not yet run against live data** — the live set was ~1,603 stars across 58 tags
+at last measure, and those numbers are now days old. Re-run the scan and review
+the tag list before applying anything.
 
 Dry-run on live data at build time: **1,767 affected across 60 tags, 24 carrying
 archived_at, zero queue-like names.** The count includes the ~166 tag-created

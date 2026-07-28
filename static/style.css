@@ -5143,6 +5143,31 @@ body[data-keyboard-open="1"] .action-modal-panel {
   overflow-wrap: anywhere;
 }
 
+/* Unstar tagged: reuses the autofile count column so the two utility lists
+   line up. The tag list runs long (58 tags on live data), so it scrolls
+   rather than pushing the action button off the panel. */
+.unstar-tagged-list {
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.unstar-tagged-row { align-items: center; }
+.unstar-tagged-queue {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.6rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--border, currentColor);
+}
+/* Separated from the hint above it: run together they read as one paragraph,
+   and this one is a warning about state that does not come back. */
+.unstar-tagged-warning {
+  margin-top: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--warning, var(--muted));
+  color: var(--warning, var(--muted));
+}
+
 .saved-dedup-title-edit {
   font-size: 0.72rem;
   margin-left: 0.35rem;
