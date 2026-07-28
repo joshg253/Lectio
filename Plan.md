@@ -1798,6 +1798,29 @@ extension keeps working too.
   stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
   behind after the Instapaper-import cleanup.
 
+### CI flake: "database is locked" from leaked background threads
+
+Seen 2026-07-28 on PR #155: `test_feed_link_xss.py::test_entry_detail_empties_unsafe_link`
+errored with `StorageError: while opening database: database is locked`, while
+the other **1914 passed**. Passes locally, twice, on the full suite — CI-only.
+
+Not a missing pragma: `_LectioReaderStorage` already sets
+`busy_timeout=10000` and opens with `timeout=30.0`.
+
+The mechanism is almost certainly the one behind the
+`PytestUnhandledThreadExceptionWarning` the suite already emits (e.g. "no such
+table: feed_media_scan"): background threads started by one test outlive it,
+and because tenancy is a **global**, a leaked thread resolves paths against
+whatever the *next* test just configured — so it opens and locks a DB it was
+never meant to touch. Same family as the earlier flaky-CI work (reader
+busy_timeout + the startup-backfill gate), and the same family as the
+`test_youtube_playlist_rules` flake logged 2026-07-21.
+
+A real fix gates background threads in tests (a fixture that refuses to start
+them, or joins them on teardown) rather than widening timeouts. Worth doing:
+with CI as the only reviewer, a suite that reddens at random teaches you to
+ignore the one signal you have.
+
 ### Code health (deferred — low value, no user impact)
 
 **Flaky test seen 2026-07-21:**
