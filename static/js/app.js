@@ -1338,8 +1338,21 @@
         data = await resp.json();
       } catch (err) {
         if (token !== _utCountToken) return;
-        btn.textContent = 'Unstar selected';
+        // Say why, but stay disabled. dataset.count still holds the total from
+        // the last successful preview, so re-enabling here would let a click
+        // unstar a set the label no longer describes — and the count is the
+        // only thing standing between the reviewer and the wrong articles.
+        // Clearing it makes a stale total unusable even if something else
+        // re-enables the button later. Changing the selection retries.
+        delete btn.dataset.count;
+        btn.textContent = 'Count unavailable';
         btn.disabled = true;
+        if (warn) {
+          warn.hidden = false;
+          warn.textContent =
+            'Could not check how many articles this would affect (' + err +
+            '). Nothing has changed — adjust the selection to try again.';
+        }
         return;
       }
       if (token !== _utCountToken) return;  // a later click already superseded this
