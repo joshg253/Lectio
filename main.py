@@ -15200,7 +15200,11 @@ def refresh_expiring_deviantart_images(
     return {"stale": len(stale), "refreshed": refreshed}
 
 
-_WIXMP_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*")([^"]*wixmp[^"]*)(")', re.IGNORECASE)
+# Capture the whole src value in one linear group and test for "wixmp" in
+# Python. Embedding the literal between two unbounded [^"]* runs backtracks
+# polynomially on feed-supplied HTML with many repetitions and no closing quote
+# (CodeQL: polynomial regular expression used on uncontrolled data).
+_IMG_SRC_ATTR_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*")([^"]*)(")', re.IGNORECASE)
 
 
 def _img_cache_has(url: str) -> bool:
@@ -15260,6 +15264,8 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
 
     def _sub(m: re.Match) -> str:
         url = html.unescape(m.group(2))
+        if "wixmp" not in url:
+            return m.group(0)
         if url in replaced:
             return f"{m.group(1)}{html.escape(replaced[url], quote=True)}{m.group(3)}"
         fresh = _resign_expired_deviantart_url(url, entry_id)
@@ -15268,7 +15274,7 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
         replaced[url] = fresh
         return f"{m.group(1)}{html.escape(fresh, quote=True)}{m.group(3)}"
 
-    updated = _WIXMP_IMG_SRC_RE.sub(_sub, content_html)
+    updated = _IMG_SRC_ATTR_RE.sub(_sub, content_html)
     if replaced:
         # Persist so a later view (and the list thumbnail) starts from the fresh
         # URL. It expires again in minutes, but by then the proxy has the bytes.

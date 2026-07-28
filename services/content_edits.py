@@ -64,8 +64,12 @@ def parse_ops(raw: str | list) -> list[dict]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except (TypeError, ValueError) as exc:
-            raise ContentEditError("ops is not valid JSON") from exc
+        except (TypeError, ValueError):
+            # `from None`: the route returns this message to the browser, and a
+            # chained parser error carries stack detail with it (CodeQL:
+            # information exposure through an exception). The same reasoning as
+            # probe_url's "only the exception class reaches the client".
+            raise ContentEditError("ops is not valid JSON") from None
     if not isinstance(raw, list) or not raw:
         raise ContentEditError("no cleanup operations were sent")
     if len(raw) > MAX_OPS:
