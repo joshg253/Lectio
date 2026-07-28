@@ -1030,12 +1030,24 @@ adding an endpoint — that branch already writes read state, `entry_read_state`
 and read history from a tenancy-rebinding daemon thread, which is exactly what
 the old on-render `_mark_entry_read_background` call did.
 
-The client holds the mark until pagination has **settled** (the 350ms
-re-measure). A long article can measure as a single page before its images load,
-and marking off that first measurement would reintroduce the same bug from the
-other direction. Both scopes follow this rule: the peek problem is identical in
-each, and the scope isn't visible from inside the reader, so splitting the rule
-would make "did that count as read?" unpredictable.
+The client holds the mark until pagination has **settled**, and settling is a
+readiness check rather than a delay. On a cold load a 12-page article measures as
+**one page** until its stylesheet and images arrive — which satisfies "last page
+reached" and marks an article read the instant it is opened. That was observed in
+testing, not theorised, and a fixed timeout cannot fix it because the wait is a
+race against however long those resources take. So `trySettle` re-measures every
+`SETTLE_POLL_MS` and only trusts the count once `document.readyState` is
+`complete` *and* every `<img>` reports `.complete` (which covers errored images —
+they are settled, they just contribute no height). `SETTLE_MAX_TRIES` caps the
+wait at ~5s so an image that never resolves can't block mark-read forever.
+
+Only the **one-page** case actually needs this guard: a multi-page article can't
+be marked without the reader genuinely paging to the end, whenever that happens.
+The guard exists because a wrong measurement makes every article look one-page.
+
+Both scopes follow this rule: the peek problem is identical in each, and the
+scope isn't visible from inside the reader, so splitting the rule would make
+"did that count as read?" unpredictable.
 
 **Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
 with the Archive axis. `feeds` is ordinary **unread feed reading**:

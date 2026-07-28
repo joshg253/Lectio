@@ -1132,8 +1132,11 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
 - ~~**Mark-read only after the last page**~~ — **DONE 2026-07-28.** The server
   no longer marks on render; `static/reader.js` posts to `/entries/read` once
   pagination settles *and* the last page is reached, reusing that route's async
-  branch rather than adding an endpoint. Held until the 350ms re-measure,
-  because a long article can measure as one page before its images load.
+  branch rather than adding an endpoint. **Settling is a readiness check, not a
+  delay** — a cold load measures a 12-page article as one page until its CSS
+  lands, which trips "last page reached" on open. Caught in review re-testing;
+  the fix polls until `readyState === 'complete'` and every image has resolved,
+  capped at ~5s.
   Verified in a browser: peek at 1/12 stays unread, 12/12 marks read, one-page
   article marks on open. **Applies to both scopes** — the peek problem is the
   same in the feeds scope, and the scope isn't visible from inside the reader.

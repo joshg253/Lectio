@@ -22,6 +22,19 @@
   var FS_KEY = "lectio-reader-fontsize";
   var FS_MIN = 0.9, FS_MAX = 1.9, FS_STEP = 0.1, FS_DEFAULT = 1.2;
 
+  // When the page count becomes trustworthy. Late images and fonts change the
+  // article's height, and on a cold load a long article can measure as a single
+  // page until they land — which would trip "last page reached" and mark an
+  // unread article read the moment it was opened. Observed, not hypothetical.
+  //
+  // A fixed delay can't fix this: it is a race against however long the images
+  // take. So the count is only trusted once the document is complete and every
+  // image has resolved, polled up to SETTLE_MAX_TRIES. The cap matters too — an
+  // image that never loads must not block mark-read forever.
+  var SETTLE_MS = 350;         // first check, and the cosmetic re-measure
+  var SETTLE_POLL_MS = 250;    // re-check interval while still loading
+  var SETTLE_MAX_TRIES = 20;   // ~5s ceiling, then trust what we have
+
   var page = 0;   // 0-indexed current page
   var pages = 1;  // total pages
 
@@ -45,9 +58,9 @@
   var paginationSettled = false;
 
   function markReadIfFinished() {
-    // Held until pagination settles: a long article can measure as one page
-    // before its images load, and marking off that first measurement would
-    // reintroduce exactly the peek-marks-read bug from the other direction.
+    // Held until pagination settles (SETTLE_MS): a long article can measure as
+    // one page before its images load, and marking off that first measurement
+    // would reintroduce exactly the peek-marks-read bug from the other side.
     if (readMarked || !paginationSettled) return;
     if (page < pages - 1) return;
     var feed = cols.getAttribute("data-feed");
@@ -163,22 +176,24 @@
   function afterAction() {
     go(NAV.next || NAV.back || "/read");
   }
-  // `requestedWith` names the async-action header the route checks; without it
-  // the endpoint answers with a redirect back into the main app instead of JSON.
+  // `requestedWith` is required, not defaulted: it names the async-action mode
+  // the target route checks, and routes disagree about which token they accept.
+  // Without the right one the endpoint answers with a redirect back into the
+  // main app instead of JSON, so each call site declares its own.
   function post(url, params, requestedWith) {
     return fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         "X-CSRF-Token": csrfToken(),
-        "X-Requested-With": requestedWith || "lectio-entry-save-toggle",
+        "X-Requested-With": requestedWith,
       },
       body: new URLSearchParams(params).toString(),
       credentials: "same-origin",
     });
   }
-  function postAction(url, params) {
-    post(url, params).then(afterAction, afterAction);
+  function postAction(url, params, requestedWith) {
+    post(url, params, requestedWith).then(afterAction, afterAction);
   }
   var archiveBtn = document.getElementById("reader-archive-btn");
   if (archiveBtn) archiveBtn.addEventListener("click", function (e) {
@@ -188,7 +203,7 @@
       feed_url: cols.getAttribute("data-feed"),
       entry_id: cols.getAttribute("data-entry"),
       archived: archived,
-    });
+    }, "lectio-entry-save-toggle");
   });
   var deleteBtn = document.getElementById("reader-delete-btn");
   if (deleteBtn) deleteBtn.addEventListener("click", function (e) {
@@ -197,7 +212,7 @@
       folder_id: "0", saved: "0", select_entry: "0",
       feed_url: cols.getAttribute("data-feed"),
       entry_id: cols.getAttribute("data-entry"),
-    });
+    }, "lectio-entry-save-toggle");
   });
 
   var reflowTimer = null;
@@ -212,10 +227,28 @@
   if (document.readyState === "complete") init();
   else window.addEventListener("load", init);
   // Late images/fonts can change article height; re-measure shortly after. This
-  // is also the point the page count is trusted, so mark-read opens for business.
-  window.setTimeout(function () {
-    recompute(true);
+  // is also the point the page count is trusted, so mark-read opens for business
+  // — but only once there is nothing left to load that could change it.
+  function imagesResolved() {
+    var imgs = cols.querySelectorAll("img");
+    for (var i = 0; i < imgs.length; i++) {
+      // .complete covers loaded *and* errored, which is what we want: a broken
+      // image is settled, it just has no height to contribute.
+      if (!imgs[i].complete) return false;
+    }
+    return true;
+  }
+
+  var settleTries = 0;
+  function trySettle() {
+    recompute(true);   // cosmetic re-measure happens on every pass
+    if ((document.readyState !== "complete" || !imagesResolved())
+        && settleTries++ < SETTLE_MAX_TRIES) {
+      window.setTimeout(trySettle, SETTLE_POLL_MS);
+      return;
+    }
     paginationSettled = true;
     markReadIfFinished();
-  }, 350);
+  }
+  window.setTimeout(trySettle, SETTLE_MS);
 })();
