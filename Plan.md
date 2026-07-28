@@ -1148,7 +1148,8 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   it's where the flash actually comes from, and it leaves both the page's
   no-store posture and the reader's navigation model untouched.
   `prefetchNextImages` parses the next article in a detached `DOMParser`
-  document and warms up to 12 same-origin images 1.5s after the settle.
+  document and warms up to 12 same-origin images, hung off the settle rather
+  than a fixed delay from load.
   **Depends on the mark-read change above** — fetching the next article's HTML
   would previously have marked it read unseen.
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack

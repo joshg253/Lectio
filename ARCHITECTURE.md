@@ -1058,10 +1058,11 @@ resources — it only reads `src` attributes), and warms up to
 `PREFETCH_MAX_IMAGES` same-origin images via `new Image()`. Those come from
 `/api/img` (`public, max-age=86400`) and `/starred-asset/` (a year, immutable),
 so unlike the page they genuinely survive in the HTTP cache. The cap exists
-because a lesson-length article can carry 50+ images; the delay (1.5s, after the
-pagination settle) exists so warming the next article never competes with
-rendering the one being read, and failures are swallowed because a prefetch must
-never disturb reading.
+because a lesson-length article can carry 50+ images. The prefetch is hung off
+the **settle** (plus `PREFETCH_DELAY_MS`) rather than a fixed delay from load, so
+warming the next article never competes with rendering the one being read — on a
+slow load settling can itself take seconds, and a fixed timer would fire straight
+into it. Failures are swallowed: a prefetch must never disturb reading.
 
 **This is only safe because rendering no longer marks read.** Fetching the next
 article's HTML to discover its images would otherwise have marked it read without
