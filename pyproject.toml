@@ -56,6 +56,14 @@ line-length = 140
 extend-ignore = ["E203"]
 select = ["E", "F", "W", "I", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# main.py registers a feedparser date handler *before* its remaining imports, so
+# the handler is in place before `reader` (which imports feedparser) parses
+# anything. The late import block is that deliberate ordering, not drift — E402
+# flags all 55 of them and none will ever be "fixed", so the rule is noise here
+# and would block every change that adds an import.
+"main.py" = ["E402"]
+
 # Ruff is the canonical linter/formatter for this project. The `select` list
 # enables pycodestyle (`E`), pyflakes (`F`), warnings (`W`), isort-style
 # import ordering (`I`) and bugbear (`B`). Add or remove checks here if

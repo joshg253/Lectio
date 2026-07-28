@@ -63,6 +63,7 @@ from services import ttrss as ttrss_service
 from services import passwords
 from services import podcast_audio
 from services import podcast_feed_discovery
+from services import content_edits
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
@@ -3211,6 +3212,24 @@ def ensure_meta_schema() -> None:
                 feed_url TEXT NOT NULL,
                 entry_id TEXT NOT NULL,
                 content TEXT NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        # Aardvark-style per-entry cleanup: the pristine body (reader's JSON
+        # content shape) plus the ops that were replayed over it. The original
+        # is what "Revert cleanup" restores; the ops are the record of *what*
+        # was removed, which a later per-feed rule gets promoted from. Only the
+        # first edit writes original_content — repeated cleanups of the same
+        # entry must keep reverting to the true original, not to the last edit.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entry_content_edits (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                original_content TEXT NOT NULL,
+                ops TEXT NOT NULL,
+                edited_at TEXT NOT NULL,
                 PRIMARY KEY(feed_url, entry_id)
             )
             """
@@ -8671,6 +8690,13 @@ def get_feed_properties(feed_url: str) -> dict:
             "devto_feed_id": _devto_id,
             "devto": devto_service.get_feed_config(_pc, _devto_id) if _devto_id else None,
             "browser_ua": feed_url in get_browser_ua_feed_urls(_pc),
+            # Declared domain migrations for this feed. Rendered as the "Other
+            # domains" list under Website, which is the only way to see them —
+            # they otherwise act invisibly at ingest and in the global dedupe
+            # alias map.
+            "url_rewrites": [
+                {"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)
+            ],
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -10208,6 +10234,11 @@ def _strip_comment_sections(raw_html: str) -> str:
 # nor the selector/whole-body fallbacks drag it in. Kept to markers that are
 # never article prose: named share/newsletter/ad/affiliate widgets, tooltips,
 # and <aside> (tangential content by definition).
+# A chrome match holding at least this share of the page's text is treated as
+# the article itself and kept. Share bars and signup boxes run a few percent;
+# an article container runs most of the page, so anything in between is safe.
+_CHROME_MAX_TEXT_SHARE = 0.4
+
 _ARTICLE_CHROME_SELECTORS = (
     '[class*="flexisites-social"]',   # Future plc social-share bar
     '[class*="byline-social"]',
@@ -10232,8 +10263,18 @@ def _strip_article_chrome(raw_html: str) -> str:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(raw_html, "html.parser")
         removed = False
+        # Chrome is small next to the article it decorates. A match holding most
+        # of the page's text is therefore not chrome — it's the article wearing
+        # a word this list happens to look for. selfh.st's Self-Host Weekly is
+        # a *newsletter*, so its body container matches [class*="newsletter"]
+        # and stripping it took 99.9% of the page, leaving Readability view with
+        # a lead image and nothing else.
+        total_text = len(soup.get_text(" ", strip=True))
         for sel in _ARTICLE_CHROME_SELECTORS:
             for el in soup.select(sel):
+                if total_text and len(el.get_text(" ", strip=True)) >= total_text * _CHROME_MAX_TEXT_SHARE:
+                    LOGGER.info("[extract] keeping %s: holds most of the page's text, not chrome", sel)
+                    continue
                 el.decompose()
                 removed = True
         # JW Player video carousels ("Latest Videos From … Watch full video
@@ -10567,14 +10608,44 @@ def markdown_to_article_html(md_text: str, source_url: str) -> tuple[str, str]:
     return title, article_html
 
 
+# Statuses that mean "refused", not "absent" — the cue to retry once with a
+# browser identity before believing the answer. Medium answers a *live* article
+# with 404 or 403 depending on the URL when it doesn't like the client, and a
+# 404 taken at face value told the user the article was gone and offered to
+# delete it. Mirrors feed_discovery's escalation policy.
+_READABILITY_REFUSAL_STATUSES = frozenset({401, 403, 404, 405, 410, 429, 451, 503})
+_READABILITY_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
 def fetch_readability_article(source_url: str) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
     route and save-article capture. Raises on fetch/extraction failure.
     Markdown documents (text/markdown, or .md/.md.txt paths served as plain
-    text) are converted instead of readability-extracted."""
-    with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
-        response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
+    text) are converted instead of readability-extracted.
+
+    An honest fetch is tried first; only if the host refuses does it retry once
+    with a browser identity. That retry is not about winning an arms race — a
+    host that blocks by IP still refuses — but about not *mistaking a refusal
+    for a deletion*: the caller flags 404/410 as "the article is gone", and a
+    bot-wall answering 404 turned a live article into a delete prompt."""
+    headers = {"User-Agent": READABILITY_USER_AGENT}
+    with url_guard.build_client(timeout=12.0, headers=headers) as client:
+        response = url_guard.safe_get(client, source_url, headers=headers)
+    if response.status_code in _READABILITY_REFUSAL_STATUSES:
+        retry_headers = {"User-Agent": _READABILITY_BROWSER_UA}
+        try:
+            with url_guard.build_client(timeout=12.0, headers=retry_headers) as client:
+                retried = url_guard.safe_get(client, source_url, headers=retry_headers)
+            # Keep the retry only if it actually did better; otherwise the
+            # honest response is the one worth reporting.
+            if retried.is_success or retried.status_code != response.status_code:
+                response = retried
+        except Exception:  # noqa: BLE001 — the first response still stands
+            LOGGER.debug("readability: browser-identity retry failed for %s", source_url, exc_info=True)
     response.raise_for_status()
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
         return markdown_to_article_html(response.text, source_url)
@@ -12022,6 +12093,19 @@ def _derive_article_lead_image(entry) -> str | None:
     # article showed no image AND persisted a negative on open, poisoning the thumb.
     if strategy in ("inline", "webcomic"):
         primary = lead_image_service.extract_inline_thumb_url(entry)
+        if strategy == "webcomic":
+            # ComicControl-style feeds (atomic-robo, smbc, misfile) ship only a
+            # small /comicsthumbs/ image inline, while the full panel is what the
+            # source-page scan already cached — so the inline-first rule above
+            # showed the thumbnail and the article never got the readable comic.
+            # Prefer a cached *positive*; a cached negative still loses to the
+            # inline image, which is the stale-negative case this bypass exists
+            # for (claycomix ships the strip inline and is unaffected either way).
+            _cached_full = lead_image_service.get_cached_lead_image_url(
+                feed_url, str(getattr(entry, "id", "") or "")
+            )
+            if _cached_full:
+                primary = _cached_full
     elif strategy == "media_rss":
         primary = lead_image_service.extract_media_rss_thumb_url(entry)
     else:
@@ -13029,11 +13113,17 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
     ComicControl gives the thumbnail and the full panel DIFFERENT cache-bust
     timestamp prefixes (e.g. comicsthumbs/1782426356-X.jpg vs comics/1782426355-X.jpg),
     so a naive /comicsthumbs/ -> /comics/ swap keeps the thumb's timestamp — and
-    ComicControl answers that nonexistent timestamp with a 200 *HTML* page, not the
+    ComicControl answers that nonexistent timestamp with a 200 placeholder, not the
     image, breaking the comic. When the resolved lead image (the real /comics/<ts>-<file>
     read from the page) shares the same timestamp-stripped filename, substitute it
-    directly. Otherwise fall back to the directory swap (correct whenever the thumb
-    and panel happen to share a timestamp)."""
+    directly.
+
+    Otherwise the image is left exactly as the feed served it. The naive swap used
+    to run as a fallback, which meant the *first* view of a new strip — before the
+    lead image has been derived and cached — replaced a working 31KB thumbnail
+    with a 11KB placeholder, so the comic appeared broken until a reload
+    (atomic-robo, reported 2026-07-26). A small correct comic beats a big broken
+    one, and the promotion still happens on every later view."""
     lead_name = (
         _comiccontrol_stable_name(full_lead_url)
         if full_lead_url and "/comics/" in full_lead_url
@@ -13044,8 +13134,7 @@ def _promote_comicsthumbs_in_content(content_html: str, full_lead_url: str | Non
         src = m.group(2)
         if lead_name and _comiccontrol_stable_name(src).lower() == lead_name.lower():
             return f"{m.group(1)}{full_lead_url}{m.group(3)}"
-        swapped = re.sub(r'(?<=/)comicsthumbs(?=/)', "comics", src, flags=re.IGNORECASE)
-        return f"{m.group(1)}{swapped}{m.group(3)}"
+        return m.group(0)  # unverifiable — keep the feed's own thumbnail
 
     return _COMICSTHUMBS_IMG_SRC_RE.sub(_sub, content_html)
 
@@ -13213,6 +13302,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 )
                 content_html = _existing + _add
 
+        # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
+        # the UI, and suppresses the embed recovery below — re-adding an embed
+        # the user just deleted is the one way a cleanup could look undone.
+        try:
+            with get_meta_connection() as _edit_conn:
+                content_edited = bool(_edit_conn.execute(
+                    "SELECT 1 FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                    (feed_url, entry_id),
+                ).fetchone())
+        except sqlite3.OperationalError:
+            content_edited = False  # tenant DB predates the table
+
         # Per-site / generic feed-content cleanups (NASA nav, mynorthwest related
         # block, Ghost audio cards, WordPress footer, qwantz nav, embed-container
         # iframes, recovered YouTube embeds). Operates on content_html only.
@@ -13223,7 +13324,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # placeholder to refill. Skips when the body already has an embed; fetch is
         # cached and SSRF-guarded. Runs before the YouTube-feed injection below so
         # that path still wins for native YouTube feeds.
-        if not (isinstance(feed_url, str)
+        if not content_edited and not (isinstance(feed_url, str)
                 and feed_url.startswith("https://www.youtube.com/feeds/videos.xml?")):
             content_html = _inject_recovered_source_embeds(content_html, entry)
 
@@ -13329,6 +13430,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         lead_image_url, _pending_lead_image = _resolve_article_lead_image(
             entry, video_id, _show_lead_in_article
         )
+        # The lead image is what the article actually displays, and it comes from
+        # the lead-image cache rather than the body — so a DeviantArt URL here
+        # needs the same expiry check the body gets, or the post shows nothing
+        # while its (re-signed) body image would have been fine.
+        if isinstance(lead_image_url, str) and "wixmp" in lead_image_url:
+            _fresh_lead = _resign_expired_deviantart_url(lead_image_url, entry_id)
+            if _fresh_lead and _fresh_lead != lead_image_url:
+                lead_image_url = _fresh_lead
+                lead_image_service.persist_lead_image_async(feed_url, entry_id, _fresh_lead)
 
         # Remove inline images whose src URL is a logo, tracker, or avatar — these
         # are typically brand assets or analytics pixels embedded by feed publishers
@@ -13564,6 +13674,13 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # hotlink hosts (e.g. nanolx.org) through the /api/img proxy so a
         # browser-cached placeholder under the original URL is bypassed. Skip
         # locally-served starred assets (same-origin, no hotlink concern).
+        # DeviantArt signs mature deviations' images for ~15 minutes, so a stored
+        # URL is usually dead by the time it is read. Re-sign on open, before the
+        # proxy rewrite below — the proxy's byte cache then holds the image for
+        # good, so this costs one API call per image, not per view.
+        if isinstance(content_html, str) and content_html:
+            content_html = _resign_expired_deviantart_images(content_html, feed_url, entry_id)
+
         if isinstance(content_html, str) and content_html and not is_saved:
             content_html = proxy_hotlink_images(content_html)
             content_html = add_no_referrer_to_images(content_html)
@@ -13631,6 +13748,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "author": author_name,
             "read": bool(entry.read),
             "saved": is_saved,
+            "content_edited": content_edited,
             # See the post-list builder: Re-fetch follows the entry, not the feed.
             "captured": str(getattr(entry, "added_by", "") or "") == "user",
             "manual_tags": manual_tags,
@@ -14091,9 +14209,22 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     source entry is synthesized into the survivor feed so its tag/star has a home.
     Moved stars are removed from the source feed's saved_entries rows.
 
-    Returns {"tags": n, "stars": n, "synth": n}.
+    Returns {"tags": n, "stars": n, "synth": n, "archives": n}.
     """
-    counts = {"tags": 0, "stars": 0, "synth": 0}
+    counts = {"tags": 0, "stars": 0, "synth": 0, "archives": 0}
+
+    # Which source entries actually hold an offline capture. Read once: the loop
+    # below would otherwise open an archive connection per entry just to
+    # discover that most have nothing to move.
+    try:
+        with get_starred_archive_connection() as _ac:
+            src_archived_ids = {
+                str(r[0]) for r in _ac.execute(
+                    "SELECT entry_id FROM archived_entry WHERE feed_url = ?", (remove_url,)
+                )
+            }
+    except sqlite3.OperationalError:
+        src_archived_ids = set()
 
     # Ensure the survivor feed exists so synthesized entries have a home.
     try:
@@ -14129,7 +14260,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
     }
 
     ids = set(src_tags) | set(src_stars)
-    if not ids:
+    if not ids and not src_archived_ids:
         return counts
 
     def _resolve(sid: str) -> tuple[str, bool]:
@@ -14170,6 +14301,18 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
                 counts["tags"] += 1
             except Exception:  # noqa: BLE001
                 LOGGER.exception("[dedup] set_tag failed %s on %s", key, target_id)
+        # Carry the offline capture across too. Without this the archive row
+        # stays keyed to a feed that is about to be deleted, and the Saved view
+        # then renders it as an archive-only *orphan* — from the archive's own
+        # stale link, which is how this surfaced: combined feeds still showing
+        # their old, dead URLs. rekey_archive moves the asset links with it and
+        # refuses to clobber an existing capture on the target.
+        if sid in src_archived_ids:
+            try:
+                starred_archive_service.rekey_archive(remove_url, sid, keep_url, target_id)
+                counts["archives"] += 1
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("[dedup] archive rekey failed %s -> %s/%s", sid, keep_url, target_id)
         if sid in src_stars:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
@@ -14177,6 +14320,23 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             )
             if cur.rowcount > 0:  # count real inserts, not IGNOREd existing rows
                 counts["stars"] += 1
+
+    # Captures on entries carrying neither a star nor a tag are never visited by
+    # the loop above — it walks curation, not entries — yet they strand exactly
+    # the same way once this feed is deleted (a star removed later leaves the
+    # capture behind; that is what an "archive-only orphan" is). Re-key any whose
+    # article exists on the survivor. One with no counterpart there is left
+    # alone: synthesizing an entry purely to host a capture would put an
+    # uncurated row in the survivor, and the orphan view is already its home.
+    for aid in src_archived_ids - ids:
+        _target_id, _synth = _resolve(aid)
+        if _synth:
+            continue
+        try:
+            starred_archive_service.rekey_archive(remove_url, aid, keep_url, _target_id)
+            counts["archives"] += 1
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[dedup] archive rekey failed %s -> %s/%s", aid, keep_url, _target_id)
 
     # The source feed is about to be deleted; drop its now-migrated star rows.
     conn.execute("DELETE FROM saved_entries WHERE feed_url = ?", (remove_url,))
@@ -14200,7 +14360,8 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
 
     Returns {"ok": bool, "synth": bool, "tags": n, "star": bool, "error": str|None}.
     """
-    result = {"ok": False, "synth": False, "tags": 0, "star": False, "error": None}
+    result = {"ok": False, "synth": False, "tags": 0, "star": False,
+              "content_moved": False, "error": None}
     src = reader.get_entry((feed_url, entry_id), None)
     if src is None:
         result["error"] = "Entry not found."
@@ -14245,6 +14406,28 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
             return result
         target_id = entry_id
         result["synth"] = True
+
+    # Carry the body when the target's is thinner. Matching by GUID/link can
+    # land on a copy that exists but is *empty* — an auto-filed capture whose
+    # source was bot-walled, say — and migrating only curation then moved the
+    # star onto a blank entry while the populated source was dropped. That is
+    # how a 44KB extension capture of a Medium article became an empty post
+    # (reported 2026-07-26). The move must never leave the reader on less than
+    # they had; pinned so the target feed's own refresh can't undo it.
+    try:
+        _src_body = (src.content[0].value if getattr(src, "content", None) else "") or src.summary or ""
+        _tgt = reader.get_entry((target_url, target_id), None)
+        _tgt_body = ""
+        if _tgt is not None:
+            _tgt_body = (_tgt.content[0].value if getattr(_tgt, "content", None) else "") or _tgt.summary or ""
+        if _src_body and len(_src_body) > len(_tgt_body):
+            saved_articles_service.replace_entry_content(
+                reader, conn, target_id, "", _src_body, feed_url=target_url,
+                bump_received=False, pin_content=True,
+            )
+            result["content_moved"] = True
+    except Exception:  # noqa: BLE001 — curation still migrates; body is best-effort
+        LOGGER.exception("[move-entry] could not carry content onto %s/%s", target_url, target_id)
 
     # Manual tags: re-key onto the target resource, then clear from the source.
     keys = [_extract_tag_key(t) for t in reader.get_tags(src.resource_id)]
@@ -14432,11 +14615,11 @@ def purge_orphaned_feed(
     # dedup/upgrade consolidation never drops curation.
     if migrate_curation_to:
         migrated = _migrate_curation(reader, conn, feed_url, migrate_curation_to)
-        if migrated["tags"] or migrated["stars"] or migrated["synth"]:
+        if migrated["tags"] or migrated["stars"] or migrated["synth"] or migrated["archives"]:
             LOGGER.info(
-                "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized",
+                "[dedup] migrated curation %s -> %s: %d tags, %d stars, %d synthesized, %d archives",
                 feed_url, migrate_curation_to,
-                migrated["tags"], migrated["stars"], migrated["synth"],
+                migrated["tags"], migrated["stars"], migrated["synth"], migrated["archives"],
             )
 
     # Step 3 — dispatch the delete via the appropriate path.
@@ -14936,6 +15119,188 @@ def _run_daily_maintenance() -> None:
                 LOGGER.exception("[maintenance] failed for user %r", _uid)
     _run_global_maintenance()
     LOGGER.info("[maintenance] daily maintenance complete")
+
+
+# NOT wired into nightly maintenance, deliberately. Measured 2026-07-26: a
+# freshly-signed mature-deviation URL expires in about **15 minutes**, not the
+# week the first sample suggested — so a 3am re-sign hands back images that are
+# dead by 3:15. Re-signing has to happen when the post is actually opened; this
+# routine stays as the building block for that (and for a manual catch-up via
+# scripts/refresh_expired_deviantart_images.py, which does make the image work
+# right now).
+# Bound one run's API calls. Mature deviations are a small slice of a library
+# and each needs its own request; anything beyond this waits for tomorrow rather
+# than hammering DeviantArt in one burst.
+_DA_IMAGE_REFRESH_MAX_PER_RUN = 100
+
+
+def refresh_expiring_deviantart_images(
+    *, within_seconds: float = 0.0, max_entries: int = _DA_IMAGE_REFRESH_MAX_PER_RUN,
+    apply: bool = True,
+) -> dict:
+    """Re-sign stored DeviantArt image URLs whose token has expired or is close to.
+
+    Matches on the *stored HTML* rather than a maturity flag: is_mature isn't
+    recorded, and the token is the thing that actually breaks. Runs for the
+    currently-bound tenancy user. Returns {"stale", "refreshed"}.
+    """
+    cutoff = time.time() + max(0.0, within_seconds)
+    stale: list[tuple[str, str, str]] = []  # (feed, entry_id, column)
+    with get_reader() as reader:
+        rows = reader._storage.get_db().execute(
+            "SELECT feed, id, summary, content FROM entries"
+            " WHERE COALESCE(summary, '') LIKE '%wixmp%token=%'"
+            "    OR COALESCE(content, '') LIKE '%wixmp%token=%'"
+        ).fetchall()
+    for feed, entry_id, summary, content in rows:
+        for column, body in (("summary", summary), ("content", content)):
+            if not body or "wixmp" not in body:
+                continue
+            exp = deviantart_service.image_token_expiry(body)
+            if exp is not None and exp < cutoff:
+                stale.append((str(feed), str(entry_id), column))
+                break
+    if not apply or not stale:
+        return {"stale": len(stale), "refreshed": 0}
+
+    # Not the raw stored value: DA access tokens last an hour, so a nightly job
+    # reading app_settings directly would 401 on almost every run. This is the
+    # same accessor the watch-list sync uses, refreshing from the refresh token
+    # when needed and returning "" when the session is dead.
+    token = get_deviantart_user_token()
+    if not token:
+        LOGGER.info("[deviantart] %d image(s) need re-signing but no usable access token "
+                    "(not connected, or reconnect required)", len(stale))
+        return {"stale": len(stale), "refreshed": 0}
+
+    refreshed = 0
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        for feed, entry_id, column in stale[:max_entries]:
+            # For DeviantArt feeds the stored entry id *is* the deviation id.
+            fresh = deviantart_service.fetch_fresh_image_url(entry_id, token)
+            if not fresh:
+                continue
+            body_row = db.execute(
+                f"SELECT {column} FROM entries WHERE feed = ? AND id = ?",  # nosemgrep: column is a literal
+                (feed, entry_id),
+            ).fetchone()
+            if not body_row or not body_row[0]:
+                continue
+            old = re.search(r'src="([^"]*wixmp[^"]*)"', body_row[0])
+            if not old:
+                continue
+            db.execute(
+                f"UPDATE entries SET {column} = ? WHERE feed = ? AND id = ?",  # nosemgrep: column is a literal
+                (body_row[0].replace(old.group(1), fresh.replace("&", "&amp;")), feed, entry_id),
+            )
+            refreshed += 1
+            time.sleep(0.3)  # stay a polite API client
+        db.commit()
+    return {"stale": len(stale), "refreshed": refreshed}
+
+
+# Capture the whole src value in one linear group and test for "wixmp" in
+# Python. Embedding the literal between two unbounded [^"]* runs backtracks
+# polynomially on feed-supplied HTML with many repetitions and no closing quote
+# (CodeQL: polynomial regular expression used on uncontrolled data).
+_IMG_SRC_ATTR_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*")([^"]*)(")', re.IGNORECASE)
+
+
+def _img_cache_has(url: str) -> bool:
+    """Is this image already in the proxy's byte cache? The cache key drops the
+    signing token (_img_cache_key_url), so a copy fetched under one token still
+    answers for every later one — which is what makes an expired DeviantArt URL
+    keep rendering."""
+    try:
+        key = hashlib.sha256(_img_cache_key_url(url).encode("utf-8")).hexdigest()
+        with get_img_cache_connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM img_cache WHERE cache_key = ? LIMIT 1", (key,)
+            ).fetchone() is not None
+    except Exception:  # noqa: BLE001 — a cache miss is the safe answer
+        return False
+
+
+def _resign_expired_deviantart_url(url: str | None, entry_id: str) -> str | None:
+    """Re-sign one expired DeviantArt image URL, or return it unchanged.
+
+    The single place that decides *whether* a re-sign is warranted, so the body
+    HTML and the lead image (resolved on a different path, from the lead-image
+    cache) can't drift apart — they did: the body was re-signed while the lead
+    image, which is what the article actually displays, kept its dead token.
+    """
+    if not url or "wixmp" not in url:
+        return url
+    exp = deviantart_service.image_token_expiry(url)
+    if exp is None or exp > time.time():
+        return url  # permanent, or still valid
+    if _img_cache_has(url):
+        return url  # the proxy holds the bytes; the token no longer matters
+    token = get_deviantart_user_token()
+    if not token:
+        return url
+    return deviantart_service.fetch_fresh_image_url(entry_id, token) or url
+
+
+def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id: str) -> str:
+    """Re-sign a DeviantArt image whose URL token has already expired.
+
+    Mature deviations are signed for only ~15 minutes, so a stored URL is dead
+    long before it is read and the post loses both image and thumbnail. A
+    scheduled re-sign can't help at that lifetime — the moment that matters is
+    when the post is opened, which is here.
+
+    Two things keep this cheap. The proxy's byte cache is consulted first: once
+    an image has been fetched under *any* valid token it answers forever (the
+    cache key drops the token), so a re-sign happens at most once per image
+    rather than once per view. And a still-valid token is left alone, so
+    ordinary permanently-signed deviations — 21,564 of 21,568 on the live
+    library — never reach the API at all.
+    """
+    if not content_html or "wixmp" not in content_html:
+        return content_html
+    replaced: dict[str, str] = {}
+
+    def _sub(m: re.Match) -> str:
+        url = html.unescape(m.group(2))
+        if "wixmp" not in url:
+            return m.group(0)
+        if url in replaced:
+            return f"{m.group(1)}{html.escape(replaced[url], quote=True)}{m.group(3)}"
+        fresh = _resign_expired_deviantart_url(url, entry_id)
+        if not fresh or fresh == url:
+            return m.group(0)
+        replaced[url] = fresh
+        return f"{m.group(1)}{html.escape(fresh, quote=True)}{m.group(3)}"
+
+    updated = _IMG_SRC_ATTR_RE.sub(_sub, content_html)
+    if replaced:
+        # Persist so a later view (and the list thumbnail) starts from the fresh
+        # URL. It expires again in minutes, but by then the proxy has the bytes.
+        try:
+            with get_reader() as reader:
+                db = reader._storage.get_db()
+                for column in ("summary", "content"):
+                    row = db.execute(
+                        f"SELECT {column} FROM entries WHERE feed = ? AND id = ?",  # nosemgrep: literal
+                        (feed_url, entry_id),
+                    ).fetchone()
+                    if not row or not row[0] or "wixmp" not in row[0]:
+                        continue
+                    body = row[0]
+                    for old, new in replaced.items():
+                        body = body.replace(html.escape(old, quote=True), html.escape(new, quote=True))
+                        body = body.replace(old, new)
+                    db.execute(
+                        f"UPDATE entries SET {column} = ? WHERE feed = ? AND id = ?",  # nosemgrep: literal
+                        (body, feed_url, entry_id),
+                    )
+                db.commit()
+        except Exception:  # noqa: BLE001 — the served page is already correct
+            LOGGER.exception("[deviantart] could not persist re-signed image for %s", entry_id)
+        LOGGER.info("[deviantart] re-signed %d expired image URL(s) on open for %s", len(replaced), entry_id)
+    return updated
 
 
 def _daily_maintenance_for_user() -> None:
@@ -22484,6 +22849,131 @@ def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), l
     return JSONResponse({"ok": True, "link": link})
 
 
+# User-facing wording for a refused cleanup, keyed by ContentEditError.code.
+# Authored here rather than taken from the exception so the response can never
+# carry exception-derived text (CodeQL: py/stack-trace-exposure).
+_CLEANUP_ERROR_MESSAGES = {
+    "not_json": "The cleanup instructions were not valid JSON.",
+    "empty": "No cleanup operations were sent.",
+    "too_many": f"Too many operations in one go (max {content_edits.MAX_OPS}).",
+    "bad_op": "One of the cleanup steps was malformed — reload the article and try again.",
+    "no_html": "This entry has no HTML body to clean.",
+    "unparseable": "This entry's HTML could not be parsed.",
+    "would_empty": "That would remove the entire article body.",
+}
+_CLEANUP_ERROR_FALLBACK = "That cleanup could not be applied."
+
+
+@app.post("/entries/content/clean")
+def clean_entry_content_route(
+    feed_url: str = Form(...), entry_id: str = Form(...), ops: str = Form(...),
+):
+    """Apply the reading pane's Aardvark-style cleanup to a post's stored body.
+
+    The browser sends *what it removed* (an ordered op list of structural paths
+    + fingerprints), not the edited HTML — see services/content_edits for why.
+    The ops are replayed here against reader's stored content, the result is
+    sanitized and written back through the same path a content re-fetch uses
+    (`replace_entry_content`, with `pin_content` so the next refresh can't
+    re-serve the junk), and the pristine body is snapshotted first so
+    /entries/content/revert can put it back.
+
+    Ops that match nothing are reported rather than guessed at: a rendered node
+    that isn't in the stored body (an injected embed, something a render-time
+    cleanup already removed) simply has nothing to delete.
+    """
+    with get_reader() as reader:
+        entry = reader.get_entry((feed_url, entry_id), None)
+        if entry is None:
+            return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+        try:
+            parsed_ops = content_edits.parse_ops(ops)
+            content_html = _resolve_entry_content_html(entry)
+            new_html, applied, unmatched = content_edits.apply_ops(content_html, parsed_ops)
+        except content_edits.ContentEditError as exc:
+            # The wording lives here, keyed by the error's own code, so nothing
+            # derived from an exception object reaches the response — the
+            # dataflow behind py/stack-trace-exposure does not exist rather than
+            # being argued about. The exception's message still goes to the log.
+            LOGGER.info("[cleanup] refused for %s: %s", entry_id, exc)
+            return JSONResponse(
+                {"ok": False, "error": _CLEANUP_ERROR_MESSAGES.get(
+                    getattr(exc, "code", ""), _CLEANUP_ERROR_FALLBACK)},
+                status_code=400,
+            )
+        if not applied:
+            return JSONResponse(
+                {"ok": False, "error": "None of those elements could be matched in the stored article.",
+                 "unmatched": unmatched},
+                status_code=409,
+            )
+        # The result is user-directed but still passes the normal allowlist —
+        # a cleanup must never be a way to widen what the body may contain.
+        new_html = html_sanitize.sanitize_html(new_html)
+        original_content = saved_articles_service.read_entry_content_json(reader, feed_url, entry_id)
+        with get_meta_connection() as conn:
+            if original_content is not None:
+                # First edit only: repeated cleanups must still revert to the
+                # true original rather than to the previous cleanup's output.
+                conn.execute(
+                    "INSERT OR IGNORE INTO entry_content_edits"
+                    " (feed_url, entry_id, original_content, ops, edited_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (feed_url, entry_id, original_content, "[]",
+                     datetime.now(timezone.utc).isoformat()),
+                )
+            existing = conn.execute(
+                "SELECT ops FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            ).fetchone()
+            prior_ops = []
+            if existing:
+                try:
+                    prior_ops = json.loads(existing[0]) or []
+                except (TypeError, ValueError):
+                    prior_ops = []
+            conn.execute(
+                "UPDATE entry_content_edits SET ops = ?, edited_at = ?"
+                " WHERE feed_url = ? AND entry_id = ?",
+                (json.dumps(prior_ops + parsed_ops), datetime.now(timezone.utc).isoformat(),
+                 feed_url, entry_id),
+            )
+            conn.commit()
+            saved_articles_service.replace_entry_content(
+                reader, conn, entry_id, "", new_html, feed_url=feed_url,
+                bump_received=False, pin_content=True,
+            )
+    return JSONResponse({"ok": True, "applied": applied, "unmatched": unmatched})
+
+
+@app.post("/entries/content/revert")
+def revert_entry_content_route(feed_url: str = Form(...), entry_id: str = Form(...)):
+    """Undo every cleanup on a post, restoring the body as the feed served it."""
+    with get_meta_connection() as conn:
+        row = conn.execute(
+            "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"ok": False, "error": "This post has no cleanup to revert."}, status_code=404)
+        with get_reader() as reader:
+            if reader.get_entry((feed_url, entry_id), None) is None:
+                return JSONResponse({"ok": False, "error": "Entry not found."}, status_code=404)
+            saved_articles_service.restore_entry_content(reader, feed_url, entry_id, row[0])
+        # Drop the pin too, or the refresh service would re-apply the cleaned
+        # copy over the body we just restored.
+        conn.execute(
+            "DELETE FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+        conn.execute(
+            "DELETE FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        )
+        conn.commit()
+    return JSONResponse({"ok": True})
+
+
 def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
     """Swap *url*'s bare host per ``{from_host: to_host}`` (case-insensitive,
     ignores userinfo/port); scheme, path, query and fragment are preserved.
@@ -22626,6 +23116,97 @@ def set_feed_website_route(feed_url: str = Form(...), website: str = Form(...)):
         "to_host": to_host,
         "migrated": stats.get("migrated", 0),
     })
+
+
+def _normalize_alias_host(value: str) -> str:
+    """Accept a pasted URL or a bare hostname, return the bare host.
+
+    Users copy what's in the address bar, so ``https://tushar.bio/`` has to work
+    as readily as ``tushar.bio``. A leading ``www.`` is dropped to match
+    get_dedupe_host_aliases, which stores and compares keys without it."""
+    host = (value or "").strip().lower()
+    if not host:
+        return ""
+    if "//" in host:
+        host = urlparse(host).netloc or ""
+    host = host.split("@")[-1].split(":")[0].strip("/")
+    host = host.removeprefix("www.")
+    # A host has no path or spaces and needs at least one dot to be a domain.
+    if not host or "/" in host or " " in host or "." not in host:
+        return ""
+    return host
+
+
+@app.post("/feeds/url-rewrites")
+def add_feed_url_rewrite_route(
+    feed_url: str = Form(...), from_host: str = Form(...), to_host: str = Form(""),
+):
+    """Declare another domain this feed's author used, from Feed Properties.
+
+    Edit Website can only seed a rule for a host it can *infer* (the channel
+    <link>, or the host most posts link to), so an author's older dead domain
+    with no surviving entries had no way in at all — the reason this exists.
+    *to_host* defaults to the feed's current Website host.
+
+    Existing entries on the old host are migrated inline, exactly as Edit
+    Website does; a dead domain with nothing on it simply reports 0 migrated
+    and the rule stands for the future (ingest rewrites, and the global dedupe
+    alias map pairs a saved article from the old domain with its twin here).
+    """
+    from_norm = _normalize_alias_host(from_host)
+    if not from_norm:
+        return JSONResponse({"ok": False, "error": "Enter a domain like example.com."}, status_code=400)
+
+    with get_reader() as reader:
+        feed_obj = reader.get_feed(feed_url, None)
+        if feed_obj is None:
+            return JSONResponse({"ok": False, "error": "Feed not found."}, status_code=404)
+        to_norm = _normalize_alias_host(to_host)
+        if not to_norm:
+            to_norm = _normalize_alias_host(str(getattr(feed_obj, "link", "") or ""))
+        if not to_norm:
+            to_norm = _normalize_alias_host(feed_url)
+    if not to_norm:
+        return JSONResponse(
+            {"ok": False, "error": "This feed has no Website set — set one first."}, status_code=400
+        )
+    if from_norm == to_norm:
+        return JSONResponse({"ok": False, "error": "That's already this feed's domain."}, status_code=400)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO feed_url_rewrites (feed_url, from_host, to_host) VALUES (?, ?, ?)",
+            (feed_url, from_norm, to_norm),
+        )
+        conn.commit()
+    stats = migrate_feed_host_rewrite(feed_url, {from_norm: to_norm})
+    invalidate_unread_counts_cache()
+    invalidate_meta_structure_cache()
+    return JSONResponse({
+        "ok": True, "from_host": from_norm, "to_host": to_norm,
+        "migrated": stats.get("migrated", 0),
+    })
+
+
+@app.post("/feeds/url-rewrites/delete")
+def delete_feed_url_rewrite_route(feed_url: str = Form(...), from_host: str = Form(...)):
+    """Drop a declared domain alias.
+
+    Only future rewrites stop — entries already migrated keep their new ids and
+    links, because the old id is gone and re-deriving it would scatter the star,
+    tags and archive rows that followed it across. The UI says so before asking.
+    """
+    from_norm = _normalize_alias_host(from_host) or (from_host or "").strip().lower()
+    with get_meta_connection() as conn:
+        removed = conn.execute(
+            "DELETE FROM feed_url_rewrites WHERE feed_url = ? AND from_host = ?",
+            (feed_url, from_norm),
+        ).rowcount
+        conn.commit()
+    if not removed:
+        return JSONResponse({"ok": False, "error": "That alias is no longer set."}, status_code=404)
+    invalidate_meta_structure_cache()
+    return JSONResponse({"ok": True, "removed": removed})
 
 
 @app.post("/entries/move-to-feed")
@@ -24501,9 +25082,17 @@ async def refresh_saved_article_content(
         )
     url = saved_articles_service.normalize_article_url(entry_id) or entry_id
     result = await run_in_threadpool(_save_article_for_current_user, url, None, True)
-    if not result.get("ok"):
+    # save_article treats extraction failure as non-fatal — right when *saving*
+    # (the bookmark is still worth keeping and the archive worker can retry),
+    # but wrong here: a re-fetch that extracted nothing changed nothing, and
+    # reporting ok made the button look like it worked while the article sat
+    # untouched (treblezine, reported 2026-07-26 as "refetches nothing but no
+    # error"). Only a real extraction counts as a successful re-fetch.
+    if not result.get("ok") or not result.get("extracted"):
         return JSONResponse(
-            {"ok": False, "error": result.get("error") or "Re-fetch failed."},
+            {"ok": False,
+             "error": result.get("error") or "Re-fetch got nothing back from the page.",
+             "dead": bool(result.get("dead"))},
             status_code=400,
         )
     return JSONResponse({
@@ -24532,6 +25121,61 @@ def _resolve_redirector_url(url: str) -> str:
     return url
 
 
+def _find_subscribed_entry_for_url(article_url: str) -> tuple[str, str] | None:
+    """An existing entry for this article in some *other* feed, or None.
+
+    Matched on the canonical link rather than the id, because the two rarely
+    agree: Medium's feed uses a `/p/<hash>` guid while the article URL is the
+    long slug, yet both entries carry the same `link`. Declared domain
+    migrations fold in through get_dedupe_host_aliases, so an author's old host
+    still pairs with their current one.
+
+    Prefers a feed-provided entry: it keeps updating and it is the one carrying
+    the publisher's tags, which is precisely what a capture cannot supply.
+    """
+    aliases = get_dedupe_host_aliases()
+    target = normalize_entry_link_for_dedupe(article_url, aliases)
+    if not target:
+        return None
+    # Candidate spellings for an indexed equality match; the normalized compare
+    # below is what actually decides, so this only has to be generous enough.
+    bare = article_url.split("#")[0].rstrip("/")
+    variants = {bare, bare + "/"}
+    for scheme_a, scheme_b in (("https://", "http://"), ("http://", "https://")):
+        if bare.startswith(scheme_a):
+            swapped = scheme_b + bare[len(scheme_a):]
+            variants |= {swapped, swapped + "/"}
+    for v in list(variants):
+        if "://www." in v:
+            variants.add(v.replace("://www.", "://", 1))
+        else:
+            variants.add(v.replace("://", "://www.", 1))
+    try:
+        conn = sqlite3.connect(str(tenancy.reader_db_path()), timeout=5.0)
+        try:
+            placeholders = ",".join("?" for _ in variants)
+            rows = conn.execute(
+                f"SELECT feed, id, link, added_by FROM entries WHERE link IN ({placeholders})",
+                list(variants),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — never block a save on the lookup
+        LOGGER.exception("[save] subscribed-entry lookup failed for %s", article_url)
+        return None
+
+    best: tuple[str, str] | None = None
+    for feed, entry_id, link, added_by in rows:
+        if str(feed) == saved_articles_service.SAVED_FEED_URL:
+            continue  # its own saved copy is handled by the normal duplicate path
+        if normalize_entry_link_for_dedupe(str(link or ""), aliases) != target:
+            continue
+        if str(added_by) == "feed":
+            return (str(feed), str(entry_id))  # the survivor we want
+        best = best or (str(feed), str(entry_id))
+    return best
+
+
 def _save_article_for_current_user(url: str, extract=None, refresh_content: bool = False) -> dict:
     """Run the saved-articles service with the current tenancy's reader/meta
     DB, wiring in readability extraction and the starred-archive enqueue.
@@ -24549,6 +25193,7 @@ def _save_article_for_current_user(url: str, extract=None, refresh_content: bool
             extract=extract or fetch_readability_article,
             enqueue_archive=starred_archive_service.enqueue_archive,
             refresh_content=refresh_content,
+            find_existing_entry=_find_subscribed_entry_for_url,
         )
     if result.get("created_feed"):
         # The Saved Articles feed just appeared — surface it in the sidebar tree.

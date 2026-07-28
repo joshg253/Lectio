@@ -5,6 +5,14 @@ this file only tracks what's still open.
 
 ## Now (priority order)
 
+**Rule-management UI shipped 2026-07-25** — Feed Properties → **Other domains**
+lists a feed's declared domain aliases with add/remove (`POST
+/feeds/url-rewrites`, `…/delete`). Closes the deferral below: Edit Website can
+only seed a rule for a host it can *infer*, so an author's older dead domain
+(Tushar's `tusharsadhwani.dev` / `tushar.bio`, neither with a surviving entry)
+had no way into `feed_url_rewrites`, no way to be seen, and no way to be removed
+short of SQL.
+
 **Shipped 2026-07-23 (engines done, rule-management UI deferred to a browser
 session):**
 - **"Fix URLs" per-feed host rewrite** — for an author who moved domains without
@@ -1123,6 +1131,206 @@ judging those now would be premature.
   engine already ships. Vocabularies verified 2026-07-21, see "Tag filtering for
   firehose feeds" in Later for the per-feed data and suggested rule shapes.
 
+### 8b. Publish dates a re-fetch overwrote — FIXED + REPAIRED 2026-07-25
+
+Cause fixed: `replace_entry_content` bumped `entries.published` to now to surface
+a re-pulled capture, which is wrong twice over (Pub is a publication date, not a
+last-touched date; and under the Pub-oldest sort in use the bump *buried* the
+article instead of surfacing it). It now bumps **Received** instead.
+
+Damage repaired the same day with `scripts/restore_bumped_publish_dates.py
+--apply`: **101 restored, 101 corroborated, 0 uncorroborated** (second user: 0).
+Drift ran up to 16 years — LWN "What every programmer should know about memory,
+Part 1" read 2026-07-25 instead of 2012-05-03. Undo snapshot at
+`data/users/u_40208f374ac18038598b39/restored_publish_dates_20260725-054213.json`;
+a follow-up dry-run reports 0 candidates.
+
+The script stays in the tree because the recovery source (starred archive
+`published_at`, cross-checked against reader's `recent_sort`) is generic — if any
+other path is ever found bumping published, re-run the dry-run first.
+
+### 8d. Tushar feed consolidation — DONE 2026-07-25
+
+Two subscriptions to one blog (`sadh.life/rss`, dead; `tush.ar/rss.xml`, live).
+Josh ran Edit Website twice on the old feed (seeding `sadh.life → tush.ar` and
+`tushar.lol → tush.ar`, migrating 14 then 1) and then Combine — which matched by
+GUID and synthesized nothing. Survivor: 18 entries, 16 stars, 15 manual tags, no
+orphaned star rows, no entry left on a dead host.
+
+Fallout, since fixed: the combine stranded the offline captures (see
+ARCHITECTURE "Combining feeds carries the offline captures"). 85 orphaned
+archive rows library-wide — not just this feed — repaired with
+`scripts/repair_orphaned_archives.py --apply`; undo snapshot (with blobs) at
+`data/users/u_40208f374ac18038598b39/repaired_orphan_archives_20260725-071313.json`.
+A follow-up dry-run reports 0.
+
+Still open: `tusharsadhwani.dev` and `tushar.bio` are two more dead domains of
+his with **no** entries in the library. Nothing to migrate; declaring them via
+Feed Properties → Other domains only future-proofs the dedupe alias map.
+
+### 8e. Comic thumbnails — FIXED 2026-07-25; tinyview + DA mature still open
+
+Reported as "the comic image loads but there's no thumb". Cause: the cached
+**lead image** (which is what the list thumbnail derives from) was site chrome,
+while the article's own `<img>` came from the feed body and rendered fine.
+
+- **gunnerkrigg** was a real code bug: the panel is `class="comic_image"` and the
+  webcomic class pattern listed hyphen spellings only, so the Archives banner won
+  the scan for 49 strips. Fixed; the id pattern already accepted both spellings.
+- **smbc / misfile** extracted correctly already — their rows were just stale,
+  from before the webcomic strategy was set. Confirmed by both fixing themselves
+  once re-derived.
+- `scripts/reset_webcomic_chrome_lead_images.py --apply` cleared **202 rows
+  across 19 images** on webcomic feeds (gunnerkrigg 49, qwantz 39, webtoons 20,
+  harkavagrant, tethered, badmachinery…). Undo snapshot at
+  `data/users/u_40208f374ac18038598b39/reset_webcomic_lead_images_20260726-000945.json`.
+  The detector is generic: a panel is unique per strip, so an image cached as the
+  lead for many entries of one webcomic feed is chrome by definition.
+
+**Closed 2026-07-26** — all four reported comics resolve to their panel
+(atomic-robo 1.2MB `…494`, gunnerkrigg, smbc, whomp). Three further causes were
+found behind the first: the blind `/comicsthumbs/`→`/comics/` rewrite existed in
+*two* places (thumbnail path as well as body), five `_fetch_source_lead_image`
+call sites on the render/revalidate paths never passed `is_webcomic` (so a page
+scanned there returned site chrome), and `_derive_article_lead_image` bypassed
+the cache for webcomic feeds, showing the inline thumbnail instead of the cached
+panel. **tinyview** now has a plugin (`TinyviewPlugin`) — its panels were in the
+served HTML all along as `cdn.tinyview.com` URLs; the scan was picking
+`assets.tinyview.com` chrome. Its feed also has `inject_source_images` on so all
+panels render, not just the first.
+
+### 8f. DeviantArt mature images expire in ~15 minutes — needs render-time re-signing
+
+Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*
+deviations' wixmp URLs with a very short life: a freshly-signed URL expires in
+**~15 minutes** (0.01 days), and every variant shares the expiry, so there is no
+permanent thumbnail to prefer. Ordinary deviations are signed permanently
+(21,564 of 21,568 entries).
+
+**Nightly maintenance cannot fix this** — a 3am re-sign yields images dead by
+3:15 — so the hook was written, measured, and deliberately removed rather than
+shipped. What exists now:
+
+- `main.refresh_expiring_deviantart_images(within_seconds=…, apply=…)` — finds
+  entries whose stored image token has expired and re-signs them via the API,
+  using `get_deviantart_user_token()` (DA access tokens last an hour, so reading
+  `app_settings` directly 401s on any scheduled run).
+- `services.deviantart.image_token_expiry` / `fetch_fresh_image_url`.
+- `scripts/refresh_expired_deviantart_images.py` — manual catch-up; makes the
+  image work *right now*, which is all a batch pass can promise.
+
+**Shipped 2026-07-26:** `_resign_expired_deviantart_images` runs on entry-detail
+render, just before the hotlink-proxy rewrite. It re-signs only an image whose
+token has *already* expired **and** whose bytes the `/api/img` cache does not
+already hold — the cache key drops the signing token
+(`_img_cache_key_url`/`_IMG_CACHE_VOLATILE_PARAMS`, and `wixmp.com` was already
+in `_HOTLINK_IMG_HOSTS`), so once an image has been fetched under any valid
+token it answers forever. That makes it one API call per *image*, not per view,
+and the 21,564 permanently-signed images never reach the API at all. The fresh
+URL is persisted so the list thumbnail starts from it too.
+
+**Superseded note (kept for the reasoning):** Not an age gate:
+DA signs mature deviations' image URLs with a ~7-day JWT and **every** variant
+shares the expiry (checked live: `content.src` and both thumbs all
+`exp=1785040938`), so there is no permanent thumbnail to prefer — the fix first
+proposed would not have worked. `scripts/refresh_expired_deviantart_images.py`
+re-fetches expired ones from the API and rewrites the stored HTML; 4 refreshed,
+0 stale after. **Worth scheduling**: each refresh buys about another week, so
+mature deviations rot again without a periodic pass.
+
+**Superseded — the old open list:**
+
+1. **tinyview** — a different animal. It is a JS app, and what got scraped is
+   `Tinyview_skeleton-animation.gif`, the pre-hydration loading skeleton, which
+   renders as "a mockup of the whole webpage sans images". Its rows were cleared
+   with the rest, but re-derivation will find the same skeleton until the site
+   gets a plugin/adapter (`services/lead_image_plugins.py`) that knows where the
+   panel lives — or the feed is treated as needing a rendered fetch.
+2. **DeviantArt mature deviations** — a separate bug, not a lead-image one: the
+   entry (`CC48A953-…`, "Tifa and Aerith - Hot Spring") has **no stored content
+   at all**, so neither image nor thumb can exist. Suspect the DA sync silently
+   drops mature items (scope/param on the API call). Needs its own pass.
+
+### 8c. Flaky test `test_tampered_hash_fails` — FIXED 2026-07-26
+
+The test flipped the **last** base64 character of a scrypt digest, which is not
+always a real change: when the digest length leaves slack bits in that
+character, several values decode to identical bytes, so verification correctly
+succeeded and the test failed on working code. It now flips a bit in the
+*decoded* digest, which always changes the bytes.
+
+Rate was never pinned down — seen failing in a full run, reproduced at 4/300
+hashes once, then 0/400 in a later sample. The fix removes the class rather than
+narrowing the odds, which matters more now that CI is the only reviewer.
+
+### 8g. Extension save should MERGE into the existing post, not add a copy
+
+**The goal, in Josh's words (2026-07-26):** "open any article webpage, save it via
+extension, and that would get merged into the post, with no loss of data."
+
+Today an extension save always creates a *new* `lectio:saved` entry, even when
+the article is already subscribed. One Medium article ended up in three places —
+the feed's own `/p/<hash>` copy (15KB **plus the five feed tags**), an empty
+auto-filed capture, and the 44KB extension capture — with the body on one, the
+tags on another, and nothing joining them. Moving copies around then lost the
+body outright (fixed 2026-07-26, "carry the body when the target copy is
+emptier"), but the copies themselves are the real problem.
+
+**Matching is already solved, which is the good news.** Both Medium copies carry
+the *same* `link` (the long article URL) even though their ids differ, so
+`normalize_entry_link_for_dedupe` — with `get_dedupe_host_aliases` for declared
+domain migrations — pairs them exactly. No per-site logic needed.
+
+Design sketch:
+
+- On save, look for an existing entry whose normalized link matches, across all
+  feeds, before creating anything. Prefer the **feed-provided** entry as the
+  survivor: it keeps updating, and it is the one carrying `entry_feed_tags`.
+- Merge rather than replace: longest body wins (the extension capture usually,
+  pinned via `entry_content_overrides` so refresh can't thin it), union of feed
+  tags and manual tags, star set, earliest real **Pub** date kept (not the save
+  time — see the Received/Pub fix), existing title kept unless pinned.
+- Only when nothing matches does a new `lectio:saved` entry get created, exactly
+  as now.
+
+This subsumes several open items: the empty-capture case, tags-stranded-on-a-twin,
+and much of the cross-feed duplicate work in #6 — a save that merges is a
+duplicate that never happens. It is also the natural home for the entry-level
+merge tool #6 wants ("keep the better body, union the tags"), since both need the
+same primitive.
+
+Worth pairing with a **time-to-read estimate** (Josh, same day): word count over
+~220 wpm. Cheap to compute, but decide first whether it is derived at render or
+stamped at ingest into a column (sortable/filterable later), and whether it shows
+in the post list, the article header, or both.
+
+### 8a. Article cleanup — Phase 2: promote a removal into a per-feed rule
+
+Phase 1 shipped 2026-07-24: the pane's **Clean up article** (🧹) removes elements
+by hand and `entry_content_edits` records both the pristine body and the ops that
+were replayed over it. The ops are the raw material for Phase 2 — the whole point
+of recording them rather than just storing cleaned HTML.
+
+What's left:
+
+- **A `feed_content_rules` table + matcher**, applied inside
+  `_apply_feed_content_cleanups` at *render* time. Not a bulk rewrite of stored
+  bodies: feed-wide that would touch hundreds of entries irreversibly, while the
+  render-time form covers old and new posts alike and un-promoting restores them.
+  This is also where the six hand-coded per-site strips should eventually migrate
+  to — they are the same thing, hardcoded.
+- **A Cleanups section in Feed Properties** listing the selectors recorded from
+  that feed's edits, each with a live match count across the feed's entries
+  ("matches 47 of 312") so a promotion's blast radius is visible before it
+  happens. Nothing pre-checked (see the bulk-action rule).
+- **Selector derivation from the recorded fingerprints.** An op stores a
+  structural path plus tag/id/classes/text; a *rule* needs the part that
+  generalizes — usually `tag.class` — and must refuse to promote an op whose only
+  distinguishing signal is its text (that matches one post, not a feed).
+- Open question worth measuring before building: how many removals a real feed
+  actually repeats. If share widgets and footers dominate, promotion is high
+  value; if most cleanups are one-offs, this stays deferred.
+
 ### 9. Tag-as-keep — Part C: pass 1 DONE 2026-07-22, pass 2 still deferred
 
 **Pass 1 ran with `--apply` on 2026-07-22: 3,581 archives enqueued** (dry-run and
@@ -1589,6 +1797,29 @@ extension keeps working too.
   ≥ 0.80) would catch it but needs blocking (e.g. rarest-title-word buckets) to
   stay sane at 10k+ saved items. Add only if the exact tiers leave real dupes
   behind after the Instapaper-import cleanup.
+
+### CI flake: "database is locked" from leaked background threads
+
+Seen 2026-07-28 on PR #155: `test_feed_link_xss.py::test_entry_detail_empties_unsafe_link`
+errored with `StorageError: while opening database: database is locked`, while
+the other **1914 passed**. Passes locally, twice, on the full suite — CI-only.
+
+Not a missing pragma: `_LectioReaderStorage` already sets
+`busy_timeout=10000` and opens with `timeout=30.0`.
+
+The mechanism is almost certainly the one behind the
+`PytestUnhandledThreadExceptionWarning` the suite already emits (e.g. "no such
+table: feed_media_scan"): background threads started by one test outlive it,
+and because tenancy is a **global**, a leaked thread resolves paths against
+whatever the *next* test just configured — so it opens and locks a DB it was
+never meant to touch. Same family as the earlier flaky-CI work (reader
+busy_timeout + the startup-backfill gate), and the same family as the
+`test_youtube_playlist_rules` flake logged 2026-07-21.
+
+A real fix gates background threads in tests (a fixture that refuses to start
+them, or joins them on teardown) rather than widening timeouts. Worth doing:
+with CI as the only reviewer, a suite that reddens at random teaches you to
+ignore the one signal you have.
 
 ### Code health (deferred — low value, no user impact)
 

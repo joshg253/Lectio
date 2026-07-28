@@ -218,11 +218,26 @@ class TestDeadAdvertisedFallback:
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/feed.xml"]
 
-    def test_discover_keeps_dead_link_when_no_alternative(self):
+    def test_discover_drops_a_gone_link_when_no_alternative(self):
+        """A 404 advertised link with nothing else on the site is reported as
+        "no feed" rather than handed back. Offering it produced the worst
+        outcome: the dialog says it found a feed, the add then refuses it, and
+        nothing appears in the feed list (leereilly.net, 2026-07-25)."""
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
                 result = discover_feed_urls("https://example.com/")
-        assert result == ["https://example.com/rss"]  # last resort — unchanged behavior
+        assert result == []
+
+    def test_discover_keeps_a_refused_link_when_no_alternative(self):
+        """403 is the server refusing to answer a HEAD, not proof the feed is
+        absent — reader's real GET may well get through, so it is still
+        offered. This is the bot-walled case the last resort exists for."""
+        def refused(url, **_kwargs):
+            return _mock_response(str(url), "text/html", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=refused):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
 
     def test_probe_url_falls_back_to_common_path(self):
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
@@ -231,9 +246,20 @@ class TestDeadAdvertisedFallback:
         assert result["status"] == "feed"
         assert result["feeds"] == [{"url": "https://example.com/feed.xml", "title": None}]
 
-    def test_probe_url_keeps_dead_link_when_no_alternative(self):
+    def test_probe_url_drops_a_gone_link_and_points_at_page_feed(self):
         with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
             with patch("services.feed_discovery._guarded_head", side_effect=self._head({})):
+                result = probe_url("https://example.com/")
+        assert result["status"] == "none"
+        assert result["feeds"] == []
+        assert "https://example.com/rss" in result["message"]
+        assert "Page Feed" in result["message"]
+
+    def test_probe_url_keeps_a_refused_link_when_no_alternative(self):
+        def refused(url, **_kwargs):
+            return _mock_response(str(url), "text/html", status=403)
+        with patch("services.feed_discovery._guarded_get", return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=refused):
                 result = probe_url("https://example.com/")
         assert result["status"] == "feed"
         assert result["feeds"][0]["url"] == "https://example.com/rss"
@@ -271,6 +297,116 @@ class TestDeadAdvertisedFallback:
             with patch("services.feed_discovery._guarded_head", side_effect=fake_head):
                 result = discover_feed_urls("https://example.com/")
         assert result == ["https://example.com/rss"]
+
+
+class TestRedirectingAdvertisedFeed:
+    """A stale autodiscovery tag is often an ``http://`` URL. The dead-link
+    probe used to stop at its 301 and keep the link, never seeing the 404
+    behind it — so discovery offered a feed the add then refused
+    (leereilly.net, reported 2026-07-25).
+    """
+
+    HTML = (
+        '<html><head>'
+        '<link rel="alternate" type="application/rss+xml" href="http://example.com/feed.xml" />'
+        '</head><body>' + ("x" * 600) + '</body></html>'
+    )
+
+    @staticmethod
+    def _head(status_by_url):
+        def fake_head(url, **_kwargs):
+            url = str(url)
+            spec = status_by_url.get(url)
+            if spec is None:
+                return _mock_response(url, "text/html", status=404)
+            if isinstance(spec, tuple):  # (status, location)
+                resp = _mock_response(url, "text/html", status=spec[0])
+                resp.headers = {"location": spec[1]}
+                resp.is_redirect = True
+                return resp
+            return _mock_response(url, spec)
+        return fake_head
+
+    def test_dead_link_behind_a_redirect_loses_to_a_working_alternative(self):
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": None,          # 404 — the truth
+            "https://example.com/rss": "application/rss+xml",  # the live feed
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["https://example.com/rss"]
+
+    def test_live_feed_behind_a_redirect_is_kept(self):
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": "application/rss+xml",
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["http://example.com/feed.xml"]
+
+    def test_redirect_loop_keeps_the_link(self):
+        """Inconclusive, so the conservative default stands."""
+        heads = {
+            "http://example.com/feed.xml": (301, "https://example.com/feed.xml"),
+            "https://example.com/feed.xml": (301, "http://example.com/feed.xml"),
+        }
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response("https://example.com/", "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(heads)):
+                result = discover_feed_urls("https://example.com/")
+        assert result == ["http://example.com/feed.xml"]
+
+
+class TestMultisitePathScopedFeeds:
+    """Multisite WordPress puts a whole blog under a path
+    (devblogs.microsoft.com/oldnewthing/) while the domain root serves a
+    firehose of every blog on it. The conventional-path probe used to try the
+    root first, so subscribing to "The Old New Thing" silently handed back
+    "Microsoft for Developers" — reported from the live site 2026-07-25.
+    """
+
+    HTML = "<html><head><title>The Old New Thing</title></head><body>" + ("x" * 600) + "</body></html>"
+
+    @staticmethod
+    def _head(alive_paths):
+        def fake_head(url, **_kwargs):
+            for path, ct in alive_paths.items():
+                if url == f"https://devblogs.microsoft.com{path}":
+                    return _mock_response(url, ct)
+            return _mock_response(url, "text/html", status=404)
+        return fake_head
+
+    def _probe(self, page, alive):
+        with patch("services.feed_discovery._guarded_get",
+                   return_value=_mock_response(page, "text/html", self.HTML)):
+            with patch("services.feed_discovery._guarded_head", side_effect=self._head(alive)):
+                return probe_url(page)
+
+    def test_path_scoped_feed_beats_the_root_firehose(self):
+        result = self._probe(
+            "https://devblogs.microsoft.com/oldnewthing/",
+            {"/oldnewthing/feed": "application/rss+xml", "/feed": "application/rss+xml"},
+        )
+        assert result["feeds"] == [
+            {"url": "https://devblogs.microsoft.com/oldnewthing/feed", "title": None}
+        ]
+
+    def test_root_feed_still_found_when_the_path_has_none(self):
+        result = self._probe(
+            "https://devblogs.microsoft.com/nosuchblog/",
+            {"/feed": "application/rss+xml"},
+        )
+        assert result["feeds"] == [{"url": "https://devblogs.microsoft.com/feed", "title": None}]
+
+    def test_root_url_is_unaffected(self):
+        result = self._probe("https://devblogs.microsoft.com/", {"/feed": "application/rss+xml"})
+        assert result["feeds"] == [{"url": "https://devblogs.microsoft.com/feed", "title": None}]
 
 
 class TestPinboardRewrite:

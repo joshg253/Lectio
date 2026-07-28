@@ -329,8 +329,8 @@
         />
         <button type="submit" class="entry-tags-submit">Apply</button>
       </form>
-      {% if selected_entry.link %}
       <div class="entry-pane-alt-actions">
+        {% if selected_entry.link %}
         <span
           id="entry-source-mode-indicator"
           class="entry-source-mode-indicator"
@@ -428,8 +428,31 @@
           </div>
         </div>
         {% endif %}
+        {% endif %}
+        {% if selected_entry.content_html %}
+        <button
+          type="button"
+          id="entry-cleanup-button"
+          class="entry-source-button"
+          data-feed-url="{{ selected_entry.feed_url }}"
+          data-entry-id="{{ selected_entry.id }}"
+          data-edited="{{ 1 if selected_entry.content_edited else 0 }}"
+          title="Clean up article (hover to select, click to remove)"
+          aria-label="Clean up article"
+        ><span class="material-symbols-rounded" aria-hidden="true">cleaning_services</span></button>
+        {% if selected_entry.content_edited %}
+        <button
+          type="button"
+          id="entry-cleanup-revert-button"
+          class="entry-source-button"
+          data-feed-url="{{ selected_entry.feed_url }}"
+          data-entry-id="{{ selected_entry.id }}"
+          title="Revert cleanup — restore the article as the feed served it"
+          aria-label="Revert cleanup"
+        ><span class="material-symbols-rounded" aria-hidden="true">restore_page</span></button>
+        {% endif %}
+        {% endif %}
       </div>
-      {% endif %}
     </div>
   </div>
   <article class="entry">

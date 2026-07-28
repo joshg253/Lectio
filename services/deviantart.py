@@ -14,7 +14,10 @@ Phase 2 (watch-list sync via the authorization_code grant) builds on this.
 """
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import re
 import sqlite3
 import time
 import uuid
@@ -809,3 +812,50 @@ def watch_user(access_token: str, username: str) -> tuple[bool, str]:
     if resp.status_code == 200 and (resp.json().get("success") if resp.headers.get("content-type", "").startswith("application/json") else False):
         return True, "ok"
     return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
+
+
+# --- Expiring image URLs (mature deviations) ---------------------------------
+# DA serves images from wixmp with a signed JWT in the query string. Ordinary
+# deviations get a permanently-signed URL, but **mature** ones are signed with
+# roughly a week's expiry — and every variant shares that expiry (verified
+# against the live API 2026-07-26: content.src and both thumbs all carried the
+# same exp), so there is no permanent thumbnail to fall back to. Once it lapses
+# the URL answers 401 and the entry shows neither image nor thumbnail. The only
+# fix is asking the API to sign a fresh one, which daily maintenance now does
+# before the old one expires.
+
+_IMAGE_TOKEN_RE = re.compile(r"token=([A-Za-z0-9_\-.]+)")
+
+
+def image_token_expiry(url: str) -> int | None:
+    """Expiry epoch of a wixmp image URL's JWT, or None when it never expires
+    (or carries no parseable token)."""
+    m = _IMAGE_TOKEN_RE.search(url or "")
+    if not m:
+        return None
+    try:
+        payload = m.group(1).split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+        return int(exp) if exp is not None else None
+    except Exception:
+        return None
+
+
+def fetch_fresh_image_url(deviation_id: str, access_token: str) -> str | None:
+    """Re-sign one deviation's image by re-fetching it. None on any failure —
+    callers leave the stored URL alone rather than blanking a working image."""
+    if not deviation_id or not access_token:
+        return None
+    try:
+        resp = _request(
+            "GET", f"{_API_BASE}/deviation/{deviation_id}",
+            headers=_user_headers(access_token),
+        )
+        if resp.status_code != 200:
+            LOGGER.info("deviantart: re-sign for %s returned HTTP %s", deviation_id, resp.status_code)
+            return None
+        return ((resp.json().get("content") or {}).get("src")) or None
+    except Exception:
+        LOGGER.exception("deviantart: re-sign failed for %s", deviation_id)
+        return None

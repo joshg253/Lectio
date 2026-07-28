@@ -324,7 +324,12 @@ class LeadImageService:
         # wp-post-image is WordPress's featured-image class — on a webcomic-strategy
         # feed the featured image IS the comic panel (e.g. claycomix), so recognize
         # it alongside the explicit comic-* classes.
-        r'\b(?:comic-image|comic-strip|comic-img|comicImg|webcomic|wp-post-image)\b',
+        #
+        # Hyphen *and* underscore: gunnerkrigg.com marks its panel
+        # class="comic_image", which the hyphen-only pattern missed, so the site's
+        # Archives banner won the scan and became the lead image for every strip.
+        # The id pattern already accepted both spellings; these now agree.
+        r'\b(?:comic[-_]image|comic[-_]strip|comic[-_]img|comicImg|webcomic|wp-post-image)\b',
         re.IGNORECASE,
     )
 
@@ -895,13 +900,23 @@ class LeadImageService:
         return self._promote_known_thumbnail(cached)
 
     def _promote_known_thumbnail(self, url: str | None) -> str | None:
-        """Promote a known small-thumbnail URL to its full-resolution equivalent.
+        """Return a small-thumbnail URL unchanged.
 
-        Currently handles the ComicControl /comicsthumbs/ → /comics/ convention.
-        Idempotent and a no-op for unrelated URLs."""
-        if not url or "comicsthumbs" not in url.lower():
-            return url
-        return self._COMICCONTROL_THUMB_RE.sub("comics", url)
+        This used to rewrite ComicControl's /comicsthumbs/<ts>-<file> to
+        /comics/<ts>-<file>, but the two carry *different* cache-bust
+        timestamps, so the rewritten URL names a file that does not exist and
+        ComicControl answers it with a 200 placeholder image — atomic-robo's
+        real panel is 1.2MB at …494 while the swapped …495 is an 11KB
+        placeholder. The promotion is only safe against the panel URL actually
+        read from the page, which is what _fetch_source_lead_image returns and
+        what main._promote_comicsthumbs_in_content matches on; doing it blind
+        here poisoned the cached lead image, and with it the thumbnail and the
+        article's lead display.
+
+        Kept as a named seam (rather than deleting the call sites) so the next
+        site-specific promotion has an obvious home — one that verifies first.
+        """
+        return url
 
     def extract_entry_thumbnail_url(self, entry: object, include_source_lookup: bool = False, fast_only: bool = False) -> str | None:
         return self._promote_known_thumbnail(
@@ -1104,7 +1119,7 @@ class LeadImageService:
 
         if include_source_lookup and entry_link and self._is_short_entry_blurb(content_html, summary):
             try:
-                source_image = self._fetch_source_lead_image(entry_link)
+                source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                 if source_image and self._is_image_url_acceptable(source_image, None, None):
                     return source_image
             except Exception:
@@ -1284,7 +1299,7 @@ class LeadImageService:
                                 return plugin_preferred
                             # plugin confirms cached value — skip source fetch
                         else:
-                            source_image = self._fetch_source_lead_image(entry_link)
+                            source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                             if source_image and source_image != cached:
                                 return source_image
                     inline_candidate = None
@@ -1299,7 +1314,7 @@ class LeadImageService:
                                 return plugin_preferred
                             # plugin confirms cached value — skip source fetch
                         else:
-                            source_image = self._fetch_source_lead_image(entry_link)
+                            source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                             if source_image and source_image != cached:
                                 return source_image
                     return cached
@@ -1316,7 +1331,7 @@ class LeadImageService:
                 return plugin_fallback
 
             if not skip_source and not self._plugin_should_skip_source_lookup(entry_link=entry_link):
-                source_image = self._fetch_source_lead_image(entry_link)
+                source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url_str))
                 if source_image:
                     return source_image
 
@@ -1412,7 +1427,7 @@ class LeadImageService:
                         entry_link = str(getattr(entry, "link", "") or "")
                         if not entry_link:
                             continue
-                        source_image = self._fetch_source_lead_image(entry_link)
+                        source_image = self._fetch_source_lead_image(entry_link, is_webcomic=self._is_feed_webcomic(feed_url))
                         if source_image:
                             self.store_entry_lead_image(feed_url_str, entry_id_str, source_image)
                         else:
@@ -2133,14 +2148,6 @@ class LeadImageService:
         or ``None`` on a miss. Network-free — the caller primes the cache via
         ``queue_source_html_fetch`` and fills in on a later open."""
         return self._source_html_cache.get(entry_link)
-
-    def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 1.0) -> bool:
-        """Block up to ``timeout`` for an in-flight queue_source_html_fetch to finish.
-        Returns True if the source HTML is cached afterward."""
-        event = self._source_html_fetch_events.get(entry_link)
-        if event is not None:
-            event.wait(timeout)
-        return entry_link in self._source_html_cache
 
     def _extract_css_background_image_url(self, html_text: str, base_url: str) -> str | None:
         """Return the first acceptable CSS background-image URL found in inline style attributes."""
@@ -3174,7 +3181,12 @@ class LeadImageService:
         """Block until the in-flight queue_source_html_fetch for this entry finishes (or timeout).
 
         Returns True if the fetch completed within the timeout, False otherwise.
-        If no fetch is in progress, returns True immediately.
+        If no fetch is in progress, returns True immediately — so a True answer
+        means "nothing left to wait for", not "the HTML is cached"; callers read
+        the cache afterwards and handle a miss. A second, shadowed definition of
+        this method used to sit earlier in the class and returned cache
+        membership instead; it was dead (this one won) and every caller passes an
+        explicit timeout, so removing it changes nothing at runtime.
         """
         event = self._source_html_fetch_events.get(entry_link)
         if event is None:

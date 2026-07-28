@@ -2398,6 +2398,19 @@
               <span id="feed-prop-change-website-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
+          {# Declared domain migrations. Without this the rules act invisibly —
+             they rewrite at ingest and feed the global dedupe alias map, but
+             nothing rendered them and only an inferrable host could be added. #}
+          <dt>Other domains</dt>
+          <dd id="feed-prop-aliases-row">
+            <ul id="feed-prop-alias-list" class="feed-prop-alias-list"></ul>
+            <span id="feed-prop-alias-empty" class="feed-prop-alias-empty">None declared.</span>
+            <span id="feed-prop-alias-add-wrap">
+              <input type="text" id="feed-prop-alias-input" class="feed-prop-url-input" placeholder="Old domain (e.g. olddomain.com)" autocomplete="off" />
+              <button type="button" id="feed-prop-alias-add" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Add</button>
+              <span id="feed-prop-alias-status" class="feed-prop-inline-status"></span>
+            </span>
+          </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">
             <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">
@@ -2686,6 +2699,7 @@
   <!-- Existing manual-tag names, for tag-input autocomplete (see attachTagAutocomplete). -->
   <script id="lectio-tag-names" type="application/json">{{ all_tag_names | tojson }}</script>
   <script src="/static/js/app.js?v={{ static_asset_version }}"></script>
+  <script src="/static/js/cleanup.js?v={{ static_asset_version }}"></script>
 
   <!-- Persistent global audio player. Lives outside the entry-pane swap target
        so playback survives navigation. Hidden until a track is loaded. -->

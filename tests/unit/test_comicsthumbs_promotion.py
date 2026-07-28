@@ -21,10 +21,14 @@ def test_uses_lead_image_when_filenames_match():
     assert "comicsthumbs" not in out
 
 
-def test_falls_back_to_directory_swap_without_lead_image():
+def test_keeps_the_feed_thumbnail_when_the_lead_image_is_not_cached_yet():
+    """The first view of a new strip happens before the lead image is derived.
+    The directory swap used to run as a fallback here, turning a working 31KB
+    thumbnail into ComicControl's 11KB placeholder — the comic looked broken
+    until a reload (atomic-robo, 2026-07-26). A small correct comic beats a big
+    broken one; later views still promote."""
     out = main._promote_comicsthumbs_in_content(BODY, None)
-    assert "comics/1782426356-ARV1701_05.jpg" in out
-    assert "comicsthumbs" not in out
+    assert out == BODY
 
 
 def test_does_not_substitute_a_different_comic():
@@ -32,7 +36,7 @@ def test_does_not_substitute_a_different_comic():
     out = main._promote_comicsthumbs_in_content(
         BODY, "https://www.atomic-robo.com/comics/12345-SOMETHING_ELSE.jpg"
     )
-    assert "comics/1782426356-ARV1701_05.jpg" in out
+    assert out == BODY
     assert "SOMETHING_ELSE" not in out
 
 

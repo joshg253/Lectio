@@ -80,19 +80,34 @@ The short version:
   article in place to repair a bad initial capture — available for any article
   Lectio captured, including ones already filed onto a real feed, and worth
   trying when a capture came out wrong, since a page that extracted badly once
-  often extracts correctly later; **File saved articles** matches
+  often extracts correctly later (a re-fetch updates the article's **Received**
+  date, never its **Pub** date — Pub stays the date it was published);
+  **File saved articles** matches
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later
   library built from feeds; an **Instapaper CSV import**
   brings your whole library over with tags and archive state — and tells you how
   much of it belongs to feeds you already follow, so a fresh import doesn't
   quietly become an unfiled backlog.
+- **Clean up article** (🧹 in the reading pane) — an Aardvark-style editor for a
+  post's body. Hovering outlines the element under the cursor and clicking
+  removes it; `W`/`N` widen and narrow the selection, `I` isolates (keeps only
+  what's selected and drops everything else), `Ctrl+Z` undoes, `Esc` cancels.
+  Nothing is written until **Save**, and **Revert cleanup** (📄 next to it)
+  restores the article exactly as the feed served it. Good for share widgets,
+  "related stories" blocks, newsletter footers, and the player chrome that
+  captured pages drag along. What you removed is recorded per post, so a future
+  release can promote a removal into a rule for the whole feed.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).
   Starred and tagged posts are never auto-deleted.
 - **Feed management** — OPML, resilient RSS/Atom auto-discovery (survives
-  stale autodiscovery links and schemeless input), Page Feeds for feedless
+  stale autodiscovery links and schemeless input, and prefers a blog's own feed
+  over the domain-wide firehose on multisite hosts like
+  `devblogs.microsoft.com/<blog>/`). When a site advertises a feed that is
+  provably gone, it says so and offers a Page Feed rather than handing back an
+  address that can't be subscribed. Page Feeds for feedless
   sites, dev.to filtered feeds, YouTube & DeviantArt sync, Bluesky image
   recovery, per-folder refresh cadence, feed compare, fetch history,
   duplicate-feed scanning, and curation-preserving unsubscribe/combine/move —
@@ -106,7 +121,13 @@ The short version:
   Properties when an author moved domains without updating their feed's
   `<guid>`/`<link>`: it rewrites every post link onto the new domain (carrying
   stars/tags/read state), records the rule so re-ingested items stay corrected,
-  and fixes the site link, favicon and duplicate-scan pairing too.
+  and fixes the site link, favicon and duplicate-scan pairing too. For an author
+  who moved more than once, **Other domains** in the same dialog lists every
+  domain declared for that feed and lets you add or remove one by hand — needed
+  because edit Website can only declare a domain it can still see in the feed,
+  which leaves an *older* dead domain with no way in. Adding one migrates any
+  posts still on it; a domain with none left is still worth declaring, since it
+  pairs old saved links with their current twins in the duplicate scan.
 - **Integrations** — Reddit (submit + authenticated fetching), Pinterest
   (pin lead images), Quire (tasks), Instapaper, email (Resend), webhooks;
   per-user OAuth with optional shared-instance credentials. On Star can
@@ -154,6 +175,20 @@ the app script is a cacheable static file rather than inline JS.
 ---
 
 ## Development
+
+Enable the lint hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It runs `scripts/lint_changed.py` over the lines you staged (ruff, ~40ms) so a
+lint problem is fixed in the commit rather than after a CI round-trip. CI runs
+the same script across the whole PR. Both are scoped to *changed lines* rather
+than whole files, because the repo carries a backlog of existing findings — new
+code is held to the rules while the backlog shrinks file by file. `git commit
+--no-verify` bypasses it.
+
 
 - **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `uv run pytest`.
 - **CI** — GitHub Actions runs the suite on Python 3.14 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies install from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.

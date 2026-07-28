@@ -29,6 +29,11 @@ from urllib.parse import urldefrag, urlparse
 
 LOGGER = logging.getLogger(__name__)
 
+# Statuses that mean the host refused *us*, not that the article is missing.
+# Kept distinct from 404/410 because those flag the entry as dead and offer a
+# delete — a bot-wall must never be able to trigger that for a live article.
+_BLOCKED_STATUSES = frozenset({401, 403, 429, 451, 503})
+
 SAVED_FEED_URL = "lectio:saved"
 SAVED_FEED_TITLE = "Saved Articles"
 
@@ -65,7 +70,7 @@ def ensure_saved_feed(reader) -> bool:
     return True
 
 
-def _replace_entry_content(
+def replace_entry_content(
     reader,
     conn: sqlite3.Connection,
     entry_id: str,
@@ -73,7 +78,7 @@ def _replace_entry_content(
     article_html: str,
     feed_url: str = SAVED_FEED_URL,
     *,
-    bump_date: bool = True,
+    bump_received: bool = True,
     pin_content: bool = False,
 ) -> None:
     """Replace a captured article's stored content with a fresh extraction.
@@ -88,20 +93,30 @@ def _replace_entry_content(
     ``lectio:saved`` while leaving it a Lectio capture, and re-fetching such an
     article has to update it where it now lives.
 
-    *bump_date* pushes published/saved_at to now (top of the backlog) — right for
-    a capture the user just re-pulled, but wrong for a *feed* entry being
-    enriched, which should keep its chronological position. *pin_content* writes
-    an ``entry_content_overrides`` row so a later feed refresh can't clobber the
-    re-fetched content with the feed's own thinner copy — set for feed entries,
-    which reader re-ingests (a capture's feed never refreshes)."""
+    *bump_received* surfaces the re-pulled article at the top of the backlog by
+    moving its **Received** date (and saved_at) to now. It used to move
+    ``published`` instead, which was wrong twice over: Pub means the date the
+    article was published, and a re-fetch does not republish it; and under a
+    Pub-oldest sort the bump buried the article at the far end of the list
+    rather than surfacing it. Measured on the live library 2026-07-25: 105
+    entries had lost their real publish dates this way. Received is the honest
+    home for "when this content arrived", and needs no new per-entry field.
+
+    Both received columns move together: ``first_updated`` backs ``Entry.added``
+    (what the UI shows and the render-path sort reads) and ``recent_sort`` backs
+    the list's SQL fast path. *pin_content* writes an ``entry_content_overrides``
+    row so a later feed refresh can't clobber the re-fetched content with the
+    feed's own thinner copy — set for feed entries, which reader re-ingests (a
+    capture's feed never refreshes)."""
     now = datetime.now(timezone.utc)
-    stored_published = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
+    stored_received = now.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC format
     content_json = json.dumps([{"value": article_html, "type": "text/html", "language": None}])
     db = reader._storage.get_db()
-    if bump_date:
+    if bump_received:
         db.execute(
-            "UPDATE entries SET content = ?, published = ? WHERE feed = ? AND id = ?",
-            (content_json, stored_published, feed_url, entry_id),
+            "UPDATE entries SET content = ?, first_updated = ?, recent_sort = ?"
+            " WHERE feed = ? AND id = ?",
+            (content_json, stored_received, stored_received, feed_url, entry_id),
         )
     else:
         db.execute(
@@ -131,7 +146,7 @@ def _replace_entry_content(
             conn.commit()
         except sqlite3.OperationalError as exc:
             LOGGER.warning("save-article: content pin failed for %s: %s", entry_id, exc)
-    if not bump_date:
+    if not bump_received:
         return
     # The saved_at bump is cosmetic ordering — never let a transient lock
     # (e.g. the archive worker writing at the same instant) fail the save
@@ -149,6 +164,28 @@ def _replace_entry_content(
                 LOGGER.warning("save-article: saved_at bump failed for %s: %s", entry_id, exc)
             else:
                 time.sleep(0.5)
+
+
+def read_entry_content_json(reader, feed_url: str, entry_id: str) -> str | None:
+    """Return reader's raw ``entries.content`` JSON for an entry, or None.
+
+    The counterpart to replace_entry_content: cleanup edits snapshot this before
+    overwriting so the pristine body can be restored verbatim, rather than being
+    re-derived (which would lose whatever the feed no longer serves)."""
+    row = reader._storage.get_db().execute(
+        "SELECT content FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id),
+    ).fetchone()
+    return row[0] if row else None  # index access: reader's row_factory is not ours to assume
+
+
+def restore_entry_content(reader, feed_url: str, entry_id: str, content_json: str) -> None:
+    """Write a previously snapshotted content JSON back onto an entry."""
+    db = reader._storage.get_db()
+    db.execute(
+        "UPDATE entries SET content = ? WHERE feed = ? AND id = ?",
+        (content_json, feed_url, entry_id),
+    )
+    db.commit()
 
 
 def refresh_captured_article(
@@ -228,6 +265,15 @@ def refresh_captured_article(
         if status in (404, 410):
             result["error"] = f"The source article is gone (HTTP {status}) — nothing to re-fetch."
             result["dead"] = True
+        elif status in _BLOCKED_STATUSES:
+            # Refused, not absent. Say which, and point at the way through:
+            # the extension posts the page your own browser already loaded, so
+            # a host that blocks this server (Medium blocks datacenter IPs
+            # outright, browser identity or not) is no obstacle.
+            result["error"] = (
+                f"{urlparse(source_url).netloc or 'The site'} blocked the fetch (HTTP {status}). "
+                "Open it in your browser and save it with the Lectio extension instead."
+            )
         elif status is not None:
             result["error"] = f"Could not fetch the article (HTTP {status})."
         else:
@@ -241,9 +287,9 @@ def refresh_captured_article(
         # A feed entry keeps its date and gets its content pinned against the
         # next refresh; a capture bumps to the top and needs no pin (its feed
         # never refreshes).
-        _replace_entry_content(
+        replace_entry_content(
             reader, conn, entry_id, new_title, article_html, feed_url=feed_url,
-            bump_date=is_capture, pin_content=not is_capture,
+            bump_received=is_capture, pin_content=not is_capture,
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("refresh-capture: content replace failed for %s: %s", entry_id, exc)
@@ -263,6 +309,86 @@ def refresh_captured_article(
     return result
 
 
+def _merge_save_into_entry(
+    reader,
+    conn: sqlite3.Connection,
+    clean_url: str,
+    target: tuple[str, str],
+    *,
+    extract: Callable[[str], tuple[str, str]],
+    enqueue_archive: Callable[[str, str], None] | None,
+    result: dict,
+) -> dict:
+    """Fold a save into an article that already exists in another feed.
+
+    The survivor is the entry we found: a feed-provided post keeps updating and
+    carries the publisher's tags (``entry_feed_tags``), neither of which a
+    capture can offer. What the capture *does* offer is a body the server often
+    cannot fetch at all — so the merge keeps whichever body is longer, pinned so
+    the feed's own thinner copy can't overwrite it on the next refresh.
+
+    Everything else is the resurface behavior a save already implies: star it,
+    un-archive it, mark it unread so it lands back in the Inbox.
+    """
+    target_feed, target_id = target
+    result["feed_url"], result["entry_id"] = target_feed, target_id
+    result["merged"] = True
+
+    entry = reader.get_entry((target_feed, target_id), None)
+    if entry is None:  # vanished between lookup and merge
+        result["error"] = "The matching article disappeared; try saving again."
+        return result
+    result["title"] = entry.title or clean_url
+
+    try:
+        new_title, article_html = extract(clean_url)
+    except Exception as exc:  # noqa: BLE001 — the star/resurface below still applies
+        LOGGER.warning("save-article: merge extraction failed for %s: %s", clean_url, exc)
+        new_title, article_html = "", ""
+
+    if article_html:
+        current = (entry.content[0].value if getattr(entry, "content", None) else "") or entry.summary or ""
+        if len(article_html) > len(current):
+            try:
+                replace_entry_content(
+                    reader, conn, target_id, "", article_html, feed_url=target_feed,
+                    bump_received=False, pin_content=True,
+                )
+                result["extracted"] = True
+                result["title"] = new_title or result["title"]
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("save-article: merge content write failed for %s: %s", target_id, exc)
+
+    conn.execute(
+        "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+        (target_feed, target_id),
+    )
+    try:
+        conn.execute(
+            "UPDATE saved_entries SET archived_at = NULL"
+            " WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
+            (target_feed, target_id),
+        )
+        conn.execute(
+            "DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?",
+            (target_feed, target_id),
+        )
+        conn.commit()
+        reader.mark_entry_as_unread((target_feed, target_id))
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("save-article: merge resurface failed for %s: %s", target_id, exc)
+    conn.commit()
+
+    if enqueue_archive is not None:
+        try:
+            enqueue_archive(target_feed, target_id)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("save-article: merge archive enqueue failed for %s: %s", target_id, exc)
+
+    result["ok"] = True
+    return result
+
+
 def save_article(
     reader,
     conn: sqlite3.Connection,
@@ -271,6 +397,7 @@ def save_article(
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
     refresh_content: bool = False,
+    find_existing_entry: Callable[[str], tuple[str, str] | None] | None = None,
 ) -> dict:
     """Save *url* as a starred entry in the Saved Articles feed.
 
@@ -284,6 +411,17 @@ def save_article(
     backlog (published = now, saved_at = now). Set when the save carries a
     browser-captured DOM — the user deliberately re-captured the page (e.g.
     after cleaning it up in-browser); URL-only re-saves stay light no-ops.
+
+    *find_existing_entry*: resolves an article URL to an entry that already
+    exists in some other feed, so saving a page you are subscribed to **merges
+    into that post** instead of adding a second copy. Injected because the
+    canonical-link matching lives in main. Without it, behavior is unchanged.
+
+    Merging matters because the copies were never equivalent: a feed entry
+    carries the publisher's tags and keeps updating, while an extension capture
+    carries the body the server cannot fetch. Split across two entries you get
+    an article with tags and no text beside one with text and no tags — which is
+    exactly what happened to a Medium post (2026-07-26).
     """
     result: dict = {
         "ok": False,
@@ -301,6 +439,21 @@ def save_article(
     result["entry_id"] = clean_url
 
     created = ensure_saved_feed(reader)
+
+    # Already subscribed to this article somewhere? Enrich that post instead of
+    # creating a rival copy. Only when there is no saved entry yet — an existing
+    # saved copy is this article's home and keeps its history.
+    if find_existing_entry is not None and reader.get_entry((SAVED_FEED_URL, clean_url), None) is None:
+        target = None
+        try:
+            target = find_existing_entry(clean_url)
+        except Exception:  # noqa: BLE001 — a failed lookup must not block the save
+            LOGGER.exception("save-article: existing-entry lookup failed for %s", clean_url)
+        if target:
+            return _merge_save_into_entry(
+                reader, conn, clean_url, target, extract=extract,
+                enqueue_archive=enqueue_archive, result=result,
+            )
 
     existing = reader.get_entry((SAVED_FEED_URL, clean_url), None)
     if existing is not None:
@@ -337,7 +490,7 @@ def save_article(
             else:
                 if article_html:
                     try:
-                        _replace_entry_content(reader, conn, clean_url, new_title, article_html)
+                        replace_entry_content(reader, conn, clean_url, new_title, article_html)
                     except Exception as exc:  # noqa: BLE001 — refresh is best-effort on a duplicate
                         LOGGER.warning("save-article: content refresh failed for %s: %s", clean_url, exc)
                     else:

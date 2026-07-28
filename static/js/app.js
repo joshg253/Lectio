@@ -3150,6 +3150,12 @@
       });
     }
 
+    // Exposed for static/js/cleanup.js, which re-renders the pane after a body
+    // edit. A full reload would also re-render the list, moving the reader's
+    // place in it for an edit the list doesn't even show.
+    window.lectioReloadEntryPane = (url, pushHistory) =>
+      loadEntryPaneWithoutFullRefresh(url || window.location.href, pushHistory === true);
+
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
       const token = ++entryPaneRequestToken;
       let currentUrlHasEntry = false;
@@ -3707,6 +3713,118 @@
       node.textContent = value && String(value).trim() ? String(value) : '-';
     }
 
+    // --- Feed Properties → "Other domains" (declared domain migrations) ---
+    // These rules rewrite an author's dead domains onto the current one at
+    // ingest, and feed the global dedupe alias map. Until this list existed the
+    // only way to add one was Edit Website, which can only declare a host it
+    // can already see in the feed — so an older dead domain had no way in.
+    function renderFeedPropAliases(feedUrl, rewrites) {
+      const list = document.getElementById('feed-prop-alias-list');
+      const empty = document.getElementById('feed-prop-alias-empty');
+      const addBtn = document.getElementById('feed-prop-alias-add');
+      const input = document.getElementById('feed-prop-alias-input');
+      const status = document.getElementById('feed-prop-alias-status');
+      if (!list) return;
+      if (addBtn) addBtn.dataset.feedUrl = feedUrl || '';
+      if (input) input.value = '';
+      if (status) status.textContent = '';
+      list.textContent = '';
+      const rows = Array.isArray(rewrites) ? rewrites : [];
+      if (empty) empty.hidden = rows.length > 0;
+      for (const row of rows) {
+        const li = document.createElement('li');
+        li.className = 'feed-prop-alias-item';
+        const from = document.createElement('code');
+        from.textContent = row.from_host || '';
+        const arrow = document.createElement('span');
+        arrow.className = 'feed-prop-alias-arrow';
+        arrow.textContent = '→';
+        const to = document.createElement('code');
+        to.textContent = row.to_host || '';
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'feed-prop-inline-btn feed-prop-alias-del';
+        del.textContent = '×';
+        del.title = 'Remove this alias';
+        del.dataset.fromHost = row.from_host || '';
+        del.dataset.feedUrl = feedUrl || '';
+        li.append(from, arrow, to, del);
+        list.appendChild(li);
+      }
+    }
+
+    async function submitFeedPropAlias() {
+      const addBtn = document.getElementById('feed-prop-alias-add');
+      const input = document.getElementById('feed-prop-alias-input');
+      const status = document.getElementById('feed-prop-alias-status');
+      const feedUrl = addBtn?.dataset.feedUrl || '';
+      const value = (input?.value || '').trim();
+      if (!feedUrl || !value) return;
+      if (status) status.textContent = 'Adding…';
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, from_host: value });
+        const resp = await fetch('/feeds/url-rewrites', { method: 'POST', body });
+        const json = await resp.json();
+        if (!json.ok) {
+          if (status) status.textContent = json.error || 'Could not add that domain.';
+          return;
+        }
+        // A dead domain with nothing on it is the normal case, so say "0 posts"
+        // plainly rather than implying the rule did nothing — it still governs
+        // ingest and duplicate matching from here on.
+        const message = json.migrated
+          ? `Added — ${json.migrated} post${json.migrated === 1 ? '' : 's'} moved to ${json.to_host}.`
+          : `Added — no existing posts on ${json.from_host}.`;
+        if (input) input.value = '';
+        // Re-render first: it repaints the list *and* clears the status line, so
+        // setting the message before this would wipe the migration count — the
+        // one number worth reading.
+        await openFeedPropertiesModal(feedUrl);
+        const freshStatus = document.getElementById('feed-prop-alias-status');
+        if (freshStatus) freshStatus.textContent = message;
+      } catch (_) {
+        if (status) status.textContent = 'Could not add that domain.';
+      }
+    }
+
+    async function removeFeedPropAlias(feedUrl, fromHost) {
+      const status = document.getElementById('feed-prop-alias-status');
+      if (!window.confirm(
+        `Stop treating ${fromHost} as this feed's old domain?\n\n`
+        + 'Posts already moved keep their current links — removing the alias only '
+        + 'stops future rewrites and un-pairs the two domains for duplicate detection.'
+      )) return;
+      try {
+        const body = new URLSearchParams({ feed_url: feedUrl, from_host: fromHost });
+        const resp = await fetch('/feeds/url-rewrites/delete', { method: 'POST', body });
+        const json = await resp.json();
+        if (!json.ok) {
+          if (status) status.textContent = json.error || 'Could not remove that alias.';
+          return;
+        }
+        openFeedPropertiesModal(feedUrl);
+      } catch (_) {
+        if (status) status.textContent = 'Could not remove that alias.';
+      }
+    }
+
+    document.getElementById('feed-prop-alias-add')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      submitFeedPropAlias();
+    });
+    document.getElementById('feed-prop-alias-input')?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submitFeedPropAlias();
+      }
+    });
+    document.getElementById('feed-prop-alias-list')?.addEventListener('click', (event) => {
+      const btn = event.target instanceof Element ? event.target.closest('.feed-prop-alias-del') : null;
+      if (!btn) return;
+      event.preventDefault();
+      removeFeedPropAlias(btn.dataset.feedUrl || '', btn.dataset.fromHost || '');
+    });
+
     async function openFeedPropertiesModal(feedUrl) {
       if (!feedUrl || !feedPropertiesModal) {
         return;
@@ -3717,6 +3835,7 @@
       setFeedPropText(feedPropRealTitle, '-');
       setFeedPropText(feedPropWebsite, '-');
       if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
+      renderFeedPropAliases(feedUrl, []);
       setFeedPropText(feedPropXml, feedUrl);
       if (feedPropXmlOpen) { feedPropXmlOpen.href = safeHttpUrl(feedUrl) || '#'; feedPropXmlOpen.hidden = !feedUrl; }
       // "View posts" — open this feed's list in the reader. Prefer the sidebar
@@ -3816,6 +3935,7 @@
           feedPropWebsiteOpen.href = ws || '#';
           feedPropWebsiteOpen.hidden = !ws;
         }
+        renderFeedPropAliases(feedUrl, data.url_rewrites || []);
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         if (feedPropXmlOpen) {
           const xu = (data.feed_url || feedUrl || '').trim();
@@ -7678,10 +7798,24 @@
       markReadFolderIdInput.value = contextFolderId;
       hideContextMenu();
       const isRootFolder = !!document.querySelector(`.root-item[data-folder-id="${CSS.escape(contextFolderId)}"]`);
-      const folderFeedFilter = isRootFolder ? null : new Set(
+      let folderFeedFilter = isRootFolder ? null : new Set(
         Array.from(document.querySelectorAll(`.feed-link[data-folder-id="${CSS.escape(contextFolderId)}"]`))
           .map(el => el.getAttribute('data-feed-url')).filter(Boolean)
       );
+      // The filter comes from the folder's feed links *in the sidebar*, which
+      // aren't in the DOM while the folder is collapsed — leaving an empty Set
+      // that matches no post, so the server marked everything read while the
+      // list sat there undimmed until a manual refresh. When the set is empty
+      // but the list on screen IS this folder's, dim everything visible
+      // instead. Marking some *other* folder read still dims nothing, which is
+      // correct: none of its posts are on screen.
+      if (folderFeedFilter && folderFeedFilter.size === 0) {
+        const viewedFolderId = new URLSearchParams(window.location.search).get('folder_id');
+        const viewingThisFolder = viewedFolderId != null
+          && String(viewedFolderId) === String(contextFolderId)
+          && !new URLSearchParams(window.location.search).get('feed_url');
+        if (viewingThisFolder) folderFeedFilter = null;
+      }
       submitMarkReadAsync(markReadFolderForm, folderFeedFilter);
       // Zero any remaining sidebar counts (covers off-screen unread posts)
       clearFolderBadges(contextFolderId, isRootFolder);
@@ -11088,47 +11222,52 @@
       const folderBtn = e.target.closest('[data-settings-folder-id]');
       if (folderBtn) { openFolderPropertiesModal(Number(folderBtn.dataset.settingsFolderId)); return; }
 
-      if (e.target.closest('#backfill-hide-shorts-btn')) {
-        const btn = document.getElementById('backfill-hide-shorts-btn');
-        btn.disabled = true;
-        btn.textContent = 'Cleaning…';
-        fetch('/feeds/backfill-hide-shorts', { method: 'POST', credentials: 'same-origin' })
-          .then(r => r.json())
-          .then(d => {
-            btn.disabled = false;
-            btn.textContent = 'Clean up Shorts';
-            showToastMessage(d.marked > 0 ? `Marked ${d.marked} Short${d.marked !== 1 ? 's' : ''} as read.` : 'No unread Shorts found.');
-          })
-          .catch(() => {
-            btn.disabled = false;
-            btn.textContent = 'Clean up Shorts';
-            showToastMessage('Error running Shorts cleanup.');
-          });
-        return;
-      }
+    });
 
-      if (e.target.closest('#fix-url-titles-btn')) {
-        const btn = document.getElementById('fix-url-titles-btn');
-        btn.disabled = true;
-        btn.textContent = 'Scanning…';
-        fetch('/feeds/fix-url-titles', { method: 'POST', credentials: 'same-origin' })
-          .then(r => r.json())
-          .then(d => {
-            btn.disabled = false;
-            btn.textContent = 'Fix URL titles';
-            if (d.queued > 0) {
-              showToastMessage(`Queued ${d.queued} feed${d.queued !== 1 ? 's' : ''} for title refresh.`);
-            } else {
-              showToastMessage('No feeds with URL-style titles found.');
-            }
-          })
-          .catch(() => {
-            btn.disabled = false;
-            btn.textContent = 'Fix URL titles';
-            showToastMessage('Error running title fix.');
-          });
-        return;
-      }
+    // "Clean up Shorts" and "Fix URL titles" live in the **Utilities** tab, but
+    // their handlers used to sit inside the #settings-tab-feeds delegated
+    // listener above — so the click never reached them and the buttons did
+    // nothing at all: no request, no toast. They were presumably left behind
+    // when Utilities was split out of the Feeds tab. Bound by id here, the way
+    // every other Utilities button already is.
+    document.getElementById('backfill-hide-shorts-btn')?.addEventListener('click', () => {
+      const btn = document.getElementById('backfill-hide-shorts-btn');
+      btn.disabled = true;
+      btn.textContent = 'Cleaning…';
+      fetch('/feeds/backfill-hide-shorts', { method: 'POST', credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(d => {
+          btn.disabled = false;
+          btn.textContent = 'Clean up Shorts';
+          showToastMessage(d.marked > 0 ? `Marked ${d.marked} Short${d.marked !== 1 ? 's' : ''} as read.` : 'No unread Shorts found.');
+        })
+        .catch(() => {
+          btn.disabled = false;
+          btn.textContent = 'Clean up Shorts';
+          showToastMessage('Error running Shorts cleanup.');
+        });
+    });
+
+    document.getElementById('fix-url-titles-btn')?.addEventListener('click', () => {
+      const btn = document.getElementById('fix-url-titles-btn');
+      btn.disabled = true;
+      btn.textContent = 'Scanning…';
+      fetch('/feeds/fix-url-titles', { method: 'POST', credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(d => {
+          btn.disabled = false;
+          btn.textContent = 'Fix URL titles';
+          if (d.queued > 0) {
+            showToastMessage(`Queued ${d.queued} feed${d.queued !== 1 ? 's' : ''} for title refresh.`);
+          } else {
+            showToastMessage('No feeds with URL-style titles found.');
+          }
+        })
+        .catch(() => {
+          btn.disabled = false;
+          btn.textContent = 'Fix URL titles';
+          showToastMessage('Error running title fix.');
+        });
     });
 
     // Feeds tab: inline per-folder refresh cadence dropdowns.
