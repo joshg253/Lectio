@@ -22849,6 +22849,21 @@ def set_entry_link_route(feed_url: str = Form(...), entry_id: str = Form(...), l
     return JSONResponse({"ok": True, "link": link})
 
 
+# User-facing wording for a refused cleanup, keyed by ContentEditError.code.
+# Authored here rather than taken from the exception so the response can never
+# carry exception-derived text (CodeQL: py/stack-trace-exposure).
+_CLEANUP_ERROR_MESSAGES = {
+    "not_json": "The cleanup instructions were not valid JSON.",
+    "empty": "No cleanup operations were sent.",
+    "too_many": f"Too many operations in one go (max {content_edits.MAX_OPS}).",
+    "bad_op": "One of the cleanup steps was malformed — reload the article and try again.",
+    "no_html": "This entry has no HTML body to clean.",
+    "unparseable": "This entry's HTML could not be parsed.",
+    "would_empty": "That would remove the entire article body.",
+}
+_CLEANUP_ERROR_FALLBACK = "That cleanup could not be applied."
+
+
 @app.post("/entries/content/clean")
 def clean_entry_content_route(
     feed_url: str = Form(...), entry_id: str = Form(...), ops: str = Form(...),
@@ -22876,7 +22891,16 @@ def clean_entry_content_route(
             content_html = _resolve_entry_content_html(entry)
             new_html, applied, unmatched = content_edits.apply_ops(content_html, parsed_ops)
         except content_edits.ContentEditError as exc:
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+            # The wording lives here, keyed by the error's own code, so nothing
+            # derived from an exception object reaches the response — the
+            # dataflow behind py/stack-trace-exposure does not exist rather than
+            # being argued about. The exception's message still goes to the log.
+            LOGGER.info("[cleanup] refused for %s: %s", entry_id, exc)
+            return JSONResponse(
+                {"ok": False, "error": _CLEANUP_ERROR_MESSAGES.get(
+                    getattr(exc, "code", ""), _CLEANUP_ERROR_FALLBACK)},
+                status_code=400,
+            )
         if not applied:
             return JSONResponse(
                 {"ok": False, "error": "None of those elements could be matched in the stored article.",

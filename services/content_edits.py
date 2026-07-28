@@ -54,7 +54,18 @@ _WS_RE = re.compile(r"\s+")
 
 
 class ContentEditError(ValueError):
-    """Payload the server refuses to replay (malformed ops, empty content)."""
+    """Payload the server refuses to replay (malformed ops, empty content).
+
+    Carries a short *code* rather than relying on its message reaching the user.
+    The route maps the code to its own wording, so nothing derived from an
+    exception object is ever written into a response — the message stays useful
+    while the dataflow CodeQL objects to (py/stack-trace-exposure) simply does
+    not exist. The message text remains for logs and tests.
+    """
+
+    def __init__(self, message: str, code: str = "invalid") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def parse_ops(raw: str | list) -> list[dict]:
@@ -69,24 +80,24 @@ def parse_ops(raw: str | list) -> list[dict]:
             # chained parser error carries stack detail with it (CodeQL:
             # information exposure through an exception). The same reasoning as
             # probe_url's "only the exception class reaches the client".
-            raise ContentEditError("ops is not valid JSON") from None
+            raise ContentEditError("ops is not valid JSON", "not_json") from None
     if not isinstance(raw, list) or not raw:
-        raise ContentEditError("no cleanup operations were sent")
+        raise ContentEditError("no cleanup operations were sent", "empty")
     if len(raw) > MAX_OPS:
-        raise ContentEditError(f"too many operations (max {MAX_OPS})")
+        raise ContentEditError(f"too many operations (max {MAX_OPS})", "too_many")
     ops: list[dict] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
-            raise ContentEditError(f"operation {index} is not an object")
+            raise ContentEditError(f"operation {index} is not an object", "bad_op")
         op = item.get("op")
         if op not in _VALID_OPS:
-            raise ContentEditError(f"operation {index} has unknown op {op!r}")
+            raise ContentEditError(f"operation {index} has unknown op {op!r}", "bad_op")
         path = item.get("path")
         if not isinstance(path, list) or not path or not all(isinstance(p, int) and p >= 0 for p in path):
-            raise ContentEditError(f"operation {index} has an invalid path")
+            raise ContentEditError(f"operation {index} has an invalid path", "bad_op")
         fingerprint = item.get("fp")
         if not isinstance(fingerprint, dict):
-            raise ContentEditError(f"operation {index} has no fingerprint")
+            raise ContentEditError(f"operation {index} has no fingerprint", "bad_op")
         ops.append({"op": op, "path": [int(p) for p in path], "fp": fingerprint})
     return ops
 
@@ -211,11 +222,11 @@ def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]
     derives each path from the DOM as it stands at the moment of that click.
     """
     if not isinstance(content_html, str) or not content_html.strip():
-        raise ContentEditError("this entry has no HTML body to clean")
+        raise ContentEditError("this entry has no HTML body to clean", "no_html")
     soup = BeautifulSoup(f"<div>{content_html}</div>", "html.parser")
     root = soup.div
     if root is None:  # the wrapper is a literal <div>, so only a parser failure gets here
-        raise ContentEditError("this entry's HTML could not be parsed")
+        raise ContentEditError("this entry's HTML could not be parsed", "unparseable")
     applied = 0
     unmatched: list[dict] = []
 
@@ -242,5 +253,5 @@ def apply_ops(content_html: str, ops: list[dict]) -> tuple[str, int, list[dict]]
 
     new_html = root.decode_contents()
     if applied and not new_html.strip():
-        raise ContentEditError("that would remove the entire article body")
+        raise ContentEditError("that would remove the entire article body", "would_empty")
     return new_html, applied, unmatched

@@ -124,3 +124,38 @@ def test_parse_ops_caps_the_batch():
     ops = [{"op": "remove", "path": [0], "fp": {"tag": "p"}}] * (content_edits.MAX_OPS + 1)
     with pytest.raises(content_edits.ContentEditError):
         content_edits.parse_ops(ops)
+
+
+def test_every_refusal_carries_a_code_the_route_can_map():
+    """The route words these errors itself, keyed by `code`, so nothing derived
+    from an exception object reaches a response (CodeQL: py/stack-trace-exposure).
+    A code with no entry in that table would silently degrade every message for
+    that case to the generic fallback."""
+    import main
+
+    codes = set()
+    for payload in ("not json", "[]", '[{"op": "explode", "path": [0], "fp": {}}]',
+                    '[{"op": "remove", "path": [], "fp": {}}]',
+                    '[{"op": "remove", "path": [0]}]'):
+        try:
+            content_edits.parse_ops(payload)
+        except content_edits.ContentEditError as exc:
+            codes.add(exc.code)
+    for html_in, ops in (("   ", [{"op": "remove", "path": [0], "fp": {"tag": "p"}}]),
+                         ("<p>only</p>", [_op("<p>only</p>", [0])])):
+        try:
+            content_edits.apply_ops(html_in, ops)
+        except content_edits.ContentEditError as exc:
+            codes.add(exc.code)
+
+    assert codes, "no refusals were raised — the test is not exercising anything"
+    unmapped = codes - set(main._CLEANUP_ERROR_MESSAGES)
+    assert not unmapped, f"ContentEditError codes with no user-facing wording: {unmapped}"
+
+
+def test_too_many_ops_is_mapped_too():
+    import main
+    try:
+        content_edits.parse_ops([{"op": "remove", "path": [0], "fp": {}}] * (content_edits.MAX_OPS + 1))
+    except content_edits.ContentEditError as exc:
+        assert exc.code in main._CLEANUP_ERROR_MESSAGES
