@@ -71,7 +71,11 @@ The short version:
 - **Read-it-later** — save any page via menu, bookmarklet, `/api/save` (share
   sheets), or a browser extension that ships the rendered page past paywalls;
   saved articles get offline capture, tags, and an e-ink **Read Mode** at
-  `/read` (paginated, Supernote-friendly). A **Scan Saved for duplicates**
+  `/read` (paginated, Supernote-friendly). An article is marked read when you
+  reach its **last page**, not when you open it — so browsing the backlog to
+  decide what to read no longer clears it behind you. A one-page article counts
+  as read as soon as it's open, since the whole thing is on screen.
+  A **Scan Saved for duplicates**
   utility (with side-by-side Compare and dead-link checking) cleans up
   same-article-different-URL saves — it never pre-selects anything, and only
   **Check URLs** arms a copy for deletion, and only when that copy's link is

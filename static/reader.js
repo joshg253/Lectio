@@ -38,9 +38,34 @@
     try { window.localStorage.setItem(FS_KEY, fs.toFixed(2)); } catch (e) { /* private mode */ }
   }
 
+  // Mark-read is earned by reaching the last page, not by opening the article:
+  // the server no longer marks on render, because in a browse loop opening an
+  // item is how you decide whether to read it.
+  var readMarked = false;
+  var paginationSettled = false;
+
+  function markReadIfFinished() {
+    // Held until pagination settles: a long article can measure as one page
+    // before its images load, and marking off that first measurement would
+    // reintroduce exactly the peek-marks-read bug from the other direction.
+    if (readMarked || !paginationSettled) return;
+    if (page < pages - 1) return;
+    var feed = cols.getAttribute("data-feed");
+    var entry = cols.getAttribute("data-entry");
+    if (!feed || !entry) return;
+    readMarked = true;
+    // Fire-and-forget: nothing on screen depends on the reply, and a failure
+    // should not interrupt reading. The header asks for the JSON reply and the
+    // read-history append, matching what the server used to do on render.
+    post("/entries/read", {
+      folder_id: "0", feed_url: feed, entry_id: entry, read: "1", select_entry: "0",
+    }, "lectio-entry-read-toggle");
+  }
+
   function render() {
     cols.style.transform = "translateX(" + (-page * pageWidth()) + "px)";
     if (pageInfo) pageInfo.textContent = (page + 1) + " / " + pages;
+    markReadIfFinished();
   }
 
   function recompute(keepRatio) {
@@ -138,19 +163,22 @@
   function afterAction() {
     go(NAV.next || NAV.back || "/read");
   }
-  function postAction(url, params) {
-    var body = new URLSearchParams(params);
-    fetch(url, {
+  // `requestedWith` names the async-action header the route checks; without it
+  // the endpoint answers with a redirect back into the main app instead of JSON.
+  function post(url, params, requestedWith) {
+    return fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         "X-CSRF-Token": csrfToken(),
-        // Ask save-toggle for a JSON reply instead of a redirect to the app.
-        "X-Requested-With": "lectio-entry-save-toggle",
+        "X-Requested-With": requestedWith || "lectio-entry-save-toggle",
       },
-      body: body.toString(),
+      body: new URLSearchParams(params).toString(),
       credentials: "same-origin",
-    }).then(afterAction, afterAction);
+    });
+  }
+  function postAction(url, params) {
+    post(url, params).then(afterAction, afterAction);
   }
   var archiveBtn = document.getElementById("reader-archive-btn");
   if (archiveBtn) archiveBtn.addEventListener("click", function (e) {
@@ -183,6 +211,11 @@
   function init() { recompute(false); }
   if (document.readyState === "complete") init();
   else window.addEventListener("load", init);
-  // Late images/fonts can change article height; re-measure shortly after.
-  window.setTimeout(function () { recompute(true); }, 350);
+  // Late images/fonts can change article height; re-measure shortly after. This
+  // is also the point the page count is trusted, so mark-read opens for business.
+  window.setTimeout(function () {
+    recompute(true);
+    paginationSettled = true;
+    markReadIfFinished();
+  }, 350);
 })();

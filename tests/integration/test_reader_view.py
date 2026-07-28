@@ -47,7 +47,7 @@ def test_read_state_prev_next_and_controls(monkeypatch):
     assert "__READER_NAV__" in body
     assert "name='csrf-token' content='tok'" in body
     assert "id='reader-archive-btn'" in body and "id='reader-delete-btn'" in body
-    assert marks == [("feed2", "e2")]                             # unread -> marked read
+    assert marks == []                    # rendering alone never marks read
 
 
 def test_read_archive_button_reflects_state(monkeypatch):
@@ -55,6 +55,20 @@ def test_read_archive_button_reflects_state(monkeypatch):
     with TestClient(_app()) as client:
         r = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"})
     assert "aria-pressed='true'" in r.text and "Un-archive" in r.text
+
+
+def test_opening_an_unread_article_does_not_mark_it_read(monkeypatch):
+    """Serving the reader page marks nothing.
+
+    Opening an item is how you decide whether to read it in an e-ink browse
+    loop, so marking on render turned every peek into a read. The client posts
+    to /entries/read once pagination has settled and the last page has actually
+    been reached (static/reader.js).
+    """
+    marks = _patch_read(monkeypatch, backlog=[_rec(1), _rec(2)])
+    with TestClient(_app()) as client:
+        r = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"})
+    assert r.status_code == 200 and marks == []
 
 
 def test_read_already_read_not_remarked(monkeypatch):

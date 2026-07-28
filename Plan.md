@@ -1122,11 +1122,32 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
 "build on demand" — this is that demand. Full context under
 "Instapaper-alternative" in Later.
 
-- **Archived-aware node counts** — tree counts are currently total-saved, so the
-  Archive split isn't reflected in the numbers. Most visible wrongness; do first.
-- **Mark-read only after the last page** — today a peek marks the whole article
-  read.
+- ~~**Archived-aware node counts**~~ — **already done, the item was stale.**
+  Shipped 2026-07-12 in `e9faf10` ("inbox-scoped Read Mode counts/tags"), the
+  same day Read Mode landed: `_read_mode_saved_index` splits archived from
+  inbox, and the folder/tag nodes count the inbox only. Verified 2026-07-28.
+  (The main app's Saved sidebar `get_saved_counts_by_folder` *is* total-saved,
+  but deliberately — the Kept view defaults to All, so the whole backlog is the
+  meaningful number there. Not the same surface, not a bug.)
+- ~~**Mark-read only after the last page**~~ — **DONE 2026-07-28.** The server
+  no longer marks on render; `static/reader.js` posts to `/entries/read` once
+  pagination settles *and* the last page is reached, reusing that route's async
+  branch rather than adding an endpoint. Held until the 350ms re-measure,
+  because a long article can measure as one page before its images load.
+  Verified in a browser: peek at 1/12 stays unread, 12/12 marks read, one-page
+  article marks on open. **Applies to both scopes** — the peek problem is the
+  same in the feeds scope, and the scope isn't visible from inside the reader.
 - **Prefetch the next article** — cuts an e-ink refresh flash on every advance.
+  **⚠ Blocked on a caching decision (found 2026-07-28):** the reader page is
+  served `Cache-Control: no-store` ([main.py:16307](main.py#L16307)), so a
+  `rel="prefetch"` would fetch the next article and immediately discard it —
+  cost without benefit. Three ways forward, in increasing blast radius:
+  (a) prefetch only the next article's **images**, which are served from
+  `/api/img` and are cacheable — likely most of the flash, and touches no HTML
+  caching; (b) relax the reader page to `private, max-age=…`, which puts a page
+  carrying a CSRF token into the browser cache; (c) fetch the next article's
+  HTML into memory and swap it in client-side, no HTTP caching involved but a
+  much bigger change to how the reader navigates. **(a) is the recommendation.**
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
   bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
   with the dead-code sweep in Later's "Code health".
