@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Lint what you are committing, before you commit it — not five minutes later
+# in CI, followed by a "fix lint" commit.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+#
+# Scoped to the *lines* you staged, via scripts/lint_changed.py. Whole-repo
+# linting is not adoptable here (main.py alone carries ~120 existing findings
+# and is touched by almost every change), and a check that is always red gets
+# ignored. Line-scoped is green today and still stops the pile growing. CI runs
+# the same script against the whole PR, so passing here means passing there.
+#
+# Reports rather than rewrites: a hook that silently reformats staged changes
+# means committing something you never read.
+#
+# Escape hatch: git commit --no-verify
+set -euo pipefail
+
+if ! git diff --cached --name-only --diff-filter=ACM -- '*.py' | grep -q .; then
+    exit 0
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "pre-commit: uv not found; skipping lint" >&2
+    exit 0
+fi
+
+exec uv run --frozen python scripts/lint_changed.py

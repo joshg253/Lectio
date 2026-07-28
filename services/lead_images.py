@@ -2149,14 +2149,6 @@ class LeadImageService:
         ``queue_source_html_fetch`` and fills in on a later open."""
         return self._source_html_cache.get(entry_link)
 
-    def wait_for_source_html_fetch(self, entry_link: str, timeout: float = 1.0) -> bool:
-        """Block up to ``timeout`` for an in-flight queue_source_html_fetch to finish.
-        Returns True if the source HTML is cached afterward."""
-        event = self._source_html_fetch_events.get(entry_link)
-        if event is not None:
-            event.wait(timeout)
-        return entry_link in self._source_html_cache
-
     def _extract_css_background_image_url(self, html_text: str, base_url: str) -> str | None:
         """Return the first acceptable CSS background-image URL found in inline style attributes."""
         for m in self._CSS_BG_IMAGE_RE.finditer(html_text):
@@ -3189,7 +3181,12 @@ class LeadImageService:
         """Block until the in-flight queue_source_html_fetch for this entry finishes (or timeout).
 
         Returns True if the fetch completed within the timeout, False otherwise.
-        If no fetch is in progress, returns True immediately.
+        If no fetch is in progress, returns True immediately — so a True answer
+        means "nothing left to wait for", not "the HTML is cached"; callers read
+        the cache afterwards and handle a miss. A second, shadowed definition of
+        this method used to sit earlier in the class and returned cache
+        membership instead; it was dead (this one won) and every caller passes an
+        explicit timeout, so removing it changes nothing at runtime.
         """
         event = self._source_html_fetch_events.get(entry_link)
         if event is None:

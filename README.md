@@ -176,6 +176,20 @@ the app script is a cacheable static file rather than inline JS.
 
 ## Development
 
+Enable the lint hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It runs `scripts/lint_changed.py` over the lines you staged (ruff, ~40ms) so a
+lint problem is fixed in the commit rather than after a CI round-trip. CI runs
+the same script across the whole PR. Both are scoped to *changed lines* rather
+than whole files, because the repo carries a backlog of existing findings — new
+code is held to the rules while the backlog shrinks file by file. `git commit
+--no-verify` bypasses it.
+
+
 - **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `uv run pytest`.
 - **CI** — GitHub Actions runs the suite on Python 3.14 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies install from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.
 - **Dependency audit** — `uv audit` (OSV-backed) scans the locked dependencies for known vulnerabilities and deprecated packages. Run it locally with `make audit`; CI runs the same scan. It's a uv preview feature, so it's kept separate from `make test` locally and the CI step is informational (non-blocking) for now.
