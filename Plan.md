@@ -1306,12 +1306,23 @@ Rate was never pinned down — seen failing in a full run, reproduced at 4/300
 hashes once, then 0/400 in a later sample. The fix removes the class rather than
 narrowing the odds, which matters more now that CI is the only reviewer.
 
-### 8g. Extension save should MERGE into the existing post, not add a copy
+### 8g. Extension save should MERGE into the existing post — DONE 2026-07-26
+
+**Shipped in `d5c171b`** (`services/saved_articles.py`:
+`_find_subscribed_entry_for_url` + `_merge_save_into_entry`, plus
+`tests/services/test_save_merges_into_existing.py`). Verified still present
+2026-07-28 — this entry had been left in future tense, which is how #7's
+"archived-aware node counts" nearly got rebuilt after it had already shipped.
+**Check the code before starting anything in this file.**
+
+The design sketch below is what was built, kept as the rationale. **Still open
+from this item: the time-to-read estimate** at the very bottom — that was a
+pairing suggestion, not part of the merge, and it never shipped.
 
 **The goal, in Josh's words (2026-07-26):** "open any article webpage, save it via
 extension, and that would get merged into the post, with no loss of data."
 
-Today an extension save always creates a *new* `lectio:saved` entry, even when
+Before this, an extension save always created a *new* `lectio:saved` entry, even when
 the article is already subscribed. One Medium article ended up in three places —
 the feed's own `/p/<hash>` copy (15KB **plus the five feed tags**), an empty
 auto-filed capture, and the 44KB extension capture — with the body on one, the
