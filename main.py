@@ -16482,6 +16482,7 @@ def _read_scope_params(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
     sort: str | None = None, resume_sort: str | None = None,
+    kept_all: bool = False,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
     URLs (scope / folder / feed / tag / Archive / search / sort).
@@ -16508,6 +16509,8 @@ def _read_scope_params(
         params.append(("archived", "1"))
     if q:
         params.append(("q", q))
+    if kept_all:
+        params.append(("kept", "all"))
     if sort and sort != _READ_SORT_DEFAULT:
         params.append(("sort", sort))
     if resume_sort and resume_sort != _READ_SORT_DEFAULT:
@@ -16519,10 +16522,11 @@ def _read_browse_href(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
     sort: str | None = None, resume_sort: str | None = None,
+    kept_all: bool = False,
 ) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
     params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
-                                sort, resume_sort)
+                                sort, resume_sort, kept_all)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -16537,11 +16541,13 @@ def _reader_href(
     scope: str = "saved",
     list_feed_url: str | None = None,
     sort: str | None = None,
+    kept_all: bool = False,
 ) -> str:
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
+                                 sort, None, kept_all)
     return "/read?" + urlencode(params)
 
 
@@ -16999,6 +17005,7 @@ def _build_read_mode_context(
     node_selected: bool = True,
     sort: str = _READ_SORT_DEFAULT,
     resume_sort: str | None = None,
+    all_saved: bool = False,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
@@ -17022,7 +17029,8 @@ def _build_read_mode_context(
         feeds = folder_feed_urls_by_id.get(fid, set())
         return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
 
-    on_all = folder_id == root_id and not tag and not archived and not q
+    on_all = (folder_id == root_id and not tag and not archived and not q
+              and not all_saved)
     # Links *out* of the Inbox must not carry its most-recently-starred order —
     # that ordering is meaningless in a folder where most items were never
     # starred. Hand back the order you had before entering the Inbox instead.
@@ -17042,6 +17050,15 @@ def _build_read_mode_context(
         "href": _read_browse_href(root_id, None, False, None,
                                   resume_sort=(sort if not on_all else resume_sort)),
         "count": len(inbox), "active": on_all,
+    }, {
+        # Everything kept minus archived — what the main app's Saved view shows.
+        # The Inbox is deliberately narrower (starred only), so without this node
+        # the ~15k tagged-but-unstarred items would exist in one mode and not the
+        # other. They are all reachable under Tags; this is the flat view.
+        "label": "All Saved", "glyph": "",
+        "href": _read_browse_href(root_id, None, False, None, sort=outbound_sort,
+                                  kept_all=True),
+        "count": len(inbox | filed), "active": all_saved,
     }]
     for row in raw_folder_rows:
         fid = int(row["id"])
@@ -17078,6 +17095,8 @@ def _build_read_mode_context(
 
     if not node_selected:
         selected_label = "Saved"
+    elif all_saved:
+        selected_label = "All Saved"
     elif archived:
         selected_label = "Archive"
     elif q:
@@ -17094,7 +17113,7 @@ def _build_read_mode_context(
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
                              folder_id=folder_id, tag=tag, archived=archived, q=q,
-                             sort=sort),
+                             sort=sort, kept_all=all_saved),
     } for it in items]
 
     _saved_search_fields = _read_mode_search_fields(
@@ -17104,7 +17123,7 @@ def _build_read_mode_context(
         "sort_options": _read_mode_sort_options(
             sort,
             lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key,
-                                          resume_sort=resume_sort),
+                                          resume_sort=resume_sort, kept_all=all_saved),
         ),
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
@@ -17149,6 +17168,7 @@ def reader_view(
     scope: str = Query(default="saved"),
     sort: str | None = Query(default=None),
     resume_sort: str | None = Query(default=None),
+    kept: str | None = Query(default=None),
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
@@ -17173,12 +17193,19 @@ def reader_view(
     # A node is "selected" once the user picks All (root folder), a folder, a feed,
     # a tag, Archive, or a search. A bare /read has no node selected: it lands on
     # the tree only, so we never auto-load the whole (huge) backlog.
+    # "All Saved" — everything kept (starred OR tagged) minus archived, i.e. what
+    # the main app's Saved view shows. Its own node rather than a mode of the
+    # Inbox: the Inbox is the to-do pile and must stay small, but the two modes
+    # disagreeing about what exists is exactly the mismatch Read Mode is meant
+    # not to have.
+    all_saved_view = (not is_feeds) and kept == "all"
     node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
-                     or archived_view or bool(q_val))
+                     or archived_view or bool(q_val) or all_saved_view)
 
     # The Inbox opens most-recently-starred; every other node keeps newest-first.
     # An explicit ?sort= always wins, so the switcher still works everywhere.
-    is_inbox = _read_is_inbox_node(folder_id, tag_val, archived_view, q_val, scope)
+    is_inbox = (not all_saved_view) and _read_is_inbox_node(
+        folder_id, tag_val, archived_view, q_val, scope)
     sort_val = _read_sort_for_node(sort, is_inbox=is_inbox)
     if is_feeds and sort_val == "starred":
         # Feed entries mostly carry no star date, so this order would be noise.
@@ -17211,7 +17238,7 @@ def reader_view(
             context = _build_read_mode_context(
                 request, folder_id=folder_id, tag=tag_val, archived=archived_view,
                 q=q_val, items=items, node_selected=node_selected, sort=sort_val,
-                resume_sort=resume_sort_val,
+                resume_sort=resume_sort_val, all_saved=all_saved_view,
             )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
@@ -17225,7 +17252,7 @@ def reader_view(
         return _reader_href(
             rec["feed_url"], rec["id"],
             folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
-            list_feed_url=feed_scope, sort=sort_val,
+            list_feed_url=feed_scope, sort=sort_val, kept_all=all_saved_view,
         )
 
     current: dict | None = None

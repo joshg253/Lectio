@@ -1198,6 +1198,15 @@ main app's Saved view) or `"starred"` (the Inbox). `_read_mode_saved_index` retu
 still be counted over filed items — counting them over a starred-only inbox would
 empty most of the tree.
 
+**"All Saved" is a separate node**, not a mode of the Inbox: everything kept
+minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay
+narrow to be a queue, but the two modes disagreeing about what *exists* is the
+mismatch Read Mode is meant not to have — the tagged-but-unstarred items are all
+reachable under Tags, and this is the flat view of them. It carries `kept=all`
+through every hop, because it is otherwise indistinguishable from the Inbox
+(same root folder, no tag, no archive, no search) and would silently inherit the
+Inbox's starred-only scope and star-date default.
+
 Two consequences worth stating, both from live reports:
 
 - **The Inbox opens most-recently-starred** (`sort=starred` → `saved_entries.

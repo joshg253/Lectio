@@ -1217,6 +1217,10 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   new `starred` sort (`saved_at`) as the Inbox default; `resume_sort` so that
   order doesn't follow you out; Read Mode Tags section renders open.
 
+  **All Saved node added** the same day, after the Inbox narrowing landed: the
+  ~15k tagged-but-unstarred items were still reachable under Tags, but Read Mode
+  had no flat "everything kept" view while the main app did.
+
   **Not built, by decision:** row-level Archive/Delete in the Read Mode list
   ("ignore for now"), and an Archive view in the regular app ("don't think we
   need it at all", conditional on History being browsable in reverse order).

@@ -95,6 +95,9 @@ The short version:
   ordered by when you added to it; pick another order and it sticks, and leaving
   the Inbox restores whatever order that view had before.
 
+  **All Saved** sits next to it with everything kept — the same set the main
+  app's Saved view shows.
+
   An article is marked read when you
   reach its **last page**, not when you open it — so browsing the backlog to
   decide what to read no longer clears it behind you. A one-page article counts

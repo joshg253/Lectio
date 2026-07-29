@@ -165,3 +165,30 @@ def test_kept_scope_starred_excludes_filed_items(configured):
 
     assert {p["id"] for p in starred_only} == {"todo", "both", "done"}
     assert {p["id"] for p in kept} == {"todo", "both", "done", "filed"}
+
+
+def test_all_saved_node_spans_kept_not_just_starred(configured):
+    """The Inbox is deliberately narrower than the main app's Saved view, so
+    Read Mode needs its own flat "everything kept" node — otherwise ~15k
+    tagged-but-unstarred items exist in one mode and not the other, which is the
+    exact cross-mode mismatch Read Mode is meant not to have."""
+    ctx = main._build_read_mode_context(
+        None, folder_id=None, tag=None, archived=False, q=None, items=[],
+        node_selected=True, all_saved=True,
+    )
+    nodes = {n["label"]: n for n in ctx["folder_nodes"]}
+
+    assert nodes["Inbox"]["count"] == 2            # todo, both
+    assert nodes["All Saved"]["count"] == 3        # + filed
+    assert nodes["All Saved"]["active"] is True
+    assert nodes["Inbox"]["active"] is False
+    assert "kept=all" in nodes["All Saved"]["href"]
+
+
+def test_all_saved_is_not_treated_as_the_inbox(configured):
+    """It shares the Inbox's folder/tag/archive shape, so only the explicit
+    marker separates them — and getting that wrong would give All Saved the
+    Inbox's starred-only scope and most-recently-starred default."""
+    assert main._read_is_inbox_node(1, None, False, None, "saved") is True
+    href = main._read_browse_href(1, None, False, None, kept_all=True)
+    assert "kept=all" in href
