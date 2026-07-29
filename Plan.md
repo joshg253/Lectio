@@ -1254,6 +1254,22 @@ served HTML all along as `cdn.tinyview.com` URLs; the scan was picking
 `assets.tinyview.com` chrome. Its feed also has `inject_source_images` on so all
 panels render, not just the first.
 
+**tinyview follow-up FIXED 2026-07-28.** With `inject_source_images` on, the post
+rendered **14 images: 5 real panels, 5 chrome, 4 broken**. Two causes, both fixed
+generically rather than per-site:
+
+- **Plugins only ever fed the lead-image *scorer*.**
+  `extract_source_gallery_urls` doesn't rank — it takes everything acceptable —
+  so `TinyviewPlugin`'s −200 for `assets.tinyview.com` never applied, and the
+  skeleton GIF, wordmark and three icons8 buttons walked straight in. The gallery
+  now drops anything a plugin scores at or below `_PLUGIN_CHROME_SCORE`.
+- **The site emits every panel twice** — once under the entry's dated path
+  (`/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_*.jpeg`, **200**) and once bare
+  (`/<comic>/IMG_*.jpeg`, **404**). `_drop_duplicate_basenames` collapses a
+  repeated filename, preferring the copy whose path carries the entry's slug.
+
+Verified against the live page: 14 → the 5 panels, each confirmed 200.
+
 ### 8f. DeviantArt mature images expire in ~15 minutes — needs render-time re-signing
 
 Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*

@@ -135,3 +135,68 @@ def test_dedupes_repeated_images(tmp_path):
     link = "https://x.test/p2"
     svc._source_html_cache[link] = (link, '<img src="https://x.test/a.jpg"><img src="https://x.test/a.jpg">')
     assert svc.extract_source_gallery_urls(link) == ["https://x.test/a.jpg"]
+
+
+# --- plugin-scored chrome, and duplicate fallback paths ---------------------
+
+_TINYVIEW_LINK = "https://tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included"
+_TINYVIEW_PAGE = f"""
+<html><body>
+  <img src="https://assets.tinyview.com/assets/images/Tinyview_skeleton-animation.gif">
+  <img src="https://assets.tinyview.com/assets/images/new-icons/tinyview-mark-and-logo-400.png">
+  {_PAD}
+  <img src="https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5656.jpeg">
+  <img src="https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5657-compressed.jpeg">
+  <img src="https://cdn.tinyview.com/heart-and-brain/IMG_5657-compressed.jpeg">
+  <img src="https://cdn.tinyview.com/heart-and-brain/IMG_5658-compressed.jpeg">
+  <img src="https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5658-compressed.jpeg">
+  {_PAD}
+  <img src="https://assets.tinyview.com/assets/images/new-icons/icons8-coffee-cup-FFFFFF-100.png">
+  <img src="https://assets.tinyview.com/assets/images/new-icons/icons8-add-50.png">
+</body></html>
+"""
+
+
+def test_gallery_drops_plugin_scored_chrome_and_broken_duplicates(tmp_path: Path):
+    """tinyview injected 14 images: 5 panels, 5 chrome, 4 that 404.
+
+    The plugin already scored assets.tinyview.com as chrome, but only the
+    lead-image *scorer* consulted it — the gallery takes everything acceptable
+    rather than ranking, so the skeleton GIF, wordmark and icons8 buttons went
+    straight in. The site also emits each panel twice, once under the entry's
+    dated path (200) and once bare (404).
+    """
+    svc = _svc(tmp_path)
+    svc._source_html_cache[_TINYVIEW_LINK] = (_TINYVIEW_LINK, _TINYVIEW_PAGE)
+
+    urls = svc.extract_source_gallery_urls(_TINYVIEW_LINK)
+
+    assert all("assets.tinyview.com" not in u for u in urls), urls
+    # One entry per panel, and it is the copy filed under this post.
+    assert urls == [
+        "https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5656.jpeg",
+        "https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5657-compressed.jpeg",
+        "https://cdn.tinyview.com/heart-and-brain/2026/07/19/hobbies-passion-not-included/IMG_5658-compressed.jpeg",
+    ]
+
+
+def test_gallery_keeps_same_named_images_when_no_slug_match(tmp_path: Path):
+    """The dedupe only collapses a repeated *filename*, and only then.
+
+    Distinct images keep their place even when the paths look similar, so a
+    site without the emit-twice pattern is unaffected.
+    """
+    svc = _svc(tmp_path)
+    link = "https://x.test/post/my-slug"
+    page = (
+        f"<html><body>{_PAD}"
+        '<img src="https://x.test/img/a/one.jpg">'
+        f"{_PAD}"
+        '<img src="https://x.test/img/b/two.jpg">'
+        "</body></html>"
+    )
+    svc._source_html_cache[link] = (link, page)
+    assert svc.extract_source_gallery_urls(link) == [
+        "https://x.test/img/a/one.jpg",
+        "https://x.test/img/b/two.jpg",
+    ]
