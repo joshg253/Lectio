@@ -1184,6 +1184,39 @@ The **superseded** rule, kept because the reasoning still explains the code:
 Archive used to keep the star and set `archived_at` on the star row, and was
 hidden entirely for tag-kept items — a control that silently did nothing.
 
+**The Inbox is STARRED minus Archived — not everything saved.** Read Mode's root
+saved node was briefly labelled "All" and counted *kept* (starred OR tagged) minus
+archived, which made it 24,672 items: the whole library wearing an inbox label.
+
+The narrowing follows from what the two signals mean. A **star is a TODO** ("I
+still have to decide what to do with this"); a **tag is filing** — already sorted,
+and filing something is not a to-do. So tagged-but-unstarred entries live in the
+tag tree, which is where you would look for them, instead of padding a queue.
+`list_entries_for_feeds(kept_scope=…)` carries this: `"kept"` (star OR tag, the
+main app's Saved view) or `"starred"` (the Inbox). `_read_mode_saved_index` returns
+*filed* (tagged minus archived) alongside the inbox, because the tag counts must
+still be counted over filed items — counting them over a starred-only inbox would
+empty most of the tree.
+
+Two consequences worth stating, both from live reports:
+
+- **The Inbox opens most-recently-starred** (`sort=starred` → `saved_entries.
+  saved_at`, a fourth sort key beside post/received/history). A to-do pile is
+  ordered by when you added to it; an old article starred today belongs at the
+  top, which is exactly what publish-date order gets wrong. `saved_at` is stored
+  in two shapes (SQLite `CURRENT_TIMESTAMP` and ISO-8601 from imports), so it is
+  parsed rather than string-sorted — `' '` sorts before `'T'`, which would
+  scramble a single day's stars.
+- **That order must not follow you out.** `resume_sort` stows the order you were
+  using when you entered the Inbox and hands it back on the way out, so leaving
+  neither drags most-recently-starred into a folder where nothing is starred nor
+  resets a folder you had set to Oldest. Same shape as the main app's
+  `resume_read_filter`, which restores your filter when you close History.
+
+The Read Mode **Tags** section now renders open. It was a collapsed `<details>`,
+which was fine while tags were a side-bucket of a kept-everything inbox; now that
+filed items are reachable *only* there, collapsing them made them look absent.
+
 **Prefetching the next article warms its images, not its page.** The e-ink flash
 on advance is mostly image decode, and the reader page itself is `no-store`, so a
 `<link rel="prefetch">` would fetch the next article and immediately discard it —

@@ -89,6 +89,12 @@ The short version:
   it simply goes back to being one. Both mark the item read, because acting on
   something from the list *is* dealing with it, and both show up in **History**.
 
+  **Inbox** holds what you have starred and not yet dealt with — a star means
+  *to-do*, so tagged-but-unstarred articles live under **Tags** instead of
+  padding the queue. It opens most-recently-starred, because a to-do pile is
+  ordered by when you added to it; pick another order and it sticks, and leaving
+  the Inbox restores whatever order that view had before.
+
   An article is marked read when you
   reach its **last page**, not when you open it — so browsing the backlog to
   decide what to read no longer clears it behind you. A one-page article counts

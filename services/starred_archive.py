@@ -375,7 +375,7 @@ class StarredArchiveService:
                 rows = conn.execute(
                     """
                     SELECT feed_url, entry_id, title, link, feed_title, author,
-                           published_at, received_at
+                           published_at, received_at, starred_at
                       FROM archived_entry
                      WHERE status = 'complete'
                     """
@@ -397,6 +397,9 @@ class StarredArchiveService:
                     "author": row["author"],
                     "published_at": float(row["published_at"]) if row["published_at"] is not None else None,
                     "received_at": float(row["received_at"]) if row["received_at"] is not None else None,
+                    # When the star was made — the Inbox's "Recently starred"
+                    # order. Orphans have no saved_entries row to read it from.
+                    "starred_at": float(row["starred_at"]) if row["starred_at"] is not None else None,
                 }
             )
         return out

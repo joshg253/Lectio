@@ -1212,9 +1212,28 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   became `POST /entries/discard` — one route instead of a client-side chain,
   because the tags-before-unstar ordering is a storage-layer property.
 
+  **PR C landed 2026-07-29**: Inbox = starred − archived (was kept − archived =
+  24,672, the whole library); tag tree counts *filed* items so it doesn't empty;
+  new `starred` sort (`saved_at`) as the Inbox default; `resume_sort` so that
+  order doesn't follow you out; Read Mode Tags section renders open.
+
   **Not built, by decision:** row-level Archive/Delete in the Read Mode list
   ("ignore for now"), and an Archive view in the regular app ("don't think we
   need it at all", conditional on History being browsable in reverse order).
+
+  **PR D (next): "archive starred older than X days" utility.** Manual, never
+  automatic, preview-then-apply like the unstar panel. Josh will run it at 30
+  days first — that leaves ~420 in the Inbox out of 9,979. This is what makes the
+  Inbox usable without redefining what a star means, and it retires #5: those
+  1,786 starred+tagged items get archived like everything else, keeping both tag
+  and capture, instead of being unstarred and losing the TODO axis.
+
+  **PR E (after): pinned tags.** Promote any tag to a top-level node in both
+  modes. Store the pin **separately from the tag name** — Josh floated a `##tag`
+  sigil, but that is the same magic-value-in-user-data problem as the `#archive`
+  auto-tag: typing `#inbox` instead of `##inbox` would silently change behavior,
+  and both `parse_manual_hashtags` and `normalize_tag_value` would have to learn
+  the sigil.
 
 - **⚠ #5's premise may no longer hold.** It unstars starred+tagged entries because
   "after tag-as-keep a tag is a keep signal, so the star is redundant." Under the
