@@ -1435,6 +1435,14 @@ tag-classed-anchor branches, and whichever path let containing text in.
 
 Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022`
 
+**More page-tag examples Josh flagged, not yet handled** (2026-07-29). All are
+"there IS a usable tag here and we are not taking it", i.e. the same tier work:
+
+- `guitarplayer.com` — a `DEALS` tag on the post is not picked up
+  (`?feed_url=…/feeds/tag/lessons`, entry `wu6rVpzS4PyZRihCreDbEF`). Note the feed
+  URL is itself a tag feed (`/feeds/tag/lessons`), so "lessons" is boilerplate
+  by the coverage rule while `DEALS` is the per-post signal.
+
 Also still open from the same pass: Real Python's page tag block mixes taxonomies
 (`ai` is a topic, `intermediate` is a **skill level**). A four-word stop-list
 (`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage

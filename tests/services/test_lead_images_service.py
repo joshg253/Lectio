@@ -1642,3 +1642,35 @@ def test_bare_comic_match_does_not_leak_into_hyphenated_classes(tmp_path: Path):
     assert not rx.search("comic_nav")
     assert not rx.search("comic-navigation")
     assert not rx.search("comicnav")
+
+
+# --- social/share icon rejection ---
+def test_social_icon_urls_are_rejected():
+    """A post with no images of its own leaves the site's share row as the
+    best-scoring picture on the page — accu.org shipped /img/bsky.png as an
+    article thumbnail."""
+    from services.lead_images import LeadImageService
+
+    for url in (
+        "https://accu.org/img/bsky.png",
+        "https://x.test/icons/social-twitter.svg",
+        "https://x.test/img/rss.png",
+        "https://x.test/share-facebook-32.png",
+        "https://x.test/follow_mastodon.png",
+    ):
+        assert LeadImageService.is_social_icon_url(url), url
+
+
+def test_articles_about_social_networks_keep_their_images():
+    """Matched on the filename STEM, not anywhere in the URL. An article genuinely
+    about Bluesky may carry "bluesky-screenshot-2026.png", and a substring rule
+    would throw away the real picture."""
+    from services.lead_images import LeadImageService
+
+    for url in (
+        "https://x.test/img/bluesky-screenshot-2026.png",
+        "https://x.test/photos/twitter-acquisition-analysis.jpg",
+        "https://x.test/2026/07/facebook-outage-timeline.png",
+        "https://x.test/img/hero-landscape.jpg",
+    ):
+        assert not LeadImageService.is_social_icon_url(url), url
