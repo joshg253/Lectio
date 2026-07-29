@@ -16928,9 +16928,14 @@ def _build_read_mode_context(
 
     on_all = folder_id == root_id and not tag and not archived and not q
     folder_nodes: list[dict] = [{
-        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
-        # spacer keeps its label aligned with the folder rows.
-        "label": "All", "glyph": "",
+        # "Inbox", not "All" — this node counts and lists `inbox`, which is kept
+        # MINUS archived. Calling it All was survivable while Archive held 23
+        # items; now that archiving is half the triage model it is just wrong,
+        # and it sits directly above a node named Archive holding what it
+        # excludes. (The feeds scope keeps "All": no archive axis there.)
+        # Empty glyph: plain navigation, so no expand arrow — but the spacer
+        # keeps its label aligned with the folder rows.
+        "label": "Inbox", "glyph": "",
         "href": _read_browse_href(root_id, None, False, None, sort=sort),
         "count": len(inbox), "active": on_all,
     }]
@@ -16976,7 +16981,7 @@ def _build_read_mode_context(
     elif tag:
         selected_label = "#" + tag
     else:
-        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
+        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "Inbox")
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
