@@ -23436,7 +23436,14 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
             dt = datetime.fromisoformat(published)
         except ValueError:
             return JSONResponse({"ok": False, "error": "Invalid date."}, status_code=400)
-        stored = dt.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC column format
+        # A naive input is LOCAL time, not UTC. "2023-07-06" from the date picker
+        # means midnight where the user is; storing it straight into reader's
+        # naive-UTC column made it midnight UTC, which then rendered through
+        # format_datetime_for_ui's astimezone() as "Jul 5, 2023 5pm" — the day
+        # before. Reported after setting a date to 7/6/23.
+        if dt.tzinfo is None:
+            dt = dt.astimezone()      # attaches the local zone (naive == local)
+        stored = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with get_meta_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
