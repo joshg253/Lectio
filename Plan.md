@@ -1164,6 +1164,58 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   than a fixed delay from load.
   **Depends on the mark-read change above** — fetching the next article's HTML
   would previously have marked it read unseen.
+- ~~**Dates, sort order, and a readable Archive button**~~ — **DONE 2026-07-28.**
+  Reported while reading on the Supernote: the Archive control "just looks like
+  an empty checkbox" (it was ▢/▣ — the shape said nothing about archiving and the
+  filled/empty difference was invisible at button size; now ▤, the glyph the tree
+  already uses, with state shown by inverting the button), no date on posts (now
+  the publish date, falling back to received, under the reader headline and on
+  each browse row), and **no way to sort** (Newest / Oldest / Received; the
+  backlog always took sort_by/sort_dir, Read Mode just pinned them). The chosen
+  order rides the URL through `_read_scope_params`, so Next/Prev walk the list
+  the same way instead of reverting at the first hop.
+- ~~**Delete/Archive were no-ops on tagged items**~~ — **FIXED 2026-07-28**, and
+  it was made urgent by the counts fix above: once Read Mode showed all kept
+  items, the majority of the backlog (16,479 tagged vs 10,002 starred) had no
+  working way to be filed or dismissed from the device. Both buttons still
+  advanced to the next article, so they looked like they worked.
+  **Josh's rule:** *Delete removes star and tags; Archive just removes it from
+  the inbox.* Delete now clears tags **then** unstars — that order matters,
+  because the unstar route only removes the offline archive when no tags remain.
+  Archive is hidden for a tag-kept item rather than silently doing nothing.
+- **Archive for tag-kept items** — still not possible. `archived_at` lives on
+  `saved_entries`, where row existence *is* the star, so "done but keep the tag"
+  has nowhere to live. Needs a schema change (a `kept_only` column, or a separate
+  archived table) plus the startup per-user migration — skip that and existing
+  tenants 500. Worth doing if marking tag-kept items done becomes a real workflow.
+- ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
+  panel of every tag in the library as large toggles (applied first, inverted),
+  tap to add or remove, with "+ New" revealing a text field only when needed.
+  Each tap applies immediately and sends the whole desired set
+  (`append_mode=0`), so closing half way still saved. The server's reply is the
+  truth and the panel re-renders from it. Note the new-tag field is
+  space-separated like the main app's, so "brand new tag" is three tags — the
+  placeholder says so, since there is no autocomplete here to make it obvious.
+- ~~**Saved counts disagree between the two modes**~~ — **FIXED 2026-07-28.**
+  The regular sidebar showed **24,695**, Read Mode **9,979**: the sidebar counts
+  **kept** (starred OR tagged), `_read_mode_saved_index` counted **starred,
+  non-archived**. Archiving was never the gap (23 rows) — it was
+  tagged-but-not-starred (16,479 tagged vs 10,002 starred).
+  **The list was already right**, which is what settled it:
+  `resolve_reader_backlog(star_only=True)` resolves against
+  `kept_entries_set = saved_entries_set | tagged_entries_set`, so the tree
+  numbers never matched the list they opened. The index now counts kept-minus-
+  archived. Only starred rows can be Archived (`archived_at` lives on
+  `saved_entries`), so a tagged-but-unstarred entry is always in the inbox.
+
+  **Josh's rule, which decided it:** *"eInk should really just be a slightly
+  simpler version of regular, mostly just the look, and eink specific things like
+  page instead of scroll."* Read Mode may differ in **presentation** (paging, high
+  contrast, big tap targets, inverted state blocks) and in genuinely
+  paging-specific behavior (mark-read on last page, the Archive done-axis). It
+  must **not** carry a different data model — same kept definition, same effective
+  date, same sort options, same tag vocabulary. A number that differs between the
+  modes is a bug to reconcile, not a feature.
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
   bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
   with the dead-code sweep in Later's "Code health".

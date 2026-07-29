@@ -1111,6 +1111,43 @@ Both scopes follow this rule: the peek problem is identical in each, and the
 scope isn't visible from inside the reader, so splitting the rule would make
 "did that count as read?" unpredictable.
 
+**Tagging from Read Mode is a tap-list, not a text field.** Filing on e-ink has
+no hover, a slow repaint, and a keyboard that costs several. So the whole tag
+vocabulary (`get_all_manual_tag_names`) ships with the page as inline JSON
+(`__READER_TAGS__`, same no-reading-from-the-DOM style as `__READER_NAV__`) and
+renders as large toggle buttons — applied tags first and inverted, the rest
+alphabetical. A keyboard is needed only for the "+ New" field, which stays hidden
+until asked for.
+
+Each tap **applies immediately** and sends the *whole desired set* with
+`append_mode=0`, so adding and removing are one request shape and closing the
+panel half way still saved what was tapped. The server normalizes and caps
+(`MAX_MANUAL_TAGS`), and its reply is treated as the truth — the panel re-renders
+from it, so a tag typed as "Brand New Tag" coming back as three tags is visible
+rather than silently assumed. The panel overlays the article instead of reflowing
+it: re-paginating the body to make room would be a full-screen e-ink flash. The
+header's `#n` count and Delete's `data-tags` are both re-synced after every
+change, the latter so Delete's confirm keeps naming the right tags.
+
+**Delete and Archive mean different things, and both had to change for the kept
+model.** Josh's rule: *Delete removes star **and** tags; Archive just takes it out
+of the inbox.*
+
+- **Delete** = leave Kept entirely. Unstarring alone was a no-op on anything
+  tagged — a tag keeps an entry on its own, so the row stayed in the list while
+  the reader advanced as though it had gone. The client clears tags **first**,
+  then unstars: the unstar route only enqueues removal of the offline archive
+  when no manual tags remain, so the reverse order would strand the captured
+  copy with nothing keeping it. Tag loss is unrecoverable, so the confirm names
+  the tags; a plain unstar (no tags) stays unconfirmed because it is cheap to undo.
+- **Archive** = out of the inbox, filing intact — star and tags both survive,
+  `archived_at` is set, and the item moves to the Archive node.
+- **Archive is hidden for a tag-kept item.** `archived_at` lives on
+  `saved_entries`, where row existence *is* the star, so an item kept only by a
+  tag has no done-state to set. Shipping the button anyway meant a control that
+  silently did nothing. Giving tag-kept items a real archive state needs a schema
+  change (row existence can no longer imply starred) — see Plan.md.
+
 **Prefetching the next article warms its images, not its page.** The e-ink flash
 on advance is mostly image decode, and the reader page itself is `no-store`, so a
 `<link rel="prefetch">` would fetch the next article and immediately discard it —

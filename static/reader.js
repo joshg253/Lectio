@@ -205,14 +205,37 @@
       archived: archived,
     }, "lectio-entry-save-toggle");
   });
+  // Delete removes the item from Kept entirely: star AND tags. Unstarring alone
+  // left a tagged item exactly where it was — a tag keeps an entry on its own,
+  // so the row stayed in the list while the reader advanced as if it had gone.
+  //
+  // ORDER MATTERS. The unstar route only enqueues removal of the offline archive
+  // when the entry has no manual tags left, so tags must be cleared *first*.
+  // Unstarring first would skip that and strand the captured copy with nothing
+  // keeping it.
   var deleteBtn = document.getElementById("reader-delete-btn");
   if (deleteBtn) deleteBtn.addEventListener("click", function (e) {
     e.preventDefault();
-    postAction("/entries/saved", {
-      folder_id: "0", saved: "0", select_entry: "0",
-      feed_url: cols.getAttribute("data-feed"),
-      entry_id: cols.getAttribute("data-entry"),
-    }, "lectio-entry-save-toggle");
+    var feed = cols.getAttribute("data-feed");
+    var entry = cols.getAttribute("data-entry");
+    var tags = (deleteBtn.getAttribute("data-tags") || "").split(",").filter(Boolean);
+    // Losing tags is not recoverable, so name them before doing it. A plain
+    // unstar stays unconfirmed — that one is cheap to undo.
+    if (tags.length && !window.confirm(
+      "Remove this from Saved?\n\nIt will lose its star and these tags: "
+      + tags.map(function (t) { return "#" + t; }).join(" ")
+    )) return;
+    post("/entries/tags", {
+      folder_id: "0", feed_url: feed, entry_id: entry,
+      tags_text: "", append_mode: "0", select_entry: "0",
+    }, "lectio-ajax")
+      .then(function () {
+        return post("/entries/saved", {
+          folder_id: "0", saved: "0", select_entry: "0",
+          feed_url: feed, entry_id: entry,
+        }, "lectio-entry-save-toggle");
+      })
+      .then(afterAction, afterAction);
   });
 
   // Warm the next article's images, to cut the e-ink refresh flash on advance.
@@ -271,6 +294,111 @@
       })
       .catch(function () { /* prefetch is best-effort; never disturb reading */ });
   }
+
+  // --- Tags ---------------------------------------------------------------
+  // Filing from the device, without a keyboard: every tag in the library is a
+  // tap target, tap toggles it on or off. Each tap applies immediately (the
+  // whole desired set is sent, so add and remove are one code path), which means
+  // closing the panel half way still saved what you tapped.
+  var TAGS = window.__READER_TAGS__ || { all: [], current: [], max: 12 };
+  var tagPanel = document.getElementById("reader-tag-panel");
+  var tagBtn = document.getElementById("reader-tag-btn");
+  var tagList = document.getElementById("reader-tag-list");
+  var current = (TAGS.current || []).slice();
+
+  function syncTagChrome() {
+    if (tagBtn) tagBtn.textContent = "#" + (current.length || "");
+    // Delete names the tags it is about to destroy, so keep it truthful as the
+    // set changes underneath it.
+    if (deleteBtn) deleteBtn.setAttribute("data-tags", current.join(","));
+  }
+
+  function renderTags() {
+    if (!tagList) return;
+    // Applied tags first, then the rest alphabetically: what is on this entry is
+    // what you are most likely to be toggling off.
+    var all = (TAGS.all || []).slice();
+    current.forEach(function (t) { if (all.indexOf(t) < 0) all.push(t); });
+    all.sort(function (a, b) {
+      var ia = current.indexOf(a) < 0 ? 1 : 0, ib = current.indexOf(b) < 0 ? 1 : 0;
+      return ia !== ib ? ia - ib : a.localeCompare(b);
+    });
+    tagList.textContent = "";
+    all.forEach(function (name) {
+      var on = current.indexOf(name) >= 0;
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "reader-tag" + (on ? " on" : "");
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.textContent = (on ? "✓ " : "") + name;
+      b.addEventListener("click", function () { toggleTag(name); });
+      tagList.appendChild(b);
+    });
+    syncTagChrome();
+  }
+
+  function applyTags(next) {
+    // Full desired set with append_mode=0, so a removal is the same request as
+    // an addition. The server normalizes and caps, and its reply is the truth.
+    return post("/entries/tags", {
+      folder_id: "0", feed_url: TAGS.feed_url, entry_id: TAGS.entry_id,
+      tags_text: next.map(function (t) { return "#" + t; }).join(" "),
+      append_mode: "0", select_entry: "0",
+    }, "lectio-ajax")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (data && data.tags) {
+          current = data.tags.slice();
+          (TAGS.all = TAGS.all || []);
+          current.forEach(function (t) {
+            if (TAGS.all.indexOf(t) < 0) TAGS.all.push(t);
+          });
+        }
+        renderTags();
+      }, function () { renderTags(); });
+  }
+
+  function toggleTag(name) {
+    var i = current.indexOf(name);
+    if (i >= 0) current.splice(i, 1);
+    else if (current.length < (TAGS.max || 12)) current.push(name);
+    else return;                       // at the cap; ignore rather than silently drop
+    renderTags();                      // optimistic: e-ink should react on tap
+    applyTags(current);
+  }
+
+  if (tagBtn) tagBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    var open = tagPanel && tagPanel.hasAttribute("hidden");
+    if (!tagPanel) return;
+    if (open) { renderTags(); tagPanel.removeAttribute("hidden"); }
+    else { tagPanel.setAttribute("hidden", ""); }
+    tagBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  var tagDone = document.getElementById("reader-tag-done");
+  if (tagDone) tagDone.addEventListener("click", function () {
+    tagPanel.setAttribute("hidden", "");
+    if (tagBtn) tagBtn.setAttribute("aria-expanded", "false");
+  });
+  var tagNewBtn = document.getElementById("reader-tag-new");
+  var tagForm = document.getElementById("reader-tag-newform");
+  var tagInput = document.getElementById("reader-tag-input");
+  // The keyboard stays out of the way until asked for — it is the slow path.
+  if (tagNewBtn) tagNewBtn.addEventListener("click", function () {
+    if (!tagForm) return;
+    var show = tagForm.hasAttribute("hidden");
+    if (show) { tagForm.removeAttribute("hidden"); if (tagInput) tagInput.focus(); }
+    else tagForm.setAttribute("hidden", "");
+  });
+  if (tagForm) tagForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var raw = (tagInput && tagInput.value || "").trim();
+    if (!raw) return;
+    if (tagInput) tagInput.value = "";
+    // Send it as typed and let the server normalize; its reply re-renders us.
+    applyTags(current.concat([raw.replace(/^#/, "")]));
+  });
+  syncTagChrome();
 
   var reflowTimer = null;
   window.addEventListener("resize", function () {

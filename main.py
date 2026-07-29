@@ -16266,9 +16266,14 @@ def resolve_reader_backlog(
 def _read_scope_params(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
+    sort: str | None = None,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
-    URLs (scope / folder / feed / tag / Archive / search)."""
+    URLs (scope / folder / feed / tag / Archive / search / sort).
+
+    *sort* rides along so the chosen order survives every hop — pick Oldest in
+    the browse pane and Next/Prev walk oldest-first too, instead of silently
+    reverting to the default at the first navigation."""
     params: list[tuple[str, str]] = []
     if scope and scope != "saved":
         params.append(("scope", scope))
@@ -16282,15 +16287,18 @@ def _read_scope_params(
         params.append(("archived", "1"))
     if q:
         params.append(("q", q))
+    if sort and sort != _READ_SORT_DEFAULT:
+        params.append(("sort", sort))
     return params
 
 
 def _read_browse_href(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
+    sort: str | None = None,
 ) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
-    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
+    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -16304,11 +16312,12 @@ def _reader_href(
     q: str | None,
     scope: str = "saved",
     list_feed_url: str | None = None,
+    sort: str | None = None,
 ) -> str:
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort)
     return "/read?" + urlencode(params)
 
 
@@ -16339,6 +16348,10 @@ def build_reader_page(
     is_archived: bool,
     csrf_token: str,
     show_saved_actions: bool = True,
+    date_display: str = "",
+    is_starred: bool = False,
+    manual_tags: tuple[str, ...] = (),
+    all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
     esc_title = html.escape(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
@@ -16346,6 +16359,10 @@ def build_reader_page(
     esc_feed = html.escape(feed_url or "", quote=True)
     esc_eid = html.escape(entry_id or "", quote=True)
     esc_csrf = html.escape(csrf_token or "", quote=True)
+    reader_dateline = (
+        f"<p class='reader-dateline'>{html.escape(date_display)}</p>"
+        if date_display else ""
+    )
     open_original = (
         f"<a class='reader-ctl' href='{esc_src}' target='_blank' rel='noopener noreferrer'"
         " title='Open original'>&#8599;</a>"
@@ -16357,14 +16374,36 @@ def build_reader_page(
     # page rather than on open — the peek problem is the same in either, and
     # splitting the rule by scope would make "did that count as read?"
     # unpredictable from inside the reader, where the scope isn't visible.
-    archive_glyph = "&#9635;" if is_archived else "&#9634;"
+    # ▤ (U+25A4) is the glyph the Read Mode tree already uses for Archive.
+    # The old ▢/▣ pair read as an empty checkbox on e-ink — the shape said
+    # nothing about archiving, and the filled/empty difference was invisible
+    # at that size. State is now shown by inverting the button (see
+    # reader.css [aria-pressed]), which e-ink renders crisply.
+    archive_glyph = "&#9636;"
     archive_title = "Un-archive" if is_archived else "Archive"
-    saved_actions = (
+    # Archive is the done-axis and it lives on the star row (saved_entries.
+    # archived_at), so an item kept only by a tag has nothing to archive. Hide
+    # the control there instead of shipping a button that silently does nothing.
+    archive_btn = (
         f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
         f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
-        "<button class='reader-ctl' id='reader-delete-btn' type='button' title='Delete (unsave)'>&#128465;</button>"
-        if show_saved_actions else ""
+        if is_starred else ""
     )
+    # Delete removes the item from Kept entirely — star *and* tags. The tag list
+    # rides along so the confirm can name what is about to be lost.
+    esc_tags = html.escape(",".join(manual_tags), quote=True)
+    delete_btn = (
+        "<button class='reader-ctl' id='reader-delete-btn' type='button'"
+        f" data-tags='{esc_tags}' title='Delete (remove from Saved)'>&#128465;</button>"
+    )
+    # "#" rather than a 🏷 emoji: emoji render inconsistently (and sometimes in
+    # colour) on e-ink browsers, while "#" is the same mark Lectio uses for tags
+    # everywhere else.
+    tag_btn = (
+        "<button class='reader-ctl' id='reader-tag-btn' type='button'"
+        f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
+    )
+    saved_actions = (tag_btn + archive_btn + delete_btn) if show_saved_actions else ""
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -16373,6 +16412,34 @@ def build_reader_page(
     nav_json = json.dumps(
         {"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}
     ).replace("<", "\\u003c")
+    # The tag vocabulary rides in the same inline-JSON style, for the same reason:
+    # nothing the panel acts on is read back out of the DOM. `all` is every tag
+    # name in the library so the panel is a tap-list rather than a keyboard task;
+    # `current` is what this entry carries.
+    tags_json = json.dumps(
+        {"all": list(all_tag_names), "current": list(manual_tags),
+         "feed_url": feed_url, "entry_id": entry_id, "max": MAX_MANUAL_TAGS}
+    ).replace("<", "\\u003c")
+    # Rendered empty (the JS fills it) so the tag list can be re-drawn after every
+    # toggle without the server re-rendering the page — an e-ink repaint of the
+    # whole article per tap would make tagging unusable.
+    tag_panel = (
+        "<div id='reader-tag-panel' hidden>"
+        "<div class='reader-tag-head'>Tags"
+        "<button type='button' id='reader-tag-new' class='reader-ctl'>+ New</button>"
+        "<button type='button' id='reader-tag-done' class='reader-ctl'>Done</button>"
+        "</div>"
+        "<form id='reader-tag-newform' hidden autocomplete='off'>"
+        # Space-separated, matching the main app's tag input — the server splits
+        # on whitespace, so "brand new tag" is three tags, not one. Says so,
+        # because there is no autocomplete here to make that obvious.
+        "<input type='text' id='reader-tag-input' placeholder='new tag (spaces split)' "
+        "inputmode='text' autocapitalize='none' spellcheck='false'>"
+        "<button type='submit' class='reader-ctl'>Add</button>"
+        "</form>"
+        "<div id='reader-tag-list'></div>"
+        "</div>"
+    ) if show_saved_actions else ""
     # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
     # raw, and it is always allowlist-sanitized upstream (archived capture, live
     # readability, or stored feed content — all via html_sanitize.sanitize_html),
@@ -16399,8 +16466,11 @@ def build_reader_page(
         "<main id='reader-viewport'>"
         f"<div id='reader-columns' data-feed='{esc_feed}' data-entry='{esc_eid}'>"
         f"<article id='reader-article'><h1 class='reader-headline'>{esc_title}</h1>"
+        f"{reader_dateline}"
         f"{article_html}</article>"
         "</div></main>"
+        f"{tag_panel}"
+        f"<script>window.__READER_TAGS__={tags_json};</script>"
         f"<script>window.__READER_NAV__={nav_json};</script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
@@ -16409,22 +16479,34 @@ def build_reader_page(
 
 
 def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]:
-    """One pass over saved_entries → (non-archived key set, per-feed non-archived
-    counts, archived total). Read Mode excludes Archived items from the inbox
-    lists AND their counts (but never strips a tag from an archived item)."""
+    """→ (inbox key set, per-feed inbox counts, archived total).
+
+    **The inbox is KEPT (starred OR tagged) minus Archived**, matching what the
+    list actually shows: `resolve_reader_backlog(star_only=True)` resolves
+    against `kept_entries_set = saved_entries_set | tagged_entries_set`, the same
+    definition the main app's Saved view uses.
+
+    This counted starred rows only, so the tree numbers never matched the list
+    they opened — measured 2026-07-28 at **9,979 against the sidebar's 24,695**,
+    because 16,479 entries are tagged versus 10,002 starred. Archiving was never
+    the gap (23 rows). Read Mode is meant to be the same app in an e-ink shape,
+    so a count that means something different here is simply wrong.
+
+    Only starred rows can be Archived (`archived_at` lives on `saved_entries`),
+    so a tagged-but-unstarred entry is always in the inbox — which is right: it
+    has no "done" state to be in.
+    """
     with get_meta_connection() as conn:
         rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
-    inbox: set[tuple[str, str]] = set()
+    archived_keys = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows if r["archived_at"] is not None}
+    kept: set[tuple[str, str]] = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
+    kept |= get_tagged_entry_keys(get_all_reader_feed_urls())
+
+    inbox = kept - archived_keys
     feed_counts: dict[str, int] = {}
-    archived_total = 0
-    for r in rows:
-        if r["archived_at"] is None:
-            key = (str(r["feed_url"]), str(r["entry_id"]))
-            inbox.add(key)
-            feed_counts[key[0]] = feed_counts.get(key[0], 0) + 1
-        else:
-            archived_total += 1
-    return inbox, feed_counts, archived_total
+    for feed_url, _entry_id in inbox:
+        feed_counts[feed_url] = feed_counts.get(feed_url, 0) + 1
+    return inbox, feed_counts, len(archived_keys)
 
 
 def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
@@ -16452,6 +16534,16 @@ def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
     return counts
 
 
+def _read_mode_date(it: dict) -> str:
+    """The date shown on a Read Mode row and under the reader's headline.
+
+    Publish date, falling back to the received date for feeds that omit one —
+    the same "effective date" the main list sorts by, so the order a sort puts
+    rows in matches the dates printed on them. Both are pre-formatted upstream
+    (`post_display` / `received_display`), so this adds no per-row work."""
+    return str(it.get("post_display") or it.get("received_display") or "")
+
+
 def _read_mode_subtitle(it: dict) -> str:
     """List subtitle: the source domain for saved-article captures (whose feed is
     the synthetic 'Saved Articles'), otherwise the originating feed's title."""
@@ -16459,6 +16551,31 @@ def _read_mode_subtitle(it: dict) -> str:
         host = urlparse(str(it.get("link") or "")).netloc
         return host[4:] if host.startswith("www.") else host
     return str(it.get("feed_title") or "")
+
+
+# Read Mode sort options: label -> (sort_by, sort_dir) for resolve_reader_backlog.
+# "Oldest first" exists because that is how a comic backlog is actually read —
+# the reader pinned newest-first and offered no way to change it.
+_READ_SORTS: dict[str, tuple[str, str]] = {
+    "new": ("post", "desc"),
+    "old": ("post", "asc"),
+    "recent": ("received", "desc"),
+}
+_READ_SORT_DEFAULT = "new"
+_READ_SORT_LABELS: dict[str, str] = {
+    "new": "Newest",
+    "old": "Oldest",
+    "recent": "Received",
+}
+
+
+def _read_mode_sort_options(current: str, href_for: Callable[[str], str]) -> list[dict]:
+    """The sort switcher for the browse pane — one link per order, current marked."""
+    return [
+        {"key": key, "label": _READ_SORT_LABELS[key], "href": href_for(key),
+         "active": key == current}
+        for key in _READ_SORTS
+    ]
 
 
 def _read_mode_scope_tabs(current_scope: str) -> list[dict]:
@@ -16618,6 +16735,7 @@ def _build_read_mode_context(
     q: str | None,
     items: list[dict],
     node_selected: bool = True,
+    sort: str = _READ_SORT_DEFAULT,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
@@ -16646,7 +16764,7 @@ def _build_read_mode_context(
         # Empty glyph: "All" is plain navigation, so no expand arrow — but the
         # spacer keeps its label aligned with the folder rows.
         "label": "All", "glyph": "",
-        "href": _read_browse_href(root_id, None, False, None),
+        "href": _read_browse_href(root_id, None, False, None, sort=sort),
         "count": len(inbox), "active": on_all,
     }]
     for row in raw_folder_rows:
@@ -16658,7 +16776,7 @@ def _build_read_mode_context(
             continue
         folder_nodes.append({
             "label": str(row["name"]), "glyph": "▸",  # ▸
-            "href": _read_browse_href(fid, None, False, None),
+            "href": _read_browse_href(fid, None, False, None, sort=sort),
             "count": c,
             "active": (not archived and not tag and folder_id == fid),
         })
@@ -16666,7 +16784,7 @@ def _build_read_mode_context(
     if uncat:
         folder_nodes.append({
             "label": "Uncategorized", "glyph": "▸",  # ▸
-            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None),
+            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None, sort=sort),
             "count": uncat,
             "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
         })
@@ -16677,7 +16795,7 @@ def _build_read_mode_context(
     inbox_tag_counts = _inbox_tag_counts(inbox)
     tag_nodes = [{
         "label": "#" + name, "glyph": "",
-        "href": _read_browse_href(None, name, False, None),
+        "href": _read_browse_href(None, name, False, None, sort=sort),
         "count": inbox_tag_counts[name],
         "active": (not archived and tag == name),
     } for name in sorted(inbox_tag_counts)]
@@ -16696,21 +16814,27 @@ def _build_read_mode_context(
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
         "subtitle": _read_mode_subtitle(it),
+        "date": _read_mode_date(it),
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
-                             folder_id=folder_id, tag=tag, archived=archived, q=q),
+                             folder_id=folder_id, tag=tag, archived=archived, q=q,
+                             sort=sort),
     } for it in items]
 
     _saved_search_fields = _read_mode_search_fields(
         scope="saved", folder_id=folder_id, tag=tag, archived=archived,
     )
     return {
+        "sort_options": _read_mode_sort_options(
+            sort,
+            lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key),
+        ),
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
         "tag_nodes": tag_nodes,
         "archive_node": {
             "label": "Archive", "glyph": "▤",  # ▤
-            "href": _read_browse_href(None, None, True, None),
+            "href": _read_browse_href(None, None, True, None, sort=sort),
             "count": archived_count, "active": archived,
         },
         "list_items": list_items,
@@ -16742,11 +16866,17 @@ def reader_view(
     archived: str | None = Query(default=None),
     q: str | None = Query(default=None),
     scope: str = Query(default="saved"),
+    sort: str | None = Query(default=None),
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
     Archive is the done-axis) and ``feeds`` (ordinary unread feed reading, with a
-    feeds tree drilling to individual feeds)."""
+    feeds tree drilling to individual feeds).
+
+    *sort* is one of `_READ_SORTS` and carries through every reader link, so the
+    order you browse in is the order Next/Prev walk. The backlog has always taken
+    sort_by/sort_dir; Read Mode simply pinned them to newest-first and gave no way
+    to change it, which is wrong for a comic backlog you read oldest-first."""
     _ua = (request.headers.get("user-agent") or "").strip()
     if _ua and _ua not in _READ_MODE_UA_SEEN and len(_READ_MODE_UA_SEEN) < 50:
         _READ_MODE_UA_SEEN.add(_ua)
@@ -16764,12 +16894,15 @@ def reader_view(
     node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
                      or archived_view or bool(q_val))
 
+    sort_val = sort if sort in _READ_SORTS else _READ_SORT_DEFAULT
+    _sort_by, _sort_dir = _READ_SORTS[sort_val]
+
     def _load_backlog(limit: int) -> list[dict]:
         return resolve_reader_backlog(
             folder_id=folder_id, list_feed_url=feed_scope,
             read_filter=("unread" if is_feeds else "all"),
             star_only=(not is_feeds),
-            tag=tag_val, sort_by="post", sort_dir="desc", search_query=q_val,
+            tag=tag_val, sort_by=_sort_by, sort_dir=_sort_dir, search_query=q_val,
             archived=archived_filter, limit=limit,
         )
 
@@ -16784,7 +16917,7 @@ def reader_view(
         else:
             context = _build_read_mode_context(
                 request, folder_id=folder_id, tag=tag_val, archived=archived_view,
-                q=q_val, items=items, node_selected=node_selected,
+                q=q_val, items=items, node_selected=node_selected, sort=sort_val,
             )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
@@ -16798,7 +16931,7 @@ def reader_view(
         return _reader_href(
             rec["feed_url"], rec["id"],
             folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
-            list_feed_url=feed_scope,
+            list_feed_url=feed_scope, sort=sort_val,
         )
 
     current: dict | None = None
@@ -16841,12 +16974,16 @@ def reader_view(
         source_link=cur_link,
         prev_href=_href(prev_rec),
         next_href=_href(next_rec),
-        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope, feed_scope),
+        back_href=_read_browse_href(folder_id, tag_val, archived_view, q_val, scope, feed_scope, sort_val),
         feed_url=cur_feed,
         entry_id=cur_id,
         is_archived=is_archived,
         csrf_token=_csrf_token_for(request),
         show_saved_actions=not is_feeds,
+        date_display=_read_mode_date(current),
+        is_starred=_entry_is_starred(cur_feed, cur_id),
+        manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
+        all_tag_names=tuple(get_all_manual_tag_names()),
     )
 
 

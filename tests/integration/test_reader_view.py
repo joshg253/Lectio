@@ -24,12 +24,18 @@ def _app():
     return app
 
 
-def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>"):
+def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>",
+                starred=True, manual_tags=(), all_tag_names=()):
     marks: list[tuple] = []
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: list(backlog))
     monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, l: article)
     monkeypatch.setattr(main, "_mark_entry_read_background", lambda *a: marks.append(a[:2]))
     monkeypatch.setattr(main, "get_archived_saved_keys", lambda: set(archived_keys))
+    # Archive lives on the star row, so the button only renders for a starred
+    # item; tags ride along so Delete's confirm can name them.
+    monkeypatch.setattr(main, "_entry_is_starred", lambda f, e: starred)
+    monkeypatch.setattr(main, "get_manual_tags_for_entry", lambda f, e: list(manual_tags))
+    monkeypatch.setattr(main, "get_all_manual_tag_names", lambda: list(all_tag_names))
     monkeypatch.setattr(main, "_csrf_token_for", lambda req: "tok")  # bare app has no session
     return marks
 
@@ -50,8 +56,18 @@ def test_read_state_prev_next_and_controls(monkeypatch):
     assert marks == []                    # rendering alone never marks read
 
 
+
+def test_archive_button_hidden_when_not_starred(monkeypatch):
+    _patch_read(monkeypatch, backlog=[_rec(2)], starred=False, manual_tags=("keepme",))
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
+    assert "id='reader-archive-btn'" not in body    # nothing to archive
+    assert "id='reader-delete-btn'" in body         # Delete still applies
+    assert "data-tags='keepme'" in body             # confirm can name the tag
+
+
 def test_read_archive_button_reflects_state(monkeypatch):
-    _patch_read(monkeypatch, backlog=[_rec(2)], archived_keys={("feed2", "e2")})
+    _patch_read(monkeypatch, backlog=[_rec(2)], archived_keys={("feed2", "e2")}, starred=True)
     with TestClient(_app()) as client:
         r = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"})
     assert "aria-pressed='true'" in r.text and "Un-archive" in r.text
@@ -244,3 +260,37 @@ def test_non_supernote_not_redirected(monkeypatch):
     with TestClient(_home_app()) as client:
         r = client.get("/", headers={"User-Agent": "Mozilla/5.0 Chrome/120"}, follow_redirects=False)
     assert r.status_code == 200
+
+
+def test_tag_panel_ships_the_whole_vocabulary(monkeypatch):
+    """Filing from an e-ink device means tapping, not typing.
+
+    The panel needs every tag name in the library up front so it can render
+    them as toggles; only the "+ New" field needs a keyboard.
+    """
+    _patch_read(
+        monkeypatch, backlog=[_rec(2)],
+        manual_tags=("humour",), all_tag_names=("comics", "humour", "linux"),
+    )
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
+
+    assert "id='reader-tag-btn'" in body
+    assert "id='reader-tag-panel'" in body
+    assert "__READER_TAGS__" in body
+    # Vocabulary and current selection both travel as inline JSON — nothing the
+    # panel acts on is read back out of the DOM.
+    assert '"all": ["comics", "humour", "linux"]' in body
+    assert '"current": ["humour"]' in body
+    # The count rides on the button so it is visible without opening the panel.
+    assert ">#1</button>" in body
+
+
+def test_tag_panel_absent_in_the_feeds_scope(monkeypatch):
+    """Tagging is a Saved-scope action, alongside Archive/Delete."""
+    _patch_read(monkeypatch, backlog=[_rec(2)], manual_tags=(), all_tag_names=("x",))
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2",
+                                           "scope": "feeds"}).text
+    assert "id='reader-tag-btn'" not in body
+    assert "id='reader-tag-panel'" not in body
