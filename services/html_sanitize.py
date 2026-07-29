@@ -212,6 +212,31 @@ SAFE_LINK_SCHEMES = ("http", "https", "mailto", "tel")
 SAFE_SRC_SCHEMES = ("http", "https")
 
 
+def _filter_element_attrs(el, tag_name: str) -> None:
+    """Strip a parsed element's attributes down to the allowlist, in place.
+
+    Shared by both passes — the main tree walk and the re-parse of feeds that
+    embed entity-escaped HTML as text — which previously carried two copies of
+    this policy. They had already drifted once (only one dropped `style`), so a
+    single implementation is the point rather than the brevity.
+    """
+    allowed = _ALLOWED_ATTRS.get(tag_name, frozenset())
+    for attr_name in list(el.attrs):
+        la = attr_name.lower()
+        if la.startswith("on") or (la not in allowed and la not in _GLOBAL_ALLOWED_ATTRS):
+            del el.attrs[attr_name]
+            continue
+        if la == "style":
+            kept_style = _sanitize_style_attr(str(el.attrs.get(attr_name, "")))
+            if kept_style:
+                el.attrs[attr_name] = kept_style
+            else:
+                del el.attrs[attr_name]
+            continue
+        if la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr_name, ""))):
+            del el.attrs[attr_name]
+
+
 def _is_safe_attr_url(attr: str, value: str) -> bool:
     """Reject javascript:/vbscript:/data: (and control-char-obfuscated variants);
     allow relative URLs and http(s) (plus mailto/tel for href)."""
@@ -478,21 +503,7 @@ def sanitize_html(content: str) -> str:
         if name not in _ALLOWED_TAGS:
             tag.unwrap()  # keep inner text/children, drop the unknown wrapper
             continue
-        allowed = _ALLOWED_ATTRS.get(name, frozenset())
-        for attr_name in list(tag.attrs):
-            la = attr_name.lower()
-            if la.startswith("on") or (la not in allowed and la not in _GLOBAL_ALLOWED_ATTRS):
-                del tag.attrs[attr_name]
-                continue
-            if la == "style":
-                kept_style = _sanitize_style_attr(str(tag.attrs.get(attr_name, "")))
-                if kept_style:
-                    tag.attrs[attr_name] = kept_style
-                else:
-                    del tag.attrs[attr_name]
-                continue
-            if la in _URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
-                del tag.attrs[attr_name]
+        _filter_element_attrs(tag, name)
 
     # Render pseudo-HTML tags that feeds sometimes embed as text inside elements
     # (e.g. &lt;em&gt;title&lt;/em&gt; in link text, stored as literal "<em>" in
@@ -513,19 +524,7 @@ def sanitize_html(content: str) -> str:
             if name not in _ALLOWED_TAGS:
                 el.unwrap()
                 continue
-            allowed_el = _ALLOWED_ATTRS.get(name, frozenset())
-            for attr in list(el.attrs):
-                la = attr.lower()
-                if la.startswith("on") or (la not in allowed_el and la not in _GLOBAL_ALLOWED_ATTRS):
-                    del el.attrs[attr]
-                elif la == "style":
-                    kept_style = _sanitize_style_attr(str(el.attrs.get(attr, "")))
-                    if kept_style:
-                        el.attrs[attr] = kept_style
-                    else:
-                        del el.attrs[attr]
-                elif la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr, ""))):
-                    del el.attrs[attr]
+            _filter_element_attrs(el, name)
         # Splice only the parsed children, not the BeautifulSoup document wrapper
         # (replace_with(frag) can introduce <html>/<body> tags around the content).
         for child in list(frag.contents):

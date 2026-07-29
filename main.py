@@ -9187,6 +9187,12 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
 # glyph. Same class of problem as the JWPlayer chrome strip below.
 _JS_PLACEHOLDER_CLASS_RE = re.compile(r"\b(?:loading|placeholder|skeleton)\b", re.IGNORECASE)
 _SHARE_WIDGET_CLASS_RE = re.compile(r"\b(?:shar(?:e|ing)[-_ ]?\w*|social(?:[-_ ]?\w*)?)\b", re.IGNORECASE)
+# Icon signals for inline SVG: Font Awesome's own marker plus the generic
+# conventions. Mirrors the sizing rules in reader/style CSS so "what counts as an
+# icon" has one answer. Anything at or above this many px in a declared
+# width/height is art, not a glyph (same floor as the lead-image scanner).
+_SVG_ICON_CLASS_RE = re.compile(r"\bsvg-inline--fa\b|\bicon\b|[-_]icon\b|\bicon[-_]", re.IGNORECASE)
+_SVG_ICON_MAX_PX = 64
 
 
 def _strip_js_dependent_chrome(html: str) -> str:
@@ -9204,12 +9210,46 @@ def _strip_js_dependent_chrome(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     changed = False
 
+    def _svg_is_icon(svg) -> bool:
+        """True for an inline SVG that is a UI glyph rather than article art.
+
+        Inline SVG *is* a legitimate kind of post image, so it has to count as
+        content — otherwise a chart or diagram in a container whose class merely
+        matched would be silently stripped. But the chrome this function exists
+        to remove is icon-only: paizo's share widget holds Font Awesome glyphs
+        and its carousel placeholders hold a dice spinner. So icons don't count,
+        and anything else does. Same signals the stylesheet uses to size icons.
+        """
+        classes = " ".join(svg.get("class") or [])
+        if _SVG_ICON_CLASS_RE.search(classes):
+            return True
+        # Otherwise judge by declared size: a glyph pins small px dimensions,
+        # art does not. Note Font Awesome's are viewBox units (320x512), which
+        # is exactly why the class test above has to come first.
+        sizes: list[int] = []
+        for attr in ("width", "height"):
+            raw = str(svg.get(attr) or "").strip()
+            if raw.isdigit():
+                sizes.append(int(raw))
+        if not sizes:
+            return False          # nothing to judge by — assume art, keep it
+        return max(sizes) < _SVG_ICON_MAX_PX
+
     def _is_textless_chrome(el) -> bool:
         if el.get_text(strip=True):
             return False
-        return el.find("img") is None
+        if el.find("img") is not None:
+            return False
+        # An inline SVG that isn't an icon is article art — keep the container.
+        return not any(not _svg_is_icon(sv) for sv in el.find_all("svg"))
 
     for el in soup.find_all(["div", "ul", "nav", "section", "aside", "li", "p"]):
+        # A chrome container can hold another (paizo: ul.loading > li.loading).
+        # find_all snapshots the tree, so the inner one is still in this list
+        # after its parent was decomposed — and reading attrs off a decomposed
+        # tag raises.
+        if getattr(el, "decomposed", False):
+            continue
         classes = " ".join(el.get("class") or [])
         if not classes:
             continue
@@ -9222,6 +9262,8 @@ def _strip_js_dependent_chrome(html: str) -> str:
     # A list whose every item was a placeholder is now an empty <ul> — drop the
     # husk too, or the reader shows a stray bullet-less gap.
     for lst in soup.find_all(["ul", "ol"]):
+        if getattr(lst, "decomposed", False):
+            continue
         if not lst.find(["li"]) and not lst.get_text(strip=True) and lst.find("img") is None:
             lst.decompose()
             changed = True

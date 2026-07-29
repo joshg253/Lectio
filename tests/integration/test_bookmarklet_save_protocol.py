@@ -264,3 +264,36 @@ def test_markdown_documents_convert_instead_of_readability():
     assert "<em>intro</em>" in html
     assert "<table" in html and "pip install foo" in html
     assert 'href="https://docs.cloud.google.com/relative/path"' in html
+
+
+def test_js_chrome_strip_keeps_a_container_holding_a_real_svg_figure():
+    """Inline SVG is a legitimate post image, so it counts as content.
+
+    Only *icons* don't — the chrome this strips is icon-only (share glyphs, a
+    dice spinner). A chart in a container whose class merely matched must
+    survive, or the strip silently eats article art.
+    """
+    html = (
+        '<p>Article text.</p>'
+        '<div class="social-chart">'
+        '<svg viewBox="0 0 800 450" width="800" height="450"><rect width="800" height="450"/></svg>'
+        '</div>'
+        '<div class="sharing_widget">'
+        '<svg class="share-icon svg-inline--fa" width="448" height="512"><path/></svg>'
+        '</div>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "social-chart" in cleaned          # real figure kept
+    assert "viewBox" in cleaned or "viewbox" in cleaned
+    assert "sharing_widget" not in cleaned    # icon-only chrome still goes
+
+
+def test_js_chrome_strip_still_removes_small_unclassed_glyphs():
+    """An unclassed but icon-sized SVG is a glyph, not a figure."""
+    html = (
+        '<p>Text.</p>'
+        '<ul class="cards loading"><li class="loading">'
+        '<svg width="20" height="20"><path/></svg></li></ul>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "<ul" not in cleaned and "Text." in cleaned
