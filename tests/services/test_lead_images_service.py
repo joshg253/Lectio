@@ -1606,3 +1606,42 @@ def test_support_platform_link_context_is_chrome(tmp_path: Path):
     assert LeadImageService._SITE_CHROME_CONTEXT_RE.search(ctx2)
     # A plain article link is not chrome context.
     assert not LeadImageService._SITE_CHROME_CONTEXT_RE.search('<a href="https://example.com/story">')
+
+
+def test_bare_comic_class_wins_the_panel_scan(tmp_path: Path):
+    """qwantz.com marks its panel class="comic" — a bare token.
+
+    The *id* pattern has always accepted a bare "comic"; the class pattern only
+    took the hyphen/underscore spellings, so nothing outranked the site's
+    decorative <img class="pteranodon"> sitting first in document order, and it
+    became the lead image for all 44 strips. Same shape as the gunnerkrigg
+    comic_image miss, one step further along.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    page = "http://www.qwantz.com/index.php?comic=4499"
+    html = (
+        "<html><body>"
+        '<img src="/pteranodon.png" class="pteranodon">'
+        '<img src="/logo5.png" width=390 height=56 class="logo">'
+        '<img src="comics/comic2-5197.png" class="comic" title="alt text here">'
+        '<img src="feedrss.gif" class="feedicon">'
+        "</body></html>"
+    )
+    assert service._extract_webcomic_panel_image(html, page, page) == (
+        "http://www.qwantz.com/comics/comic2-5197.png"
+    )
+
+
+def test_bare_comic_match_does_not_leak_into_hyphenated_classes(tmp_path: Path):
+    """The bare alternative uses lookarounds, not \\b.
+
+    With \\b it would also fire inside "comic-nav", handing the panel bonus to
+    navigation buttons — the precise failure the pattern exists to prevent.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    rx = service._WEBCOMIC_IMG_CLASS_RE
+    assert rx.search("comic") and rx.search("comic_image") and rx.search("webcomic")
+    assert not rx.search("comic-nav")
+    assert not rx.search("comic_nav")
+    assert not rx.search("comic-navigation")
+    assert not rx.search("comicnav")
