@@ -2144,12 +2144,52 @@ class LeadImageService:
             for resolved in self._iter_acceptable_img_urls(attrs, base_url, entry_link):
                 if resolved in seen or urlparse(resolved).path in exclude_paths:
                     continue
+                # Honour the plugins' verdict here too. They only ever fed the
+                # lead-image *scorer*, so a host a plugin scores as chrome
+                # (tinyview's skeleton GIF, wordmark and icons8 buttons all live
+                # on assets.tinyview.com) sailed straight into the gallery, which
+                # takes everything acceptable rather than ranking it.
+                if self._plugin_source_score_adjustment(
+                    source_url=entry_link, attrs=attrs, resolved_url=resolved
+                ) <= self._PLUGIN_CHROME_SCORE:
+                    continue
                 seen.add(resolved)
                 results.append(resolved)
                 break  # one URL per <img> tag
             if len(results) >= limit:
                 break
-        return results
+        return self._drop_duplicate_basenames(results, entry_link)[:limit]
+
+    # A plugin scoring a URL this low is calling it site chrome, not a candidate
+    # to rank lower. Well below any legitimate demotion.
+    _PLUGIN_CHROME_SCORE = -100
+
+    def _drop_duplicate_basenames(self, urls: list[str], entry_link: str) -> list[str]:
+        """Collapse candidates that repeat a filename under different paths.
+
+        Server-rendered apps often emit the same image twice — once at its real
+        location and once at a fallback path that 404s. tinyview ships both
+        ``/<comic>/<yyyy>/<mm>/<dd>/<slug>/IMG_5657-compressed.jpeg`` (200) and
+        ``/<comic>/IMG_5657-compressed.jpeg`` (404) for the same panel, so half
+        the injected gallery rendered as broken images.
+
+        Which one is real can't be known without fetching, but it can be inferred:
+        prefer the URL whose path contains the entry's own slug, since that is
+        the copy filed under this post. Falls back to first-seen order, so a site
+        without that pattern is unaffected.
+        """
+        slug = urlparse(entry_link).path.rstrip("/").rsplit("/", 1)[-1].lower()
+        by_name: dict[str, list[str]] = {}
+        for u in urls:
+            name = urlparse(u).path.rsplit("/", 1)[-1].lower()
+            by_name.setdefault(name, []).append(u)
+        dropped = set()
+        for name, group in by_name.items():
+            if len(group) < 2 or not name:
+                continue
+            preferred = next((g for g in group if slug and slug in urlparse(g).path.lower()), group[0])
+            dropped.update(g for g in group if g != preferred)
+        return [u for u in urls if u not in dropped]
 
     def get_cached_source_html(self, entry_link: str) -> tuple[str, str] | None:
         """Return ``(base_url, html_text)`` for a source page already in the cache,
