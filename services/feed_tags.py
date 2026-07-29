@@ -11,6 +11,7 @@ foundation for future tag-filtered feed adapters.
 """
 from __future__ import annotations
 
+import html as html_module
 import logging
 import re
 import time
@@ -31,12 +32,17 @@ JUNK_TAGS = {
 
 
 def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
-    """Whitespace-compact, drop junk placeholders, dedupe case-insensitively
-    (order preserved), optionally cap."""
+    """Decode entities, whitespace-compact, drop junk placeholders, dedupe
+    case-insensitively (order preserved), optionally cap.
+
+    Entity decoding is not cosmetic: feeds ship ``C&#43;&#43;`` for ``C++``,
+    ``bricks &amp; minifigs``, ``Bu&#xF1;uel``. Undecoded, each is a distinct
+    tag from its readable twin and matches nothing a user would type.
+    """
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in values:
-        compact = " ".join(value.strip().split())
+        compact = " ".join(html_module.unescape(value).strip().split())
         if not compact or len(compact) > 60:
             continue
         lowered = compact.lower()
@@ -47,6 +53,28 @@ def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
         if cap is not None and len(cleaned) >= cap:
             break
     return cleaned
+
+
+def _split_multi_value_term(value: str) -> list[str]:
+    """Split a single <category> that packs several tags into one term.
+
+    Some generators emit ``<category>ASP.NET Core;Security;CSRF;CORS</category>``
+    rather than one element each (andrewlock.net), which lands as a single
+    unusable tag.
+
+    **Entities are decoded first, and that ordering is the whole subtlety.**
+    Measured on the live library: 124 stored tags contain a ``;``, but only 25
+    still do once decoded — the other 99 are entity terminators. Splitting raw
+    text would turn ``C&#43;&#43;`` into three fragments instead of ``C++``.
+
+    Only ``;`` splits. Commas look tempting and are not: the comma-bearing tags
+    here are a single junk value (a forum feed's ``9,41,44,… Forum``), which
+    splitting would explode into 19 numeric tags.
+    """
+    decoded = html_module.unescape(value)
+    if ";" not in decoded:
+        return [value]
+    return [part for part in decoded.split(";") if part.strip()]
 
 
 def extract_feed_entry_tags(raw_entry: object) -> list[str]:
@@ -66,11 +94,11 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
                 scheme = scheme or raw_tag.get("scheme")
             tag_value = term or label or scheme
             if tag_value:
-                values.append(str(tag_value))
+                values.extend(_split_multi_value_term(str(tag_value)))
 
     category = getattr(raw_entry, "category", None)
     if category:
-        values.append(str(category))
+        values.extend(_split_multi_value_term(str(category)))
 
     return _clean_tag_values(values)
 

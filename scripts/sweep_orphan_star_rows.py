@@ -50,14 +50,17 @@ def sweep_for_user(uid: str, apply: bool) -> dict:
         by_feed = Counter(f for f, _ in orphans)
         archived = 0
         if orphans:
-            # archived_at on an orphan is Read Mode state for an entry that no
-            # longer exists — moot, but worth reporting before deleting.
+            # Archived state on an orphan is a done-flag for an entry that no
+            # longer exists — moot, but worth reporting before deleting. Reads
+            # archived_entries: the legacy saved_entries.archived_at column
+            # stopped being maintained when the done-axis moved to its own table
+            # (Archive removes the star, so the flag cannot live on the star row).
             placeholders = ",".join("(?,?)" for _ in orphans[:500])
             if placeholders:
                 flat = [v for k in orphans[:500] for v in k]
                 archived = mc.execute(
-                    "SELECT COUNT(*) FROM saved_entries "
-                    f"WHERE (feed_url, entry_id) IN ({placeholders}) AND archived_at IS NOT NULL",
+                    "SELECT COUNT(*) FROM archived_entries "
+                    f"WHERE (feed_url, entry_id) IN ({placeholders})",
                     flat,
                 ).fetchone()[0]
 

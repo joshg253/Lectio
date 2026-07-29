@@ -1291,6 +1291,20 @@ Reassess the "pinned saved-tag shortcuts" and "badge counts total instead of
 unread" ideas *after* #4 lands — auto-filing changes what the tree looks like, so
 judging those now would be premature.
 
+### 7a. Feed tags — Real Python has none to pull (2026-07-29)
+
+Reported as "can pull some tags from page". Checked, and there is nothing to
+pull without evading a bot wall:
+
+- **The Atom feed carries zero `<category>` elements** — 0 across 50 entries.
+- **The page fallback cannot run.** `extract_page_tags` already fires whenever a
+  feed supplies no tags (main.py, via the lead-image source-HTML cache or its
+  deferred fetch), but `realpython.com` answers a non-browser client with a
+  Cloudflare interstitial ("Just a moment…"), so there is no article HTML to
+  scan. Fixing this means spoofing a browser UA, which we don't do.
+
+Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
+
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **Tag autocomplete while typing** — auto-list matching existing tags during tag
