@@ -2,6 +2,12 @@
 // it across navigations (it was ~580KB of inline JS re-shipped with every
 // full page render). Template-derived values arrive via the window.* config
 // object in the document <head>; this file must stay Jinja-free.
+
+// The wire value selecting whole-page capture over readability extraction, sent
+// by both the Save Article modal and the post menu's "Re-fetch full page". Kept
+// in one place because a typo silently falls back to readability rather than
+// erroring; the server-side spelling lives in main.CAPTURE_MODE_FULL.
+const CAPTURE_MODE_FULL = 'full';
     // Only web-ish schemes may reach an href/src. Entry and feed URLs are
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
@@ -7803,10 +7809,14 @@
       }
     });
 
-    // Both menu items run the same re-fetch; `mode` picks readability
-    // extraction or whole-page capture. Shared so the dead-source recovery
+    // Both menu items run the same re-fetch; `fullPage` picks whole-page
+    // capture over readability extraction. Shared so the dead-source recovery
     // below (offer to delete a 404) can't drift between the two.
-    const runPostRefetch = async (event, mode) => {
+    //
+    // A boolean rather than a mode string: only the request body needs the wire
+    // value, and the file-scope CAPTURE_MODE_FULL keeps that spelling in one
+    // place — a typo there falls back to readability silently.
+    const runPostRefetch = async (event, fullPage) => {
       event.preventDefault();
       event.stopPropagation();
       const feedUrl = contextPostFeedUrl;
@@ -7814,12 +7824,12 @@
       hideAllContextMenus();
       if (!feedUrl || !entryId) return;
       if (typeof showToastMessage === 'function') {
-        showToastMessage(mode === 'full' ? 'Re-fetching full page…' : 'Re-fetching content…');
+        showToastMessage(fullPage ? 'Re-fetching full page…' : 'Re-fetching content…');
       }
       try {
         const body = new URLSearchParams(
-          mode === 'full'
-            ? { feed_url: feedUrl, entry_id: entryId, mode: 'full' }
+          fullPage
+            ? { feed_url: feedUrl, entry_id: entryId, mode: CAPTURE_MODE_FULL }
             : { feed_url: feedUrl, entry_id: entryId }
         );
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
@@ -7846,7 +7856,7 @@
           return;
         }
         if (typeof showToastMessage === 'function') {
-          showToastMessage(mode === 'full' ? 'Full page re-fetched.' : 'Content re-fetched.');
+          showToastMessage(fullPage ? 'Full page re-fetched.' : 'Content re-fetched.');
         }
         // If this entry is currently open, re-render the pane to show the fresh copy.
         const cur = new URL(window.location.href);
@@ -7858,8 +7868,8 @@
       }
     };
 
-    postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, 'readability'));
-    postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, 'full'));
+    postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, false));
+    postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, true));
 
     postRemoveTagShownButton?.addEventListener('click', async (event) => {
       event.preventDefault();
@@ -13836,7 +13846,7 @@
               method: 'POST',
               headers: { 'X-Requested-With': 'lectio-save-article' },
               body: new URLSearchParams(
-                svaFullPage?.checked ? { url, mode: 'full' } : { url }
+                svaFullPage?.checked ? { url, mode: CAPTURE_MODE_FULL } : { url }
               ),
             });
             const result = await response.json();
