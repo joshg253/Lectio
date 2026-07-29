@@ -144,6 +144,12 @@ The short version:
   "related stories" blocks, newsletter footers, and the player chrome that
   captured pages drag along. What you removed is recorded per post, so a future
   release can promote a removal into a rule for the whole feed.
+- **Archive old stars** — the Saved Inbox holds what you starred and have not
+  dealt with, so years of older stars sit in it forever. Pick a cutoff (a week, a
+  month, a year) and archive everything older in one pass: it leaves the Inbox and
+  is marked read, while tags, the offline copy and protection from cleanup are all
+  kept, and anything can be un-archived. Shows the age spread and the resulting
+  Inbox size before you commit.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).

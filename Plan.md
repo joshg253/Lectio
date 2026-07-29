@@ -1225,12 +1225,26 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   ("ignore for now"), and an Archive view in the regular app ("don't think we
   need it at all", conditional on History being browsable in reverse order).
 
-  **PR D (next): "archive starred older than X days" utility.** Manual, never
-  automatic, preview-then-apply like the unstar panel. Josh will run it at 30
-  days first — that leaves ~420 in the Inbox out of 9,979. This is what makes the
-  Inbox usable without redefining what a star means, and it retires #5: those
-  1,786 starred+tagged items get archived like everything else, keeping both tag
-  and capture, instead of being unstarred and losing the TODO axis.
+  **PR D landed 2026-07-29**: Settings → Feeds → Utilities → **Archive old
+  stars**. Cutoff chips (7d/30d/90d/6mo/1yr) with an age-spread table, because a
+  lone total cannot be sanity-checked before thousands of items move. Manual,
+  never automatic. Measured live:
+
+  | cutoff | archives | Inbox left |
+  |---|---|---|
+  | 7 days | 9,827 | 175 |
+  | **30 days** | **9,581** | **421** |
+  | 90 days | 3,461 | 6,541 |
+  | 1 year | 3,130 | 6,872 |
+
+  The 1–3 month bucket alone holds 6,120 (the filing run of ~2 months ago), which
+  is why 90 days barely helps.
+
+  **This retires #5.** Those 1,786 starred+tagged items get archived like the
+  rest, keeping tag *and* capture, instead of being unstarred and losing the TODO
+  axis. **⚠ The bulk path deliberately does not write `read_history`** — capped at
+  2,000 rows, it is the only reverse-chronological record of what has been dealt
+  with, and 9,000 bulk archives would evict all of it.
 
   **PR E (after): pinned tags.** Promote any tag to a top-level node in both
   modes. Store the pin **separately from the tag name** — Josh floated a `##tag`

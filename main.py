@@ -67,6 +67,7 @@ from services import content_edits
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
+from services import archive_old_stars as archive_old_stars_service
 from services import unstar_tagged as unstar_tagged_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
@@ -24911,6 +24912,112 @@ async def apply_unstar_tagged(request: Request):
     return JSONResponse({
         "ok": True,
         "unstarred": deleted,
+    })
+
+
+def _current_archive_old_stars_plan(days: int) -> dict:
+    """Assemble the archive-old-stars plan for the current user. Read-only."""
+    with get_meta_connection() as conn:
+        starred_at: dict[tuple[str, str], datetime] = {}
+        for feed, eid, when in conn.execute(
+            "SELECT feed_url, entry_id, saved_at FROM saved_entries"
+        ):
+            starred_at[(str(feed), str(eid))] = _parse_stored_dt(when)
+    return archive_old_stars_service.build_archive_plan(
+        starred_at, get_archived_saved_keys(), days=days,
+    )
+
+
+@app.get("/saved/archive-old/preview")
+def preview_archive_old_stars(days: int = Query(archive_old_stars_service.DEFAULT_DAYS)):
+    """Preview which stars would be archived. Changes nothing."""
+    plan = _current_archive_old_stars_plan(days)
+    return JSONResponse({
+        "ok": True,
+        "days": plan["days"],
+        "cutoff": plan["cutoff"],
+        "totals": plan["totals"],
+        "buckets": plan["buckets"],
+        "day_choices": list(archive_old_stars_service.DAY_CHOICES),
+    })
+
+
+@app.post("/saved/archive-old")
+async def apply_archive_old_stars(request: Request):
+    """Archive every star older than N days — the Inbox bankruptcy pass.
+
+    Recomputes the plan server-side from the given ``days`` rather than trusting a
+    client id list, the same as the unstar-tagged apply.
+
+    **Reversible per item, and nothing is lost**: the tag, the offline capture and
+    pruning-exemption all survive, because archived is itself a keep signal. This
+    is why it is the right instrument for the Inbox backlog and #5's unstar sweep
+    is not — see services/archive_old_stars.py.
+
+    Written in bulk rather than by looping the single-entry route, for two
+    reasons beyond speed:
+
+    - **It must not write ``read_history``.** That table is capped at 2,000 rows
+      and is the only reverse-chronological record of what has been dealt with —
+      the thing that made dropping a separate Archive view acceptable. Pushing
+      9,000 bulk archives through it would evict the entire real history.
+    - **No capture-release check is needed.** The archived rows are written first,
+      so every entry provably still carries a keep signal; the per-entry
+      ``entry_has_keep_signal`` probe would be two queries each to answer "yes".
+    """
+    body = await request.json()
+    try:
+        days = int(body.get("days", archive_old_stars_service.DEFAULT_DAYS))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "days must be a number"}, status_code=400)
+
+    plan = _current_archive_old_stars_plan(days)
+    keys = plan["to_archive"]
+    if not keys:
+        return JSONResponse({"ok": True, "archived": 0, "days": days})
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_meta_connection() as conn:
+        conn.execute("PRAGMA busy_timeout = 20000")
+        for start in range(0, len(keys), 400):
+            chunk = keys[start:start + 400]
+            conn.executemany(
+                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "VALUES (?, ?, ?)",
+                [(f, e, now_iso) for f, e in chunk],
+            )
+            # The star comes off: the TODO is discharged.
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            conn.execute(
+                f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({placeholders})",
+                [v for k in chunk for v in k],
+            )
+            # Read at the override level too, so a refresh can't un-read them.
+            conn.executemany(
+                "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) "
+                "VALUES (?, ?, ?)",
+                [(f, e, now_iso) for f, e in chunk],
+            )
+        conn.commit()
+
+    marked_read = 0
+    try:
+        with get_reader() as reader:
+            for feed_url, entry_id in keys:
+                try:
+                    reader.mark_entry_as_read((feed_url, entry_id))
+                    marked_read += 1
+                except Exception:  # noqa: BLE001 — a missing entry is not fatal here
+                    pass
+    except Exception:
+        LOGGER.warning("archive-old-stars: reader mark-read pass failed", exc_info=True)
+
+    # A behind-the-back write leaves the generation-guarded counts stale.
+    invalidate_unread_counts_cache()
+    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd (marked read: %d)",
+                len(keys), days, marked_read)
+    return JSONResponse({
+        "ok": True, "archived": len(keys), "days": days, "marked_read": marked_read,
     })
 
 
