@@ -1140,17 +1140,18 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   Verified in a browser: peek at 1/12 stays unread, 12/12 marks read, one-page
   article marks on open. **Applies to both scopes** — the peek problem is the
   same in the feeds scope, and the scope isn't visible from inside the reader.
-- **Prefetch the next article** — cuts an e-ink refresh flash on every advance.
-  **⚠ Blocked on a caching decision (found 2026-07-28):** the reader page is
-  served `Cache-Control: no-store` ([main.py:16307](main.py#L16307)), so a
-  `rel="prefetch"` would fetch the next article and immediately discard it —
-  cost without benefit. Three ways forward, in increasing blast radius:
-  (a) prefetch only the next article's **images**, which are served from
-  `/api/img` and are cacheable — likely most of the flash, and touches no HTML
-  caching; (b) relax the reader page to `private, max-age=…`, which puts a page
-  carrying a CSRF token into the browser cache; (c) fetch the next article's
-  HTML into memory and swap it in client-side, no HTTP caching involved but a
-  much bigger change to how the reader navigates. **(a) is the recommendation.**
+- ~~**Prefetch the next article**~~ — **DONE 2026-07-28, via images only.**
+  The obvious form was blocked: the reader page is `Cache-Control: no-store`
+  ([main.py:16307](main.py#L16307)), so `rel="prefetch"` would fetch the next
+  article and discard it. Of the three options — (a) images only, (b) relax the
+  page to `private, max-age=…`, (c) client-side HTML swap — **(a) shipped**:
+  it's where the flash actually comes from, and it leaves both the page's
+  no-store posture and the reader's navigation model untouched.
+  `prefetchNextImages` parses the next article in a detached `DOMParser`
+  document and warms up to 12 same-origin images, hung off the settle rather
+  than a fixed delay from load.
+  **Depends on the mark-read change above** — fetching the next article's HTML
+  would previously have marked it read unseen.
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
   bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
   with the dead-code sweep in Later's "Code health".

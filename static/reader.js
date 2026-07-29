@@ -215,6 +215,63 @@
     }, "lectio-entry-save-toggle");
   });
 
+  // Warm the next article's images, to cut the e-ink refresh flash on advance.
+  //
+  // Only the *images* are prefetched, not the page. The reader page is served
+  // Cache-Control: no-store, so a <link rel=prefetch> would fetch the next
+  // article and immediately throw it away — cost with no benefit. Images come
+  // from /api/img and /starred-asset/ with real max-age, so they survive in the
+  // HTTP cache and are what actually makes an e-ink advance repaint slowly.
+  //
+  // This is only safe because the server no longer marks an entry read when its
+  // reader page is served: fetching the next article's HTML to find its images
+  // would otherwise have marked it read without it ever being seen.
+  var PREFETCH_MAX_IMAGES = 12;   // a lesson-length article can carry 50+
+  var PREFETCH_DELAY_MS = 1200;   // breathing room after the settle, see below
+
+  // The image proxy is a fixed path with the source in the query string; the
+  // starred archive serves per-asset paths under a prefix.
+  function isWarmableImagePath(path) {
+    return path === "/api/img" || path.indexOf("/starred-asset/") === 0;
+  }
+
+  function prefetchNextImages() {
+    if (!NAV.next) return;
+    var u;
+    try {
+      u = new URL(NAV.next, window.location.origin);
+      if (u.origin !== window.location.origin) return;
+    } catch (e) { return; }
+    fetch(u.pathname + u.search, { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) return;
+        // DOMParser builds a detached document: it runs no scripts and loads no
+        // resources, so this only reads attributes. The warming below is what
+        // actually fetches, and only for same-origin URLs.
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var imgs = doc.querySelectorAll("#reader-article img");
+        var n = Math.min(imgs.length, PREFETCH_MAX_IMAGES);
+        for (var i = 0; i < n; i++) {
+          var src = imgs[i].getAttribute("src");
+          if (!src) continue;
+          try {
+            var iu = new URL(src, window.location.origin);
+            if (iu.origin !== window.location.origin) continue;
+            // Warm only the two endpoints article images are rewritten to.
+            // Same-origin alone is too loose: a feed's broken relative src
+            // resolves against our origin and would be prefetched into a 404,
+            // and anything else same-origin (a /static/ placeholder) is already
+            // cached or not worth the request. These two are also the only ones
+            // with a real max-age, which is the whole reason this works.
+            if (!isWarmableImagePath(iu.pathname)) continue;
+            new Image().src = iu.pathname + iu.search;
+          } catch (e) { /* malformed src — skip */ }
+        }
+      })
+      .catch(function () { /* prefetch is best-effort; never disturb reading */ });
+  }
+
   var reflowTimer = null;
   window.addEventListener("resize", function () {
     if (reflowTimer) window.clearTimeout(reflowTimer);
@@ -249,6 +306,11 @@
     }
     paginationSettled = true;
     markReadIfFinished();
+    // Prefetch last, and only once the current article has settled — warming
+    // the next one must never compete with rendering the one being read. Hung
+    // off the settle rather than a fixed delay, because settling can take up to
+    // the SETTLE_MAX_TRIES ceiling on a slow load.
+    window.setTimeout(prefetchNextImages, PREFETCH_DELAY_MS);
   }
   window.setTimeout(trySettle, SETTLE_MS);
 })();

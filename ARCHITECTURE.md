@@ -1049,6 +1049,32 @@ Both scopes follow this rule: the peek problem is identical in each, and the
 scope isn't visible from inside the reader, so splitting the rule would make
 "did that count as read?" unpredictable.
 
+**Prefetching the next article warms its images, not its page.** The e-ink flash
+on advance is mostly image decode, and the reader page itself is `no-store`, so a
+`<link rel="prefetch">` would fetch the next article and immediately discard it —
+cost with no benefit. Instead `prefetchNextImages` fetches the next article's
+HTML, parses it in a **detached `DOMParser` document** (runs no scripts, loads no
+resources — it only reads `src` attributes), and warms up to
+`PREFETCH_MAX_IMAGES` images via `new Image()`.
+
+Warming is restricted by `isWarmableImagePath` to the two endpoints article
+images are actually rewritten to: `/api/img` (`public, max-age=86400`) and
+`/starred-asset/` (a year, immutable). Same-origin alone is too loose — a feed's
+broken *relative* `src` resolves against our own origin and would be prefetched
+into a 404, and other same-origin assets (a `/static/` placeholder) are already
+cached or not worth a request. These two are also the only paths with a real
+`max-age`, which is the entire reason prefetching works here when prefetching the
+page does not. The cap exists because a lesson-length article can carry 50+
+images. The prefetch is hung off
+the **settle** (plus `PREFETCH_DELAY_MS`) rather than a fixed delay from load, so
+warming the next article never competes with rendering the one being read — on a
+slow load settling can itself take seconds, and a fixed timer would fire straight
+into it. Failures are swallowed: a prefetch must never disturb reading.
+
+**This is only safe because rendering no longer marks read.** Fetching the next
+article's HTML to discover its images would otherwise have marked it read without
+it ever being seen — the two changes are ordered, not independent.
+
 **Two scopes** (`?scope=`). `saved` (default, above) reads the starred backlog
 with the Archive axis. `feeds` is ordinary **unread feed reading**:
 `_build_feeds_mode_context` renders a simplified feeds tree (All Feeds + folders
