@@ -593,6 +593,20 @@ feeds must be excluded from the global caches.
   browser paints only the rect, so the feature degrades to a flat colour block.
   Both sanitizers are innocent; the damage predates them. See Plan.md for the
   repro and the fix options (re-parse SVG subtrees as XML at ingest).
+  **Icon SVGs are excluded from the lead-image slot *and* sized down in the
+  pane** — two separate fixes for one cause. An inline icon's `width`/`height`
+  attributes are **viewBox units**, not pixels: a Font Awesome chevron ships
+  `width="320" height="512"` and depends on the source site's own CSS to shrink
+  it to ~1em. Neither of `_is_decorative_inline_svg`'s original tests caught
+  that — the class carries no "icon" word (`fa-lg svg-inline--fa
+  fa-chevron-left`) and 320×512 is far above the small-glyph pixel floor — so
+  on a paizo.com post the chevron both won the thumbnail and rendered as a
+  pane-filling graphic. `_SVG_FA_CLASS_RE` now matches `svg-inline--fa`, Font
+  Awesome's own marker, and `.entry-content svg.svg-inline--fa` (plus the
+  generic `*-icon` conventions) constrains them to text height. Both match that
+  exact marker rather than any `fa-` substring, which would also catch an
+  illustration classed `alfa-romeo-art`. Non-icon inline SVG keeps only a
+  `max-width` cap — forcing a height would squash legitimate SVG figures.
 - **Reader-view embed re-injection** — `python-readability`'s `.summary()` strips
   *every* `<iframe>` during extraction (and sometimes keeps the lead image twice),
   so allowlisted players would vanish from Reader view. `build_readability_response`

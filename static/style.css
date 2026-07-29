@@ -3212,6 +3212,35 @@ button:hover, .button-link:hover {
   vertical-align: -0.2em;
 }
 
+/* Inline icon SVGs — the same bug as the emoji images above, one tag along.
+   Font Awesome (and friends) ship the icon as inline <svg> whose width/height
+   ATTRIBUTES are viewBox units: a chevron is width="320" height="512", a tags
+   glyph width="640". The source site shrinks them to ~1em via its own CSS; with
+   no site CSS and no rule here, paizo.com's post rendered a 640x512 px chevron
+   filling the whole pane. Constrain to text height and keep them inline.
+
+   Matched on `svg-inline--fa` (Font Awesome's own canonical marker, added by
+   its JS, so no false positives) plus the generic icon class conventions. A
+   loose `[class*="fa-"]` was deliberately NOT used: it would also catch an
+   illustration classed something like `alfa-romeo-art`. */
+.entry-content svg.svg-inline--fa,
+.entry-content svg[class~="icon"],
+.entry-content svg[class*="icon-"],
+.entry-content svg[class*="-icon"] {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  max-height: 1.2em;
+  vertical-align: -0.125em;
+}
+
+/* Any other inline SVG must at least not overflow the pane. Deliberately only
+   a width cap: forcing a height here would squash legitimate inline-SVG
+   figures, which are a supported kind of post image. */
+.entry-content svg {
+  max-width: 100%;
+}
+
 /* Math formula images from Sphinx/dvisvgm blogs (eli.thegreenplace.net, etc.).
    The feed ships each glyph's true rendered px height (preserved onto the img's
    height attribute by html_sanitize) plus a valign-* baseline class. Honor both:

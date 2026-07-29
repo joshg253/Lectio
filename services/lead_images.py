@@ -1209,6 +1209,12 @@ class LeadImageService:
 
     _SVG_OPEN_RE = re.compile(r"<svg\b[^>]*>", re.IGNORECASE)
     _SVG_ICON_CLASS_RE = re.compile(r'class\s*=\s*["\'][^"\']*\bicon(?:s|--)?\b', re.IGNORECASE)
+    # Font Awesome's own marker, added by its JS to every inline icon. Needed
+    # because FA icons defeat both other tests: paizo.com's nav chevron is
+    # class="fa-lg svg-inline--fa fa-chevron-left" (no "icon" word anywhere)
+    # sized width="320" height="512" (viewBox units, so far over the px floor),
+    # and it won the thumbnail slot for a Pathfinder blog post.
+    _SVG_FA_CLASS_RE = re.compile(r'class\s*=\s*["\'][^"\']*\bsvg-inline--fa\b', re.IGNORECASE)
     _INLINE_SVG_MIN_SIZE = 64
 
     def _is_decorative_inline_svg(self, svg_html: str) -> bool:
@@ -1217,6 +1223,8 @@ class LeadImageService:
         m = self._SVG_OPEN_RE.search(svg_html)
         open_tag = m.group(0) if m else svg_html
         if self._SVG_ICON_CLASS_RE.search(open_tag):
+            return True
+        if self._SVG_FA_CLASS_RE.search(open_tag):
             return True
         # Explicit small pixel size marks a UI glyph. A real inline-SVG hero scales
         # via viewBox and rarely pins a tiny width/height, so we only judge on the

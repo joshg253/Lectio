@@ -279,6 +279,46 @@ def test_inline_svg_icon_skipped_for_real_hero(tmp_path: Path):
     assert service._extract_inline_svg_data_uri(icon + hero) is not None
 
 
+def test_font_awesome_inline_icon_is_decorative(tmp_path: Path):
+    """Font Awesome icons defeat both other decorative tests.
+
+    Reported on paizo.com's Pathfinder blog: the nav chevron carries no "icon"
+    word in its class, and its width/height are *viewBox units* (320x512), far
+    above the pixel floor that catches ordinary UI glyphs — so it read as a
+    hero and became the post's thumbnail. `svg-inline--fa` is Font Awesome's
+    own marker, added by its JS to every inline icon.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    chevron = (
+        '<svg class="fa-lg svg-inline--fa fa-chevron-left fa-w-10" color="#888" '
+        'height="512" viewBox="0 0 320 512" width="320"><path d="M8 1z"/></svg>'
+    )
+    tags = (
+        '<svg class="fa-lg svg-inline--fa fa-tags fa-w-20" height="512" '
+        'viewBox="0 0 640 512" width="640"><path d="M8 1z"/></svg>'
+    )
+    hero = '<svg viewBox="0 0 800 450"><rect width="800" height="450"/></svg>'
+
+    assert service._is_decorative_inline_svg(chevron) is True
+    assert service._is_decorative_inline_svg(tags) is True
+    # A real inline hero must still win, even when the icons come first.
+    assert service._is_decorative_inline_svg(hero) is False
+    assert service._extract_inline_svg_data_uri(chevron + tags) is None
+    assert service._extract_inline_svg_data_uri(chevron + hero) is not None
+
+
+def test_plain_fa_prefixed_class_is_not_treated_as_an_icon(tmp_path: Path):
+    """Only Font Awesome's real marker counts, not any `fa-` substring.
+
+    Guards the deliberately narrow match: an illustration classed
+    `alfa-romeo-art` contains "fa-" but is article art, not a glyph.
+    """
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    art = ('<svg class="alfa-romeo-art" viewBox="0 0 800 450">'
+           '<rect width="800" height="450"/></svg>')
+    assert service._is_decorative_inline_svg(art) is False
+
+
 def test_banner_aspect_ratio_rejected_from_query_dims(tmp_path: Path):
     # WordPress/Jetpack resize= and fit= query params declare the served size.
     # A banner-shaped ratio (wider than 4:1) is a site-wide promo, not article
