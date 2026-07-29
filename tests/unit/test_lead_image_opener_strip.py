@@ -12,9 +12,36 @@ def _strip(content, lead=LEAD, feed="https://f.test/feed", show=True):
     return main._strip_lead_image_opener(content, lead, feed, show)
 
 
-def test_noop_when_not_showing_lead():
-    html = f'<p><img src="{LEAD}"></p><p>body</p>'
-    assert _strip(html, show=False) == (html, LEAD)
+def test_hidden_lead_still_strips_the_body_opener():
+    """This deliberately overturns the previous assertion that show=False was a
+    complete no-op.
+
+    "Don't show the lead image in the article" has to include the case where the
+    FEED put it there. The old behavior suppressed only Lectio's own copy above
+    the article, so unchecking the box did nothing visible on a feed whose body
+    opens with the same image — reported live on Blogger, which emits its
+    social-preview asset (…-Blog-Metadata.png) as a real <img> at the top of the
+    post body. That asset is also what the scorer picks as the thumbnail, so the
+    article opened with a near-identical crop of its own first picture.
+    """
+    content, lead = _strip(f'<p><img src="{LEAD}"></p><p>body</p>', show=False)
+    assert LEAD not in (content or "")
+    assert "body" in content
+    assert lead == LEAD          # still the thumbnail; only the body copy goes
+
+
+def test_hidden_lead_leaves_a_mid_article_occurrence_alone():
+    """Only the opener is a header. The same image further down is the author
+    placing it in the flow, which is content."""
+    html = f'<p>intro text</p><p><img src="{LEAD}"></p><p>more</p>'
+    content, lead = _strip(html, show=False)
+    assert content == html
+    assert lead == LEAD
+
+
+def test_hidden_lead_with_no_lead_image_is_a_noop():
+    html = "<p>just text</p>"
+    assert _strip(html, lead=None, show=False) == (html, None)
 
 
 def test_opener_equals_lead_is_stripped(monkeypatch):

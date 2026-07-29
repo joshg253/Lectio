@@ -13222,7 +13222,30 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
     - Tumblr size-variant dedup (same media hash, different size suffix);
     - when the lead came from source scraping and the body is just a thumbnail
       wrapper (minimal text), strip the inline imgs."""
-    if not (show_lead_in_article and lead_image_url and isinstance(content_html, str)):
+    if not (lead_image_url and isinstance(content_html, str)):
+        return content_html, lead_image_url
+
+    if not show_lead_in_article:
+        # "Don't show the lead image in the article" has to include the case
+        # where the FEED put it there. This setting used to suppress only
+        # Lectio's own copy above the article, so a feed whose body opens with
+        # the same image still showed it — unchecking the box did nothing
+        # visible, which is how it was reported.
+        #
+        # Blogger is the case in hand: it emits the social-preview asset
+        # (…-Blog-Metadata.png) as a real <img> at the top of the post body, and
+        # that is also what the lead-image scorer picks as the thumbnail. So the
+        # article opened with a near-identical crop of its own first picture.
+        # Good thumbnail, unwanted in the body — exactly the split this setting
+        # is for.
+        #
+        # Only the *opener* is stripped, and only when it is the lead image
+        # itself. An occurrence further down is the author placing it in the
+        # flow, which is content rather than a header.
+        if _LEAD_IMG_OPENER_RE.match(content_html):
+            _stripped = _bs4_strip_opener(content_html, lead_image_url)
+            if _stripped is not None:
+                content_html = _stripped or None
         return content_html, lead_image_url
 
     _m = _LEAD_IMG_OPENER_RE.match(content_html)
