@@ -340,9 +340,19 @@ class LeadImageService:
         # whole class token only: \b would also fire inside "comic-nav", handing
         # the panel bonus to navigation buttons. Hyphen/underscore spellings stay
         # with the explicit alternatives above.
-        r'(?:\b(?:comic[-_]image|comic[-_]strip|comic[-_]img|comicImg|webcomic|wp-post-image)\b'
-        r'|(?<![-\w])comic(?![-\w]))',
-        re.IGNORECASE,
+        r"""
+        \b(?:                                   # explicit multi-word spellings
+            comic[-_]image | comic[-_]strip
+          | comic[-_]img   | comicImg
+          | webcomic       | wp-post-image
+        )\b
+        |
+        (?<![-\w]) comic (?![-\w])             # a BARE `comic` class token only:
+                                               # lookarounds, not \b, so this does
+                                               # not fire inside `comic-nav` and
+                                               # hand the panel bonus to buttons
+        """,
+        re.IGNORECASE | re.VERBOSE,
     )
 
     # ComicControl CMS (atomic-robo.com, everblue-comic.com, many others) ships a

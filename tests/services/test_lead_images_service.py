@@ -1609,13 +1609,10 @@ def test_support_platform_link_context_is_chrome(tmp_path: Path):
 
 
 def test_bare_comic_class_wins_the_panel_scan(tmp_path: Path):
-    """qwantz.com marks its panel class="comic" — a bare token.
+    """A bare `comic` class must win the panel scan (qwantz.com).
 
-    The *id* pattern has always accepted a bare "comic"; the class pattern only
-    took the hyphen/underscore spellings, so nothing outranked the site's
-    decorative <img class="pteranodon"> sitting first in document order, and it
-    became the lead image for all 44 strips. Same shape as the gunnerkrigg
-    comic_image miss, one step further along.
+    Without it the site's decorative first image wins instead. Background in
+    Plan.md 8e.
     """
     service = _build_service(tmp_path / "meta.sqlite", [])
     page = "http://www.qwantz.com/index.php?comic=4499"
