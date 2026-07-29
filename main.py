@@ -17213,7 +17213,17 @@ def _build_read_mode_context(
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn
-# the Supernote Manta's UA for the e-ink auto-detect (it isn't in access logs).
+# the e-ink devices' UA for auto-detect (it isn't in access logs).
+#
+# Captured 2026-07-29 from Josh's Manta:
+#   Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A.210505.003; wv)
+#   AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/96.0.4664.92 …
+#
+# ⚠ It says **Nomad on a Manta** — the model is hardcoded in Supernote's browser,
+# not detected, and the Build fingerprint is stock Android 11. So an auto-detect
+# must match "Supernote", never the model. `wv` also matters: this is an Android
+# WebView, so storage persistence and service-worker availability are the host
+# app's call, not the web platform's — see the offline-reading note in Plan.md.
 _READ_MODE_UA_SEEN: set[str] = set()
 
 
