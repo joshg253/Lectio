@@ -270,3 +270,24 @@ def test_resave_refresh_respects_pinned_title(reader, meta_conn):
     fresh = reader.get_entry((SAVED_FEED_URL, "https://example.com/post"))
     assert fresh.title == "My Pinned Title"
     assert fresh.content[0].value == "<p>new body</p>"
+
+
+def test_capture_does_not_fabricate_a_publish_date(reader, meta_conn):
+    """"When I saved this" is not "when this was published".
+
+    save_article used to store now() as the article's publish date, and the UI
+    presented that as fact. The save time is recorded on saved_entries.saved_at,
+    which is where it belongs.
+
+    The epoch rather than NULL is deliberate: entry_effective_date falls back
+    published → updated → added, so clearing the field would silently substitute
+    the capture time anyway — the same wrong answer by a longer route. 1970 is
+    visibly not a publish date, sorts to the end, and is searchable.
+    """
+    from services.saved_articles import UNKNOWN_PUBLISHED
+
+    save_article(reader, meta_conn, "https://example.com/dateless", extract=_extract_ok)
+    entry = reader.get_entry((SAVED_FEED_URL, "https://example.com/dateless"))
+
+    assert entry.published == UNKNOWN_PUBLISHED
+    assert entry.published.year == 1970

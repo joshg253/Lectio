@@ -131,3 +131,27 @@ def test_empty_or_bad_csv_reports_nothing_imported(configured):
     assert "No+bookmarks" in r.headers["location"]
     with main.get_meta_connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM saved_entries").fetchone()[0] == 0
+
+
+def test_import_does_not_use_the_save_date_as_the_publish_date(configured):
+    """An Instapaper CSV records when *you saved* a bookmark, never when the
+    article was published.
+
+    Storing the save timestamp as `published` made a 2015 article bookmarked in
+    2019 read as published 2019, and the UI showed it as fact. Found on the live
+    library as 3,308 entries whose publish date was exactly their save date —
+    and it also poisoned any "archive things older than X" decision, since the
+    dates looked plausible.
+    """
+    from services.saved_articles import UNKNOWN_PUBLISHED
+
+    _upload(CSV)
+    with main.get_reader() as reader:
+        for eid in ("https://ex.test/unread", "https://ex.test/arch"):
+            entry = reader.get_entry((main.saved_articles_service.SAVED_FEED_URL, eid))
+            assert entry.published == UNKNOWN_PUBLISHED, eid
+
+    # The save date is still recorded — on the star row, where it belongs.
+    with main.get_meta_connection() as conn:
+        rows = dict(conn.execute("SELECT entry_id, saved_at FROM saved_entries").fetchall())
+    assert rows["https://ex.test/unread"] is not None

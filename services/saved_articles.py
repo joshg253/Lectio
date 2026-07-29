@@ -29,6 +29,11 @@ from urllib.parse import urldefrag, urlparse
 
 LOGGER = logging.getLogger(__name__)
 
+# "We do not know when this was published." Deliberately a real date rather than
+# NULL: entry_effective_date falls back to the received date, so NULL would just
+# re-substitute the import/capture time. See the note at its use sites.
+UNKNOWN_PUBLISHED = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
 # Statuses that mean the host refused *us*, not that the article is missing.
 # Kept distinct from 404/410 because those flag the entry as dead and offer a
 # delete — a bot-wall must never be able to trigger that for a live article.
@@ -509,7 +514,17 @@ def save_article(
             "id": clean_url,
             "link": clean_url,
             "title": title,
-            "published": datetime.now(timezone.utc),
+            # NOT now(). "When I saved this" is not "when this was published",
+            # and storing the capture time as the article's date fabricates a
+            # date the UI then presents as fact. The save time is already
+            # recorded where it belongs, in saved_entries.saved_at.
+            #
+            # The Unix epoch is used rather than omitting the field, because
+            # entry_effective_date falls back published → updated → added, so
+            # leaving it unset would silently substitute the capture time anyway
+            # — the same lie by a longer route. 1970 is visibly wrong, sorts to
+            # the end, and is trivially searchable.
+            "published": UNKNOWN_PUBLISHED,
         }
         if article_html:
             entry["content"] = [{"value": article_html}]

@@ -1237,8 +1237,56 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   | 90 days | 3,461 | 6,541 |
   | 1 year | 3,130 | 6,872 |
 
-  The 1–3 month bucket alone holds 6,120 (the filing run of ~2 months ago), which
-  is why 90 days barely helps.
+  **⚠ DO NOT RUN IT YET — `saved_at` is not a real star date for most rows.**
+  Measured 2026-07-29: **6,091 of 10,002 stars carry a `saved_at` in 2026-06**,
+  which is when multi-user went live and the data was migrated — the migration
+  stamped its own run date instead of preserving the original. Those are largely
+  years-old Inoreader stars wearing a seven-week-old timestamp. (This is the
+  "1–3 month bucket holds 6,120" figure, which was first misread as the filing
+  run.) So a 30-day cutoff sweeps 6,091 articles in and a 90-day cutoff protects
+  them, neither for any real reason.
+
+  **Fix before this is usable: offer the date basis, and default to publish
+  date.** Publish date asks the better question anyway ("articles from 2019 I
+  have still never opened"). Josh also said he still wants to go through most of
+  this material, so the whole premise of a bulk cutoff is his call rather than a
+  given.
+
+  **Star provenance, measured 2026-07-29** — only 419 of 10,002 stars were made
+  by hand in Lectio:
+
+  | `saved_at` | stars | meaning |
+  |---|---|---|
+  | before 2026-06 | 3,492 | real dates, read out of the Instapaper CSV |
+  | 2026-06 | 6,091 | **the migration's own run date** |
+  | 2026-07+ | 419 | actually starred in Lectio |
+
+### 7c. Importers fabricated publish dates — FIXED + REPAIRED 2026-07-29
+
+Two capture paths stored "when this arrived in Lectio" as "when this was
+published", and every date-based decision then trusted it:
+
+- **Instapaper import** used the CSV's *save* timestamp as `published`, so a 2015
+  article bookmarked in 2019 read as published 2019. **3,308 entries.**
+- **Save-article (URL capture)** used `now()` at capture time. 5 entries.
+
+Both now write `services.saved_articles.UNKNOWN_PUBLISHED` (the Unix epoch).
+**1970 rather than NULL is the load-bearing choice**: `entry_effective_date`
+falls back published → updated → added, so clearing the field would silently
+substitute the *import* date — the same wrong answer by a longer route. The epoch
+is visibly not a publish date, sorts to the end of every order, and is
+searchable, which makes these findable rather than merely untrusted.
+
+`scripts/repair_fabricated_publish_dates.py` reset the 3,310 already stored (JSON
+log alongside the other repair logs, so it is reversible). It matches only two
+*exact* signatures — `published == saved_at` and `published == first_updated` —
+and **preserves `entry_date_overrides`** (4 rows; an explicit correction outranks
+any inference). A looser rule would have destroyed the **22,543** user-added
+entries that carry genuine publish dates from the Inoreader migration.
+
+⚠ The lesson generalizes: **an importer must never invent a field it does not
+have.** A missing date is recoverable; a plausible wrong one is not, because
+nothing downstream can tell it apart from real data.
 
   **This retires #5.** Those 1,786 starred+tagged items get archived like the
   rest, keeping tag *and* capture, instead of being unstarred and losing the TODO

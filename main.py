@@ -27322,7 +27322,14 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
                     "id": bm.url,
                     "link": bm.url,
                     "title": bm.title,
-                    "published": saved_dt,
+                    # NOT saved_dt. An Instapaper CSV records when *you saved*
+                    # the bookmark, never when the article was published — so
+                    # this stored a 2015 article as published 2019 and the UI
+                    # showed that as fact. Measured on the live library: 3,308
+                    # entries whose publish date was exactly their save date.
+                    # The save date is kept where it belongs, on saved_entries
+                    # below. See UNKNOWN_PUBLISHED for why 1970 and not NULL.
+                    "published": saved_articles_service.UNKNOWN_PUBLISHED,
                 }
                 try:
                     reader.add_entry(entry)
