@@ -202,6 +202,47 @@ def test_jwplayer_chrome_stripped_at_render():
     assert "Article text." in cleaned and "More text." in cleaned
 
 
+def test_js_dependent_chrome_stripped_at_render():
+    """Share widgets and unfilled lazy-load placeholders only exist once the
+    source page's JS runs. Observed on paizo.com: a sharing_widget of anchors
+    with no href, then four <li class="blog-item loading"> holding only a dice
+    glyph — a related-posts carousel that never filled in."""
+    html = (
+        '<p>Article text.</p>'
+        '<div class="sharing_widget"> <a class="fb" title="Share on Facebook">'
+        '<svg class="share-icon svg-inline--fa fa-facebook-square"><path/></svg></a></div>'
+        '<ul class="content_card_row__cards blog_feed">'
+        '<li class="blog-item loading"><svg class="themed-icon"><path/></svg></li>'
+        '<li class="blog-item loading"><svg class="themed-icon"><path/></svg></li>'
+        '</ul>'
+        '<p>More text.</p>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "sharing_widget" not in cleaned
+    assert "blog-item" not in cleaned
+    assert "<ul" not in cleaned          # the emptied list husk goes too
+    assert "Article text." in cleaned and "More text." in cleaned
+
+
+def test_js_chrome_strip_keeps_anything_with_real_content():
+    """The safety invariant: only textless, image-free elements are removed.
+
+    A related-posts block with headlines, and a gallery whose class happens to
+    match ("social-gallery"), both carry content a reader wants — so neither
+    may be caught by the class match alone.
+    """
+    html = (
+        '<ul class="related loading"><li class="blog-item">'
+        '<a href="https://x.test/a">A real related headline</a></li></ul>'
+        '<div class="social-gallery"><img src="https://x.test/a.png"></div>'
+        '<div class="share-block"><p>Tell your friends about this article.</p></div>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "A real related headline" in cleaned
+    assert "x.test/a.png" in cleaned
+    assert "Tell your friends" in cleaned
+
+
 def test_markdown_documents_convert_instead_of_readability():
     """Markdown sources (text/markdown, or .md/.md.txt paths served as
     text/plain — Google dev docs' 'View as Markdown') convert to article
@@ -223,3 +264,36 @@ def test_markdown_documents_convert_instead_of_readability():
     assert "<em>intro</em>" in html
     assert "<table" in html and "pip install foo" in html
     assert 'href="https://docs.cloud.google.com/relative/path"' in html
+
+
+def test_js_chrome_strip_keeps_a_container_holding_a_real_svg_figure():
+    """Inline SVG is a legitimate post image, so it counts as content.
+
+    Only *icons* don't — the chrome this strips is icon-only (share glyphs, a
+    dice spinner). A chart in a container whose class merely matched must
+    survive, or the strip silently eats article art.
+    """
+    html = (
+        '<p>Article text.</p>'
+        '<div class="social-chart">'
+        '<svg viewBox="0 0 800 450" width="800" height="450"><rect width="800" height="450"/></svg>'
+        '</div>'
+        '<div class="sharing_widget">'
+        '<svg class="share-icon svg-inline--fa" width="448" height="512"><path/></svg>'
+        '</div>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "social-chart" in cleaned          # real figure kept
+    assert "viewBox" in cleaned or "viewbox" in cleaned
+    assert "sharing_widget" not in cleaned    # icon-only chrome still goes
+
+
+def test_js_chrome_strip_still_removes_small_unclassed_glyphs():
+    """An unclassed but icon-sized SVG is a glyph, not a figure."""
+    html = (
+        '<p>Text.</p>'
+        '<ul class="cards loading"><li class="loading">'
+        '<svg width="20" height="20"><path/></svg></li></ul>'
+    )
+    cleaned = main._apply_feed_content_cleanups(html, "lectio:saved", "e1")
+    assert "<ul" not in cleaned and "Text." in cleaned

@@ -9179,6 +9179,98 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+# Chrome that only exists once the source page's own JavaScript runs. We don't
+# run it, so a share widget stays a row of dead icons and a lazy "related posts"
+# carousel stays a row of empty bullets with a spinner in each — observed on
+# paizo.com, whose post ends with div.sharing_widget (anchors with no href at
+# all) followed by four <li class="blog-item loading"> holding only a dice
+# glyph. Same class of problem as the JWPlayer chrome strip below.
+_JS_PLACEHOLDER_CLASS_RE = re.compile(r"\b(?:loading|placeholder|skeleton)\b", re.IGNORECASE)
+_SHARE_WIDGET_CLASS_RE = re.compile(r"\b(?:shar(?:e|ing)[-_ ]?\w*|social(?:[-_ ]?\w*)?)\b", re.IGNORECASE)
+# Icon signals for inline SVG: Font Awesome's own marker plus the generic
+# conventions. Mirrors the sizing rules in reader/style CSS so "what counts as an
+# icon" has one answer. Anything at or above this many px in a declared
+# width/height is art, not a glyph (same floor as the lead-image scanner).
+_SVG_ICON_CLASS_RE = re.compile(r"\bsvg-inline--fa\b|\bicon\b|[-_]icon\b|\bicon[-_]", re.IGNORECASE)
+_SVG_ICON_MAX_PX = 64
+
+
+def _strip_js_dependent_chrome(html: str) -> str:
+    """Drop share widgets and unfilled lazy-load placeholders from entry content.
+
+    **Only ever removes elements that contain no text and no <img>.** That is the
+    whole safety argument: a real "related posts" block carries headlines, and a
+    real gallery carries images, so neither can match. What is left to match is
+    icon-only chrome, which carries nothing a reader would read.
+    """
+    if not html or ("class" not in html):
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+
+    def _svg_is_icon(svg) -> bool:
+        """True for an inline SVG that is a UI glyph rather than article art.
+
+        Inline SVG *is* a legitimate kind of post image, so it has to count as
+        content — otherwise a chart or diagram in a container whose class merely
+        matched would be silently stripped. But the chrome this function exists
+        to remove is icon-only: paizo's share widget holds Font Awesome glyphs
+        and its carousel placeholders hold a dice spinner. So icons don't count,
+        and anything else does. Same signals the stylesheet uses to size icons.
+        """
+        classes = " ".join(svg.get("class") or [])
+        if _SVG_ICON_CLASS_RE.search(classes):
+            return True
+        # Otherwise judge by declared size: a glyph pins small px dimensions,
+        # art does not. Note Font Awesome's are viewBox units (320x512), which
+        # is exactly why the class test above has to come first.
+        sizes: list[int] = []
+        for attr in ("width", "height"):
+            raw = str(svg.get(attr) or "").strip()
+            if raw.isdigit():
+                sizes.append(int(raw))
+        if not sizes:
+            return False          # nothing to judge by — assume art, keep it
+        return max(sizes) < _SVG_ICON_MAX_PX
+
+    def _is_textless_chrome(el) -> bool:
+        if el.get_text(strip=True):
+            return False
+        if el.find("img") is not None:
+            return False
+        # An inline SVG that isn't an icon is article art — keep the container.
+        return not any(not _svg_is_icon(sv) for sv in el.find_all("svg"))
+
+    for el in soup.find_all(["div", "ul", "nav", "section", "aside", "li", "p"]):
+        # A chrome container can hold another (paizo: ul.loading > li.loading).
+        # find_all snapshots the tree, so the inner one is still in this list
+        # after its parent was decomposed — and reading attrs off a decomposed
+        # tag raises.
+        if getattr(el, "decomposed", False):
+            continue
+        classes = " ".join(el.get("class") or [])
+        if not classes:
+            continue
+        is_share = _SHARE_WIDGET_CLASS_RE.search(classes) is not None
+        is_placeholder = _JS_PLACEHOLDER_CLASS_RE.search(classes) is not None
+        if (is_share or is_placeholder) and _is_textless_chrome(el):
+            el.decompose()
+            changed = True
+
+    # A list whose every item was a placeholder is now an empty <ul> — drop the
+    # husk too, or the reader shows a stray bullet-less gap.
+    for lst in soup.find_all(["ul", "ol"]):
+        if getattr(lst, "decomposed", False):
+            continue
+        if not lst.find(["li"]) and not lst.get_text(strip=True) and lst.find("img") is None:
+            lst.decompose()
+            changed = True
+
+    return str(soup) if changed else html
+
+
 # WordPress "rss_footer" boilerplate appended to feed content: "The post <title>
 # appeared first on <site>." Plugins add near-duplicate variants ("first appeared
 # on") and some double-encode the wrapping <p> (so the reader shows literal
@@ -13182,6 +13274,12 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     if isinstance(content_html, str) and ("jw-" in content_html or "jwp-" in content_html or "vid-present" in content_html):
         for _cls in ("vid-present", "jwplayer", "jw-wrapper", "jwp-carousel"):
             content_html = _strip_div_blocks_by_class(content_html, _cls)
+
+    # Share widgets and never-filled lazy-load placeholders — the same "chrome
+    # the site's own JS would have handled" problem, generically. Textless and
+    # image-free only, so real related-post blocks and galleries can't match.
+    if isinstance(content_html, str):
+        content_html = _strip_js_dependent_chrome(content_html)
 
     # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
     # after the first paragraph. It contains external article thumbnails that

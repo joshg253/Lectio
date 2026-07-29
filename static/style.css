@@ -3196,6 +3196,53 @@ button:hover, .button-link:hover {
   height: auto;
 }
 
+/* Several <img> sharing one container are a row in the source — images are
+   inline by default, so paizo.com's three cover variants sat side by side with
+   no styling at all until the display:block above stacked them. Lay the
+   container out as a wrapping row instead.
+
+   This is self-regulating and safe to apply broadly: max-width:100% still
+   holds, so full-width images each fill the row and wrap one-per-line exactly
+   as before, while only genuinely small images (the 250px covers here) share a
+   line. :has() is pure CSS — no JS. */
+.entry-content figure:has(> img + img),
+.entry-content p:has(> img + img),
+.entry-content div:has(> img + img) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.entry-content figure:has(> img + img) > img,
+.entry-content p:has(> img + img) > img,
+.entry-content div:has(> img + img) > img {
+  width: auto;
+}
+/* The caption belongs under the row, not beside it. */
+.entry-content figure:has(> img + img) > figcaption {
+  flex: 1 0 100%;
+}
+
+/* Author centering, restored end-to-end. The sanitizer now keeps <center>,
+   align="center" and an enumerated text-align, but text-align cannot centre the
+   images above because we render them display:block — so give block children
+   auto side margins when their container is centred. The style selector matches
+   the sanitizer's normalized output ("text-align: center"), which is why that
+   spacing is fixed there. */
+.entry-content center img,
+.entry-content [align="center"] img,
+.entry-content [style*="text-align: center"] img {
+  margin-left: auto;
+  margin-right: auto;
+}
+/* <center> and align= predate CSS and carry no text-align of their own here. */
+.entry-content center,
+.entry-content [align="center"] {
+  text-align: center;
+}
+.entry-content [align="right"] { text-align: right; }
+.entry-content [align="left"]  { text-align: left; }
+
 /* Inline emoji glyphs embedded in post bodies: WordPress wp-smiley (s.w.org),
    IP.Board ipsEmoji, and twemoji's "emoji" class. The source sites size these
    to ~1em via their own CSS; without it the general .entry-content img rule

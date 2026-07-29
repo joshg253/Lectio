@@ -27,6 +27,10 @@ _ALLOWED_TAGS = frozenset({
     "picture", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub",
     "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr",
     "u", "ul", "var", "wbr", "audio", "video", "source", "iframe",
+    # Deprecated but purely presentational, and still emitted by older feeds.
+    # Unwrapping it (the default for unknown tags) silently lost the author's
+    # centering, since we never load feed CSS to restore it another way.
+    "center",
 })
 # Dangerous tags whose entire subtree is dropped. Anything else not in the allow
 # list is unwrapped (its text/children kept) rather than deleted. ``svg`` and
@@ -67,13 +71,67 @@ _ALLOWED_ATTRS = {
     "colgroup": frozenset({"span"}),
     "time": frozenset({"datetime"}),
 }
+# Legacy block-level `align`, by the same reasoning already applied to img/td/th/
+# tr above: value-constrained presentational markup with no scripting surface.
+# It had simply never been extended past images and table cells, so a feed
+# writing <p align="center"> lost its centering for no security reason.
+for _block_tag in ("p", "div", "figure", "figcaption", "h1", "h2", "h3", "h4", "h5", "h6", "table"):
+    _ALLOWED_ATTRS[_block_tag] = _ALLOWED_ATTRS.get(_block_tag, frozenset()) | {"align"}
 # Attributes kept on every element. class carries no styling effect (feed CSS is
 # never loaded) but Lectio's content-cleanup passes key off it — e.g. stripping
 # "RELATED STORIES" / NASA-block / Ghost audio-card / embed-container widgets and
 # detecting webcomic/YouTube-embed figures. Dropping it silently broke those
 # cleanups on freshly-ingested (sanitized) content. (id is deliberately NOT kept:
 # a feed id could collide with the app's own element IDs the page JS looks up.)
-_GLOBAL_ALLOWED_ATTRS = frozenset({"class"})
+_GLOBAL_ALLOWED_ATTRS = frozenset({"class", "style"})
+
+# Presentational styles worth preserving, as an ENUMERATED allowlist: property →
+# the exact set of values accepted. Nothing free-form is ever kept, so there is
+# no place for `url(...)`, `expression(...)`, `-moz-binding`, escapes, or any
+# other value-carried payload to survive — an unlisted property or an unlisted
+# value is dropped, not sanitized-and-kept. Declarations are re-emitted from
+# this table rather than passed through, so the output string is ours.
+#
+# Layout/positioning properties are deliberately absent: `position`, `z-index`,
+# `width`, and friends let feed content escape the pane or overlay the app's own
+# UI, which is a real concern even without scripting.
+_ALLOWED_STYLE_VALUES: dict[str, frozenset[str]] = {
+    "text-align": frozenset({"left", "right", "center", "justify", "start", "end"}),
+    "font-style": frozenset({"normal", "italic", "oblique"}),
+    "font-weight": frozenset({
+        "normal", "bold", "bolder", "lighter",
+        "100", "200", "300", "400", "500", "600", "700", "800", "900",
+    }),
+    "text-decoration": frozenset({"none", "underline", "line-through", "overline"}),
+    "text-transform": frozenset({"none", "uppercase", "lowercase", "capitalize"}),
+    "font-variant": frozenset({"normal", "small-caps"}),
+}
+
+
+def _sanitize_style_attr(value: str) -> str:
+    """Rebuild a ``style`` attribute from `_ALLOWED_STYLE_VALUES`.
+
+    Returns the normalized declarations (``"text-align: center"``) or ``""`` when
+    nothing survives, in which case the caller drops the attribute. Both property
+    and value must match the table exactly — this is an allowlist of literal
+    values, not a filter over arbitrary CSS, so nothing is ever "cleaned up" and
+    kept. The normalized output is also what the stylesheet's
+    ``[style*="text-align: center"]`` rules key off, so the spacing here is
+    load-bearing.
+    """
+    kept: list[str] = []
+    for decl in str(value or "").split(";"):
+        prop, sep, val = decl.partition(":")
+        if not sep:
+            continue
+        prop = prop.strip().lower()
+        # Strip !important before matching; it carries no payload and dropping
+        # it keeps the app's own stylesheet able to win where it must.
+        val = val.strip().lower().replace("!important", "").strip()
+        allowed_values = _ALLOWED_STYLE_VALUES.get(prop)
+        if allowed_values and val in allowed_values:
+            kept.append(f"{prop}: {val}")
+    return "; ".join(kept)
 # Single-URL attributes scheme-validated against javascript:/data:/vbscript:. The
 # lazyload data-* attrs are included so an unsafe value can't survive sanitization
 # and later be promoted into src by the lazy-media normalizer. (srcset/data-srcset
@@ -152,6 +210,31 @@ _MATHML_ATTRS = frozenset({
 SAFE_LINK_SCHEMES = ("http", "https", "mailto", "tel")
 # Non-href single-URL attributes (src, poster, …) never need mailto/tel.
 SAFE_SRC_SCHEMES = ("http", "https")
+
+
+def _filter_element_attrs(el, tag_name: str) -> None:
+    """Strip a parsed element's attributes down to the allowlist, in place.
+
+    Shared by both passes — the main tree walk and the re-parse of feeds that
+    embed entity-escaped HTML as text — which previously carried two copies of
+    this policy. They had already drifted once (only one dropped `style`), so a
+    single implementation is the point rather than the brevity.
+    """
+    allowed = _ALLOWED_ATTRS.get(tag_name, frozenset())
+    for attr_name in list(el.attrs):
+        la = attr_name.lower()
+        if la.startswith("on") or (la not in allowed and la not in _GLOBAL_ALLOWED_ATTRS):
+            del el.attrs[attr_name]
+            continue
+        if la == "style":
+            kept_style = _sanitize_style_attr(str(el.attrs.get(attr_name, "")))
+            if kept_style:
+                el.attrs[attr_name] = kept_style
+            else:
+                del el.attrs[attr_name]
+            continue
+        if la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr_name, ""))):
+            del el.attrs[attr_name]
 
 
 def _is_safe_attr_url(attr: str, value: str) -> bool:
@@ -420,14 +503,7 @@ def sanitize_html(content: str) -> str:
         if name not in _ALLOWED_TAGS:
             tag.unwrap()  # keep inner text/children, drop the unknown wrapper
             continue
-        allowed = _ALLOWED_ATTRS.get(name, frozenset())
-        for attr_name in list(tag.attrs):
-            la = attr_name.lower()
-            if la.startswith("on") or la == "style" or (la not in allowed and la not in _GLOBAL_ALLOWED_ATTRS):
-                del tag.attrs[attr_name]
-                continue
-            if la in _URL_ATTRS and not _is_safe_attr_url(la, str(tag.attrs.get(attr_name, ""))):
-                del tag.attrs[attr_name]
+        _filter_element_attrs(tag, name)
 
     # Render pseudo-HTML tags that feeds sometimes embed as text inside elements
     # (e.g. &lt;em&gt;title&lt;/em&gt; in link text, stored as literal "<em>" in
@@ -448,13 +524,7 @@ def sanitize_html(content: str) -> str:
             if name not in _ALLOWED_TAGS:
                 el.unwrap()
                 continue
-            allowed_el = _ALLOWED_ATTRS.get(name, frozenset())
-            for attr in list(el.attrs):
-                la = attr.lower()
-                if la.startswith("on") or la == "style" or (la not in allowed_el and la not in _GLOBAL_ALLOWED_ATTRS):
-                    del el.attrs[attr]
-                elif la in _URL_ATTRS and not _is_safe_attr_url(la, str(el.attrs.get(attr, ""))):
-                    del el.attrs[attr]
+            _filter_element_attrs(el, name)
         # Splice only the parsed children, not the BeautifulSoup document wrapper
         # (replace_with(frag) can introduce <html>/<body> tags around the content).
         for child in list(frag.contents):

@@ -442,6 +442,35 @@ feeds must be excluded from the global caches.
   `referrerpolicy` and lazy loading. Inline SVG is cleaned via
   `services/svg_sanitize.py`; MathML is kept with a curated element/attribute
   allowlist.
+- **Presentational formatting is preserved, by enumerated allowlist.** Bold and
+  italic always survived (`b`/`strong`/`i`/`em` are allowed tags), but *centering*
+  did not: `style` was stripped wholesale, `align` was granted only to `img`/`td`/
+  `th`/`tr`, and `<center>` fell through the unknown-tag unwrap. Since feed CSS is
+  never loaded, nothing could restore the author's intent afterwards. Now
+  `<center>` is allowed, `align` extends to block elements (`p`/`div`/`figure`/
+  `figcaption`/`h1`–`h6`/`table` — the same "value-constrained, no scripting
+  surface" reasoning already applied to table cells, which had simply never been
+  extended), and `_sanitize_style_attr` keeps a **fixed table of property →
+  literal values** (`text-align`, `font-style`, `font-weight`,
+  `text-decoration`, `text-transform`, `font-variant`).
+  **Nothing free-form is ever kept**, so there is no place for `url(…)`,
+  `expression(…)`, `-moz-binding`, or an escaped payload to survive — an unlisted
+  property *or* an unlisted value is dropped rather than cleaned-and-kept, and the
+  declarations are re-emitted from the table so the output string is ours.
+  Layout and positioning (`position`, `z-index`, `width`, `display`, `opacity`)
+  are deliberately excluded: without any scripting they still let feed content
+  escape the pane or overlay the app's own UI. The normalized output spacing
+  (`text-align: center`) is load-bearing — `style.css` keys its centering rules
+  off that exact string.
+- **JS-dependent chrome is stripped at render** (`_strip_js_dependent_chrome`).
+  Share widgets and lazy "related posts" carousels only become anything once the
+  source page's own JavaScript runs; we don't run it, so they arrive as rows of
+  dead icons and empty bullets (paizo.com ends every post with a
+  `div.sharing_widget` of href-less anchors plus four
+  `<li class="blog-item loading">` holding a dice spinner). The safety rule is
+  narrow and load-bearing: **only elements with no text *and* no `<img>` are
+  removed**, so a real related-posts block (which has headlines) and a real
+  gallery (which has images) can never match on class name alone.
 - **Sphinx/dvisvgm math sizing** — blogs like eli.thegreenplace.net emit formulas
   as `<object type="image/svg+xml">` / `<img>` whose *true* rendered height rides on
   an inline `style="height: Npx"` (the SVGs' intrinsic dimensions are in `pt`, which
