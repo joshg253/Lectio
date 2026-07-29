@@ -1174,9 +1174,13 @@ of the inbox.*
   them. `_prune_entries` honors the same three signals, or retention would delete
   archived posts nightly — they are read and unstarred, exactly its target shape.
 - **Ordering is server-side.** `POST /entries/archive` writes the archived row
-  *before* unstarring, and `POST /entries/discard` clears tags *before*
-  unstarring, both for the same reason: the capture is released only when the
-  last keep signal goes. Delete used to be a client-side chain of two POSTs with
+  *before* unstarring, and `POST /entries/discard` clears tags **and the archived
+  row** *before* unstarring, both for the same reason: the capture is released
+  only when the last keep signal goes. Delete forgetting the archived row failed
+  quietly twice — the entry stayed listed in Archive forever, and the unstar saw
+  a surviving keep signal and skipped releasing the capture, so Delete kept the
+  contents it exists to drop. Deleting an archived item is not a contradiction:
+  Archive means "done, keep it", Delete means "done, don't", so Delete wins. Delete used to be a client-side chain of two POSTs with
   that ordering encoded in a comment in `reader.js`; it is one route now, because
   the constraint is a property of the storage layer, not of the caller.
 

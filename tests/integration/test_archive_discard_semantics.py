@@ -202,3 +202,30 @@ def test_discard_does_not_delete_an_ordinary_feed_post(configured):
 
     with main.get_reader() as reader:
         assert reader.get_entry((FEED, "star"), None) is not None
+
+
+def test_discard_also_clears_the_archived_row(configured):
+    """Delete must win over Archive, and forgetting this fails twice quietly.
+
+    Reported live: an archived post was deleted — tag gone, star gone — and it
+    still sat in the Archive list, because nothing cleared the done-axis row.
+    """
+    _archive(FEED, "star")
+    main.discard_entry(None, feed_url=FEED, entry_id="star")
+
+    assert (FEED, "star") not in main.get_archived_saved_keys()
+
+
+def test_discarding_an_archived_item_still_releases_the_capture(configured):
+    """The second, quieter half of the same bug.
+
+    Archived counts as a keep signal, so leaving the row in place meant the
+    unstar found one and skipped enqueue_removal — Delete kept the contents it
+    exists to drop. Only visible by watching the removal queue, never in the UI.
+    """
+    removals = configured
+    _archive(FEED, "star")
+    assert removals == []          # archiving kept it, as it must
+
+    main.discard_entry(None, feed_url=FEED, entry_id="star")
+    assert (FEED, "star") in removals

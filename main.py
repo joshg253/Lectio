@@ -26187,12 +26187,20 @@ def discard_entry(
     would ever show; `apply_star_state` removes those outright.
 
     This exists as a route because the gesture has an **order** the client was
-    previously trusted to get right: tags must be cleared *before* the unstar,
-    since the capture is only released once no keep signal remains. Reversed, the
-    captured copy is stranded with nothing keeping it. That is server-side
+    previously trusted to get right: **every** keep signal must be cleared before
+    the unstar, since the capture is only released once none remains. Reversed,
+    the captured copy is stranded with nothing keeping it. That is server-side
     knowledge, so it now lives on the server.
+
+    That includes the **archived** row, which is easy to forget and fails
+    quietly twice over: the entry stays listed in Archive forever, and — because
+    archived *is* a keep signal — the unstar below sees one and skips releasing
+    the offline capture, so Delete keeps the contents it exists to drop.
+    Deleting an archived item is not a contradiction: Archive means "done, keep
+    it", Delete means "done, don't", so Delete has to win.
     """
     set_manual_tags_for_entry(feed_url, entry_id, "")
+    set_entry_archived(feed_url, entry_id, False)
     apply_star_state(feed_url, entry_id, False)
     mark_entry_read_everywhere(feed_url, entry_id)
     return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "discarded": True})
