@@ -8247,13 +8247,19 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
 
 
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
-    """Feed-provided tags captured at ingest (entry_feed_tags meta table)."""
+    """Feed-provided tags captured at ingest (entry_feed_tags meta table).
+
+    Tags that this feed puts on essentially every entry are dropped — they carry
+    no per-entry signal and crowd out the ones that do. See
+    FeedTagService.low_signal_tags; the stored rows are untouched.
+    """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
+        low = feed_tag_service.low_signal_tags(feed_url)
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
-    return tags[:MAX_FEED_TAG_SUGGESTIONS]
+    return [t for t in tags if t not in low][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()

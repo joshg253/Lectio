@@ -228,6 +228,48 @@ class FeedTagService:
             ).fetchall()
         return [row[0] for row in rows]
 
+    # A tag on (nearly) every entry of a feed says nothing about any one entry.
+    # Measured on the live library: 2,525 slickdeals posts tagged "Popular
+    # Deals", 1,221 "Forum", all 555 talkpython.fm episodes carrying the same
+    # eight tags. Reported as "'popular-deals' is a useless tag".
+    #
+    # A coverage rule rather than a blocklist of junk words: it needs no
+    # maintenance, adapts per feed, and keeps a tag that actually varies —
+    # "python" survives on a Python-heavy feed precisely because it is not on
+    # everything.
+    LOW_SIGNAL_COVERAGE = 0.9
+    # Below this, coverage is noise: three of four entries sharing a tag is not
+    # evidence of boilerplate.
+    LOW_SIGNAL_MIN_ENTRIES = 10
+
+    def low_signal_tags(self, feed_url: str) -> set[str]:
+        """Tags carried by ~every tagged entry of *feed_url*, so worth hiding.
+
+        Filters the *suggestions*, never the stored rows: the table is also the
+        data foundation for tag-filtered feed adapters, where "this feed's every
+        post is tagged Popular Deals" is a fact worth keeping.
+        """
+        try:
+            with self._get_meta_connection() as conn:
+                total = conn.execute(
+                    "SELECT COUNT(DISTINCT entry_id) FROM entry_feed_tags WHERE feed_url = ?",
+                    (feed_url,),
+                ).fetchone()[0]
+                if not total or total < self.LOW_SIGNAL_MIN_ENTRIES:
+                    return set()
+                rows = conn.execute(
+                    "SELECT tag, COUNT(DISTINCT entry_id) FROM entry_feed_tags"
+                    " WHERE feed_url = ? GROUP BY tag",
+                    (feed_url,),
+                ).fetchall()
+        except Exception:
+            LOGGER.warning("low-signal tag scan failed for %s", feed_url, exc_info=True)
+            return set()
+        return {
+            str(tag) for tag, n in rows
+            if total and (n / total) >= self.LOW_SIGNAL_COVERAGE
+        }
+
     def delete_for_feed(self, feed_url: str) -> int:
         with self._get_meta_connection() as conn:
             return conn.execute(

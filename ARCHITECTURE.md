@@ -1392,6 +1392,23 @@ All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explici
 
 ## Feed-provided tag suggestions (`entry_feed_tags`)
 
+**Boilerplate feed tags are suppressed by coverage, not by a blocklist.** A tag a
+feed puts on essentially every entry carries no per-entry signal and crowds out
+the ones that do. Measured on the live library: 2,525 slickdeals posts tagged
+`Popular Deals`, 576 r/VinylDeals posts tagged `VinylDeals`, all 555
+talkpython.fm episodes carrying the same eight tags — 661 (feed, tag) pairs in
+total, against 51,028 kept.
+
+`FeedTagService.low_signal_tags` hides any tag on ≥90% of a feed's tagged entries,
+with a 10-entry floor because below that coverage is noise (three of four entries
+sharing a tag is not boilerplate). A coverage rule needs no maintenance and adapts
+per feed: `python` survives on a Python-heavy feed precisely because it is not on
+literally everything, which a junk-word list could never express.
+
+It filters the **suggestions only** — the stored rows are untouched, since the
+table is also the data foundation for tag-filtered feed adapters, where "every
+post in this feed is tagged VinylDeals" is a fact worth keeping.
+
 `reader` discards entry categories (RSS/Atom `<category>`) at ingest — its `Entry` type has no tags attribute — so Lectio captures them itself at the only point the raw feedparser result exists: `SanitizingFeedparserParser.__call__` (`services/reader_sanitize.py`). After `_process_feed`, the parser hands `(entry_id, tags)` pairs to an **injected sink** (`set_entry_tag_sink`, wired in `main` to `FeedTagService.record_entry_tags`), keeping services free of main/DB imports. Design notes:
 
 - **Tenancy for free.** Parsing runs synchronously inside `reader.update_feed(s)`, always in a user context (request thread or `_run_in_user_context` background threads), so the sink's `get_meta_connection()` resolves the correct per-user meta DB at call time — the same guarantee `get_reader()` relies on. The service itself is tenancy-unaware (LeadImageService pattern).
