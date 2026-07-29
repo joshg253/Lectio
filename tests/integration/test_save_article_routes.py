@@ -60,11 +60,15 @@ def test_modal_post_defaults_to_readability(monkeypatch):
     _save_article_for_current_user falls through to readability."""
     app, _ = _build_app(monkeypatch, _ok_result())
     with TestClient(app) as client:
-        client.post(
+        r = client.post(
             "/articles/save",
             data={"url": "https://example.com/post"},
             headers={"X-Requested-With": "lectio-save-article"},
         )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["duplicate"] is False
+    assert body["entry_id"] == "https://example.com/post"
     assert app.state.save_extracts == [None]
 
 
@@ -83,6 +87,7 @@ def test_modal_post_full_mode_captures_the_whole_page(monkeypatch):
             headers={"X-Requested-With": "lectio-save-article"},
         )
     assert r.status_code == 200
+    assert r.json()["ok"] is True
     assert app.state.save_extracts == [main.fetch_full_page_article]
 
 
@@ -90,11 +95,15 @@ def test_modal_post_unknown_mode_falls_back_to_readability(monkeypatch):
     """Anything that isn't exactly "full" must not silently full-capture."""
     app, _ = _build_app(monkeypatch, _ok_result())
     with TestClient(app) as client:
-        client.post(
+        r = client.post(
             "/articles/save",
             data={"url": "https://example.com/post", "mode": "FULL-ish"},
             headers={"X-Requested-With": "lectio-save-article"},
         )
+    # Still a normal, successful save — an unknown mode must not become an error
+    # *or* quietly widen the capture.
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
     assert app.state.save_extracts == [None]
 
 
