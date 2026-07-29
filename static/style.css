@@ -4018,6 +4018,22 @@ body[data-keyboard-open="1"] .action-modal-panel {
 .afd-msg--ok    { border-color: #2e7d52; color: #1a5c3a; background: #d4edda; }
 .afd-msg--warn  { border-color: #b8860b; color: #7a5800; background: #fff3cd; }
 .afd-msg--error { border-color: #c0392b; color: #7b241c; background: #fde8e6; }
+
+/* Full-page capture opt-in. Sits between the normal hint and the actions, with
+   its own hint indented under it so the caveat reads as belonging to the
+   checkbox rather than to the dialog. */
+.sva-fullpage-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.sva-fullpage-hint {
+  margin-top: 0.2rem;
+  padding-left: 1.35rem;
+}
 @media (prefers-color-scheme: dark) {
   .afd-msg--ok    { border-color: #2e7d52; color: #6fcf97; background: #0d2a1a; }
   .afd-msg--warn  { border-color: #b8860b; color: #f2c94c; background: #2a1f00; }

@@ -2,6 +2,12 @@
 // it across navigations (it was ~580KB of inline JS re-shipped with every
 // full page render). Template-derived values arrive via the window.* config
 // object in the document <head>; this file must stay Jinja-free.
+
+// The wire value selecting whole-page capture over readability extraction, sent
+// by both the Save Article modal and the post menu's "Re-fetch full page". Kept
+// in one place because a typo silently falls back to readability rather than
+// erroring; the server-side spelling lives in main.CAPTURE_MODE_FULL.
+const CAPTURE_MODE_FULL = 'full';
     // Only web-ish schemes may reach an href/src. Entry and feed URLs are
     // feed-controlled: a `javascript:` URL assigned to an anchor's href would
     // run in our origin the moment the user clicks it. The server already
@@ -2458,6 +2464,13 @@
     const postEditTitleButton = document.getElementById('ctx-post-edit-title');
     const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
+    const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
+    // Both re-fetch items appear under the same condition — the post has to be
+    // a Lectio capture for there to be anything to re-fetch. Read at call time,
+    // so it picks up whichever post the menu was opened on.
+    const postCanRefetch = () =>
+      (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
+      && Boolean(contextPostFeedUrl && contextPostEntryId);
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
     const postRangeReadForm = document.getElementById('context-post-range-read-form');
@@ -6359,8 +6372,8 @@
           setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
           setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-          setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
-              && Boolean(contextPostFeedUrl && contextPostEntryId));
+          setMenuItemVisible(postRefetchButton, postCanRefetch());
+          setMenuItemVisible(postRefetchFullButton, postCanRefetch());
           setMenuItemVisible(postMoveVisibleButton, false);
           setMenuItemVisible(postRemoveTagShownButton, false);
           setMenuItemVisible(postMarkAboveReadButton, false);
@@ -6718,8 +6731,8 @@
             setMenuItemVisible(postEditDateButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditTitleButton, Boolean(contextPostFeedUrl && contextPostEntryId));
             setMenuItemVisible(postEditLinkButton, Boolean(contextPostFeedUrl && contextPostEntryId));
-            setMenuItemVisible(postRefetchButton, (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
-                && Boolean(contextPostFeedUrl && contextPostEntryId));
+            setMenuItemVisible(postRefetchButton, postCanRefetch());
+            setMenuItemVisible(postRefetchFullButton, postCanRefetch());
             setMenuItemVisible(postMoveVisibleButton, true);
             // "Remove this tag from all shown": only in the Saved view filtered
             // by a tag. Scoped server-side to the folder+tag, so it clears the
@@ -7796,16 +7809,29 @@
       }
     });
 
-    postRefetchButton?.addEventListener('click', async (event) => {
+    // Both menu items run the same re-fetch; `fullPage` picks whole-page
+    // capture over readability extraction. Shared so the dead-source recovery
+    // below (offer to delete a 404) can't drift between the two.
+    //
+    // A boolean rather than a mode string: only the request body needs the wire
+    // value, and the file-scope CAPTURE_MODE_FULL keeps that spelling in one
+    // place — a typo there falls back to readability silently.
+    const runPostRefetch = async (event, fullPage) => {
       event.preventDefault();
       event.stopPropagation();
       const feedUrl = contextPostFeedUrl;
       const entryId = contextPostEntryId;
       hideAllContextMenus();
       if (!feedUrl || !entryId) return;
-      if (typeof showToastMessage === 'function') showToastMessage('Re-fetching content…');
+      if (typeof showToastMessage === 'function') {
+        showToastMessage(fullPage ? 'Re-fetching full page…' : 'Re-fetching content…');
+      }
       try {
-        const body = new URLSearchParams({ feed_url: feedUrl, entry_id: entryId });
+        const body = new URLSearchParams(
+          fullPage
+            ? { feed_url: feedUrl, entry_id: entryId, mode: CAPTURE_MODE_FULL }
+            : { feed_url: feedUrl, entry_id: entryId }
+        );
         const resp = await fetch('/articles/refresh-content', { method: 'POST', body });
         const data = await resp.json();
         if (!data.ok) {
@@ -7829,7 +7855,9 @@
           window.alert(data.error || 'Re-fetch failed.');
           return;
         }
-        if (typeof showToastMessage === 'function') showToastMessage('Content re-fetched.');
+        if (typeof showToastMessage === 'function') {
+          showToastMessage(fullPage ? 'Full page re-fetched.' : 'Content re-fetched.');
+        }
         // If this entry is currently open, re-render the pane to show the fresh copy.
         const cur = new URL(window.location.href);
         if (cur.searchParams.get('entry_id') === entryId && typeof loadEntryPaneWithoutFullRefresh === 'function') {
@@ -7838,7 +7866,10 @@
       } catch (_) {
         window.alert('Re-fetch failed.');
       }
-    });
+    };
+
+    postRefetchButton?.addEventListener('click', (ev) => runPostRefetch(ev, false));
+    postRefetchFullButton?.addEventListener('click', (ev) => runPostRefetch(ev, true));
 
     postRemoveTagShownButton?.addEventListener('click', async (event) => {
       event.preventDefault();
@@ -13781,6 +13812,7 @@
         const svaMsg = document.getElementById('sva-msg');
         const svaSpinner = document.getElementById('sva-spinner');
         const svaSubmit = document.getElementById('sva-submit');
+        const svaFullPage = document.getElementById('sva-fullpage');
         if (!svaModal || !svaUrl || !svaSubmit) return;
 
         const validUrl = () => /^https?:\/\/\S+\.\S+/i.test(svaUrl.value.trim());
@@ -13794,6 +13826,9 @@
           svaMsg.hidden = true;
           svaMsg.textContent = '';
           svaUrl.value = '';
+          // Reset the escape hatch each time: it applies to the shape of one
+          // page, so leaving it armed would silently full-capture the next save.
+          if (svaFullPage) svaFullPage.checked = false;
           svaSubmit.disabled = true;
           svaSubmit.textContent = 'Save Article';
           svaModal.removeAttribute('hidden');
@@ -13810,7 +13845,9 @@
             const response = await fetch('/articles/save', {
               method: 'POST',
               headers: { 'X-Requested-With': 'lectio-save-article' },
-              body: new URLSearchParams({ url }),
+              body: new URLSearchParams(
+                svaFullPage?.checked ? { url, mode: CAPTURE_MODE_FULL } : { url }
+              ),
             });
             const result = await response.json();
             if (!result.ok) throw new Error(result.error || 'Could not save the article.');
