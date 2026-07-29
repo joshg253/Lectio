@@ -1055,10 +1055,17 @@ on advance is mostly image decode, and the reader page itself is `no-store`, so 
 cost with no benefit. Instead `prefetchNextImages` fetches the next article's
 HTML, parses it in a **detached `DOMParser` document** (runs no scripts, loads no
 resources — it only reads `src` attributes), and warms up to
-`PREFETCH_MAX_IMAGES` same-origin images via `new Image()`. Those come from
-`/api/img` (`public, max-age=86400`) and `/starred-asset/` (a year, immutable),
-so unlike the page they genuinely survive in the HTTP cache. The cap exists
-because a lesson-length article can carry 50+ images. The prefetch is hung off
+`PREFETCH_MAX_IMAGES` images via `new Image()`.
+
+Warming is restricted by `isWarmableImagePath` to the two endpoints article
+images are actually rewritten to: `/api/img` (`public, max-age=86400`) and
+`/starred-asset/` (a year, immutable). Same-origin alone is too loose — a feed's
+broken *relative* `src` resolves against our own origin and would be prefetched
+into a 404, and other same-origin assets (a `/static/` placeholder) are already
+cached or not worth a request. These two are also the only paths with a real
+`max-age`, which is the entire reason prefetching works here when prefetching the
+page does not. The cap exists because a lesson-length article can carry 50+
+images. The prefetch is hung off
 the **settle** (plus `PREFETCH_DELAY_MS`) rather than a fixed delay from load, so
 warming the next article never competes with rendering the one being read — on a
 slow load settling can itself take seconds, and a fixed timer would fire straight

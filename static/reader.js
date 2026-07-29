@@ -229,6 +229,12 @@
   var PREFETCH_MAX_IMAGES = 12;   // a lesson-length article can carry 50+
   var PREFETCH_DELAY_MS = 1200;   // breathing room after the settle, see below
 
+  // The image proxy is a fixed path with the source in the query string; the
+  // starred archive serves per-asset paths under a prefix.
+  function isWarmableImagePath(path) {
+    return path === "/api/img" || path.indexOf("/starred-asset/") === 0;
+  }
+
   function prefetchNextImages() {
     if (!NAV.next) return;
     var u;
@@ -252,6 +258,13 @@
           try {
             var iu = new URL(src, window.location.origin);
             if (iu.origin !== window.location.origin) continue;
+            // Warm only the two endpoints article images are rewritten to.
+            // Same-origin alone is too loose: a feed's broken relative src
+            // resolves against our origin and would be prefetched into a 404,
+            // and anything else same-origin (a /static/ placeholder) is already
+            // cached or not worth the request. These two are also the only ones
+            // with a real max-age, which is the whole reason this works.
+            if (!isWarmableImagePath(iu.pathname)) continue;
             new Image().src = iu.pathname + iu.search;
           } catch (e) { /* malformed src — skip */ }
         }
