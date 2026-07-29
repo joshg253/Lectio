@@ -306,15 +306,27 @@ Verified in a browser end to end: search and clear both work *after* an in-page
 nav, Enter still routes in-page rather than reloading, and a search started
 inside Archive stays in Archive.
 
-### 2. Saved capture quality — engine DONE 2026-07-22, UI pending
+### 2. Saved capture quality — DONE 2026-07-28
 
 `extract_full_page_article` / `fetch_full_page_article` capture the whole page
 body instead of readability-extracting it: same sanitizer and post-processing
 tail (factored into `_finalize_article_html`), but the body-selection step keeps
-everything rather than scoring it. Reachable now via
-`POST /articles/refresh-content` with `mode=full`, so a bad capture can be
-re-taken in place without extraction. **The save-time toggle and a Re-fetch menu
-variant wait for browser testing.**
+everything rather than scoring it.
+
+**UI shipped 2026-07-28**, both halves, verified in a browser:
+
+- **Re-fetch full page** in the post context menu — same handler as *Re-fetch
+  content*, with `mode` selecting the extractor, so the dead-source recovery
+  (offer to delete a 404) can't drift between the two.
+- **Capture the whole page** checkbox on the Save Article modal
+  (`POST /articles/save` gained `mode`). Having it at *save* time is the point:
+  the re-fetch form only helps once an entry exists, so a page shape known to
+  extract badly had to be captured wrong first.
+
+**Off by default, and matched exactly against `"full"`** so a stray value can't
+silently widen a capture — on a blog-shaped page full capture keeps the nav and
+sidebar chrome readability strips. The checkbox also resets on every modal open:
+it describes one page's shape, not a standing preference.
 
 Verified on the two shapes below plus the live Blood Meridian article: full
 capture keeps the cover image and pull-quote readability drops (4 imgs / 7,238

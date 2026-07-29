@@ -85,7 +85,13 @@ The short version:
   Lectio captured, including ones already filed onto a real feed, and worth
   trying when a capture came out wrong, since a page that extracted badly once
   often extracts correctly later (a re-fetch updates the article's **Received**
-  date, never its **Pub** date — Pub stays the date it was published);
+  date, never its **Pub** date — Pub stays the date it was published).
+  For a page the reader mangles outright — a manual or docs-style page whose
+  text is scattered rather than sitting in one article body — **Capture the
+  whole page** (a checkbox on Save Article, and **Re-fetch full page** in the
+  post menu) keeps everything instead of extracting. It's off by default on
+  purpose: on a normal blog post it also keeps the nav and sidebars that
+  extraction strips, so it's the escape hatch, not the better setting.
   **File saved articles** matches
   unfiled saves to the subscribed feed they came from (grouped by host, reviewed
   per host before anything moves) — the usual case after importing a read-later

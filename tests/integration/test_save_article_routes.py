@@ -29,11 +29,16 @@ def _build_app(monkeypatch, result):
 
     calls: list[str] = []
 
-    def fake_save(url: str) -> dict:
+    def fake_save(url: str, extract=None, refresh_content: bool = False) -> dict:
         calls.append(url)
+        # The extractor the route chose, for the full-page tests below. Kept off
+        # `calls` so the existing URL assertions stay readable.
+        extracts.append(extract)
         return result
 
+    extracts: list = []
     monkeypatch.setattr(main, "_save_article_for_current_user", fake_save)
+    app.state.save_extracts = extracts
     return app, calls
 
 
@@ -48,6 +53,49 @@ def test_modal_post_returns_json(monkeypatch):
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert calls == ["https://example.com/post"]
+
+
+def test_modal_post_defaults_to_readability(monkeypatch):
+    """No mode means the normal capture: the route passes no extractor, so
+    _save_article_for_current_user falls through to readability."""
+    app, _ = _build_app(monkeypatch, _ok_result())
+    with TestClient(app) as client:
+        client.post(
+            "/articles/save",
+            data={"url": "https://example.com/post"},
+            headers={"X-Requested-With": "lectio-save-article"},
+        )
+    assert app.state.save_extracts == [None]
+
+
+def test_modal_post_full_mode_captures_the_whole_page(monkeypatch):
+    """mode=full swaps in the whole-page capture at save time.
+
+    The escape hatch already existed after the fact via
+    /articles/refresh-content; this is the same capture offered *before* a
+    known-bad page shape gets captured wrong once.
+    """
+    app, _ = _build_app(monkeypatch, _ok_result())
+    with TestClient(app) as client:
+        r = client.post(
+            "/articles/save",
+            data={"url": "https://example.com/post", "mode": "full"},
+            headers={"X-Requested-With": "lectio-save-article"},
+        )
+    assert r.status_code == 200
+    assert app.state.save_extracts == [main.fetch_full_page_article]
+
+
+def test_modal_post_unknown_mode_falls_back_to_readability(monkeypatch):
+    """Anything that isn't exactly "full" must not silently full-capture."""
+    app, _ = _build_app(monkeypatch, _ok_result())
+    with TestClient(app) as client:
+        client.post(
+            "/articles/save",
+            data={"url": "https://example.com/post", "mode": "FULL-ish"},
+            headers={"X-Requested-With": "lectio-save-article"},
+        )
+    assert app.state.save_extracts == [None]
 
 
 def test_modal_post_error_returns_400(monkeypatch):

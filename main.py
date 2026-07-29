@@ -25256,9 +25256,19 @@ def _refresh_captured_article_for_current_user(
 
 
 @app.post("/articles/save")
-def save_article_route(request: Request, url: str = Form(...)):
-    """In-app save (Save Article modal). Session-authenticated."""
-    result = _save_article_for_current_user(url)
+def save_article_route(
+    request: Request, url: str = Form(...), mode: str = Form("readability")
+):
+    """In-app save (Save Article modal). Session-authenticated.
+
+    *mode* ``"full"`` captures the whole page body instead of readability-
+    extracting it, for a document-shaped page readability mangles — the same
+    escape hatch `/articles/refresh-content` offers after the fact, offered at
+    save time so a known-bad shape doesn't have to be captured wrong first.
+    Deliberately not the default: on a blog-shaped page it keeps the nav and
+    sidebar chrome readability would strip."""
+    extract = fetch_full_page_article if mode == "full" else None
+    result = _save_article_for_current_user(url, extract)
     if is_async_action_request(request, "lectio-save-article"):
         status = 200 if result["ok"] else 400
         return JSONResponse(result, status_code=status)

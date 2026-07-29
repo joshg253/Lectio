@@ -742,6 +742,25 @@ re-create the duplicate that filing removed — hence the split, and hence
 saved feed. Feed-provided entries are refused: their content belongs to the
 publisher and the next refresh would overwrite it anyway.
 
+**Whole-page capture is an opt-in `mode`, on both the save and re-fetch paths.**
+`mode="full"` swaps `fetch_readability_article` for `fetch_full_page_article` —
+same sanitizer and post-processing tail (`_finalize_article_html`), but the
+body-selection step keeps everything instead of scoring it. It exists because
+readability doesn't merely under-extract on document-shaped pages, it picks the
+*wrong node*: on a DocBook-style export (84 `<p>` across 68 `<div>`, no
+`<article>`, 13 `<pre>`) it returns a single shell-session `<pre>` and drops the
+prose, because it scores containers by paragraph density.
+
+Reachable from `POST /articles/refresh-content` (UI: **Re-fetch full page**) and
+from `POST /articles/save` (UI: the **Capture the whole page** checkbox). Having
+it at *save* time matters because the re-fetch form only helps once an entry
+exists — a page shape known to extract badly would otherwise have to be captured
+wrong first. **Never the default, and matched exactly against `"full"`** so a
+stray value can't silently widen a capture: on a blog-shaped page this keeps the
+nav and sidebar chrome readability strips, so it is the escape hatch rather than
+the better option. The modal's checkbox resets on every open for the same reason
+— it describes one page's shape, not a standing preference.
+
 The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
