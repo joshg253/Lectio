@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import base64
 import hashlib
 import html
 import io
@@ -1654,7 +1655,7 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/", "/sw.js")
 
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
@@ -16864,7 +16865,15 @@ def build_reader_page(
         "<button class='reader-ctl' id='reader-tag-btn' type='button'"
         f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
     )
-    saved_actions = (tag_btn + archive_btn + delete_btn) if show_saved_actions else ""
+    # EXPERIMENT (uncommitted): download this article as a self-contained file,
+    # to test whether the Supernote can reach saved articles with WiFi off. A
+    # plain <a download> — no JS, so nothing to fail on an old WebView. ⤓ (U+2913)
+    offline_btn = (
+        "<a class='reader-ctl' id='reader-offline-btn'"
+        f" href='/read/offline?feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}'"
+        " download title='Save local copy'>&#10515;</a>"
+    )
+    saved_actions = (tag_btn + archive_btn + delete_btn + offline_btn) if show_saved_actions else ""
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -17378,6 +17387,213 @@ def _build_read_mode_context(
         "exit_href": "/",
         "static_asset_version": STATIC_ASSET_VERSION,
     }
+
+
+_OFFLINE_IMG_MAX_BYTES = 2 * 1024 * 1024      # per image, inlined as base64
+_OFFLINE_IMG_TOTAL_BYTES = 12 * 1024 * 1024   # whole document budget
+_OFFLINE_IMG_MAX_FETCHES = 20                 # network fetches per saved article
+
+
+def _fetch_image_for_offline(url: str) -> tuple[bytes, str] | None:
+    """Fetch one image through the proxy's own route, so the SSRF guard, the
+    honest UA and the cache write are exactly those of a normal image load —
+    rather than a second, subtly different outbound path."""
+    import asyncio
+
+    resp = asyncio.run(api_img_proxy(url))
+    body = getattr(resp, "body", b"") or b""
+    ctype = resp.headers.get("content-type", "")
+    if resp.status_code != 200 or not ctype.startswith("image/") or not body:
+        return None
+    return bytes(body), ctype
+
+
+def _inline_images_as_data_uris(article_html: str) -> tuple[str, int, int]:
+    """Rewrite <img src> to data: URIs so the document needs no network at all.
+
+    EXPERIMENT (2026-07-29), not committed yet. The Supernote has no browser
+    launcher — Read Mode is reached from a saved hyperlink — so with WiFi off the
+    navigation itself fails and nothing cached is reachable. A downloaded,
+    self-contained file sidesteps the entry-point problem entirely, which is the
+    thing a service worker cannot be assumed to solve in a WebView.
+
+    Images come from the /api/img byte cache when it has them (zero extra
+    requests). Misses are fetched — bounded, and only because this is an explicit
+    "save this for offline" click rather than anything speculative; the cache
+    turns out to hold only recently-viewed images (1,800 rows), so cache-only
+    would leave most saved articles full of broken pictures. The fetch reuses the
+    proxy's own path, so the SSRF guard, the polite UA and the cache write all
+    behave identically to a normal image load.
+
+    → (html, inlined_count, skipped_count)
+    """
+    if not article_html or "<img" not in article_html.lower():
+        return article_html, 0, 0
+
+    from bs4 import BeautifulSoup   # imported at use site, as elsewhere in main
+
+    soup = BeautifulSoup(article_html, "html.parser")
+    inlined = skipped = fetched = 0
+    budget = _OFFLINE_IMG_TOTAL_BYTES
+    for img in soup.find_all("img"):
+        src = str(img.get("src") or "")
+        if not src or src.startswith("data:"):
+            continue
+        # Unwrap our own proxy URL back to the real one before hashing: the cache
+        # is keyed on the upstream URL, not on /api/img?u=…
+        target = src
+        if "/api/img" in src:
+            qs = parse_qs(urlparse(src).query)
+            target = (qs.get("u") or [""])[0] or src
+        try:
+            key = hashlib.sha256(_img_cache_key_url(target).encode("utf-8")).hexdigest()
+            hit = _img_cache_get(key)
+        except Exception:  # noqa: BLE001 — an offline copy is best-effort
+            hit = None
+        if hit is None and fetched < _OFFLINE_IMG_MAX_FETCHES:
+            fetched += 1
+            try:
+                hit = _fetch_image_for_offline(target)
+            except Exception:  # noqa: BLE001 — best-effort
+                hit = None
+        if hit is None or len(hit[0]) > _OFFLINE_IMG_MAX_BYTES or len(hit[0]) > budget:
+            skipped += 1
+            continue
+        body, content_type = hit
+        budget -= len(body)
+        img["src"] = f"data:{content_type or 'image/jpeg'};base64," + base64.b64encode(body).decode("ascii")
+        # srcset would re-introduce network fetches the moment the browser
+        # preferred one of its candidates over the inlined src.
+        for attr in ("srcset", "data-src", "data-srcset", "loading"):
+            if img.has_attr(attr):
+                del img[attr]
+        inlined += 1
+    return str(soup), inlined, skipped
+
+
+@app.get("/read/offline")
+def read_offline_copy(
+    feed_url: str = Query(...),
+    entry_id: str = Query(...),
+):
+    """Download one article as a single self-contained HTML file.
+
+    EXPERIMENT — the cheapest possible test of offline reading on the Supernote,
+    and deliberately not a design commitment. It answers the two questions a
+    capability probe cannot: can that WebView download a file at all, and can the
+    file be found and opened with WiFi off.
+
+    No JS, no external references, CSS inlined, images as data: URIs. Nothing in
+    it can phone home, so if it opens offline it works offline.
+    """
+    detail = get_entry_detail(feed_url, entry_id)
+    if detail is None:
+        return JSONResponse({"ok": False, "error": "No such entry."}, status_code=404)
+    title = str(detail.get("title") or detail.get("link") or "(untitled)")
+    link = str(detail.get("link") or "")
+    article_html = resolve_reader_article_html(feed_url, entry_id, link)
+    article_html, inlined, skipped = _inline_images_as_data_uris(article_html)
+
+    try:
+        css = (Path(__file__).parent / "static" / "reader.css").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        css = ""
+        LOGGER.warning("offline copy: reader.css unreadable", exc_info=True)
+
+    date_display = _read_mode_date(detail)
+    esc_title = html.escape(title)
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        f"<title>{esc_title}</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<style>{css}</style>"
+        # The saved file is read as one long scroll, not paged: pagination is
+        # reader.js's job and there is no JS here by design.
+        "<style>body{overflow:auto}.reader-columns{columns:auto!important;"
+        "height:auto!important;overflow:visible!important}</style>"
+        "</head><body class='reader-body'>"
+        "<main class='reader-columns'>"
+        f"<h1 class='reader-title'>{esc_title}</h1>"
+        + (f"<p class='reader-dateline'>{html.escape(date_display)}</p>" if date_display else "")
+        + article_html
+        + (f"<p class='reader-dateline'>Source: {html.escape(link)}</p>" if link else "")
+        + f"<p class='reader-dateline'>Offline copy — {inlined} image(s) embedded, {skipped} skipped.</p>"
+        "</main></body></html>"
+    )
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()[:60] or "article"
+    return HTMLResponse(doc, headers={
+        "Content-Disposition": f'attachment; filename="{slug}.html"',
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/sw.js")
+def offline_service_worker():
+    """Serve the probe worker from the ROOT path — EXPERIMENT, uncommitted.
+
+    A worker's default scope is its own directory, so /static/sw.js could only
+    ever control /static/*. Read Mode lives at /read, so it has to be served from
+    "/" (or carry Service-Worker-Allowed); the header is sent as well so the
+    registration cannot silently fall back to a scope that controls nothing.
+
+    Auth-exempt like the other static assets: the worker is fetched by the
+    browser's registration machinery, and its own requests carry the session.
+    """
+    try:
+        body = (Path(__file__).parent / "static" / "sw.js").read_text(encoding="utf-8")
+    except Exception:
+        return Response(status_code=404)
+    return Response(body, media_type="application/javascript", headers={
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/read/offline/manifest")
+def read_offline_manifest(
+    folder_id: int | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    kept: str | None = Query(default=None),
+    n: int = Query(default=20),
+):
+    """The URLs a device should precache to read the next *n* Inbox items offline.
+
+    The page cannot work this out for itself: the browse list holds hrefs, but an
+    article also needs its images, and those live inside the rendered HTML.
+
+    Assembled server-side and capped, because the whole point is a bounded set —
+    "cache the Inbox" on a 9,979-item backlog is not a request anyone means.
+    """
+    n = max(1, min(int(n), 50))
+    is_all = kept == "all"
+    tag_val = normalize_tag_value(tag)
+    items = resolve_reader_backlog(
+        folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
+        tag=tag_val, sort_by=("starred" if not (tag_val or is_all) else "post"),
+        sort_dir="desc", search_query=None, archived=False, limit=n,
+        kept_scope=("kept" if (tag_val or is_all) else "starred"),
+    )[:n]
+
+    urls: list[str] = []
+    for it in items:
+        feed_u, eid = str(it["feed_url"]), str(it["id"])
+        urls.append(_reader_href(feed_u, eid, folder_id=folder_id, tag=tag_val,
+                                 archived=False, q=None, kept_all=is_all))
+        # Same-origin image URLs from the rendered article. Cross-origin ones are
+        # skipped: a no-cors response is opaque, so caching one stores a result
+        # the worker cannot tell apart from a failure.
+        article = resolve_reader_article_html(feed_u, eid, str(it.get("link") or ""))
+        if article and "<img" in article.lower():
+            from bs4 import BeautifulSoup
+            for img in BeautifulSoup(article, "html.parser").find_all("img"):
+                src = str(img.get("src") or "")
+                if src.startswith("/"):
+                    urls.append(src)
+    # Dedupe, order preserved: articles first, so a quota cut-off loses images
+    # rather than whole articles.
+    seen: set[str] = set()
+    deduped = [u for u in urls if not (u in seen or seen.add(u))]
+    return JSONResponse({"ok": True, "count": len(items), "urls": deduped})
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn

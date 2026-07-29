@@ -105,6 +105,15 @@
           {% endfor %}
         </div>
         {% endif %}
+        {# EXPERIMENT (uncommitted): offline probe. The Supernote browser has no
+           download handler at all, so a service worker is the only in-browser
+           route left — it can serve the NAVIGATION, which is what the saved
+           hyperlink needs when WiFi is off. #}
+        <div class="rm-offline">
+          <button type="button" id="rm-offline-btn" class="rm-sort-opt">Save 20 for offline</button>
+          <span id="rm-offline-status" class="rm-offline-status">Checking support…</span>
+          <pre id="rm-offline-detail" class="rm-offline-detail" hidden></pre>
+        </div>
       </header>
 
       {% if list_items %}
@@ -133,5 +142,6 @@
       {% endif %}
     </main>
   </div>
+  <script src="/static/offline-probe.js?v={{ static_asset_version }}"></script>
 </body>
 </html>

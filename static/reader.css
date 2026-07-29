@@ -486,3 +486,8 @@ body.rm-body {
 /* Applied tags invert — the same "state = filled block" language the Archive
    button and the sort switcher use, which reads at a glance on e-ink. */
 .reader-tag.on { background: #000; color: #fff; }
+
+/* Offline probe (EXPERIMENT, uncommitted) */
+.rm-offline { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .4rem; }
+.rm-offline-status { font-size: .85rem; }
+.rm-offline-detail { font-size: .75rem; white-space: pre-wrap; word-break: break-all; margin: .25rem 0 0; width: 100%; }
