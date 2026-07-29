@@ -93,6 +93,18 @@
           <a class="rm-search-clear" href="{{ read_clear_search_href }}" aria-label="Clear search">Clear</a>
           {% endif %}
         </form>
+        {# Sort switcher: plain links, so it works with no JS and each tap is a
+           single e-ink repaint. The chosen order rides the URL, so Next/Prev
+           inside the reader walk the list the same way. #}
+        {% if sort_options %}
+        <div class="rm-sort" role="group" aria-label="Sort order">
+          <span class="rm-sort-label">Sort</span>
+          {% for s in sort_options %}
+          <a class="rm-sort-opt{% if s.active %} active{% endif %}" href="{{ s.href }}"
+             {% if s.active %}aria-current="true"{% endif %}>{{ s.label }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
       </header>
 
       {% if list_items %}
@@ -101,7 +113,15 @@
         <li class="rm-item{% if it.read %} rm-read{% endif %}">
           <a class="rm-item-link" href="{{ it.href }}">
             <span class="rm-item-title">{{ it.title }}</span>
-            {% if it.subtitle %}<span class="rm-item-feed">{{ it.subtitle }}</span>{% endif %}
+            {# Source and date share a line: on a small e-ink screen a third
+               line per row costs more than the date is worth. #}
+            {% if it.subtitle or it.date %}
+            <span class="rm-item-feed">
+              {%- if it.subtitle %}{{ it.subtitle }}{% endif -%}
+              {%- if it.subtitle and it.date %} · {% endif -%}
+              {%- if it.date %}<span class="rm-item-date">{{ it.date }}</span>{% endif -%}
+            </span>
+            {% endif %}
           </a>
         </li>
         {% endfor %}

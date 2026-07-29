@@ -1164,6 +1164,29 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   than a fixed delay from load.
   **Depends on the mark-read change above** — fetching the next article's HTML
   would previously have marked it read unseen.
+- ~~**Dates, sort order, and a readable Archive button**~~ — **DONE 2026-07-28.**
+  Reported while reading on the Supernote: the Archive control "just looks like
+  an empty checkbox" (it was ▢/▣ — the shape said nothing about archiving and the
+  filled/empty difference was invisible at button size; now ▤, the glyph the tree
+  already uses, with state shown by inverting the button), no date on posts (now
+  the publish date, falling back to received, under the reader headline and on
+  each browse row), and **no way to sort** (Newest / Oldest / Received; the
+  backlog always took sort_by/sort_dir, Read Mode just pinned them). The chosen
+  order rides the URL through `_read_scope_params`, so Next/Prev walk the list
+  the same way instead of reverting at the first hop.
+- **Tag from inside Read Mode** — agreed shape: a Tag button opening existing
+  tags as large tap targets, tap to add/remove, with a "+ New" revealing a text
+  field only when needed. No keyboard, one repaint per tap. `POST /entries/tags`
+  already supports this (`append_mode`, JSON reply) and `get_all_manual_tag_names()`
+  exists, so it is a Read Mode UI job. **Not built yet.**
+- **⚠ Saved counts disagree between the two modes** — measured 2026-07-28:
+  the regular sidebar shows **24,695**, Read Mode **9,979**. Both are deliberate
+  in their own code and neither is a bug on its own: `get_saved_counts_by_folder`
+  counts **kept** (starred OR tagged), while `_read_mode_saved_index` counts
+  **starred, non-archived**. Archiving is not the cause (only 23 archived) — the
+  gap is **tagged-but-not-starred** (16,479 tagged vs 10,002 starred). Since
+  tag-as-keep made a tag a keep signal, Read Mode arguably cannot reach most of
+  what is kept. **Needs a decision** before either count changes.
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
   bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
   with the dead-code sweep in Later's "Code health".

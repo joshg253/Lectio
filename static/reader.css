@@ -88,6 +88,24 @@ body {
   cursor: pointer;
 }
 
+/* Toggle state (currently: Archive). Inverting the whole button is legible on
+   e-ink at a glance; the previous approach — swapping ▢ for ▣ — read as an
+   empty checkbox either way, and the two glyphs were indistinguishable at
+   button size. */
+.reader-ctl[aria-pressed="true"] {
+  background: #000;
+  color: #fff;
+}
+
+/* Publish date under the headline. Quiet, but present: on a device you read
+   a day behind, "which strip is this" is the first question. */
+.reader-dateline {
+  margin: -4px 0 14px;
+  font-size: 0.85rem;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- Paginated article --------------------------------------------------- */
 #reader-viewport {
   position: fixed;
@@ -318,13 +336,16 @@ body.rm-body {
   min-width: 0;
   background: #fff;
 }
+/* Wraps, and has no fixed height: the sort row is a second line whenever the
+   search form has taken the first, rather than being squeezed alongside it. */
 .rm-list-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
-  height: 48px;
-  padding: 0 16px;
+  min-height: 48px;
+  padding: 8px 16px;
   border-bottom: 2px solid #000;
 }
 .rm-list-title { font-weight: 700; font-size: 1.1rem; flex: 0 0 auto; }
@@ -367,6 +388,37 @@ body.rm-body {
 }
 .rm-item-title { font-size: 1.1rem; line-height: 1.3; font-weight: 600; }
 .rm-item-feed { font-size: 0.85rem; opacity: 0.7; }
+.rm-item-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Sort switcher. Big tap targets and a solid inverted "current" — on e-ink a
+   colour or weight difference is easy to miss, a filled block is not. */
+.rm-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  /* Own the full header row so the options never interleave with the search. */
+  flex: 1 0 100%;
+}
+.rm-sort-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+.rm-sort-opt {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.rm-sort-opt.active { background: #000; color: #fff; }
 .rm-item.rm-read .rm-item-title { font-weight: 400; opacity: 0.6; }
 .rm-empty { padding: 24px 16px; opacity: 0.7; }
 
