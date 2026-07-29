@@ -83,3 +83,40 @@ def test_thumbnail_wrapper_imgs_stripped(monkeypatch):
     content, lead = _strip('<p><img src="https://cdn.test/thumb.jpg"> short</p>')
     assert lead == LEAD
     assert "<img" not in (content or "")
+
+
+# --- block-spacer collapse -------------------------------------------------
+def test_spacer_only_blocks_and_boundary_breaks_are_dropped():
+    """Blogger emits "</div><br/><div><i><br/></i>" between blocks, which renders
+    as a large empty gap. It was always there — a second image above it filled
+    the space, so removing that image is what made it visible.
+    """
+    out = main._collapse_block_spacers(
+        '<div><img src="https://x.test/a.png"></div><br/><div><i><br/></i><p>Body text</p></div>'
+    )
+    assert "<br" not in out
+    assert "Body text" in out
+    assert 'src="https://x.test/a.png"' in out
+
+
+def test_a_br_between_words_survives():
+    """The narrowness is the whole point: plenty of feeds ship no <p> at all and
+    separate lines with <br><br>. Collapsing those would reflow real prose."""
+    html = "<p>line one<br/><br/>line two</p>"
+    assert main._collapse_block_spacers(html) == html
+
+
+def test_a_block_holding_an_image_is_not_a_spacer():
+    """No text, but not empty — dropping it would delete the picture."""
+    html = '<div><br/><img src="https://x.test/b.png"></div>'
+    out = main._collapse_block_spacers(html)
+    assert 'src="https://x.test/b.png"' in out
+
+
+def test_content_without_breaks_is_returned_untouched():
+    html = "<p>nothing to do</p>"
+    assert main._collapse_block_spacers(html) == html
+
+
+def test_all_spacer_content_collapses_to_none():
+    assert main._collapse_block_spacers("<div><br/></div>") is None

@@ -205,7 +205,10 @@
              tree, load no posts (All can be huge) — pick All/a folder explicitly. #}
           <div class="scope-tabs" role="tablist">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&home=1"
+              {# No sort in a scope-switch link: Feeds and Saved remember their
+                 order separately, and an explicit sort_by here would overwrite
+                 the target view's remembered value with this one's. #}
+              href="/?folder_id={{ root_folder_row.id }}&home=1"
               class="tree-item root-item scope-tab {% if not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -216,7 +219,7 @@
               <span class="name">Feeds</span>
             </a>
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1&home=1"
+              href="/?folder_id={{ root_folder_row.id }}&star_only=1&home=1"
               class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"

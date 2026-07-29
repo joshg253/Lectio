@@ -2871,8 +2871,6 @@ const CAPTURE_MODE_FULL = 'full';
       const nextSavedHome = nextStarOnly && nextHome;
       const nextReadFilter = nextUrl.searchParams.get('read_filter') || 'unread';
       const nextResumeReadFilter = nextUrl.searchParams.get('resume_read_filter') || nextReadFilter;
-      const nextSortBy = nextUrl.searchParams.get('sort_by') || 'post';
-      const nextSortDir = nextUrl.searchParams.get('sort_dir') || 'desc';
 
       // Bare URLs are ambiguous in SPA/popstate flows. Prefer preserving
       // current visible selection to avoid active-state flicker/clearing.
@@ -2914,8 +2912,11 @@ const CAPTURE_MODE_FULL = 'full';
         if (nextTag) {
           params.set('tag', nextTag);
         }
-        params.set('sort_by', nextSortBy);
-        params.set('sort_dir', nextSortDir);
+        // This builds the OPPOSITE scope's URL (star_only is flipped below), so it
+        // must not carry this view's order — Feeds and Saved remember their sort
+        // separately and the server persists any explicit sort_by it is sent.
+        // Stamping it here (defaulting to 'post' when absent) overwrote the target
+        // view's remembered order on every toggle.
         params.set('read_filter', nextStarOnly ? resumeFilter : 'all');
         params.set('star_only', nextStarOnly ? '0' : '1');
         params.set('resume_read_filter', resumeFilter);
@@ -3076,7 +3077,17 @@ const CAPTURE_MODE_FULL = 'full';
         if (!shouldKeepTargetReadFilter) {
           keysToSync.unshift('read_filter');
         }
+        // A scope tab (Feeds <-> Saved) must not carry the sort or the scope flag
+        // it is leaving. Feeds and Saved remember their sort separately, and the
+        // server persists any EXPLICIT sort_by it receives — so copying the
+        // current view's order onto the tab made switching overwrite the other
+        // view's remembered order, and the two collapsed into one. The tab's own
+        // href already declares star_only.
+        const isScopeSwitch = linkEl.matches('.scope-tab');
         for (const key of keysToSync) {
+          if (isScopeSwitch && (key === 'sort_by' || key === 'sort_dir' || key === 'star_only')) {
+            continue;
+          }
           if (currentParams.has(key)) {
             targetUrl.searchParams.set(key, currentParams.get(key) || '');
           }

@@ -1417,6 +1417,29 @@ closed and WiFi turned off.
 Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
 pile; at ~420 it is a meaningful unit.
 
+### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
+
+gottadeal posts carry a real category line on the page:
+
+    Posted on 7/29/26 in Woot!, Pet Supplies
+
+`Woot!` and `Pet Supplies` are genuine categories, but the harvested tag came out
+as **"in XXX, YYY"** — the extractor took surrounding sentence text instead of the
+two anchor texts. First reported as junk chrome and dismissed as such; Josh
+corrected it ("these actually do have tags of sort").
+
+Distinct from the coverage rule shipped the same day: that hides tags a feed puts
+on *everything*, whereas this is a per-post tag being read wrongly. Look at
+`extract_page_tags`' anchor tiers in `services/feed_tags.py` — the `rel="tag"` /
+tag-classed-anchor branches, and whichever path let containing text in.
+
+Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022`
+
+Also still open from the same pass: Real Python's page tag block mixes taxonomies
+(`ai` is a topic, `intermediate` is a **skill level**). A four-word stop-list
+(`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage
+cannot — it is fixed vocabulary, not per-feed frequency.
+
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 
 - **Tag autocomplete while typing** — auto-list matching existing tags during tag

@@ -13241,6 +13241,79 @@ _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
 
+_BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "figure"})
+# Real blocks only, for the "is this <br> at a block boundary" test. Inline tags
+# are deliberately absent: a <br> before a <span> is separating text, and removing
+# it would join two lines the author meant to keep apart.
+_REAL_BLOCK_TAGS = frozenset({
+    "div", "p", "figure", "blockquote", "table", "ul", "ol", "li", "pre", "hr",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+})
+
+
+def _collapse_block_spacers(content_html):
+    """Drop blocks whose only content is <br>/whitespace, and <br> sitting at a
+    block boundary. Returns the (possibly None) html.
+
+    These are spacing hacks, not content: Blogger emits
+    ``</div><br/><div><i><br/></i>`` between blocks, which renders as a large
+    empty gap. It was always there — a second image above it used to fill the
+    space, so removing that image is what made it visible.
+
+    Deliberately narrow. A ``<br><br>`` *inside* a paragraph is how plenty of
+    feeds separate lines when they ship no <p> tags at all, and collapsing those
+    would reflow real prose. Only breaks adjacent to a block boundary, and blocks
+    holding nothing but breaks, are touched.
+    """
+    if not content_html or "<br" not in content_html.lower():
+        return content_html
+    from bs4 import BeautifulSoup, NavigableString
+
+    soup = BeautifulSoup(content_html, "html.parser")
+
+    def _is_spacer_only(el) -> bool:
+        if el.name not in _BLOCK_SPACER_TAGS:
+            return False
+        if el.get_text(strip=True):
+            return False
+        if el.find(["img", "svg", "iframe", "video", "audio", "table"]) is not None:
+            return False
+        return el.find("br") is not None
+
+    # Innermost first, so <div><i><br/></i></div> collapses all the way out
+    # rather than leaving the now-empty wrapper behind.
+    for _ in range(3):
+        victims = [el for el in soup.find_all(list(_BLOCK_SPACER_TAGS)) if _is_spacer_only(el)]
+        if not victims:
+            break
+        for el in victims:
+            if not getattr(el, "decomposed", False):
+                el.decompose()
+
+    # A <br> whose previous/next meaningful sibling is a block element is padding
+    # between blocks, not a line break inside text.
+    for br in list(soup.find_all("br")) + list(soup.find_all("br")):
+        if getattr(br, "decomposed", False):
+            continue
+        def _neighbour(node, forward: bool):
+            sib = node.next_sibling if forward else node.previous_sibling
+            while sib is not None and isinstance(sib, NavigableString) and not sib.strip():
+                sib = sib.next_sibling if forward else sib.previous_sibling
+            return sib
+        prev, nxt = _neighbour(br, False), _neighbour(br, True)
+        # None = the edge of the parent block, so a leading/trailing break is
+        # padding too. A neighbouring <br> counts as a boundary so a run at a
+        # block edge clears out one pass at a time.
+        prev_edge = prev is None or getattr(prev, "name", None) in _REAL_BLOCK_TAGS
+        next_edge = (nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS
+                     or getattr(nxt, "name", None) == "br")
+        if prev_edge and next_edge:
+            br.decompose()
+
+    out = str(soup).strip()
+    return out or None
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -13967,6 +14040,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
+        content_html = _collapse_block_spacers(content_html)
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
