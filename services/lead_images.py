@@ -329,8 +329,30 @@ class LeadImageService:
         # class="comic_image", which the hyphen-only pattern missed, so the site's
         # Archives banner won the scan and became the lead image for every strip.
         # The id pattern already accepted both spellings; these now agree.
-        r'\b(?:comic[-_]image|comic[-_]strip|comic[-_]img|comicImg|webcomic|wp-post-image)\b',
-        re.IGNORECASE,
+        #
+        # Bare `comic` too, for the same reason one step further: qwantz.com marks
+        # its panel class="comic", the id pattern has always accepted a bare
+        # "comic", and the class pattern did not — so the site's decorative
+        # <img class="pteranodon"> (first in document order) won the scan and
+        # became the lead image for all 44 strips.
+        #
+        # The bare alternative uses lookarounds rather than \b so it matches the
+        # whole class token only: \b would also fire inside "comic-nav", handing
+        # the panel bonus to navigation buttons. Hyphen/underscore spellings stay
+        # with the explicit alternatives above.
+        r"""
+        \b(?:                                   # explicit multi-word spellings
+            comic[-_]image | comic[-_]strip
+          | comic[-_]img   | comicImg
+          | webcomic       | wp-post-image
+        )\b
+        |
+        (?<![-\w]) comic (?![-\w])             # a BARE `comic` class token only:
+                                               # lookarounds, not \b, so this does
+                                               # not fire inside `comic-nav` and
+                                               # hand the panel bonus to buttons
+        """,
+        re.IGNORECASE | re.VERBOSE,
     )
 
     # ComicControl CMS (atomic-robo.com, everblue-comic.com, many others) ships a

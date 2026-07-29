@@ -1270,6 +1270,26 @@ generically rather than per-site:
 
 Verified against the live page: 14 → the 5 panels, each confirmed 200.
 
+**qwantz FIXED 2026-07-28 — the same miss, one step further.** Reported as "no
+longer shows the comics, just a pterodactyl", right after the feed's strategy was
+set to `webcomic` (which invalidates the cached leads and re-scans). The scan then
+picked `qwantz.com/pteranodon.png` — a decorative image sitting first in document
+order — for **all 44 strips**.
+
+Cause: qwantz marks its panel `class="comic"`, a **bare** token. The *id* pattern
+has always accepted a bare `comic`; `_WEBCOMIC_IMG_CLASS_RE` only took the
+hyphen/underscore spellings, so `_extract_webcomic_panel_image` returned `None`
+and the generic fallback let chrome win. Proven against the live page: the old
+pattern returns `None`, the new one returns `comics/comic2-5197.png`.
+
+The bare alternative uses **lookarounds, not `\b`** — `\b` would also fire inside
+`comic-nav` and hand the panel bonus to navigation buttons. Pinned by a test.
+
+`scripts/reset_webcomic_chrome_lead_images.py --apply` then cleared the poisoned
+rows (qwantz 44, birdandmoon 4); they re-derive on next view. **Run order
+matters** — the script's own docstring says to fix the picker first, or
+re-derivation just reproduces the bad pick.
+
 ### 8f. DeviantArt mature images expire in ~15 minutes — needs render-time re-signing
 
 Measured 2026-07-26, correcting two earlier wrong readings. DA signs *mature*
