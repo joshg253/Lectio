@@ -25,15 +25,17 @@ def build_unstar_plan(
     starred: set[Key],
     tags_by_key: dict[Key, list[str]],
     *,
-    archived: set[Key] | None = None,
     keep_tags: set[str] | None = None,
 ) -> dict:
     """Decide which starred+tagged entries to unstar.
 
     *starred* is every (feed_url, entry_id) holding a star row; *tags_by_key*
-    maps an entry to its manual tags; *archived* are entries carrying Read
-    Mode's archived_at, reported so the caller can see what state a row deletion
-    would discard. *keep_tags* is the opt-out set.
+    maps an entry to its manual tags; *keep_tags* is the opt-out set.
+
+    There is no *archived* parameter any more. It existed to warn that deleting
+    a star row would discard that entry's `archived_at`, back when the done-flag
+    was a column on `saved_entries`. Archived is now its own table, so unstarring
+    cannot touch it and there is nothing to warn about.
 
     **An entry is kept if it carries *any* kept tag.** That is the whole reason
     this is tag-selectable rather than a blanket sweep: the distribution is
@@ -43,7 +45,6 @@ def build_unstar_plan(
     Anything else silently drops entries the user asked to protect.
     """
     keep = {t.strip().lower() for t in (keep_tags or set()) if t and t.strip()}
-    archived = archived or set()
 
     affected = {k for k in starred if tags_by_key.get(k)}
     protected = {k for k in affected if any(t.lower() in keep for t in tags_by_key[k])}
@@ -67,9 +68,6 @@ def build_unstar_plan(
             "affected": len(affected),
             "to_unstar": len(to_unstar),
             "protected": len(protected),
-            # Deleting the star row discards this entry's archived_at, so the
-            # caller can warn before a one-way loss of Read Mode state.
-            "archived_at_lost": len(to_unstar & archived),
             "distinct_tags": len(per_tag),
         },
     }

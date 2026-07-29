@@ -3161,6 +3161,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # The read-later "done" axis, deliberately its own table rather than a
+        # column on saved_entries. A saved_entries row *is* the star, and the
+        # star is the TODO axis: "I still have to decide what to do with this."
+        # Done is independent — Archive removes the star but the item stays
+        # archived, so the state cannot live on a row that archiving deletes.
+        # NOT the offline "starred archive" (archived_entry), which is content.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archived_entries (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                archived_at TIMESTAMP NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS deleted_entries (
@@ -3341,11 +3357,24 @@ def ensure_meta_schema() -> None:
             )
         except Exception:
             pass
-        # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
-        # separate from read/unread and from the star itself. NOT the offline
-        # "starred archive" (archived_entry) — this is a read-later done-state.
+        # Read Mode "Archive" state: originally a per-saved-item flag (NULL =
+        # inbox). Superseded by the archived_entries table above — see its
+        # comment for why the done-axis cannot live on the star row. The column
+        # is still created (old rows carry it, and it is the migration source)
+        # but nothing reads it after the backfill below.
         try:
             conn.execute("ALTER TABLE saved_entries ADD COLUMN archived_at TIMESTAMP DEFAULT NULL")
+        except Exception:
+            pass
+        # One-time lift of the legacy column into the new table. Idempotent via
+        # INSERT OR IGNORE, so it is safe on every boot and during a rolling
+        # deploy where old code may still be writing the column.
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "SELECT feed_url, entry_id, archived_at FROM saved_entries "
+                "WHERE archived_at IS NOT NULL"
+            )
         except Exception:
             pass
         conn.execute(
@@ -11812,25 +11841,33 @@ def list_entries_for_feeds(
 
 
 def get_archived_saved_keys() -> set[tuple[str, str]]:
-    """(feed_url, entry_id) of saved items the user has Archived in Read Mode
-    (archived_at set). Archived items keep their star but drop out of the Read
-    Mode inbox; they're reached via the Archive node or Search."""
+    """(feed_url, entry_id) of items the user has Archived — the read-later
+    "done" axis. Archived items drop out of the Read Mode inbox and are reached
+    via the Archive node or Search. Independent of the star: an entry can be
+    archived with no saved_entries row at all."""
     with get_meta_connection() as conn:
         return {
             (str(row["feed_url"]), str(row["entry_id"]))
-            for row in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
-            )
+            for row in conn.execute("SELECT feed_url, entry_id FROM archived_entries")
         }
 
 
 def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
-    """Set/clear the Read Mode Archive flag on a saved item (no-op if unsaved)."""
+    """Set/clear the Archive (done) flag. Unlike the old column this works for
+    any entry, starred or not — archiving is what *removes* the star, so
+    requiring one would make the state unreachable the moment it was set."""
     with get_meta_connection() as conn:
-        conn.execute(
-            "UPDATE saved_entries SET archived_at = ? WHERE feed_url = ? AND entry_id = ?",
-            (datetime.now(timezone.utc).isoformat() if archived else None, feed_url, entry_id),
-        )
+        if archived:
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "VALUES (?, ?, ?)",
+                (feed_url, entry_id, datetime.now(timezone.utc).isoformat()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
         conn.commit()
 
 
@@ -16492,13 +16529,13 @@ def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]
     the gap (23 rows). Read Mode is meant to be the same app in an e-ink shape,
     so a count that means something different here is simply wrong.
 
-    Only starred rows can be Archived (`archived_at` lives on `saved_entries`),
-    so a tagged-but-unstarred entry is always in the inbox — which is right: it
-    has no "done" state to be in.
+    Archived is its own axis (`archived_entries`), so *any* kept entry can be
+    done — including a tagged-but-unstarred one. Archiving is also what removes
+    the star, so the archived set is not a subset of the starred set.
     """
     with get_meta_connection() as conn:
-        rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
-    archived_keys = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows if r["archived_at"] is not None}
+        rows = conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
+    archived_keys = get_archived_saved_keys()
     kept: set[tuple[str, str]] = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
     kept |= get_tagged_entry_keys(get_all_reader_feed_urls())
 
@@ -23229,8 +23266,8 @@ def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
 
 
 def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> str:
-    """Recreate one entry under its host-rewritten id, carrying the star
-    (+archived_at), manual tags, read state and offline archive, then delete the
+    """Recreate one entry under its host-rewritten id, carrying the star, the
+    archived (done) row, manual tags, read state and offline archive, then delete the
     old one. Returns "migrated" / "gone". Idempotent: an already-migrated entry
     no longer matches a from_host. Must run with the ingest rewrite hook in place
     so the feed re-serving the old guid updates the migrated entry, not a
@@ -23254,15 +23291,23 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
             reader.set_tag((feed, new_id), key)
             reader.delete_tag(src.resource_id, key, missing_ok=True)
     row = conn.execute(
-        "SELECT saved_at, archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
         (feed, old_id),
     ).fetchone()
     if row:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
-            "VALUES (?, ?, ?, ?)", (feed, new_id, row["saved_at"], row["archived_at"]),
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (feed, new_id, row["saved_at"]),
         )
         conn.execute("DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    # The done-axis travels with the entry too, and independently of the star:
+    # an archived item may have no saved_entries row to carry it.
+    conn.execute(
+        "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+        "SELECT ?, ?, archived_at FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+        (feed, new_id, feed, old_id),
+    )
+    conn.execute("DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
     if src.read:
         reader.mark_entry_as_read((feed, new_id))
     conn.execute("DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
@@ -24433,14 +24478,7 @@ def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
                 "SELECT feed_url, entry_id FROM saved_entries"
             )
         }
-        archived = {
-            (str(f), str(e)) for f, e in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
-            )
-        }
-    plan = unstar_tagged_service.build_unstar_plan(
-        starred, tags_by_key, archived=archived, keep_tags=keep_tags,
-    )
+    plan = unstar_tagged_service.build_unstar_plan(starred, tags_by_key, keep_tags=keep_tags)
     plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags(
         {row["tag"] for row in plan["per_tag"]}
     )
@@ -24487,7 +24525,7 @@ async def apply_unstar_tagged(request: Request):
     plan = _current_unstar_tagged_plan(keep)
     to_unstar = plan["to_unstar"]
     if not to_unstar:
-        return JSONResponse({"ok": True, "unstarred": 0, "archived_at_lost": 0})
+        return JSONResponse({"ok": True, "unstarred": 0})
 
     deleted = 0
     with get_meta_connection() as conn:
@@ -24507,7 +24545,6 @@ async def apply_unstar_tagged(request: Request):
     return JSONResponse({
         "ok": True,
         "unstarred": deleted,
-        "archived_at_lost": plan["totals"]["archived_at_lost"],
     })
 
 
@@ -25263,7 +25300,8 @@ def toggle_entry_archived(
     archived: int = Form(...),
 ):
     """Read Mode: Archive / un-Archive a saved item. Keeps the star; only flips
-    saved_entries.archived_at so the item leaves (or rejoins) the inbox."""
+    the archived_entries row so the item leaves (or rejoins) the inbox. The star
+    is untouched here — B moves that onto this route."""
     set_entry_archived(feed_url, entry_id, bool(archived))
     return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "archived": bool(archived)})
 
@@ -26809,13 +26847,19 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
             else:
                 summary["duplicates"] += 1
 
-            archived_at = saved_dt.isoformat() if bm.archived else None
             conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(feed_url, entry_id) DO UPDATE SET "
-                "archived_at = COALESCE(excluded.archived_at, saved_entries.archived_at)",
-                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat(), archived_at),
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat()),
             )
+            if bm.archived:
+                # Instapaper's archived bookmarks import straight onto the done
+                # axis. OR IGNORE, so re-importing never rewrites a date the
+                # user has since set by archiving here.
+                conn.execute(
+                    "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                    "VALUES (?, ?, ?)",
+                    (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat()),
+                )
             if bm.archived:
                 summary["archived"] += 1
 

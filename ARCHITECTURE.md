@@ -999,7 +999,7 @@ The service is pure (it takes extracted rows, not a reader) so the guards are te
 
 **The UI inverts the API's opt-out, on purpose.** The endpoint takes `keep_tags` — the tags to *protect* — but a panel that rendered that directly would show all ~58 affected tags pre-checked, making "unstar everything" the default and *unchecking* the destructive act. That breaks the rule that a bulk-action list arrives with nothing selected. The panel therefore selects tags to **clear** and derives `keep_tags = every affected tag − selected` before each call, so an empty selection is an empty action. The inversion looks redundant and is pinned by tests for that reason.
 
-**Per-tag counts cannot be summed**, which is why the action button's number comes from the server. An entry is protected by *any* kept tag, so an article tagged both `python` and `books` survives a selection of `python` alone even though it is counted in the `python` row. Adding the checked rows client-side would therefore over-promise. Every selection change re-requests the preview under the derived `keep_tags` and shows `to_unstar`, with an out-of-order guard so a slower earlier reply can't overwrite a newer count. Deleting the star row also discards that entry's `archived_at` (Read Mode progress lives on the star row), so the preview reports `archived_at_lost` and the panel warns before a one-way loss. Tag names suggesting a reading queue (`read`, `todo`, `later`, `queue`, …) are flagged via `queue_like_tags` and excluded from "select all topical tags" — for those the star *is* the queue, not a redundant copy. Measured zero matches on live data twice, but tag vocabularies drift and this cleanup is meant to be re-run.
+**Per-tag counts cannot be summed**, which is why the action button's number comes from the server. An entry is protected by *any* kept tag, so an article tagged both `python` and `books` survives a selection of `python` alone even though it is counted in the `python` row. Adding the checked rows client-side would therefore over-promise. Every selection change re-requests the preview under the derived `keep_tags` and shows `to_unstar`, with an out-of-order guard so a slower earlier reply can't overwrite a newer count. Tag names suggesting a reading queue (`read`, `todo`, `later`, `queue`, …) are flagged via `queue_like_tags` and excluded from "select all topical tags" — for those the star *is* the queue, not a redundant copy. Measured zero matches on live data twice, but tag vocabularies drift and this cleanup is meant to be re-run.
 
 **Two different "this isn't a feed" decisions**, deliberately labelled apart in the UI because they can appear on the same row:
 
@@ -1062,11 +1062,28 @@ page it navigates to the prev/next article (`data-prev`/`data-next`, full loads)
 `A−`/`A+` adjusts `--reader-fs` and re-paginates, persisting size in `localStorage`.
 Prev/next follow the **selected node's** list.
 
-**Archive vs Delete (the "done" axis).** Because saved items are usually already
-read, read/unread is meaningless for them; the axis that matters is Archive.
-`saved_entries.archived_at` (migrated via the `ensure_meta_schema` ALTER pattern,
-per-tenant at startup) is a per-saved-item flag that **keeps the star** but drops
-the item from the inbox (`resolve_reader_backlog(archived=…)` filters against
+**Archive vs Delete (the "done" axis).** Saved items need a *second* layer of
+read/unread. Josh's framing (2026-07-29): a feed post only needs read/unread, but
+**a star is a TODO** — "I still have to decide what to do with this" — and you can
+read something and still not be done with it. So done is its own axis.
+
+The two axes are deliberately independent, and all four combinations are
+reachable: *read but not archived* is the TODO that survives reading; *archived
+but unread* is deciding you don't need to read it at all. The model is triaging
+an email inbox — you can tell from the list whether you want to read something,
+keep it, or drop it, without opening it.
+
+**`archived_entries` is its own table, not a column on `saved_entries`.** A
+`saved_entries` row *is* the star, and Archive **removes** the star — so state
+stored on that row could not outlive the act that sets it. The table also lets a
+tagged-but-unstarred entry be archived, which the column could never represent.
+Migrated by lifting the legacy `saved_entries.archived_at` column on every boot
+(`INSERT OR IGNORE`, so it is idempotent and rolling-deploy safe); the column is
+still created but nothing reads it. This also deleted the unstar-tagged panel's
+`archived_at_lost` warning outright — unstarring can no longer discard archived
+state, so there is nothing to warn about.
+
+Archiving drops the item from the inbox (`resolve_reader_backlog(archived=…)` filters against
 `get_archived_saved_keys()`; `None` = no filter, used for Search which spans
 everything). The reader header's **Archive** button POSTs `/entries/archive`
 (`set_entry_archived`); **Delete** simply un-saves via the existing
@@ -1140,13 +1157,18 @@ of the inbox.*
   when no manual tags remain, so the reverse order would strand the captured
   copy with nothing keeping it. Tag loss is unrecoverable, so the confirm names
   the tags; a plain unstar (no tags) stays unconfirmed because it is cheap to undo.
-- **Archive** = out of the inbox, filing intact — star and tags both survive,
-  `archived_at` is set, and the item moves to the Archive node.
-- **Archive is hidden for a tag-kept item.** `archived_at` lives on
-  `saved_entries`, where row existence *is* the star, so an item kept only by a
-  tag has no done-state to set. Shipping the button anyway meant a control that
-  silently did nothing. Giving tag-kept items a real archive state needs a schema
-  change (row existence can no longer imply starred) — see Plan.md.
+- **Archive** = out of the inbox, filing intact. The 2026-07-29 refinement (the
+  `archived_entries` table above) is that Archive **removes the star** — the TODO
+  is discharged — while tags, the offline capture, and pruning-exemption all
+  survive, because "keep its contents" is the whole point. It works on tag-kept
+  items too; the old "hide the button when only a tag keeps it" branch is gone.
+- **Both Archive and Delete mark the entry read, at both levels.** Acting on
+  something from the list *is* dealing with it, so leaving it unread would put it
+  straight back in the queue it was just cleared from.
+
+The **superseded** rule, kept because the reasoning still explains the code:
+Archive used to keep the star and set `archived_at` on the star row, and was
+hidden entirely for tag-kept items — a control that silently did nothing.
 
 **Prefetching the next article warms its images, not its page.** The e-ink flash
 on advance is mostly image decode, and the reader page itself is `no-store`, so a

@@ -8,6 +8,8 @@ reading queue the user asked to keep.
 """
 from __future__ import annotations
 
+import pytest
+
 from services.unstar_tagged import build_unstar_plan, queue_like_tags
 
 A = ("feed", "a")
@@ -76,14 +78,18 @@ def test_per_tag_marks_kept_tags():
     assert row["tag"] == "books" and row["kept"] is True
 
 
-def test_archived_at_loss_is_reported_only_for_unstarred_rows():
-    starred = {A, B}
-    tags = {A: ["python"], B: ["books"]}
-    archived = {A, B}  # both carry Read Mode state
+def test_plan_no_longer_reports_archived_loss():
+    """Archive moved to its own table, so unstarring cannot discard it.
 
-    # Keeping books means B is protected, so only A's archived_at would be lost.
-    plan = build_unstar_plan(starred, tags, archived=archived, keep_tags={"books"})
-    assert plan["totals"]["archived_at_lost"] == 1
+    The old `archived` argument and `archived_at_lost` total existed only to
+    warn that deleting a star row dropped the entry's archived_at column with
+    it. Nothing is lost now, so the warning is gone rather than always-zero —
+    an always-zero field invites callers to keep rendering a dead warning.
+    """
+    plan = build_unstar_plan({A, B}, {A: ["python"], B: ["books"]}, keep_tags={"books"})
+    assert "archived_at_lost" not in plan["totals"]
+    with pytest.raises(TypeError):
+        build_unstar_plan({A}, {A: ["python"]}, archived={A})
 
 
 def test_a_duplicated_tag_on_one_entry_counts_once():

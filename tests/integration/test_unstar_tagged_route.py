@@ -46,9 +46,11 @@ def configured(tmp_path):
             conn.execute(
                 "INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)", (FEED, eid)
             )
-        # a also carries Read Mode archived state, which a star-row delete discards.
+        # a is also Archived (the done axis). It lives in its own table now,
+        # so unstarring must leave it completely alone.
         conn.execute(
-            "UPDATE saved_entries SET archived_at = '2026-01-01' WHERE entry_id = 'a'"
+            "INSERT INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, ?)",
+            (FEED, "a", "2026-01-01"),
         )
         conn.commit()
     try:
@@ -85,7 +87,6 @@ def test_preview_counts_without_changing_anything(configured):
     plan = main._current_unstar_tagged_plan(set())
     assert plan["totals"]["affected"] == 2  # a, b
     assert plan["totals"]["to_unstar"] == 2
-    assert plan["totals"]["archived_at_lost"] == 1  # only a
     assert _stars() == {"a", "b", "c"}  # nothing moved
 
 
@@ -95,6 +96,18 @@ def test_apply_removes_only_the_redundant_stars(configured):
     assert body["unstarred"] == 2
     # c (untagged star) and d (unstarred) survive; a and b lose their star.
     assert _stars() == {"c"}
+
+
+def test_apply_leaves_archived_state_alone(configured):
+    """Unstarring must not touch the done axis.
+
+    'a' is starred, tagged, and Archived. Unstarring it deletes the star row;
+    when archived_at was a column on that row this silently discarded the
+    archived state, which is why the panel used to carry a data-loss warning.
+    """
+    _apply()
+
+    assert (FEED, "a") in main.get_archived_saved_keys()
 
 
 def test_apply_preserves_tags_entry_and_read_state(configured):

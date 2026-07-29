@@ -1183,11 +1183,46 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   the inbox.* Delete now clears tags **then** unstars — that order matters,
   because the unstar route only removes the offline archive when no tags remain.
   Archive is hidden for a tag-kept item rather than silently doing nothing.
-- **Archive for tag-kept items** — still not possible. `archived_at` lives on
-  `saved_entries`, where row existence *is* the star, so "done but keep the tag"
-  has nowhere to live. Needs a schema change (a `kept_only` column, or a separate
-  archived table) plus the startup per-user migration — skip that and existing
-  tenants 500. Worth doing if marking tag-kept items done becomes a real workflow.
+- **Archive for tag-kept items** — **schema landed 2026-07-29 (PR A).** The
+  separate-table option won: `saved_entries` row existence means "starred" in 115
+  places across 13 files, so a `kept_only` column would have needed every one of
+  them audited, and any miss turns an archived item back into a starred one.
+  `archived_entries` leaves all 115 untouched. Legacy `saved_entries.archived_at`
+  is lifted on every boot (`INSERT OR IGNORE`) and no longer read.
+
+  **Josh's workflow definition (2026-07-29), which drove the whole design:**
+  *Archive = mark this To Read item as read, keep its contents. Delete = I'm done
+  with this, don't necessarily delete it now but don't protect it anymore.* A star
+  is a **TODO**, not a keep — saved items needed a second read/unread layer
+  because you can read something and still not have decided what to do with it.
+  The model is triaging an email inbox from the list without opening things.
+
+  | | Archive | Delete |
+  |---|---|---|
+  | star (TODO) | removed | removed |
+  | tags | kept | cleared |
+  | read state | marked read | marked read |
+  | inbox | out | out |
+  | offline capture | kept | released |
+  | pruning | exempt | not protected |
+
+  Remaining (PR B): make Archive unstar + mark read, allow it on tag-kept items,
+  and make `archived_entries` membership a **third keep signal** alongside star
+  and tag. That last part is not optional — without it, archiving an untagged
+  item walks into the unstar path's husk-delete (`lectio:saved` items are removed
+  outright, [main.py:25226](main.py#L25226)) and `enqueue_removal` releases the
+  offline capture, which is the opposite of "keep its contents".
+
+- **⚠ #5's premise may no longer hold.** It unstars starred+tagged entries because
+  "after tag-as-keep a tag is a keep signal, so the star is redundant." Under the
+  workflow above star = TODO and tag = filing, so starred+tagged means "filed, and
+  I still have to deal with it" — an ordinary state, not redundancy. Unstarring
+  the 1,786 affected items would erase the TODO axis from everything already
+  filed, with no undo. Re-decide before running it.
+
+- **Read Mode has no per-row actions.** Archive/Delete exist only inside the
+  reader, so the email-triage flow the model describes (deal with it from the
+  list, without opening) isn't actually possible yet. Candidate for PR B.
 - ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
   panel of every tag in the library as large toggles (applied first, inverted),
   tap to add or remove, with "+ New" revealing a text field only when needed.
