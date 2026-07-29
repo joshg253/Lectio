@@ -1392,6 +1392,29 @@ All three skip feeds where `feed_lead_image_strategy.manual=1` (user has explici
 
 ## Feed-provided tag suggestions (`entry_feed_tags`)
 
+**Feeds and Saved remember their sort separately**, and a remembered sort is only
+written by an *explicit* choice. Both halves were bugs:
+
+- One shared `sort_by`/`sort_dir` pair meant picking an order in Saved silently
+  re-sorted Feeds. They are different jobs — a publish-date backlog versus a
+  to-do pile — so `sort_setting_keys(star_only)` splits them. The unprefixed keys
+  stay Feeds' so existing installs keep the value they had.
+- The index used to re-save the remembered sort on **every** plain load, passing
+  it through `normalize_sort_by` first. So any stored value the normalizer did not
+  recognize was silently replaced by the default — the preference destroying
+  itself with nothing to show it had happened. Persisting only when the request
+  carries an explicit `sort_by` also gives node-specific defaults (Read Mode's
+  Inbox opens star-date-ordered) somewhere to live: applied without a URL param,
+  they cannot overwrite the scope's remembered order, so leaving the node
+  restores it.
+
+**`normalize_sort_by` keeps `starred` behind `allow_starred=True`.** It exists for
+Read Mode's Inbox, and blessing it globally let it reach the index, which persists
+what it is handed; the regular sort menu has no entry for `starred`, so nothing
+rendered as active and the toolbar showed "Published newest" while the list was
+ordered by star date. Reported as the Feed view reverting to "Pub new" after
+switching in and out of e-ink mode.
+
 **Boilerplate feed tags are suppressed by coverage, not by a blocklist.** A tag a
 feed puts on essentially every entry carries no per-entry signal and crowds out
 the ones that do. Measured on the live library: 2,525 slickdeals posts tagged

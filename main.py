@@ -326,6 +326,20 @@ FAILED_FEED_BACKOFF_MAX_SECONDS = 60 * 60 * 24
 AUTO_REFRESH_SETTING_KEY = "auto_refresh_minutes"
 SORT_BY_SETTING_KEY = "sort_by"
 SORT_DIR_SETTING_KEY = "sort_dir"
+# Feeds and Saved remember their sort SEPARATELY. One shared pair meant picking
+# an order in Saved silently changed Feeds, and vice versa — the two are
+# different jobs (a publish-date backlog vs a to-do pile), so they want
+# different orders. The unprefixed keys stay Feeds' so existing installs keep
+# their remembered value.
+SAVED_SORT_BY_SETTING_KEY = "saved_sort_by"
+SAVED_SORT_DIR_SETTING_KEY = "saved_sort_dir"
+
+
+def sort_setting_keys(star_only: bool) -> tuple[str, str]:
+    """The (sort_by, sort_dir) setting keys for the active scope."""
+    if star_only:
+        return SAVED_SORT_BY_SETTING_KEY, SAVED_SORT_DIR_SETTING_KEY
+    return SORT_BY_SETTING_KEY, SORT_DIR_SETTING_KEY
 GLOBAL_NOTE_SETTING_KEY = "global_note"
 PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
 YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
@@ -9016,11 +9030,20 @@ def title_inferred_pubdate(title: str | None) -> datetime | None:
         return None
 
 
-def normalize_sort_by(sort_by: str | None) -> str:
-    # "starred" orders by when the item was starred (saved_entries.saved_at),
-    # which is the Inbox's natural order — a to-do pile is newest-first by when
-    # you added it, not by when the article was published.
-    if sort_by in {"post", "received", "starred"}:
+def normalize_sort_by(sort_by: str | None, *, allow_starred: bool = False) -> str:
+    """Normalize a list sort key. ``post``/``received`` always; ``starred`` only
+    when the caller opts in.
+
+    *allow_starred* is not decoration. "starred" orders by when the item was
+    starred (saved_entries.saved_at) and exists for Read Mode's Inbox — a to-do
+    pile is newest-first by when you added to it. Blessing it globally let it
+    reach the main index, which **persists** whatever it is handed as the
+    remembered sort; the regular sort menu has no entry for "starred", so nothing
+    rendered as active and the toolbar showed "Published newest" while the list
+    was ordered by star date. Reported as the Feed view reverting to "Pub new"
+    after switching in and out of e-ink mode.
+    """
+    if sort_by in {"post", "received"} or (allow_starred and sort_by == "starred"):
         return sort_by
     return DEFAULT_SORT_BY
 
@@ -11331,7 +11354,7 @@ def list_entries_for_feeds(
     if not feed_urls:
         return entries
 
-    normalized_sort_by = normalize_sort_by(sort_by)
+    normalized_sort_by = normalize_sort_by(sort_by, allow_starred=True)
     normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
@@ -12182,7 +12205,9 @@ def merge_orphan_saved_entries(
         return posts
 
     sort_desc = normalize_sort_dir(sort_dir) == "desc"
-    normalized_orphan_sort = normalize_sort_by(sort_by)
+    # Reader path: this runs under resolve_reader_backlog, so the Inbox's
+    # star-date order is a legitimate value here.
+    normalized_orphan_sort = normalize_sort_by(sort_by, allow_starred=True)
 
     def _sort_value_from_epoch(epoch: float | None) -> str:
         # Mirrors datetime_sort_value — ISO-format string, empty for None.
@@ -18173,13 +18198,21 @@ def _home_inner(
 
     with get_meta_connection() as conn:
         _tick("connect")
-        preferred_sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
-        preferred_sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+        # Per-scope: Feeds and Saved keep their own remembered order.
+        _sort_by_key, _sort_dir_key = sort_setting_keys(normalize_star_only(star_only))
+        preferred_sort_by = normalize_sort_by(get_setting(conn, _sort_by_key))
+        preferred_sort_dir = normalize_sort_dir(get_setting(conn, _sort_dir_key))
         problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
         selected_sort_by = normalize_sort_by(sort_by or preferred_sort_by)
         selected_sort_dir = normalize_sort_dir(sort_dir or preferred_sort_dir)
-        set_setting(conn, SORT_BY_SETTING_KEY, selected_sort_by)
-        set_setting(conn, SORT_DIR_SETTING_KEY, selected_sort_dir)
+        # Persist only an EXPLICIT choice from the sort menu. Re-saving on every
+        # plain load meant any stored value normalize_sort_by did not recognize
+        # was silently replaced by the default — the remembered preference
+        # quietly destroying itself, with no way to tell it had happened.
+        if sort_by:
+            set_setting(conn, _sort_by_key, selected_sort_by)
+        if sort_dir:
+            set_setting(conn, _sort_dir_key, selected_sort_dir)
         _tick("settings")
 
         snapshot = get_meta_structure_snapshot(conn)
@@ -26949,7 +26982,8 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
 
 
 @app.get("/tree/folder-feeds/{folder_id}")
-def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
+def tree_folder_feeds_fragment(request: Request, folder_id: int,
+                               star_only: str | None = Query(default=None)) -> Response:
     """One folder's sidebar feed rows (<li> fragment).
 
     The sidebar renders folder rows only; each collapsed folder's feed list is
@@ -26965,8 +26999,12 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
         all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
         disabled_feed_urls = get_disabled_feed_urls(conn)
         problematic_feeds = get_problematic_feeds_cached(conn)
-        sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
-        sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+        # Same per-scope split as a full render: these rows are links into
+        # whichever view the sidebar is currently showing, so stamping them with
+        # the other scope's order would make one click silently re-sort.
+        _sb_key, _sd_key = sort_setting_keys(normalize_star_only(star_only))
+        sort_by = normalize_sort_by(get_setting(conn, _sb_key))
+        sort_dir = normalize_sort_dir(get_setting(conn, _sd_key))
 
     if folder_id == UNCATEGORIZED_FOLDER_ID:
         urls = sorted(

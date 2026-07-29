@@ -150,6 +150,10 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Sort is remembered per view** — Feeds and Saved each keep their own order, so
+  reading a publish-date backlog in one doesn't re-sort the other. Views with a
+  natural order of their own (the Saved Inbox opens most-recently-starred) use it
+  without disturbing what you last chose; leaving them restores it.
 - **Retention** — per-folder *Delete after read* (nightly), a **Purge old
   posts** utility with preview, and tombstones that keep deleted posts from
   resurrecting (swept only after they leave the publisher's feed window).

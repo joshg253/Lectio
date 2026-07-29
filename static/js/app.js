@@ -568,7 +568,13 @@ const CAPTURE_MODE_FULL = 'full';
       ul.removeAttribute('data-lazy-feeds');
       ul.innerHTML = '<li class="tree-feed-item"><span class="feed-label">Loading…</span></li>';
       try {
-        const resp = await fetch(`/tree/folder-feeds/${encodeURIComponent(fid)}`, { credentials: 'same-origin' });
+        // Pass the current scope: Feeds and Saved remember their sort separately,
+        // so rows stamped with the other scope's order would silently re-sort on
+        // the first click. Scope comes from the URL, the same source the rest of
+        // this file reads it from.
+        const _star = new URLSearchParams(location.search).get('star_only');
+        const _sq = (_star && _star !== '0') ? '?star_only=1' : '';
+        const resp = await fetch(`/tree/folder-feeds/${encodeURIComponent(fid)}${_sq}`, { credentials: 'same-origin' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         ul.innerHTML = await resp.text();
         window._refreshUnreadFoldersOnly?.();
