@@ -57,11 +57,19 @@ def test_read_state_prev_next_and_controls(monkeypatch):
 
 
 
-def test_archive_button_hidden_when_not_starred(monkeypatch):
+def test_archive_button_shown_for_a_tag_kept_item(monkeypatch):
+    """A tag-kept item can be archived now, and this deliberately overturns the
+    old assertion that the button was hidden for it.
+
+    Hiding it was correct while the done-flag lived on the star row: an item kept
+    only by a tag had nothing to set. With `archived_entries` it does — and this
+    is the majority case, not an edge one (16,479 tagged vs 10,002 starred), so
+    those were exactly the items with no way to be cleared from the device.
+    """
     _patch_read(monkeypatch, backlog=[_rec(2)], starred=False, manual_tags=("keepme",))
     with TestClient(_app()) as client:
         body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
-    assert "id='reader-archive-btn'" not in body    # nothing to archive
+    assert "id='reader-archive-btn'" in body
     assert "id='reader-delete-btn'" in body         # Delete still applies
     assert "data-tags='keepme'" in body             # confirm can name the tag
 

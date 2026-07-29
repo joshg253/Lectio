@@ -1206,12 +1206,15 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   | offline capture | kept | released |
   | pruning | exempt | not protected |
 
-  Remaining (PR B): make Archive unstar + mark read, allow it on tag-kept items,
-  and make `archived_entries` membership a **third keep signal** alongside star
-  and tag. That last part is not optional — without it, archiving an untagged
-  item walks into the unstar path's husk-delete (`lectio:saved` items are removed
-  outright, [main.py:25226](main.py#L25226)) and `enqueue_removal` releases the
-  offline capture, which is the opposite of "keep its contents".
+  **PR B landed 2026-07-29**: Archive unstars + marks read (both levels, plus
+  `read_history`), works on tag-kept items, and `archived_entries` membership is
+  now a third keep signal in `entry_has_keep_signal` and `_prune_entries`. Delete
+  became `POST /entries/discard` — one route instead of a client-side chain,
+  because the tags-before-unstar ordering is a storage-layer property.
+
+  **Not built, by decision:** row-level Archive/Delete in the Read Mode list
+  ("ignore for now"), and an Archive view in the regular app ("don't think we
+  need it at all", conditional on History being browsable in reverse order).
 
 - **⚠ #5's premise may no longer hold.** It unstars starred+tagged entries because
   "after tag-as-keep a tag is a keep signal, so the star is redundant." Under the
@@ -1222,7 +1225,16 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
 
 - **Read Mode has no per-row actions.** Archive/Delete exist only inside the
   reader, so the email-triage flow the model describes (deal with it from the
-  list, without opening) isn't actually possible yet. Candidate for PR B.
+  list, without opening) isn't actually possible yet. Deferred 2026-07-29.
+
+- **⚠ `read_history` is capped at 2,000 rows** (`READ_HISTORY_CAP`,
+  [main.py:9098](main.py#L9098)) and is currently full — oldest entry 2026-07-08,
+  about three weeks. Dropping the regular-app Archive view was made conditional
+  on History being browsable in reverse order, which it is (`ORDER BY read_at
+  DESC`). But Archive and Delete now both write history, so triage volume flows
+  through that cap and the window will shrink. Read Mode's Archive node is the
+  durable record; History is a convenience. Raising the cap is a one-line change
+  and awaiting a number.
 - ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
   panel of every tag in the library as large toggles (applied first, inverted),
   tap to add or remove, with "+ New" revealing a text field only when needed.

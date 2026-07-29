@@ -1164,7 +1164,21 @@ of the inbox.*
   items too; the old "hide the button when only a tag keeps it" branch is gone.
 - **Both Archive and Delete mark the entry read, at both levels.** Acting on
   something from the list *is* dealing with it, so leaving it unread would put it
-  straight back in the queue it was just cleared from.
+  straight back in the queue it was just cleared from. Both also append to
+  `read_history`, which is what makes a triaged item findable again.
+- **Archive is a third keep signal**, next to starred and tagged —
+  `entry_has_keep_signal`. This is not bookkeeping: archiving is *implemented* as
+  an unstar, and the unstar path releases the offline capture and hard-deletes a
+  `lectio:saved` husk once nothing keeps the entry. Miss the archived signal and
+  the gesture that promises to keep the contents is the gesture that destroys
+  them. `_prune_entries` honors the same three signals, or retention would delete
+  archived posts nightly — they are read and unstarred, exactly its target shape.
+- **Ordering is server-side.** `POST /entries/archive` writes the archived row
+  *before* unstarring, and `POST /entries/discard` clears tags *before*
+  unstarring, both for the same reason: the capture is released only when the
+  last keep signal goes. Delete used to be a client-side chain of two POSTs with
+  that ordering encoded in a comment in `reader.js`; it is one route now, because
+  the constraint is a property of the storage layer, not of the caller.
 
 The **superseded** rule, kept because the reasoning still explains the code:
 Archive used to keep the star and set `archived_at` on the star row, and was

@@ -11871,6 +11871,135 @@ def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
         conn.commit()
 
 
+def is_entry_archived(feed_url: str, entry_id: str) -> bool:
+    """Single-entry Archive check, for the keep-signal test on the unstar path."""
+    with get_meta_connection() as conn:
+        return conn.execute(
+            "SELECT 1 FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone() is not None
+
+
+def entry_has_keep_signal(feed_url: str, entry_id: str, *, starred: bool) -> bool:
+    """Is *anything* still keeping this entry?
+
+    Three independent signals, and the offline capture plus pruning-exemption
+    are owed to the entry if **any** of them holds:
+
+    - **starred** — it is still a TODO;
+    - **manually tagged** — it is filed;
+    - **archived** — it is done, and "Archive keeps its contents" is the rule.
+
+    Archive is the one that is easy to forget, and forgetting it is destructive
+    rather than untidy: archiving unstars, so an archived-and-untagged entry
+    would otherwise read as "no keep signal" and lose the very contents Archive
+    promised to keep.
+    """
+    if starred:
+        return True
+    if get_manual_tags_for_entry(feed_url, entry_id):
+        return True
+    return is_entry_archived(feed_url, entry_id)
+
+
+def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
+    """Set/clear the star (the TODO axis) and everything that mirrors it.
+
+    Extracted from ``POST /entries/saved`` so Archive can reuse it: archiving is
+    *implemented* as an unstar, and re-implementing the capture/husk handling
+    beside it is how the two drift apart.
+
+    Unstarring releases the offline capture and hard-deletes a Saved Articles
+    husk **only when no keep signal remains** — see ``entry_has_keep_signal``.
+    Callers that are about to archive must therefore write the archived row
+    *first*, or this will tear down the contents Archive means to keep.
+    """
+    newly_starred = False
+    with get_meta_connection() as conn:
+        if saved:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                (feed_url, entry_id),
+            )
+            newly_starred = cur.rowcount > 0
+        else:
+            conn.execute(
+                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        conn.commit()
+
+    # "On star, also send to…" — fire configured destinations once, only on a
+    # genuine new star (rowcount), off-request so the star stays snappy.
+    if newly_starred:
+        _uid = tenancy.current_user_id()
+        threading.Thread(
+            target=lambda: _run_in_user_context(_uid, _run_on_star_destinations, feed_url, entry_id),
+            daemon=True,
+        ).start()
+
+    # Mirror the save state into the archive: queue a capture when starred,
+    # mark for later removal when unstarred. The archive worker handles the
+    # actual fetching off-request.
+    try:
+        if saved:
+            starred_archive_service.enqueue_archive(feed_url, entry_id)
+        elif not entry_has_keep_signal(feed_url, entry_id, starred=False):
+            # Only release the capture when no keep signal remains — a tag or an
+            # Archive both keep it after the star is gone. Archive matters most
+            # here: archiving is *implemented* as an unstar, so missing it would
+            # delete the contents Archive exists to preserve.
+            starred_archive_service.enqueue_removal(feed_url, entry_id)
+            # A Saved Article that is now neither starred nor tagged is a husk —
+            # the read-later pile should hold only kept items. It's user-added
+            # and deletable, so remove it outright rather than leaving invisible
+            # cruft (which the host-review view would surface). Mirrors the
+            # source cleanup Move already does; a tag keeping it is handled above.
+            if saved_articles_service.is_saved_articles_feed(feed_url):
+                with get_reader() as reader:
+                    entry = reader.get_entry((feed_url, entry_id), None)
+                    if entry is not None:
+                        _hard_delete_entry(reader, feed_url, entry_id, entry)
+                invalidate_unread_counts_cache()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+
+
+def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
+    """Mark an entry read at both levels, the way a triage action means it.
+
+    reader's own read flag *and* ``entry_read_state`` — the latter is an
+    override re-applied on refresh, so marking read in reader alone doesn't
+    stick. Also appends to ``read_history``, which is what makes an archived or
+    deleted item findable afterwards in the History view.
+    """
+    try:
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+            feed = reader.get_feed(feed_url, None)
+            reader.mark_entry_as_read((feed_url, entry_id))
+    except Exception:
+        entry = feed = None
+        LOGGER.warning("mark_entry_read_everywhere: reader write failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    try:
+        upsert_entry_read_state(feed_url, entry_id)
+    except Exception:
+        LOGGER.warning("mark_entry_read_everywhere: read-state override failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    try:
+        append_read_history(
+            feed_url, entry_id,
+            str(getattr(entry, "title", None) or ""),
+            str(getattr(entry, "link", None) or ""),
+            str(getattr(feed, "title", None) or ""),
+        )
+    except Exception:
+        LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    invalidate_unread_counts_cache()
+
+
 def get_saved_unread_count() -> int:
     """Unread count across all kept (starred OR tagged) entries, for the sidebar's
     Saved Articles badge. Kept sets are small (hundreds), so a per-feed IN query
@@ -16386,7 +16515,6 @@ def build_reader_page(
     csrf_token: str,
     show_saved_actions: bool = True,
     date_display: str = "",
-    is_starred: bool = False,
     manual_tags: tuple[str, ...] = (),
     all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
@@ -16418,13 +16546,15 @@ def build_reader_page(
     # reader.css [aria-pressed]), which e-ink renders crisply.
     archive_glyph = "&#9636;"
     archive_title = "Un-archive" if is_archived else "Archive"
-    # Archive is the done-axis and it lives on the star row (saved_entries.
-    # archived_at), so an item kept only by a tag has nothing to archive. Hide
-    # the control there instead of shipping a button that silently does nothing.
+    # Always shown now. Archive used to be hidden for a tag-kept item, because
+    # the done-flag lived on the star row and an item kept only by a tag had
+    # nothing to set. The done-axis has its own table (archived_entries), so
+    # anything in the inbox can be marked done — which matters: tagged entries
+    # outnumber starred ones 16,479 to 10,002, and they were the ones with no
+    # way to be cleared from the device.
     archive_btn = (
         f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
         f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
-        if is_starred else ""
     )
     # Delete removes the item from Kept entirely — star *and* tags. The tag list
     # rides along so the confirm can name what is about to be lost.
@@ -17018,7 +17148,6 @@ def reader_view(
         csrf_token=_csrf_token_for(request),
         show_saved_actions=not is_feeds,
         date_display=_read_mode_date(current),
-        is_starred=_entry_is_starred(cur_feed, cur_id),
         manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
         all_tag_names=tuple(get_all_manual_tag_names()),
     )
@@ -22863,8 +22992,12 @@ def _prune_entries(
     Selection: with read_cutoff, read entries whose read time (meta read_at,
     falling back to reader's read_modified) is older; with published_cutoff,
     entries whose effective date (published/updated/added) is older — read
-    only unless include_unread. Always protected: starred/saved entries,
-    manually tagged entries, and the Saved Articles feed itself.
+    only unless include_unread. Always protected: **any entry carrying a keep
+    signal** — starred (TODO), manually tagged (filed), or archived (done) — plus
+    the Saved Articles feed itself. Archived is the newest of the three and the
+    one worth stating: Archive removes the star, so without an explicit exemption
+    an archived item would fall straight through into the prune, which is the
+    opposite of "Archive keeps its contents".
 
     Deletes are tombstoned (deleted_entries) so a refresh can't resurrect
     copies still inside the publisher's feed window. Returns the count
@@ -22875,10 +23008,17 @@ def _prune_entries(
 
     placeholders = ",".join("?" * len(feed_urls))
     with get_meta_connection() as conn:
-        starred = {
+        protected = {
             (str(r[0]), str(r[1]))
             for r in conn.execute(
                 f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+        protected |= {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id FROM archived_entries WHERE feed_url IN ({placeholders})",
                 feed_urls,
             )
         }
@@ -22905,7 +23045,7 @@ def _prune_entries(
 
         for feed, eid, read, read_modified, published, updated, first_updated in rows:
             pair = (str(feed), str(eid))
-            if pair in starred:
+            if pair in protected:
                 continue
             if read_cutoff is not None:
                 if not read:
@@ -25222,53 +25362,7 @@ def toggle_entry_saved(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
-    newly_starred = False
-    with get_meta_connection() as conn:
-        if saved:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                (feed_url, entry_id),
-            )
-            newly_starred = cur.rowcount > 0
-        else:
-            conn.execute(
-                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            )
-        conn.commit()
-
-    # "On star, also send to…" — fire configured destinations once, only on a
-    # genuine new star (rowcount), off-request so the star stays snappy.
-    if newly_starred:
-        _uid = tenancy.current_user_id()
-        threading.Thread(
-            target=lambda: _run_in_user_context(_uid, _run_on_star_destinations, feed_url, entry_id),
-            daemon=True,
-        ).start()
-
-    # Mirror the save state into the archive: queue a capture when starred,
-    # mark for later removal when unstarred. The archive worker handles the
-    # actual fetching off-request.
-    try:
-        if saved:
-            starred_archive_service.enqueue_archive(feed_url, entry_id)
-        elif not get_manual_tags_for_entry(feed_url, entry_id):
-            # Only release the archive when no keep signal remains — a manually
-            # tagged entry keeps its capture even after it's unstarred.
-            starred_archive_service.enqueue_removal(feed_url, entry_id)
-            # A Saved Article that is now neither starred nor tagged is a husk —
-            # the read-later pile should hold only kept items. It's user-added
-            # and deletable, so remove it outright rather than leaving invisible
-            # cruft (which the host-review view would surface). Mirrors the
-            # source cleanup Move already does; a tag keeping it is handled above.
-            if saved_articles_service.is_saved_articles_feed(feed_url):
-                with get_reader() as reader:
-                    entry = reader.get_entry((feed_url, entry_id), None)
-                    if entry is not None:
-                        _hard_delete_entry(reader, feed_url, entry_id, entry)
-                invalidate_unread_counts_cache()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    apply_star_state(feed_url, entry_id, bool(saved))
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
@@ -25299,10 +25393,32 @@ def toggle_entry_archived(
     entry_id: str = Form(...),
     archived: int = Form(...),
 ):
-    """Read Mode: Archive / un-Archive a saved item. Keeps the star; only flips
-    the archived_entries row so the item leaves (or rejoins) the inbox. The star
-    is untouched here — B moves that onto this route."""
-    set_entry_archived(feed_url, entry_id, bool(archived))
+    """Archive / un-Archive an item — the read-later **done** axis.
+
+    Josh's definition (2026-07-29): *"Archive is essentially just mark this To
+    Read item as Read. Keep its contents."* A star is a TODO, so archiving
+    discharges it: the star comes off, the item leaves the inbox, and it is
+    marked read at both levels because acting on something from the list is
+    dealing with it.
+
+    **Order is load-bearing.** The archived row is written *before* the unstar,
+    because ``apply_star_state`` releases the offline capture (and hard-deletes a
+    Saved Articles husk) when no keep signal remains. Archive is itself the keep
+    signal here, so unstarring first would destroy the contents this promises to
+    keep — for a URL-saved article the capture is often the only copy.
+
+    Un-archiving is the inverse: it restores the star, putting the item back on
+    the TODO pile it came from. Read state is deliberately *not* reverted — "read
+    but not archived" is a real state (you read it, you still haven't decided
+    what to do with it), and it is the whole reason this second axis exists.
+    """
+    if archived:
+        set_entry_archived(feed_url, entry_id, True)
+        apply_star_state(feed_url, entry_id, False)
+        mark_entry_read_everywhere(feed_url, entry_id)
+    else:
+        apply_star_state(feed_url, entry_id, True)
+        set_entry_archived(feed_url, entry_id, False)
     return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "archived": bool(archived)})
 
 
@@ -25846,6 +25962,35 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/entries/discard")
+def discard_entry(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    """Delete — the other half of the read-later triage pair.
+
+    Josh's definition (2026-07-29): *"I'm done with this but don't necessarily
+    need its contents stored; don't necessarily delete it now, but also don't
+    protect it anymore."* So: drop every keep signal (star **and** tags), mark it
+    read at both levels, and let the offline capture and pruning-exemption go
+    with them. The entry itself is not deleted — it goes back to being an
+    ordinary feed post and takes its chances with per-folder retention. The one
+    exception is a `lectio:saved` husk, which nothing else holds and no view
+    would ever show; `apply_star_state` removes those outright.
+
+    This exists as a route because the gesture has an **order** the client was
+    previously trusted to get right: tags must be cleared *before* the unstar,
+    since the capture is only released once no keep signal remains. Reversed, the
+    captured copy is stranded with nothing keeping it. That is server-side
+    knowledge, so it now lives on the server.
+    """
+    set_manual_tags_for_entry(feed_url, entry_id, "")
+    apply_star_state(feed_url, entry_id, False)
+    mark_entry_read_everywhere(feed_url, entry_id)
+    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "discarded": True})
 
 
 @app.post("/tags/delete")
