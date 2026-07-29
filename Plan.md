@@ -1174,6 +1174,20 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   backlog always took sort_by/sort_dir, Read Mode just pinned them). The chosen
   order rides the URL through `_read_scope_params`, so Next/Prev walk the list
   the same way instead of reverting at the first hop.
+- ~~**Delete/Archive were no-ops on tagged items**~~ — **FIXED 2026-07-28**, and
+  it was made urgent by the counts fix above: once Read Mode showed all kept
+  items, the majority of the backlog (16,479 tagged vs 10,002 starred) had no
+  working way to be filed or dismissed from the device. Both buttons still
+  advanced to the next article, so they looked like they worked.
+  **Josh's rule:** *Delete removes star and tags; Archive just removes it from
+  the inbox.* Delete now clears tags **then** unstars — that order matters,
+  because the unstar route only removes the offline archive when no tags remain.
+  Archive is hidden for a tag-kept item rather than silently doing nothing.
+- **Archive for tag-kept items** — still not possible. `archived_at` lives on
+  `saved_entries`, where row existence *is* the star, so "done but keep the tag"
+  has nowhere to live. Needs a schema change (a `kept_only` column, or a separate
+  archived table) plus the startup per-user migration — skip that and existing
+  tenants 500. Worth doing if marking tag-kept items done becomes a real workflow.
 - **Tag from inside Read Mode** — agreed shape: a Tag button opening existing
   tags as large tap targets, tap to add/remove, with a "+ New" revealing a text
   field only when needed. No keyboard, one repaint per tap. `POST /entries/tags`

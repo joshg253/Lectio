@@ -1111,6 +1111,25 @@ Both scopes follow this rule: the peek problem is identical in each, and the
 scope isn't visible from inside the reader, so splitting the rule would make
 "did that count as read?" unpredictable.
 
+**Delete and Archive mean different things, and both had to change for the kept
+model.** Josh's rule: *Delete removes star **and** tags; Archive just takes it out
+of the inbox.*
+
+- **Delete** = leave Kept entirely. Unstarring alone was a no-op on anything
+  tagged — a tag keeps an entry on its own, so the row stayed in the list while
+  the reader advanced as though it had gone. The client clears tags **first**,
+  then unstars: the unstar route only enqueues removal of the offline archive
+  when no manual tags remain, so the reverse order would strand the captured
+  copy with nothing keeping it. Tag loss is unrecoverable, so the confirm names
+  the tags; a plain unstar (no tags) stays unconfirmed because it is cheap to undo.
+- **Archive** = out of the inbox, filing intact — star and tags both survive,
+  `archived_at` is set, and the item moves to the Archive node.
+- **Archive is hidden for a tag-kept item.** `archived_at` lives on
+  `saved_entries`, where row existence *is* the star, so an item kept only by a
+  tag has no done-state to set. Shipping the button anyway meant a control that
+  silently did nothing. Giving tag-kept items a real archive state needs a schema
+  change (row existence can no longer imply starred) — see Plan.md.
+
 **Prefetching the next article warms its images, not its page.** The e-ink flash
 on advance is mostly image decode, and the reader page itself is `no-store`, so a
 `<link rel="prefetch">` would fetch the next article and immediately discard it —

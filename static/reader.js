@@ -205,14 +205,37 @@
       archived: archived,
     }, "lectio-entry-save-toggle");
   });
+  // Delete removes the item from Kept entirely: star AND tags. Unstarring alone
+  // left a tagged item exactly where it was — a tag keeps an entry on its own,
+  // so the row stayed in the list while the reader advanced as if it had gone.
+  //
+  // ORDER MATTERS. The unstar route only enqueues removal of the offline archive
+  // when the entry has no manual tags left, so tags must be cleared *first*.
+  // Unstarring first would skip that and strand the captured copy with nothing
+  // keeping it.
   var deleteBtn = document.getElementById("reader-delete-btn");
   if (deleteBtn) deleteBtn.addEventListener("click", function (e) {
     e.preventDefault();
-    postAction("/entries/saved", {
-      folder_id: "0", saved: "0", select_entry: "0",
-      feed_url: cols.getAttribute("data-feed"),
-      entry_id: cols.getAttribute("data-entry"),
-    }, "lectio-entry-save-toggle");
+    var feed = cols.getAttribute("data-feed");
+    var entry = cols.getAttribute("data-entry");
+    var tags = (deleteBtn.getAttribute("data-tags") || "").split(",").filter(Boolean);
+    // Losing tags is not recoverable, so name them before doing it. A plain
+    // unstar stays unconfirmed — that one is cheap to undo.
+    if (tags.length && !window.confirm(
+      "Remove this from Saved?\n\nIt will lose its star and these tags: "
+      + tags.map(function (t) { return "#" + t; }).join(" ")
+    )) return;
+    post("/entries/tags", {
+      folder_id: "0", feed_url: feed, entry_id: entry,
+      tags_text: "", append_mode: "0", select_entry: "0",
+    }, "lectio-ajax")
+      .then(function () {
+        return post("/entries/saved", {
+          folder_id: "0", saved: "0", select_entry: "0",
+          feed_url: feed, entry_id: entry,
+        }, "lectio-entry-save-toggle");
+      })
+      .then(afterAction, afterAction);
   });
 
   // Warm the next article's images, to cut the e-ink refresh flash on advance.

@@ -16307,6 +16307,8 @@ def build_reader_page(
     csrf_token: str,
     show_saved_actions: bool = True,
     date_display: str = "",
+    is_starred: bool = False,
+    manual_tags: tuple[str, ...] = (),
 ) -> HTMLResponse:
     esc_title = html.escape(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
@@ -16336,12 +16338,22 @@ def build_reader_page(
     # reader.css [aria-pressed]), which e-ink renders crisply.
     archive_glyph = "&#9636;"
     archive_title = "Un-archive" if is_archived else "Archive"
-    saved_actions = (
+    # Archive is the done-axis and it lives on the star row (saved_entries.
+    # archived_at), so an item kept only by a tag has nothing to archive. Hide
+    # the control there instead of shipping a button that silently does nothing.
+    archive_btn = (
         f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
         f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
-        "<button class='reader-ctl' id='reader-delete-btn' type='button' title='Delete (unsave)'>&#128465;</button>"
-        if show_saved_actions else ""
+        if is_starred else ""
     )
+    # Delete removes the item from Kept entirely — star *and* tags. The tag list
+    # rides along so the confirm can name what is about to be lost.
+    esc_tags = html.escape(",".join(manual_tags), quote=True)
+    delete_btn = (
+        "<button class='reader-ctl' id='reader-delete-btn' type='button'"
+        f" data-tags='{esc_tags}' title='Delete (remove from Saved)'>&#128465;</button>"
+    )
+    saved_actions = (archive_btn + delete_btn) if show_saved_actions else ""
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -16889,6 +16901,8 @@ def reader_view(
         csrf_token=_csrf_token_for(request),
         show_saved_actions=not is_feeds,
         date_display=_read_mode_date(current),
+        is_starred=_entry_is_starred(cur_feed, cur_id),
+        manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
     )
 
 
