@@ -1188,11 +1188,14 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   has nowhere to live. Needs a schema change (a `kept_only` column, or a separate
   archived table) plus the startup per-user migration — skip that and existing
   tenants 500. Worth doing if marking tag-kept items done becomes a real workflow.
-- **Tag from inside Read Mode** — agreed shape: a Tag button opening existing
-  tags as large tap targets, tap to add/remove, with a "+ New" revealing a text
-  field only when needed. No keyboard, one repaint per tap. `POST /entries/tags`
-  already supports this (`append_mode`, JSON reply) and `get_all_manual_tag_names()`
-  exists, so it is a Read Mode UI job. **Not built yet.**
+- ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
+  panel of every tag in the library as large toggles (applied first, inverted),
+  tap to add or remove, with "+ New" revealing a text field only when needed.
+  Each tap applies immediately and sends the whole desired set
+  (`append_mode=0`), so closing half way still saved. The server's reply is the
+  truth and the panel re-renders from it. Note the new-tag field is
+  space-separated like the main app's, so "brand new tag" is three tags — the
+  placeholder says so, since there is no autocomplete here to make it obvious.
 - ~~**Saved counts disagree between the two modes**~~ — **FIXED 2026-07-28.**
   The regular sidebar showed **24,695**, Read Mode **9,979**: the sidebar counts
   **kept** (starred OR tagged), `_read_mode_saved_index` counted **starred,

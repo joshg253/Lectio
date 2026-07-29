@@ -16309,6 +16309,7 @@ def build_reader_page(
     date_display: str = "",
     is_starred: bool = False,
     manual_tags: tuple[str, ...] = (),
+    all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
     esc_title = html.escape(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
@@ -16353,7 +16354,14 @@ def build_reader_page(
         "<button class='reader-ctl' id='reader-delete-btn' type='button'"
         f" data-tags='{esc_tags}' title='Delete (remove from Saved)'>&#128465;</button>"
     )
-    saved_actions = (archive_btn + delete_btn) if show_saved_actions else ""
+    # "#" rather than a 🏷 emoji: emoji render inconsistently (and sometimes in
+    # colour) on e-ink browsers, while "#" is the same mark Lectio uses for tags
+    # everywhere else.
+    tag_btn = (
+        "<button class='reader-ctl' id='reader-tag-btn' type='button'"
+        f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
+    )
+    saved_actions = (tag_btn + archive_btn + delete_btn) if show_saved_actions else ""
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -16362,6 +16370,34 @@ def build_reader_page(
     nav_json = json.dumps(
         {"prev": prev_href or "", "next": next_href or "", "back": back_href or "/read"}
     ).replace("<", "\\u003c")
+    # The tag vocabulary rides in the same inline-JSON style, for the same reason:
+    # nothing the panel acts on is read back out of the DOM. `all` is every tag
+    # name in the library so the panel is a tap-list rather than a keyboard task;
+    # `current` is what this entry carries.
+    tags_json = json.dumps(
+        {"all": list(all_tag_names), "current": list(manual_tags),
+         "feed_url": feed_url, "entry_id": entry_id, "max": MAX_MANUAL_TAGS}
+    ).replace("<", "\\u003c")
+    # Rendered empty (the JS fills it) so the tag list can be re-drawn after every
+    # toggle without the server re-rendering the page — an e-ink repaint of the
+    # whole article per tap would make tagging unusable.
+    tag_panel = (
+        "<div id='reader-tag-panel' hidden>"
+        "<div class='reader-tag-head'>Tags"
+        "<button type='button' id='reader-tag-new' class='reader-ctl'>+ New</button>"
+        "<button type='button' id='reader-tag-done' class='reader-ctl'>Done</button>"
+        "</div>"
+        "<form id='reader-tag-newform' hidden autocomplete='off'>"
+        # Space-separated, matching the main app's tag input — the server splits
+        # on whitespace, so "brand new tag" is three tags, not one. Says so,
+        # because there is no autocomplete here to make that obvious.
+        "<input type='text' id='reader-tag-input' placeholder='new tag (spaces split)' "
+        "inputmode='text' autocapitalize='none' spellcheck='false'>"
+        "<button type='submit' class='reader-ctl'>Add</button>"
+        "</form>"
+        "<div id='reader-tag-list'></div>"
+        "</div>"
+    ) if show_saved_actions else ""
     # NOTE: every scalar below is html.escape'd; only `article_html` is embedded
     # raw, and it is always allowlist-sanitized upstream (archived capture, live
     # readability, or stored feed content — all via html_sanitize.sanitize_html),
@@ -16391,6 +16427,8 @@ def build_reader_page(
         f"{reader_dateline}"
         f"{article_html}</article>"
         "</div></main>"
+        f"{tag_panel}"
+        f"<script>window.__READER_TAGS__={tags_json};</script>"
         f"<script>window.__READER_NAV__={nav_json};</script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
@@ -16903,6 +16941,7 @@ def reader_view(
         date_display=_read_mode_date(current),
         is_starred=_entry_is_starred(cur_feed, cur_id),
         manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
+        all_tag_names=tuple(get_all_manual_tag_names()),
     )
 
 

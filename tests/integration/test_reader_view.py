@@ -25,7 +25,7 @@ def _app():
 
 
 def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>BODY</p>",
-                starred=True, manual_tags=()):
+                starred=True, manual_tags=(), all_tag_names=()):
     marks: list[tuple] = []
     monkeypatch.setattr(main, "resolve_reader_backlog", lambda **k: list(backlog))
     monkeypatch.setattr(main, "resolve_reader_article_html", lambda f, e, l: article)
@@ -35,6 +35,7 @@ def _patch_read(monkeypatch, *, backlog, archived_keys=frozenset(), article="<p>
     # item; tags ride along so Delete's confirm can name them.
     monkeypatch.setattr(main, "_entry_is_starred", lambda f, e: starred)
     monkeypatch.setattr(main, "get_manual_tags_for_entry", lambda f, e: list(manual_tags))
+    monkeypatch.setattr(main, "get_all_manual_tag_names", lambda: list(all_tag_names))
     monkeypatch.setattr(main, "_csrf_token_for", lambda req: "tok")  # bare app has no session
     return marks
 
@@ -259,3 +260,37 @@ def test_non_supernote_not_redirected(monkeypatch):
     with TestClient(_home_app()) as client:
         r = client.get("/", headers={"User-Agent": "Mozilla/5.0 Chrome/120"}, follow_redirects=False)
     assert r.status_code == 200
+
+
+def test_tag_panel_ships_the_whole_vocabulary(monkeypatch):
+    """Filing from an e-ink device means tapping, not typing.
+
+    The panel needs every tag name in the library up front so it can render
+    them as toggles; only the "+ New" field needs a keyboard.
+    """
+    _patch_read(
+        monkeypatch, backlog=[_rec(2)],
+        manual_tags=("humour",), all_tag_names=("comics", "humour", "linux"),
+    )
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2"}).text
+
+    assert "id='reader-tag-btn'" in body
+    assert "id='reader-tag-panel'" in body
+    assert "__READER_TAGS__" in body
+    # Vocabulary and current selection both travel as inline JSON — nothing the
+    # panel acts on is read back out of the DOM.
+    assert '"all": ["comics", "humour", "linux"]' in body
+    assert '"current": ["humour"]' in body
+    # The count rides on the button so it is visible without opening the panel.
+    assert ">#1</button>" in body
+
+
+def test_tag_panel_absent_in_the_feeds_scope(monkeypatch):
+    """Tagging is a Saved-scope action, alongside Archive/Delete."""
+    _patch_read(monkeypatch, backlog=[_rec(2)], manual_tags=(), all_tag_names=("x",))
+    with TestClient(_app()) as client:
+        body = client.get("/read", params={"feed_url": "feed2", "entry_id": "e2",
+                                           "scope": "feeds"}).text
+    assert "id='reader-tag-btn'" not in body
+    assert "id='reader-tag-panel'" not in body

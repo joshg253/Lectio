@@ -432,3 +432,57 @@ body.rm-body {
     border-bottom: 2px solid #000;
   }
 }
+
+/* --- Tag panel ----------------------------------------------------------- */
+/* Overlays the article rather than reflowing it: on e-ink, re-paginating the
+   body just to show a panel is a visible full-screen flash. */
+#reader-tag-panel {
+  position: fixed;
+  top: var(--reader-bar-h);
+  left: 0; right: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 20;
+  padding: 12px 16px 16px;
+  background: #fff;
+  border-bottom: 3px solid #000;
+}
+.reader-tag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.8rem;
+}
+/* Push the actions to the right of the "TAGS" label. */
+.reader-tag-head #reader-tag-new { margin-left: auto; }
+
+#reader-tag-newform { display: flex; gap: 8px; margin-bottom: 12px; }
+#reader-tag-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: inherit;
+}
+
+#reader-tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Deliberately large: a fingertip target on a slow screen, not a chip. */
+.reader-tag {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font: 700 15px/1 -apple-system, "Segoe UI", Arial, sans-serif;
+  cursor: pointer;
+}
+/* Applied tags invert — the same "state = filled block" language the Archive
+   button and the sort switcher use, which reads at a glance on e-ink. */
+.reader-tag.on { background: #000; color: #fff; }
