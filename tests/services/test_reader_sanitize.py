@@ -149,5 +149,25 @@ def test_table_align_attribute_survives():
     html = '<table><tr align="center"><td colspan="2" align="center">Before</td><th align="right">x</th></tr></table>'
     out = sanitize_html(html)
     assert 'align="center"' in out and 'colspan="2"' in out and 'align="right"' in out
-    # Not global: align on non-table elements stays stripped.
-    assert "align" not in sanitize_html('<p align="center">x</p>')
+
+
+def test_block_align_attribute_survives():
+    """align now also survives on block elements, by the same reasoning.
+
+    This deliberately overturns an earlier assertion that align outside tables
+    was stripped. That scoping was never a security position — the rationale
+    for keeping it on td/img is "value-constrained, no scripting surface",
+    which is just as true of <p>. The narrower rule silently lost a feed's
+    centering, and we never load feed CSS to restore it another way.
+    """
+    from services.html_sanitize import sanitize_html
+    for tag in ("p", "div", "figure", "h2"):
+        out = sanitize_html(f'<{tag} align="center">x</{tag}>')
+        assert 'align="center"' in out, tag
+
+
+def test_align_is_still_not_global():
+    """Inline elements have no business carrying presentational alignment."""
+    from services.html_sanitize import sanitize_html
+    assert "align" not in sanitize_html('<span align="center">x</span>')
+    assert "align" not in sanitize_html('<a href="https://x.test" align="center">x</a>')

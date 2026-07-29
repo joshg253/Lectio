@@ -184,3 +184,62 @@ def test_audio_video_kept():
 def test_empty_and_none_safe():
     assert H.sanitize_html("") == ""
     assert H.sanitize_html(None) is None  # ty: ignore[invalid-argument-type]
+
+
+# --- inline style: enumerated allowlist ------------------------------------
+
+def test_presentational_styles_survive():
+    """Author formatting the app can't otherwise recover: feed CSS is never
+    loaded, so a stripped text-align is a stripped intent."""
+    out = H.sanitize_html('<p style="text-align:center">c</p>')
+    assert 'style="text-align: center"' in out
+    out = H.sanitize_html('<span style="font-style:italic;font-weight:bold">x</span>')
+    assert "font-style: italic" in out and "font-weight: bold" in out
+
+
+def test_style_values_are_normalized_for_the_stylesheet():
+    """The emitted form is ours, not the feed's — style.css keys its
+    centering rules off the exact string `text-align: center`."""
+    for raw in ("TEXT-ALIGN:CENTER", "text-align:   center", "text-align: center !important"):
+        assert 'style="text-align: center"' in H.sanitize_html(f'<p style="{raw}">c</p>')
+
+
+def test_unlisted_style_properties_are_dropped():
+    """Layout/positioning would let feed content escape the pane or overlay the
+    app's own UI, which matters even with no scripting involved."""
+    for css in ("position:fixed;top:0;left:0", "z-index:99999", "width:5000px",
+                "display:none", "opacity:0", "content:attr(data-x)"):
+        assert "style=" not in H.sanitize_html(f'<p style="{css}">x</p>')
+
+
+def test_style_payloads_cannot_survive():
+    """Values are matched against a literal allowlist, so there is nowhere for a
+    payload to hide — nothing free-form is ever kept."""
+    for css in (
+        "background:url(javascript:alert(1))",
+        "width:expression(alert(1))",
+        "behavior:url(x.htc)",
+        "-moz-binding:url(x.xml)",
+        "text-align:url(javascript:alert(1))",
+        "text-align:center\\3b background:red",
+    ):
+        out = H.sanitize_html(f'<p style="{css}">x</p>')
+        assert "javascript" not in out.lower()
+        assert "expression" not in out.lower()
+        assert "binding" not in out.lower()
+        assert "url(" not in out.lower()
+
+
+def test_valid_declaration_survives_alongside_a_payload():
+    """A mixed declaration keeps only the listed part — the rest is dropped,
+    not escaped-and-kept."""
+    out = H.sanitize_html('<p style="text-align:center;background:url(javascript:alert(1))">x</p>')
+    assert 'style="text-align: center"' in out
+    assert "javascript" not in out.lower() and "background" not in out.lower()
+
+
+def test_center_tag_survives():
+    """<center> is deprecated but purely presentational; unwrapping it silently
+    lost the author's centering."""
+    out = H.sanitize_html("<center>c</center>")
+    assert "<center>" in out and "c" in out

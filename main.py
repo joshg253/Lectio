@@ -9179,6 +9179,56 @@ def _strip_div_blocks_by_class(html: str, *class_markers: str) -> str:
     return "".join(result)
 
 
+# Chrome that only exists once the source page's own JavaScript runs. We don't
+# run it, so a share widget stays a row of dead icons and a lazy "related posts"
+# carousel stays a row of empty bullets with a spinner in each — observed on
+# paizo.com, whose post ends with div.sharing_widget (anchors with no href at
+# all) followed by four <li class="blog-item loading"> holding only a dice
+# glyph. Same class of problem as the JWPlayer chrome strip below.
+_JS_PLACEHOLDER_CLASS_RE = re.compile(r"\b(?:loading|placeholder|skeleton)\b", re.IGNORECASE)
+_SHARE_WIDGET_CLASS_RE = re.compile(r"\b(?:shar(?:e|ing)[-_ ]?\w*|social(?:[-_ ]?\w*)?)\b", re.IGNORECASE)
+
+
+def _strip_js_dependent_chrome(html: str) -> str:
+    """Drop share widgets and unfilled lazy-load placeholders from entry content.
+
+    **Only ever removes elements that contain no text and no <img>.** That is the
+    whole safety argument: a real "related posts" block carries headlines, and a
+    real gallery carries images, so neither can match. What is left to match is
+    icon-only chrome, which carries nothing a reader would read.
+    """
+    if not html or ("class" not in html):
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+
+    def _is_textless_chrome(el) -> bool:
+        if el.get_text(strip=True):
+            return False
+        return el.find("img") is None
+
+    for el in soup.find_all(["div", "ul", "nav", "section", "aside", "li", "p"]):
+        classes = " ".join(el.get("class") or [])
+        if not classes:
+            continue
+        is_share = _SHARE_WIDGET_CLASS_RE.search(classes) is not None
+        is_placeholder = _JS_PLACEHOLDER_CLASS_RE.search(classes) is not None
+        if (is_share or is_placeholder) and _is_textless_chrome(el):
+            el.decompose()
+            changed = True
+
+    # A list whose every item was a placeholder is now an empty <ul> — drop the
+    # husk too, or the reader shows a stray bullet-less gap.
+    for lst in soup.find_all(["ul", "ol"]):
+        if not lst.find(["li"]) and not lst.get_text(strip=True) and lst.find("img") is None:
+            lst.decompose()
+            changed = True
+
+    return str(soup) if changed else html
+
+
 # WordPress "rss_footer" boilerplate appended to feed content: "The post <title>
 # appeared first on <site>." Plugins add near-duplicate variants ("first appeared
 # on") and some double-encode the wrapping <p> (so the reader shows literal
@@ -13182,6 +13232,12 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     if isinstance(content_html, str) and ("jw-" in content_html or "jwp-" in content_html or "vid-present" in content_html):
         for _cls in ("vid-present", "jwplayer", "jw-wrapper", "jwp-carousel"):
             content_html = _strip_div_blocks_by_class(content_html, _cls)
+
+    # Share widgets and never-filled lazy-load placeholders — the same "chrome
+    # the site's own JS would have handled" problem, generically. Textless and
+    # image-free only, so real related-post blocks and galleries can't match.
+    if isinstance(content_html, str):
+        content_html = _strip_js_dependent_chrome(content_html)
 
     # MyNorthwest injects a "RELATED STORIES" sidebar block (div.related.alignright)
     # after the first paragraph. It contains external article thumbnails that

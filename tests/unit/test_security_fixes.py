@@ -41,9 +41,12 @@ def test_sanitizer_preserves_benign_content():
 
 
 def test_sanitizer_unwraps_unknown_tags_keeping_text():
-    out = main._sanitize_html_allowlist("<center><marquee>keep me</marquee></center>")
+    # NB: <center> used to stand in for "unknown tag" here, but it is now
+    # allowed — deprecated yet purely presentational, and unwrapping it lost
+    # the author's centering. <marquee>/<blink> still carry the actual point.
+    out = main._sanitize_html_allowlist("<marquee><blink>keep me</blink></marquee>")
     assert "keep me" in out
-    assert "<marquee" not in out.lower() and "<center" not in out.lower()
+    assert "<marquee" not in out.lower() and "<blink" not in out.lower()
 
 
 # ── M2: login open-redirect guard ──
