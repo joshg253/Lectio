@@ -43,6 +43,12 @@ def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
     seen: set[str] = set()
     for value in values:
         compact = " ".join(html_module.unescape(value).strip().split())
+        # A leading "#" is display chrome, not part of the name: themes render
+        # tag links as "#motivation", and Lectio uses "#" as its own tag marker
+        # everywhere. Stripping it here also folds the duplicate when a page
+        # links the same term once as a category ("personal") and once as a
+        # hash-prefixed tag ("#personal").
+        compact = compact.lstrip("#").strip()
         if not compact or len(compact) > 60:
             continue
         lowered = compact.lower()
@@ -110,8 +116,14 @@ _META_ATTR_RE = re.compile(
 _PAGE_TAG_KEYS = {"article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
 _MAX_PAGE_TAGS = 15
 _ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,120}?)</a>", re.IGNORECASE | re.DOTALL)
+# /tag/x, /tags/x, /category/x, /categories/x — trailing slash optional. The
+# capture is the slug, used when the anchor has no text of its own.
+_TAXONOMY_HREF_RE = re.compile(r"/(?:tags?|categor(?:y|ies))/([^/?#]+)", re.IGNORECASE)
+# The unquoted alternative is not optional politeness: minified Hugo output emits
+# `href=https://host/tags/x/` with no quotes at all, so a quotes-only pattern
+# matched nothing on those pages and every anchor tier below silently found zero.
 _ANCHOR_ATTR_RE = re.compile(
-    r'\b(rel|class|href|title)\s*=\s*("([^"]*)"|\'([^\']*)\')', re.IGNORECASE
+    r'\b(rel|class|href|title)\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))', re.IGNORECASE
 )
 _INNER_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -151,7 +163,9 @@ def extract_page_tags(html: str | None) -> list[str]:
     for m in _ANCHOR_RE.finditer(html):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
-            attrs[am.group(1).lower()] = am.group(3) if am.group(3) is not None else am.group(4)
+            attrs[am.group(1).lower()] = next(
+                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
+            )
         if "tag" not in (attrs.get("rel") or "").lower().split():
             continue
         text = _INNER_TAG_RE.sub(" ", m.group(2)).strip()
@@ -165,7 +179,9 @@ def extract_page_tags(html: str | None) -> list[str]:
     for open_tag in re.findall(r"<a\b[^>]*>", html, re.IGNORECASE):
         attrs = {}
         for am in _ANCHOR_ATTR_RE.finditer(open_tag):
-            attrs[am.group(1).lower()] = am.group(3) if am.group(3) is not None else am.group(4)
+            attrs[am.group(1).lower()] = next(
+                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
+            )
         classes = (attrs.get("class") or "").lower()
         href = attrs.get("href") or ""
         if "tag" not in classes or not href:
@@ -175,6 +191,39 @@ def extract_page_tags(html: str | None) -> list[str]:
             value = slug_m.group(1).replace("-", " ")
         if value:
             values.append(value)
+
+    # Taxonomy-URL anchors: a link to /tags/<slug>/ or /categories/<slug>/ IS a
+    # tag link, whatever its class. Hugo (and most static generators) mark them
+    # only by URL shape — krshrimali.github.io puts its category at the top and
+    # its tags in the footer with no tag class and no rel="tag", so the tiers
+    # above found nothing at all.
+    #
+    # Plural matters: the older slug fallback matched /tag/ and /category/ only,
+    # which misses Hugo's /tags/ and /categories/ entirely.
+    #
+    # A slug is REQUIRED, which is what keeps the nav links to the /tags and
+    # /categories index pages out.
+    for m in _ANCHOR_RE.finditer(html):
+        attrs = {}
+        for am in _ANCHOR_ATTR_RE.finditer(m.group(1)):
+            attrs[am.group(1).lower()] = next(
+                (g for g in (am.group(3), am.group(4), am.group(5)) if g is not None), ""
+            )
+        href = attrs.get("href") or ""
+        if not _TAXONOMY_HREF_RE.search(href):
+            continue
+        # title, then the anchor's own text, then the slug. The text carries the
+        # publisher's casing and punctuation ("Pet Supplies", "Woot!") where a slug
+        # gives "pet-supplies" — but only when there IS text: Valnet wraps its tag
+        # anchors around an image or a one-character span, and a slug beats "x".
+        text = (attrs.get("title") or "").strip()
+        if len(text) < 2:
+            text = " ".join(_INNER_TAG_RE.sub(" ", m.group(2)).split())
+        if len(text) < 2:
+            slug_m = _TAXONOMY_HREF_RE.search(href)
+            text = (slug_m.group(1) if slug_m else "").replace("-", " ")
+        if len(text) >= 2:
+            values.append(text)
 
     return _clean_tag_values(values, cap=_MAX_PAGE_TAGS)
 

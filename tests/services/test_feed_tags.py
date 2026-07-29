@@ -254,14 +254,23 @@ def test_page_tags_rel_tag_anchors():
 
 
 def test_page_tags_tag_classed_anchors_title_or_slug():
-    # Valnet style: tags-link anchors, some wrapping images (title attr wins);
-    # plain /tag/ links without a tag class are ignored (nav/related noise).
+    """Valnet style: tags-link anchors, some wrapping an image or a junk span, so
+    the title attribute wins and the slug beats one-character text.
+
+    ⚠ This deliberately overturns the old assertion that a plain /tag/ link
+    *without* a tag class is nav noise to be ignored. Hugo (and most static
+    generators) mark taxonomy links only by URL shape — no class, no rel="tag" —
+    so requiring a class found nothing at all on those sites, which is how
+    krshrimali.github.io's category and tags were both missed. A link to
+    /tag/<slug>/ on an article page is overwhelmingly that article's tag; the junk
+    filter and the 15-tag cap bound the cost of the occasional sidebar link.
+    """
     html = (
         '<a class="tags-link image" href="/category/windows/" title="Windows"><img src="x"></a>'
         '<a class="tags-link" href="/tag/windows-tips/"><span>x</span></a>'
         '<a href="/tag/unrelated-nav-link/">Nav</a>'
     )
-    assert extract_page_tags(html) == ["Windows", "windows tips"]
+    assert extract_page_tags(html) == ["Windows", "windows tips", "Nav"]
 
 
 def test_junk_tags_dropped_at_capture():
@@ -374,3 +383,55 @@ def test_low_signal_does_not_delete_stored_rows(service):
 
     assert service.low_signal_tags(feed) == {"VinylDeals"}
     assert service.get_tags_for_entry(feed, "e0") == ["VinylDeals"]
+
+
+# --- page tag extraction: taxonomy URLs ---
+def test_taxonomy_url_anchors_are_tags_whatever_their_class():
+    """A link to /tags/<slug>/ IS a tag link. Hugo marks them only by URL shape —
+    krshrimali.github.io puts its category at the top and its tags in the footer
+    with no tag class and no rel="tag", so the class/rel tiers found nothing.
+
+    Plural matters: the old slug fallback matched /tag/ and /category/ only, which
+    misses Hugo's /tags/ and /categories/ entirely.
+    """
+    out = extract_page_tags(
+        '<a href="https://x.test/categories/personal/">personal</a>'
+        '<a href="https://x.test/tags/motivation/">#motivation</a>'
+    )
+    assert out == ["personal", "motivation"]
+
+
+def test_unquoted_attributes_are_parsed():
+    """Minified Hugo output emits `href=https://…` with no quotes, so a
+    quotes-only attribute pattern matched nothing and every anchor tier silently
+    found zero tags on those pages."""
+    out = extract_page_tags("<a href=https://x.test/tags/rust/>rust</a>")
+    assert out == ["rust"]
+
+
+def test_taxonomy_index_links_are_not_tags():
+    """The nav links to the /tags and /categories listing pages carry no slug,
+    which is exactly what keeps them out."""
+    assert extract_page_tags('<a href="/tags">Tags</a><a href="/categories">All</a>') == []
+
+
+def test_anchor_text_beats_the_slug():
+    """The publisher's own casing and punctuation — "Pet Supplies", "Woot!" —
+    rather than "pet-supplies". This is the gottadeal case, where the harvested
+    tag had been the surrounding sentence ("in XXX, YYY") instead of the anchors.
+    """
+    out = extract_page_tags(
+        '<p>Posted on 7/29/26 in <a href="/category/woot/">Woot!</a>, '
+        '<a href="/category/pet-supplies/">Pet Supplies</a></p>'
+    )
+    assert out == ["Woot!", "Pet Supplies"]
+
+
+def test_a_leading_hash_is_stripped():
+    """Display chrome, not part of the name — and Lectio uses "#" as its own tag
+    marker everywhere. Stripping it also folds a term linked once as a category
+    and once as a hash-prefixed tag."""
+    out = extract_page_tags(
+        '<a href="/categories/python/">python</a><a href="/tags/python/">#python</a>'
+    )
+    assert out == ["python"]
