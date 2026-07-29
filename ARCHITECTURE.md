@@ -1198,6 +1198,25 @@ main app's Saved view) or `"starred"` (the Inbox). `_read_mode_saved_index` retu
 still be counted over filed items — counting them over a starred-only inbox would
 empty most of the tree.
 
+**The Archive filter is applied before every clip, and there are three.**
+`_sorted_star_key_window` sorts and clips *in SQL over the raw kept keys*,
+`list_entries_for_feeds` clips its light records, and `merge_orphan_saved_entries`
+re-sorts and re-clips after appending archive-only orphans. The done-axis filter
+originally sat downstream of all three, in `resolve_reader_backlog`, so it chose
+archived rows out of a window computed against the *unfiltered* backlog.
+
+Live symptom (2026-07-29): one archived post among 24,672 kept. Newest-first
+found it, because a recent post sorts high; oldest-first and Recently-starred
+returned nothing, because it sorted to the far end and fell outside the first
+150. The Archive node rendered "Nothing here" while its own count — read straight
+from `archived_entries` — said 1. **A count and a list computed at different
+layers is the recurring bug in this area**; it is the same shape as the
+9,979-vs-24,695 tree mismatch.
+
+`kept_entries_set` also folds in the archived keys, because archiving removes the
+star: an archived, untagged entry is kept by no other axis and would be
+unreachable in the one view built to show it.
+
 **"All Saved" is a separate node**, not a mode of the Inbox: everything kept
 minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay
 narrow to be a queue, but the two modes disagreeing about what *exists* is the

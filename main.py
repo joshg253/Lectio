@@ -11307,6 +11307,7 @@ def list_entries_for_feeds(
     selected_tag: str | None = None,
     search_query: str | None = None,
     kept_scope: str = "kept",
+    archived: bool | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -11399,6 +11400,20 @@ def list_entries_for_feeds(
         set(saved_entries_set) if kept_scope == "starred"
         else saved_entries_set | tagged_entries_set
     )
+    # The Archive (done) axis, applied here rather than by the caller because it
+    # has to happen BEFORE the limit clip. Filtering afterwards means the caller
+    # only ever sees archived items that sorted into the first N of the whole
+    # kept backlog — with 24k kept and a 150 limit, the Archive view showed
+    # whatever happened to land at the top and nothing else. It looked fine under
+    # newest-first (recent archives sort high) and returned nothing under
+    # "Recently starred", where an archived item has no star date at all.
+    archive_filter_keys = get_archived_saved_keys() if archived is not None else set()
+    # Archived counts as kept, the same third keep signal `entry_has_keep_signal`
+    # and `_prune_entries` honor. Archiving REMOVES the star, so an archived item
+    # with no tag is otherwise not "kept" by any axis and would be unreachable in
+    # the very view built to show it.
+    if archived and kept_scope != "starred":
+        kept_entries_set = kept_entries_set | archive_filter_keys
 
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
@@ -11460,6 +11475,18 @@ def list_entries_for_feeds(
                 star_keys = kept_entries_set & get_entry_keys_for_manual_tag(
                     set(feed_urls), normalized_selected_tag
                 )
+            if archived is not None:
+                # Narrow to the done-axis BEFORE the window clip below, for the
+                # same reason the tag filter moved up here: _sorted_star_key_window
+                # sorts and clips in SQL over the raw keys, so anything filtered
+                # afterwards is chosen from a window computed against the whole
+                # kept set. With one archived post among 24k kept, "oldest first"
+                # put it far outside the first 150 and the Archive node rendered
+                # "Nothing here" while its count said 1.
+                star_keys = {
+                    k for k in star_keys
+                    if (k in archive_filter_keys) == archived
+                }
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -11661,6 +11688,9 @@ def list_entries_for_feeds(
                     continue
             # Kept view keeps anything starred OR tagged (the unified keep axis).
             if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
+                continue
+            if archived is not None and \
+                    (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
                 continue
             # Unread composes with star_only (Saved view narrowed to unread);
             # history stays exclusive with starred (it sorts by read time).
@@ -12100,8 +12130,15 @@ def merge_orphan_saved_entries(
     sort_dir: str,
     limit: int,
     only_feed_url: str | None = None,
+    archived: bool | None = None,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
+
+    *archived* (the done-axis) must be applied HERE, not by the caller: this
+    re-sorts and re-clips to *limit*, so a caller filtering afterwards sees only
+    the archived rows that survived a clip made against the unfiltered list. That
+    is what made the Archive view show nothing under some sort orders — a single
+    archived post sorted to the bottom and fell outside the window.
 
     Orphans are starred entries whose feed is no longer in any folder; their
     metadata comes entirely from the starred archive. Rendered alongside live
@@ -12111,7 +12148,15 @@ def merge_orphan_saved_entries(
     canonically) — used when the user clicks the feed link of an orphaned save
     to browse just that unsubscribed feed's archived items.
     """
+    archived_keys = get_archived_saved_keys() if archived is not None else set()
+    if archived is not None:
+        posts = [p for p in posts
+                 if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
+
     orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    if archived is not None:
+        orphans = [o for o in orphans
+                   if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
     if only_feed_url is not None:
         target = normalize_feed_url(only_feed_url)
         orphans = [o for o in orphans if normalize_feed_url(o["feed_url"]) == target]
@@ -16447,10 +16492,12 @@ def resolve_reader_backlog(
         selected_tag=tag,
         search_query=search_query,
         kept_scope=kept_scope,
+        archived=archived,
     )
 
     # Parity with the Saved list: surface archive-only orphans (saves whose feed
     # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    _merged_orphans = False
     if (
         star_only
         and not list_feed_url
@@ -16465,11 +16512,15 @@ def resolve_reader_backlog(
                 sort_by=sort_by,
                 sort_dir=sort_dir,
                 limit=limit,
+                archived=archived,
             )
+            _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("reader backlog orphan merge failed: %s", exc)
 
-    if archived is not None:
+    if archived is not None and not _merged_orphans:
+        # Both list_entries_for_feeds and merge_orphan_saved_entries apply this
+        # before their own clips; this covers the path where the merge is skipped.
         archived_keys = get_archived_saved_keys()
         posts = [
             p for p in posts
