@@ -16387,22 +16387,34 @@ def build_reader_page(
 
 
 def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]:
-    """One pass over saved_entries → (non-archived key set, per-feed non-archived
-    counts, archived total). Read Mode excludes Archived items from the inbox
-    lists AND their counts (but never strips a tag from an archived item)."""
+    """→ (inbox key set, per-feed inbox counts, archived total).
+
+    **The inbox is KEPT (starred OR tagged) minus Archived**, matching what the
+    list actually shows: `resolve_reader_backlog(star_only=True)` resolves
+    against `kept_entries_set = saved_entries_set | tagged_entries_set`, the same
+    definition the main app's Saved view uses.
+
+    This counted starred rows only, so the tree numbers never matched the list
+    they opened — measured 2026-07-28 at **9,979 against the sidebar's 24,695**,
+    because 16,479 entries are tagged versus 10,002 starred. Archiving was never
+    the gap (23 rows). Read Mode is meant to be the same app in an e-ink shape,
+    so a count that means something different here is simply wrong.
+
+    Only starred rows can be Archived (`archived_at` lives on `saved_entries`),
+    so a tagged-but-unstarred entry is always in the inbox — which is right: it
+    has no "done" state to be in.
+    """
     with get_meta_connection() as conn:
         rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
-    inbox: set[tuple[str, str]] = set()
+    archived_keys = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows if r["archived_at"] is not None}
+    kept: set[tuple[str, str]] = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
+    kept |= get_tagged_entry_keys(get_all_reader_feed_urls())
+
+    inbox = kept - archived_keys
     feed_counts: dict[str, int] = {}
-    archived_total = 0
-    for r in rows:
-        if r["archived_at"] is None:
-            key = (str(r["feed_url"]), str(r["entry_id"]))
-            inbox.add(key)
-            feed_counts[key[0]] = feed_counts.get(key[0], 0) + 1
-        else:
-            archived_total += 1
-    return inbox, feed_counts, archived_total
+    for feed_url, _entry_id in inbox:
+        feed_counts[feed_url] = feed_counts.get(feed_url, 0) + 1
+    return inbox, feed_counts, len(archived_keys)
 
 
 def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:

@@ -1179,14 +1179,26 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   field only when needed. No keyboard, one repaint per tap. `POST /entries/tags`
   already supports this (`append_mode`, JSON reply) and `get_all_manual_tag_names()`
   exists, so it is a Read Mode UI job. **Not built yet.**
-- **⚠ Saved counts disagree between the two modes** — measured 2026-07-28:
-  the regular sidebar shows **24,695**, Read Mode **9,979**. Both are deliberate
-  in their own code and neither is a bug on its own: `get_saved_counts_by_folder`
-  counts **kept** (starred OR tagged), while `_read_mode_saved_index` counts
-  **starred, non-archived**. Archiving is not the cause (only 23 archived) — the
-  gap is **tagged-but-not-starred** (16,479 tagged vs 10,002 starred). Since
-  tag-as-keep made a tag a keep signal, Read Mode arguably cannot reach most of
-  what is kept. **Needs a decision** before either count changes.
+- ~~**Saved counts disagree between the two modes**~~ — **FIXED 2026-07-28.**
+  The regular sidebar showed **24,695**, Read Mode **9,979**: the sidebar counts
+  **kept** (starred OR tagged), `_read_mode_saved_index` counted **starred,
+  non-archived**. Archiving was never the gap (23 rows) — it was
+  tagged-but-not-starred (16,479 tagged vs 10,002 starred).
+  **The list was already right**, which is what settled it:
+  `resolve_reader_backlog(star_only=True)` resolves against
+  `kept_entries_set = saved_entries_set | tagged_entries_set`, so the tree
+  numbers never matched the list they opened. The index now counts kept-minus-
+  archived. Only starred rows can be Archived (`archived_at` lives on
+  `saved_entries`), so a tagged-but-unstarred entry is always in the inbox.
+
+  **Josh's rule, which decided it:** *"eInk should really just be a slightly
+  simpler version of regular, mostly just the look, and eink specific things like
+  page instead of scroll."* Read Mode may differ in **presentation** (paging, high
+  contrast, big tap targets, inverted state blocks) and in genuinely
+  paging-specific behavior (mark-read on last page, the Archive done-axis). It
+  must **not** carry a different data model — same kept definition, same effective
+  date, same sort options, same tag vocabulary. A number that differs between the
+  modes is a bug to reconcile, not a feature.
 - **Excise the dormant in-app star-mode tree/JS** that the Read Mode hijack
   bypasses — dead weight now that the sidebar row opens `/read`. Pairs naturally
   with the dead-code sweep in Later's "Code health".
