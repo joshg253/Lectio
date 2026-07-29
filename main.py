@@ -3366,15 +3366,26 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE saved_entries ADD COLUMN archived_at TIMESTAMP DEFAULT NULL")
         except Exception:
             pass
-        # One-time lift of the legacy column into the new table. Idempotent via
-        # INSERT OR IGNORE, so it is safe on every boot and during a rolling
-        # deploy where old code may still be writing the column.
+        # One-time lift of the legacy column into the new table — and it must be
+        # ONE-TIME, not merely idempotent. The first version relied on INSERT OR
+        # IGNORE and left the column populated, so every boot re-lifted it:
+        # un-archiving deleted the archived_entries row, the old column survived,
+        # and the next restart brought the item back. Reported as "I've
+        # unarchived them 3 times now and they keep coming back" — a resurrection
+        # bug that is invisible until something restarts the app.
+        #
+        # Clearing the source in the same transaction is what makes it one-time,
+        # and it also removes the second source of truth. A marker flag would
+        # leave a populated column that still looks authoritative to the next
+        # person reading the schema.
         try:
             conn.execute(
                 "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
                 "SELECT feed_url, entry_id, archived_at FROM saved_entries "
                 "WHERE archived_at IS NOT NULL"
             )
+            conn.execute("UPDATE saved_entries SET archived_at = NULL WHERE archived_at IS NOT NULL")
+            conn.commit()
         except Exception:
             pass
         conn.execute(

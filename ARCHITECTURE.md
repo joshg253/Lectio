@@ -1077,9 +1077,16 @@ keep it, or drop it, without opening it.
 `saved_entries` row *is* the star, and Archive **removes** the star — so state
 stored on that row could not outlive the act that sets it. The table also lets a
 tagged-but-unstarred entry be archived, which the column could never represent.
-Migrated by lifting the legacy `saved_entries.archived_at` column on every boot
-(`INSERT OR IGNORE`, so it is idempotent and rolling-deploy safe); the column is
-still created but nothing reads it. This also deleted the unstar-tagged panel's
+Migrated by lifting the legacy `saved_entries.archived_at` column **once**, then
+clearing the column in the same transaction. **Idempotent is not enough here.**
+The first version used `INSERT OR IGNORE` and left the column populated, so every
+boot re-lifted it: un-archiving deleted the `archived_entries` row, the old column
+survived, and the next restart resurrected the item. It surfaced as "I've
+unarchived them 3 times now and they keep coming back", and it is invisible until
+something restarts the app — the same shape as the starred-archive backfill that
+re-created orphan star rows at every boot. Clearing the source is also what
+removes the second source of truth; a marker flag would leave a populated column
+that still reads as authoritative. This also deleted the unstar-tagged panel's
 `archived_at_lost` warning outright — unstarring can no longer discard archived
 state, so there is nothing to warn about.
 

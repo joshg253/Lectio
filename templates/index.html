@@ -230,6 +230,21 @@
           {# Folders that hold saved articles — the Saved counterpart of the
              feeds tree; visible only in Saved mode (badges = total saved). #}
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
+            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
+               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
+            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
+                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
+                >
+                  <span class="name">Inbox</span>
+                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {# "All": the whole starred backlog — what the header itself used to
                load. Sits at folder level so opening it is a deliberate click. #}
             <div class="tree-folder-group">
@@ -243,21 +258,6 @@
                   <span class="name">All</span>
                   {% set _saved_total = saved_counts_by_folder.get(root_folder_row.id, 0) %}
                   {% if _saved_total %}<span class="count">{{ _saved_total }}</span>{% endif %}
-                </a>
-              </div>
-            </div>
-            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
-               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
-            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
-            <div class="tree-folder-group">
-              <div class="tree-folder-row">
-                <span class="tree-toggle-spacer"></span>
-                <a
-                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
-                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
-                >
-                  <span class="name">Inbox</span>
-                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
                 </a>
               </div>
             </div>
