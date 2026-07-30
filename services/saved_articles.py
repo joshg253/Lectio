@@ -26,7 +26,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from urllib.parse import urldefrag, urlparse
+from urllib.parse import parse_qsl, unquote_plus, urldefrag, urlparse
 
 LOGGER = logging.getLogger(__name__)
 
@@ -96,20 +96,45 @@ def _title_words(value: str) -> set[str]:
     return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
 
 
+# Structural URL vocabulary: file extensions and CMS path furniture. These carry
+# no subject, and leaving them in is how informit.com defeated this guard —
+# /articles/article.aspx overlapped the site index title "Articles | InformIT",
+# so a wrong page read as the right one.
+_URL_STRUCTURAL_WORDS = frozenset({
+    "article", "articles", "index", "default", "page", "pages", "post", "posts",
+    "item", "items", "view", "show", "story", "stories", "content", "detail",
+    "details", "print", "amp", "html", "htm", "aspx", "php", "asp",
+    "cfm", "jsp", "shtml", "cgi", "www", "web", "site", "blog",
+})
+
+
 def _url_slug_words(url: str) -> set[str]:
-    """Significant words from a URL's own path — the stable ground truth.
+    """Significant words from a URL's path AND its query VALUES.
 
     The STORED title cannot be the reference: re-fetch exists partly to replace a
     bad capture's title ("Stale Listing Page" -> the real one), so comparing old
-    against new refuses exactly the case the feature is for. A URL's slug does not
-    change when a site starts serving a parked page over it.
+    against new refuses exactly the case the feature is for. A URL does not change
+    when a site starts serving a parked page over it.
+
+    Query values matter as much as the path. Plenty of CMS URLs are
+    ``/articles/article.aspx?p=2432250&WT.rss_a=Working+with+the+PowerShell…`` —
+    the path is furniture and the subject is in the query, so reading the path
+    alone left nothing to compare against but boilerplate.
     """
     try:
-        path = urlparse(url).path
+        parsed = urlparse(url)
     except ValueError:
         return set()
-    words = re.findall(r"[a-z0-9]+", path.lower())
-    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+    text = parsed.path
+    if parsed.query:
+        # Values only: keys are parameter names, never subject.
+        for _key, value in parse_qsl(parsed.query, keep_blank_values=False):
+            text += " " + unquote_plus(value)
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {
+        w for w in words
+        if len(w) > 2 and w not in _TITLE_STOPWORDS and w not in _URL_STRUCTURAL_WORDS
+    }
 
 
 def _page_is_a_different_article(source_url: str, new_title: str) -> bool:

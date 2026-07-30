@@ -392,3 +392,34 @@ def test_the_guard_stands_down_when_it_cannot_judge():
     # A title that genuinely echoes its slug is never refused.
     assert not different("https://x.test/2020/09/08/stl-algorithms-tutorial-unique-copy",
                          "STL Algorithms Tutorial: unique_copy")
+
+
+def test_query_string_urls_are_judged_on_their_query(reader, meta_conn):
+    """informit.com defeated the path-only version of this guard.
+
+    Its URLs are /articles/article.aspx?p=…&WT.rss_a=<the actual title>. The path
+    is furniture, and worse, "articles" overlapped the site index title
+    "Articles | InformIT" — so a wrong page read as the right one and the stored
+    article was replaced with the section index.
+
+    Query VALUES are now part of the reference, and structural vocabulary
+    (article/index/aspx/…) is excluded from it.
+    """
+    from services.saved_articles import _page_is_a_different_article as different
+
+    url = ("http://www.informit.com/articles/article.aspx?p=2432250&WT.rss_f=Article"
+           "&WT.rss_a=Working%20with%20the%20PowerShell%20Desired%20State%20Configuration"
+           "%2C%20Part%202%3A%20Implementation%20and%20Troubleshooting")
+
+    assert different(url, "Articles | InformIT")
+    assert not different(url, "Working with the PowerShell Desired State Configuration, Part 2")
+
+
+def test_structural_url_words_are_not_evidence():
+    """A path of nothing but CMS furniture leaves no reference, so the guard must
+    stand down rather than match on "article" or "index"."""
+    from services.saved_articles import _url_slug_words
+
+    assert _url_slug_words("https://x.test/articles/article.aspx") == set()
+    assert _url_slug_words("https://x.test/index.php") == set()
+    assert "powershell" in _url_slug_words("https://x.test/a.aspx?t=PowerShell+Desired+State")
