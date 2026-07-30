@@ -10988,6 +10988,38 @@ _PUBDATE_SOURCES: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+_WAYBACK_AVAILABILITY = "https://archive.org/wayback/available"
+
+
+def wayback_snapshot_url(source_url: str) -> str | None:
+    """The nearest Wayback snapshot of *source_url*, or None.
+
+    One small JSON call to archive.org's availability API — no crawling, no
+    scraping of the site that already refused us. This is the answer for an
+    article whose publisher now serves a parked page or a section index over its
+    own URL: the guard correctly refuses that page, and without a fallback the
+    user is left with nothing better.
+    """
+    if not source_url or not source_url.startswith(("http://", "https://")):
+        return None
+    try:
+        headers = {"User-Agent": READABILITY_USER_AGENT}
+        with url_guard.build_client(timeout=10.0, headers=headers) as client:
+            resp = url_guard.safe_get(
+                client, f"{_WAYBACK_AVAILABILITY}?url={quote_plus(source_url)}",
+                headers=headers,
+            )
+        resp.raise_for_status()
+        snap = ((resp.json() or {}).get("archived_snapshots") or {}).get("closest") or {}
+    except Exception:  # noqa: BLE001 — a missing fallback is not an error
+        LOGGER.info("wayback lookup failed for %s", source_url, exc_info=True)
+        return None
+    if not snap.get("available"):
+        return None
+    url = str(snap.get("url") or "")
+    return url or None
+
+
 def mine_publish_date(raw_html: str | None) -> datetime | None:
     """The article's publish date from a page's own metadata, or None.
 
@@ -26631,6 +26663,7 @@ async def refresh_saved_article_content(
             "entry_id": entry_id,
             "url": result.get("source_url") or entry_id,
             "dated": result.get("dated"),
+            "from_archive": result.get("from_archive"),
         })
     # Only the saved feed has a meaningful fallback: re-running the save path
     # can create the entry when it is genuinely absent. Anywhere else, the
@@ -26824,6 +26857,28 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
+    # The live page was refused as a different article (parked page, section
+    # index). Ask the archive for the real one before giving up — the guard
+    # protects the stored copy, but on its own it leaves the user stuck.
+    if not result.get("ok") and (result.get("mismatch") or result.get("dead")):
+        snapshot = wayback_snapshot_url(result.get("source_url") or entry_id)
+        if snapshot:
+            LOGGER.info("[re-fetch] falling back to the archive for %s", entry_id)
+            _capture.clear()
+
+            def _from_archive(_url: str):
+                return _base(snapshot, capture=_capture)
+
+            with get_meta_connection() as conn:
+                archived_result = saved_articles_service.refresh_captured_article(
+                    reader, conn, feed_url, entry_id,
+                    extract=_from_archive,
+                    enqueue_archive=starred_archive_service.enqueue_archive,
+                )
+            if archived_result.get("ok"):
+                archived_result["from_archive"] = snapshot
+                result = archived_result
+
     if result.get("ok"):
         try:
             result["dated"] = _apply_mined_publish_date(

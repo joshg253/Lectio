@@ -150,6 +150,11 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Re-fetch is undoable, and falls back to the Internet Archive.** Re-pulling an
+  article stores the previous body first, so *Revert* puts it back if the result is
+  worse. If the publisher now serves a parked page or a section index over the
+  article's own URL, Lectio notices, refuses to overwrite your copy with it, and
+  asks the Wayback Machine for the real one.
 - **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
   filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
   thumbnails, feed type), *Maintenance*, *History*, *Automations*.

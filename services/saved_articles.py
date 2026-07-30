@@ -415,6 +415,30 @@ def refresh_captured_article(
         result["mismatch"] = True
         return result
 
+    # Snapshot the body BEFORE replacing it, so a bad re-fetch is one click to
+    # undo. Two entries were destroyed this way before this existed — a parked
+    # page returning 200, and a URL whose subject lived only in its query string —
+    # and each needed a backup dive to recover. The guard above catches what it
+    # can recognize; this covers what it cannot.
+    #
+    # INSERT OR IGNORE keeps the FIRST original, matching the cleanup feature that
+    # shares this table: reverting means "as the feed served it", not "as the last
+    # re-fetch left it". Reusing the row also means the existing Revert control
+    # lights up with no further wiring.
+    try:
+        _original = read_entry_content_json(reader, feed_url, entry_id)
+        if _original is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO entry_content_edits"
+                " (feed_url, entry_id, original_content, ops, edited_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (feed_url, entry_id, _original, "[]",
+                 datetime.now(timezone.utc).isoformat()),
+            )
+    except Exception:  # noqa: BLE001 — never block a re-fetch on the snapshot
+        LOGGER.warning("refresh-capture: could not snapshot %s before replacing", entry_id,
+                       exc_info=True)
+
     try:
         # A feed entry keeps its date and gets its content pinned against the
         # next refresh; a capture bumps to the top and needs no pin (its feed

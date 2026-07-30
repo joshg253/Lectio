@@ -1465,6 +1465,29 @@ comment's.
 Manual `entry_date_overrides` are never touched; an explicit correction outranks
 anything inferred.
 
+### 7d. Re-fetch: undo + Wayback fallback — DONE 2026-07-30
+
+Two entries were wrecked by re-fetch in two days, each defeating the guard in a way
+the previous case did not predict:
+
+- **the-digital-reader** — a parked "Empowering Relationships" page returning **200**
+  for a 2019 post. Unrecoverable: the archive copy had been rewritten too.
+- **informit** — `/articles/article.aspx?p=…&WT.rss_a=<title>`. The subject lived
+  only in the query string, and the path word "articles" matched the site index
+  title "Articles | InformIT", so the slug guard passed it. Recovered from the
+  07-28 backup, then upgraded from a Wayback snapshot Josh found by hand — the feed
+  had only ever carried a 472-byte teaser, so the entry is now better than it was.
+
+**The lesson: stop sharpening the heuristic.** It failed twice on cases that could
+not have been foreseen. A re-fetch now snapshots the previous body into
+`entry_content_edits.original_content` (INSERT OR IGNORE, so the first original
+wins), which lights up the existing Revert control for free — a bad result is one
+click to undo rather than a backup dive.
+
+And the guard alone left the user stuck, so a refusal now falls back to
+`archive.org/wayback/available`. The guard still applies to the archived fetch, so a
+snapshot of the same parked page is refused too.
+
 ### 7c-4. accu.org: an image-less post with nine chrome images (2026-07-29)
 
 Reported three times as "img-less post, getting a social icon". Each fix revealed

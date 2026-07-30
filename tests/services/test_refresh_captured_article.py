@@ -56,6 +56,18 @@ def meta_conn():
     )
     conn.execute(
         """
+        CREATE TABLE entry_content_edits (
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            original_content TEXT NOT NULL,
+            ops TEXT NOT NULL,
+            edited_at TEXT NOT NULL,
+            PRIMARY KEY(feed_url, entry_id)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE entry_content_overrides (
             feed_url TEXT NOT NULL,
             entry_id TEXT NOT NULL,
@@ -423,3 +435,61 @@ def test_structural_url_words_are_not_evidence():
     assert _url_slug_words("https://x.test/articles/article.aspx") == set()
     assert _url_slug_words("https://x.test/index.php") == set()
     assert "powershell" in _url_slug_words("https://x.test/a.aspx?t=PowerShell+Desired+State")
+
+
+def test_a_refetch_is_undoable(reader, meta_conn):
+    """A bad re-fetch must be one click to undo.
+
+    Two entries were destroyed before this existed — a parked page returning 200,
+    and a URL whose subject lived only in its query string — and each needed a
+    backup dive to recover. The guard catches what it can recognize; the snapshot
+    covers what it cannot.
+    """
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
+        "content": [{"value": "<p>The body the feed served.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, ARTICLE))
+    meta_conn.commit()
+
+    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
+                                    extract=_extract_ok)["ok"] is True
+
+    row = meta_conn.execute(
+        "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()
+    assert row is not None, "no snapshot was taken"
+    assert "the feed served" in row[0]
+
+    # And the existing revert path restores it.
+    from services.saved_articles import restore_entry_content
+    restore_entry_content(reader, REAL_FEED, ARTICLE, row[0])
+    assert "the feed served" in reader.get_entry((REAL_FEED, ARTICLE)).content[0].value
+
+
+def test_the_snapshot_keeps_the_first_original(reader, meta_conn):
+    """Reverting means "as the feed served it", not "as the last re-fetch left it"
+    — the same semantics the cleanup feature has, since they share the row."""
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
+        "content": [{"value": "<p>ORIGINAL feed body.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, ARTICLE))
+    meta_conn.commit()
+
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
+                             extract=lambda u: ("Focus", "<p>A second re-fetch.</p>"))
+
+    original = meta_conn.execute(
+        "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()[0]
+    assert "ORIGINAL feed body" in original
