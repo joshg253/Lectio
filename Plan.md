@@ -1447,7 +1447,17 @@ when the entry has no date or sits at the epoch**, and never over an
 `entry_date_overrides` row: re-fetch used to *move* `published` and destroyed 105
 real dates before that was caught.
 
-**1,278 remain at 1970 deliberately**: 324 have no captured HTML, the rest have HTML
+**Batch-fetching the stragglers is NOT worth it — measured 2026-07-30.**
+`scripts/fetch_missing_publish_dates.py` exists (date-only probe, paced, guarded)
+but a 25-entry sample returned **zero** dates and a per-host probe across 8 hosts
+also returned zero. The remaining entries cluster on sites that publish no date
+metadata: blog.guitar-pro.com (96), joanwestenberg.com (45), what-if.xkcd.com (45),
+datagenetics.com (27). One host answered 404 carrying the 404 page's own date,
+which is what the slug and save-date guards are for. Sample with `--limit` before
+any future full pass.
+
+**Only 253 remain at 1970** (down from 1,278 — feed refreshes re-ingested most of
+the rest with real dates), deliberately: 324 have no captured HTML, the rest have HTML
 with no date in it. Guessing there would re-create the original bug. `<time>` is
 tried last for the same reason — a page has many, and the first is often a
 comment's.
