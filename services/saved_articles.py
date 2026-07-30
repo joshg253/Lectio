@@ -75,6 +75,25 @@ def ensure_saved_feed(reader) -> bool:
     return True
 
 
+# Duplicated rather than imported from main: services must not import the app
+# module. Kept next to its only use so the two cannot drift unnoticed.
+_MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
+
+
+def _has_manual_tag(reader, feed_url: str, entry_id: str) -> bool:
+    """Does this entry carry any manual (user) tag? Read straight from reader's
+    entry_tags, the same way this module already writes reader's own columns."""
+    try:
+        row = reader._storage.get_db().execute(
+            "SELECT 1 FROM entry_tags WHERE feed = ? AND id = ? AND key LIKE ? LIMIT 1",
+            (feed_url, entry_id, _MANUAL_TAG_KEY_PREFIX + "%"),
+        ).fetchone()
+    except Exception:  # noqa: BLE001 — treat an unreadable tag table as "no tags"
+        LOGGER.warning("manual-tag probe failed for %s", entry_id, exc_info=True)
+        return False
+    return row is not None
+
+
 def replace_entry_content(
     reader,
     conn: sqlite3.Connection,
@@ -247,8 +266,15 @@ def refresh_captured_article(
         "SELECT 1 FROM saved_entries WHERE feed_url = ? AND entry_id = ? LIMIT 1",
         (feed_url, entry_id),
     ).fetchone() is not None
-    if not is_capture and not is_starred:
-        result["error"] = "Re-fetch is available for captured or starred articles."
+    # KEPT, not starred. Tag-as-keep made a manual tag a keep signal everywhere
+    # else, and this gate never followed: a tagged-but-unstarred post shows in the
+    # Saved view with no way to re-fetch its content. 14,695 items on the live
+    # library. The pin below (pin_content for a feed entry) is what makes it safe
+    # — without that the refresh would silently undo the re-fetch, which is the
+    # reason an unkept feed entry is still refused.
+    is_tagged = _has_manual_tag(reader, feed_url, entry_id)
+    if not (is_capture or is_starred or is_tagged):
+        result["error"] = "Re-fetch is available for captured, starred or tagged articles."
         return result
 
     result["title"] = entry.title or entry_id

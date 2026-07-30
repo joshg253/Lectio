@@ -1415,6 +1415,22 @@ rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
 
+**Re-fetch is gated on KEPT, not on the star.** Both re-fetch items (readability
+and whole-page) appear when the post is one Lectio is keeping — a capture, starred,
+**or manually tagged** — because only then is there a stored copy worth replacing.
+
+The gate originally checked the star alone, on both sides (`postCanRefetch` in the
+client, `refresh_captured_article` on the server). Tag-as-keep made a tag a keep
+signal everywhere else and neither followed, so a tagged-but-unstarred post showed
+in the Saved view with no way to re-fetch its content — **14,695 items**, the
+majority of the library.
+
+An *unkept* feed entry is still refused, and the reason is what makes the kept case
+safe: `replace_entry_content(pin_content=not is_capture)` writes an
+`entry_content_overrides` row for a feed entry so the next refresh cannot clobber
+the fuller copy. Without that pin the re-fetch would be silently undone, which is
+exactly the failure the original refusal existed to prevent.
+
 **Titles render a tiny inline allowlist, by escape-then-restore.** Feeds put `<em>`
 in titles — and they also put `std::vector<T>` and `#include <chrono>` in them.
 Measured on the live library: of 21 titles containing angle brackets, only 6 are

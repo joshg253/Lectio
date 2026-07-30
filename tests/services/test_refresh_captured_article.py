@@ -157,9 +157,12 @@ def test_a_pinned_title_survives_the_refresh(reader, meta_conn):
     assert "familiar story" in _stored_content(reader, REAL_FEED, ARTICLE)
 
 
-def test_refuses_a_feed_provided_entry(reader, meta_conn):
-    """A publisher's own entry is re-written by the next feed refresh, so
-    replacing its content would be both wrong and silently undone."""
+def test_refuses_an_unkept_feed_entry(reader, meta_conn):
+    """A publisher's own entry that Lectio is not keeping gets re-written by the
+    next feed refresh, so replacing its content would be silently undone.
+
+    Kept entries (starred OR tagged) are allowed, because those pin the result —
+    see test_tagged_feed_entry_is_refetched_and_pinned."""
     reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
     reader.disable_feed_updates(REAL_FEED)
     reader.add_entry({
@@ -291,3 +294,43 @@ def test_a_transient_http_error_is_not_flagged_dead(reader, meta_conn):
     assert result["ok"] is False
     assert result["dead"] is False
     assert "503" in result["error"]
+
+
+def _tag_entry(reader, feed_url, entry_id, tag="python"):
+    db = reader._storage.get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO entry_tags (feed, id, key, value) VALUES (?, ?, ?, ?)",
+        (feed_url, entry_id, "lectio.manual_tag." + tag, "null"),
+    )
+    db.commit()
+
+
+def test_tagged_feed_entry_is_refetched_and_pinned(reader, meta_conn):
+    """A TAGGED but unstarred feed entry must be re-fetchable.
+
+    Tag-as-keep made a manual tag a keep signal everywhere else, and this gate
+    never followed — so a tagged post appeared in the Saved view with no way to
+    re-fetch its content. 14,695 items on the live library. Reported as "why is
+    neither refetch available on this one?".
+    """
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Feed Post",
+        "published": datetime(2020, 1, 1, tzinfo=timezone.utc),
+        "content": [{"value": "<p>Thin feed content.</p>"}],
+    })
+    db = reader._storage.get_db()
+    db.execute("UPDATE entries SET added_by = 'feed' WHERE feed = ? AND id = ?", (REAL_FEED, ARTICLE))
+    db.commit()
+    _tag_entry(reader, REAL_FEED, ARTICLE)          # tagged, NOT starred
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+
+    assert result["ok"] is True
+    # Pinned, so the next feed refresh can't clobber the fuller copy — which is
+    # what makes allowing a feed entry safe at all.
+    assert meta_conn.execute(
+        "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone() is not None
