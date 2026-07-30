@@ -314,3 +314,57 @@ def test_author_pseudo_tag_drops_and_rescues(env):
     with main.get_meta_connection() as conn:
         result = main._run_tag_filter(conn, "feed", FEED, "+linux, -by-deal-guy")
     assert result["count"] == 0  # rescued by +linux
+
+
+def test_a_second_feed_rule_merges_into_the_first(env):
+    """A feed can only have ONE tag_filter rule.
+
+    get_feed_tag_filter_rule fetches a single row, so a second rule is edited by
+    nothing while still executing. Two were live on one dev.to feed
+    ("-rust, -powerbi" and "-rust, -hindi, -javascript, -powerbi, -aws") and both
+    ran, invisibly — which is what "overlapping tag rules for that feed" was.
+    """
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -powerbi", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "-hindi, -aws", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        rows = conn.execute(
+            "SELECT keyword FROM highlight_keywords"
+            " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?", (FEED,),
+        ).fetchall()
+
+    assert len(rows) == 1, "a rival rule was created instead of merging"
+    spec = rows[0]["keyword"]
+    for tag in ("-rust", "-powerbi", "-hindi", "-aws"):
+        assert tag in spec, spec
+
+
+def test_the_incoming_sign_wins_on_merge(env):
+    """Re-adding +rust where -rust was set is a correction, not a contradiction to
+    preserve."""
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust, -go", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "+rust", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        spec = conn.execute(
+            "SELECT keyword FROM highlight_keywords"
+            " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?", (FEED,),
+        ).fetchone()["keyword"]
+
+    assert "+rust" in spec and "-rust" not in spec
+    assert "-go" in spec       # untouched tags survive
+
+
+def test_other_feeds_are_not_merged_into(env):
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-rust", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", OTHER_FEED, "-go", "yellow",
+                                   rule_type="tag_filter", enabled=1)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM highlight_keywords WHERE type = 'tag_filter'"
+        ).fetchone()[0]
+
+    assert n == 2

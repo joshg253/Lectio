@@ -4357,6 +4357,49 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: str) -> str | None:
+    """Fold *incoming* into the feed's existing tag_filter spec, and drop the
+    now-redundant rows. Returns the merged spec, or None when there is nothing to
+    merge with.
+
+    Signed tokens are deduped by TAG, with the incoming sign winning: re-adding
+    ``+rust`` where ``-rust`` was set is a correction, not a contradiction to
+    preserve.
+    """
+    rows = conn.execute(
+        "SELECT rowid, keyword FROM highlight_keywords"
+        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?"
+        " ORDER BY rowid",
+        (feed_url,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    by_tag: dict[str, str] = {}          # tag -> sign, insertion-ordered
+    for source in [str(r["keyword"] or "") for r in rows] + [incoming]:
+        for token in source.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            sign, tag = "", token
+            for prefix in ("++", "+", "-"):
+                if token.startswith(prefix):
+                    sign, tag = prefix, token[len(prefix):]
+                    break
+            tag = normalize_tag_value(tag)
+            if tag:
+                by_tag[tag] = sign
+    # Delete ALL of them, not just the extras: the caller's INSERT OR REPLACE keys
+    # on the keyword, which the merge has just changed, so leaving the first row
+    # behind would leave a rival rather than replace it.
+    conn.executemany(
+        "DELETE FROM highlight_keywords WHERE rowid = ?", [(r["rowid"],) for r in rows],
+    )
+    if len(rows) > 1:
+        LOGGER.info("[tag-filter] merged %d duplicate rule(s) for %s", len(rows) - 1, feed_url)
+    return ", ".join(f"{sign}{tag}" for tag, sign in by_tag.items())
+
+
 def add_highlight_keyword(
     conn: sqlite3.Connection,
     scope: str,
@@ -4396,6 +4439,15 @@ def add_highlight_keyword(
         delivery = "immediately"
     if webhook_format not in WEBHOOK_VALID_FORMATS:
         webhook_format = "generic"
+    # A feed can only have ONE tag_filter rule: get_feed_tag_filter_rule fetches a
+    # single row, so a second one is edited by nothing while still executing — two
+    # rules on the same dev.to feed ("-rust, -powerbi" and "-rust, -hindi,
+    # -javascript, -powerbi, -aws") were both running, invisibly. Merge into the
+    # existing rule rather than adding a rival.
+    if rule_type == "tag_filter" and scope == "feed":
+        merged = _merge_tag_filter_specs(conn, scope_id, keyword)
+        if merged is not None:
+            keyword = merged
     conn.execute(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
