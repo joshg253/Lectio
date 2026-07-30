@@ -334,3 +334,61 @@ def test_tagged_feed_entry_is_refetched_and_pinned(reader, meta_conn):
         "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
         (REAL_FEED, ARTICLE),
     ).fetchone() is not None
+
+
+def test_a_parked_page_at_the_url_is_refused(reader, meta_conn):
+    """⚠ A 200 does not mean the article is still there.
+
+    the-digital-reader served a parked "Empowering Relationships" page for a 2019
+    post, and the re-fetch replaced the stored article AND its title with it —
+    destroying the only copy, because the archive was rewritten too.
+
+    The reference is the URL's own SLUG, not the stored title: re-fetch exists
+    partly to replace a bad capture's title, so comparing old against new would
+    refuse the very case the feature is for. A slug does not change when a site
+    starts serving a parked page over it.
+    """
+    url = ("https://the-digital-reader.com/2019/01/22/"
+           "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": url, "link": url,
+        "title": "33 Ornament, Dingbat and Other Decorative Fonts",
+        "content": [{"value": "<p>The original article body.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, url))
+    meta_conn.commit()
+
+    def _parked(u):
+        return "Empowering Relationships - The Digital Reader", "<p>Unrelated filler.</p>"
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, url, extract=_parked)
+
+    assert result["ok"] is False
+    assert result.get("mismatch") is True
+    entry = reader.get_entry((REAL_FEED, url))
+    assert "original article body" in entry.content[0].value   # untouched
+    assert entry.title.startswith("33 Ornament")
+
+
+def test_the_guard_stands_down_when_it_cannot_judge():
+    """Conservative by design: refusing a legitimate re-fetch is a nuisance, while
+    accepting a wrong one destroys the stored copy. So it fires only on ZERO
+    overlap, and not at all when the slug carries too little to judge."""
+    from services.saved_articles import _page_is_a_different_article as different
+
+    rich = ("https://the-digital-reader.com/2019/01/22/"
+            "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    assert different(rich, "Empowering Relationships - The Digital Reader")
+    assert not different(rich, "33 Ornament, Dingbat and Other Decorative Fonts")
+
+    # Opaque id, date-only path, thin section slug: nothing to compare against.
+    assert not different("https://blog.chrismoore.com/?p=1524", "Anything At All")
+    assert not different("https://x.test/2019/01/22/", "Anything At All")
+    assert not different("https://blog.example.com/topics/how-to-focus", "The Real Article")
+
+    # A title that genuinely echoes its slug is never refused.
+    assert not different("https://x.test/2020/09/08/stl-algorithms-tutorial-unique-copy",
+                         "STL Algorithms Tutorial: unique_copy")

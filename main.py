@@ -11875,6 +11875,32 @@ def list_entries_for_feeds(
     light_records = light_records[:limit]
 
     enrich_start = time.perf_counter()
+    # Which of the VISIBLE rows carry a manual tag: one query over the clipped
+    # window, not the whole backlog. `_manual_tags` above is filled only when a tag
+    # filter is active, so a kept flag derived from it read empty on ordinary rows
+    # — which is why re-fetch appeared in the entry pane but not from the post
+    # list, and only once a post had been starred.
+    _visible_tagged: set[tuple[str, str]] = set()
+    if light_records:
+        try:
+            _keys = [(str(r["feed_url"]), str(r["id"])) for r in light_records]
+            _tconn = sqlite3.connect(f"file:{tenancy.reader_db_path()}?mode=ro", uri=True, timeout=5.0)
+            try:
+                for _i in range(0, len(_keys), 400):
+                    _chunk = _keys[_i:_i + 400]
+                    _ph = ",".join("(?,?)" for _ in _chunk)
+                    _flat = [v for k in _chunk for v in k]
+                    for _f, _e in _tconn.execute(
+                        f"SELECT DISTINCT feed, id FROM entry_tags"  # nosemgrep: placeholders only
+                        f" WHERE (feed, id) IN ({_ph}) AND key LIKE ?",
+                        _flat + [f"{MANUAL_TAG_KEY_PREFIX}%"],
+                    ):
+                        _visible_tagged.add((str(_f), str(_e)))
+            finally:
+                _tconn.close()
+        except Exception:  # noqa: BLE001 — a missing flag only hides a menu item
+            LOGGER.warning("visible-tag probe failed", exc_info=True)
+
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
     # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
@@ -11965,6 +11991,10 @@ def list_entries_for_feeds(
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
+                # Starred OR tagged. Drives the re-fetch menu, which must not key
+                # on manual_tags (populated only under a tag filter) nor on the
+                # star alone — tag-as-keep made a tag a keep signal everywhere.
+                "kept": bool(is_saved or (entry.feed_url, entry.id) in _visible_tagged),
                 # Inline formatting a feed put in the title (<em>), rendered
                 # rather than escaped. Everything else stays literal text, so a
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.

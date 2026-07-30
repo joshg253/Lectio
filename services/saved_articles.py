@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -78,6 +79,62 @@ def ensure_saved_feed(reader) -> bool:
 # Duplicated rather than imported from main: services must not import the app
 # module. Kept next to its only use so the two cannot drift unnoticed.
 _MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
+
+
+# Words too common to count as evidence that two titles are about the same thing.
+_TITLE_STOPWORDS = frozenset({
+    "a", "an", "and", "the", "of", "for", "to", "in", "on", "at", "by", "with",
+    "from", "is", "are", "be", "your", "you", "how", "what", "why", "it", "its",
+    "this", "that", "or", "as", "vs", "new", "part", "free",
+})
+
+
+def _title_words(value: str) -> set[str]:
+    """Significant lowercase words of a title, site suffix included — a shared
+    " - The Digital Reader" must not by itself make two titles look related."""
+    words = re.findall(r"[a-z0-9]+", (value or "").lower())
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+
+
+def _url_slug_words(url: str) -> set[str]:
+    """Significant words from a URL's own path — the stable ground truth.
+
+    The STORED title cannot be the reference: re-fetch exists partly to replace a
+    bad capture's title ("Stale Listing Page" -> the real one), so comparing old
+    against new refuses exactly the case the feature is for. A URL's slug does not
+    change when a site starts serving a parked page over it.
+    """
+    try:
+        path = urlparse(url).path
+    except ValueError:
+        return set()
+    words = re.findall(r"[a-z0-9]+", path.lower())
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+
+
+def _page_is_a_different_article(source_url: str, new_title: str) -> bool:
+    """True when the page fetched from *source_url* is plainly not what lives there.
+
+    the-digital-reader served a parked "Empowering Relationships" page for a 2019
+    post; its slug (33-ornament-dingbat-and-other-decorative-fonts…) shares no word
+    with that title, while a real article's title almost always echoes its own slug.
+
+    Deliberately conservative — refusing a legitimate re-fetch is a nuisance, while
+    accepting a wrong one destroys the stored copy, which is why this fires only on
+    ZERO overlap and stands down whenever the slug carries too little to judge
+    (opaque ids like ``?p=1524``, date-only paths, short section URLs).
+    """
+    if not new_title:
+        return False
+    slug_words = _url_slug_words(source_url)
+    # Drop pure numbers: a date path (/2019/01/22/) is not evidence of subject.
+    slug_words = {w for w in slug_words if not w.isdigit()}
+    if len(slug_words) < 3:
+        return False
+    title_words = _title_words(new_title)
+    if len(title_words) < 2:
+        return False
+    return not (slug_words & title_words)
 
 
 def _has_manual_tag(reader, feed_url: str, entry_id: str) -> bool:
@@ -312,6 +369,25 @@ def refresh_captured_article(
         return result
     if not article_html:
         result["error"] = "Nothing could be extracted from the page."
+        return result
+
+    # ⚠ A 200 does not mean the article is still there. the-digital-reader served
+    # a parked "Empowering Relationships" page for a 2019 post, and the re-fetch
+    # replaced the stored article AND its title with it — destroying the only copy,
+    # since the archive was rewritten too. Refuse when the fetched page is plainly
+    # a different article.
+    #
+    # The URL's own slug is the reference, NOT the stored title: re-fetch exists
+    # partly to replace a bad capture's title, so comparing old against new would
+    # refuse the very case the feature is for. A slug does not change when a site
+    # starts serving a parked page over it.
+    if _page_is_a_different_article(source_url, new_title):
+        result["error"] = (
+            "The page now at that URL looks like a different article "
+            f"(\u201c{new_title[:60]}\u201d) — the stored copy was left alone. "
+            "Use Edit URL if the article moved."
+        )
+        result["mismatch"] = True
         return result
 
     try:

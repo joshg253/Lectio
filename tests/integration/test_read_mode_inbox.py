@@ -305,3 +305,25 @@ def test_no_actions_row_on_the_archive_node(configured):
         node_selected=True,
     )
     assert ctx["node_actions"] is None
+
+
+def test_rows_carry_a_kept_flag_for_tagged_but_unstarred_posts(configured):
+    """The re-fetch menu keys on `kept`, and it must not key on `manual_tags`.
+
+    `manual_tags` is populated on a row only when a TAG FILTER is active, so a
+    kept flag derived from it read empty on ordinary rows: re-fetch showed up in
+    the entry pane but not from the post list, and appeared at all only once a
+    post was starred. Reported as "this one was only tagged, but no refetch
+    available. I starred it and refetch is available now".
+    """
+    rows = main.list_entries_for_feeds({FEED}, limit=50, star_only=True, kept_scope="kept")
+    by_id = {r["id"]: r for r in rows}
+
+    # tagged, never starred — the case that was hidden
+    assert by_id["filed"]["saved"] is False
+    assert by_id["filed"]["kept"] is True
+    assert by_id["filed"]["manual_tags"] == []      # still empty: no tag filter active
+
+    # starred, untagged — kept for the other reason
+    assert by_id["todo"]["saved"] is True
+    assert by_id["todo"]["kept"] is True
