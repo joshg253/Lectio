@@ -1447,6 +1447,28 @@ comment's.
 Manual `entry_date_overrides` are never touched; an explicit correction outranks
 anything inferred.
 
+### 7c-3. Bot-walled pages: no server-side tags available (2026-07-29)
+
+Two feeds where the tags Josh can see are rendered by the site's JavaScript and are
+unreachable from the server. **Not code bugs — do not spend time on them.**
+
+- **behance.net** — the feed carries **zero** `<category>` elements, and the gallery
+  page answers a non-browser client with a JS challenge (`js_challenge_value`
+  cookie + `window.location.reload()`). Page extraction *did* work 2026-07-13 →
+  07-20 (793 tag rows captured, e.g. "Adobe Photoshop" ×39), then stopped dead, so
+  the wall went up around 07-20. Any Behance entry ingested after that has no tags
+  and cannot get them.
+- **realpython.com** — feed has no `<category>` either; the page returns a
+  Cloudflare interstitial. See 7a.
+
+Both would need browser-shaped requests, which Lectio deliberately does not send
+(see the good-web-citizen rule). Worth re-testing occasionally: Behance's wall
+appeared mid-July, so it may lift the same way. If it does, the existing background
+source-fetch fills the tags in with no work from us.
+
+⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
+uses the same source-page fetch, so it went blind on the same date.
+
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
 gottadeal posts carry a real category line on the page:
