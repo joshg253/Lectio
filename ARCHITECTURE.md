@@ -785,6 +785,35 @@ re-create the duplicate that filing removed — hence the split, and hence
 saved feed. Feed-provided entries are refused: their content belongs to the
 publisher and the next refresh would overwrite it anyway.
 
+**Batch re-fetch shares its pacing with the CLI, because a politeness guarantee
+that holds in one entry point is not a guarantee.** `services/refetch_batch.py`
+owns the delays (`GLOBAL_DELAY`, `PER_HOST_DELAY`, `HOST_FAILURE_LIMIT`), the
+host interleave and the runtime estimate; both `POST /saved/refetch-scope` and
+`scripts/refetch_scope.py` import them rather than defining their own. Bulk
+re-fetch spends someone else's bandwidth, so pacing is the design and not a
+setting.
+
+Three details are load-bearing:
+
+- **The estimate counts the per-host delay, not the global one.** A single-feed
+  scope is a single host, so 89 articles is 89 × 10s, not 89 × 2s. An early
+  version reported a 15-minute run as under 4 minutes — for a deliberately slow
+  job, the runtime is the one number that must not be understated.
+- **One job at a time, per user.** Two overlapping runs would each honor the
+  pacing and together double the rate every site sees, so a second start returns
+  409. The job runs on a background thread through `_run_in_user_context`, since
+  a raw thread loses the tenancy user.
+- **A refusal is not a failure.** The slug guard declining to overwrite a stored
+  copy is the guard working, and it is counted apart from a fetch that broke;
+  only a real failure counts toward dropping a host.
+
+Scope is kept articles (starred or tagged) with an `http(s)` link — the same rule
+the single-article button uses, because an unkept feed entry is rewritten by the
+next refresh anyway. Everything the interactive re-fetch does still happens per
+entry: the previous body is snapshotted (so any one result is revertible), a
+plainly-different page is refused, a refusal falls back to the Wayback Machine,
+and a missing publish date is learned on the way.
+
 **Whole-page capture is an opt-in `mode`, on both the save and re-fetch paths.**
 `mode="full"` swaps `fetch_readability_article` for `fetch_full_page_article` —
 same sanitizer and post-processing tail (`_finalize_article_html`), but the

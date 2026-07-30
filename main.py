@@ -69,6 +69,7 @@ from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
 from services import archive_old_stars as archive_old_stars_service
+from services import refetch_batch
 from services import unstar_tagged as unstar_tagged_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
@@ -27306,6 +27307,175 @@ def _scope_starred_keys(
     if normalized_tag:
         starred &= get_entry_keys_for_manual_tag(feeds, normalized_tag)
     return sorted(starred)
+
+
+# One batch re-fetch at a time, per user. A bulk network job that can be started
+# twice is a politeness bug: two runs interleave and each host sees double the rate
+# the pacing promises.
+_refetch_jobs = _PerUserDict()
+_refetch_jobs_lock = threading.Lock()
+
+
+def _refetch_job_state(create: bool = False) -> dict | None:
+    with _refetch_jobs_lock:
+        job = _refetch_jobs.get("job")
+        if job is None and create:
+            job = {"running": False}
+            _refetch_jobs["job"] = job
+        return job
+
+
+def _scope_refetchable(folder_id: int | None, list_feed_url: str | None
+                       ) -> list[tuple[str, str, str]]:
+    """(feed_url, entry_id, link) for kept entries in scope with a usable link.
+
+    Kept only — the same rule the single-article button uses, because an unkept
+    feed entry is rewritten by the next refresh anyway.
+    """
+    with get_meta_connection() as conn:
+        if list_feed_url:
+            feeds = {list_feed_url}
+        elif folder_id is not None:
+            feeds = set(get_folder_feed_urls(conn, int(folder_id)))
+        else:
+            feeds = set(get_all_reader_feed_urls())
+        starred = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries") if str(f) in feeds
+        }
+    kept = starred | {k for k in get_tagged_entry_keys(feeds) if k[0] in feeds}
+    rows: list[tuple[str, str, str]] = []
+    with get_reader() as reader:
+        for f, e in sorted(kept):
+            entry = reader.get_entry((f, e), None)
+            if entry is None:
+                continue
+            link = str(getattr(entry, "link", "") or "") or e
+            if link.startswith(("http://", "https://")):
+                rows.append((f, e, link))
+    return refetch_batch.interleave_by_host(rows)
+
+
+@app.get("/saved/refetch-scope/preview")
+def preview_refetch_scope(
+    folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
+):
+    """How many articles a batch re-fetch would touch, and how long it would take."""
+    rows = _scope_refetchable(folder_id, list_feed_url)
+    return JSONResponse({
+        "ok": True,
+        "count": len(rows),
+        "hosts": len({refetch_batch.host_of(r[2]) for r in rows}),
+        "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
+    })
+
+
+@app.get("/saved/refetch-scope/status")
+def refetch_scope_status():
+    """Progress of the running (or last) batch, for the caller to poll."""
+    job = _refetch_job_state()
+    if job is None:
+        return JSONResponse({"ok": True, "running": False, "idle": True})
+    return JSONResponse({"ok": True, **{k: v for k, v in job.items() if k != "cancel"}})
+
+
+@app.post("/saved/refetch-scope/cancel")
+def cancel_refetch_scope():
+    job = _refetch_job_state()
+    if job and job.get("running"):
+        job["cancel"] = True
+        return JSONResponse({"ok": True, "cancelling": True})
+    return JSONResponse({"ok": True, "cancelling": False})
+
+
+@app.post("/saved/refetch-scope")
+async def start_refetch_scope(request: Request):
+    """Start a paced batch re-fetch over a folder or feed.
+
+    A background thread rather than a request: a hundred articles at ten seconds a
+    host is a quarter of an hour, which no request should hold open. The caller
+    polls /status.
+
+    Bulk is only reasonable because every protection the single re-fetch has
+    applies per entry — the guard refuses a wrong page rather than overwriting, the
+    previous body is snapshotted so any result is revertible, a refusal falls back
+    to the archive, and a missing publish date is learned on the way.
+    """
+    body = await request.json()
+    folder_id = body.get("folder_id")
+    list_feed_url = body.get("list_feed_url") or None
+    if folder_id is None and not list_feed_url:
+        return JSONResponse({"ok": False, "error": "Pick a feed or a folder."}, status_code=400)
+
+    job = _refetch_job_state(create=True)
+    if job.get("running"):
+        return JSONResponse({"ok": False, "error": "A batch re-fetch is already running."},
+                            status_code=409)
+
+    rows = _scope_refetchable(int(folder_id) if folder_id is not None else None, list_feed_url)
+    if not rows:
+        return JSONResponse({"ok": False, "error": "Nothing kept here to re-fetch."},
+                            status_code=400)
+
+    job.update({
+        "running": True, "cancel": False, "done": 0, "total": len(rows),
+        "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
+        "scope": list_feed_url or f"folder {folder_id}",
+        "started_at": time.time(),
+        "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
+    })
+    uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(uid, _run_refetch_batch, rows, job),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "started": True, "total": len(rows),
+                         "estimate_seconds": job["estimate_seconds"]})
+
+
+def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
+    host_failures: dict[str, int] = {}
+    host_last: dict[str, float] = {}
+    try:
+        for feed_u, entry_id, link in rows:
+            if job.get("cancel"):
+                break
+            host = refetch_batch.host_of(link)
+            if host_failures.get(host, 0) >= refetch_batch.HOST_FAILURE_LIMIT:
+                job["skipped"] += 1
+                job["done"] += 1
+                continue
+            wait = refetch_batch.PER_HOST_DELAY - (time.monotonic() - host_last.get(host, 0.0))
+            if wait > 0:
+                time.sleep(wait)
+            time.sleep(refetch_batch.GLOBAL_DELAY * (0.5 + secrets.randbelow(1000) / 1000))
+            host_last[host] = time.monotonic()
+
+            try:
+                result = _refresh_captured_article_for_current_user(feed_u, entry_id, "readability")
+            except Exception:  # noqa: BLE001 — one bad entry must not end the run
+                LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)
+                result = {"ok": False}
+            if result.get("ok"):
+                job["archive" if result.get("from_archive") else "ok"] += 1
+                host_failures[host] = 0
+            elif result.get("mismatch"):
+                job["refused"] += 1          # stored copy deliberately left alone
+                host_failures[host] = 0
+            elif result.get("dead"):
+                job["dead"] += 1
+                host_failures[host] = 0
+            else:
+                job["failed"] += 1
+                host_failures[host] = host_failures.get(host, 0) + 1
+            job["done"] += 1
+    finally:
+        job["running"] = False
+        job["finished_at"] = time.time()
+        LOGGER.info("[refetch-batch] %s: ok=%d archive=%d refused=%d dead=%d failed=%d",
+                    job.get("scope"), job["ok"], job["archive"], job["refused"],
+                    job["dead"], job["failed"])
 
 
 @app.get("/saved/unstar-scope/preview")

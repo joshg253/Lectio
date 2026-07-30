@@ -155,6 +155,15 @@ The short version:
   worse. If the publisher now serves a parked page or a section index over the
   article's own URL, Lectio notices, refuses to overwrite your copy with it, and
   asks the Wayback Machine for the real one.
+- **Batch re-fetch a feed or folder** — right-click a feed or folder in the Saved
+  tree and pick *Re-fetch all articles…* to re-pull every kept article in it. It
+  tells you the count, how many sites it touches and how long it will take before
+  you commit, then runs in the background so you can keep reading. **It is
+  deliberately slow**: requests are paced globally and per site, sites are visited
+  in rotation rather than in runs, and a site that keeps failing is dropped. Every
+  protection the single-article re-fetch has still applies to each article, so a
+  wrong page is refused rather than written and any one result stays revertible.
+  The same menu item cancels a run in progress.
 - **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
   filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
   thumbnails, feed type), *Maintenance*, *History*, *Automations*.

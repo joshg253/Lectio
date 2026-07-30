@@ -2514,6 +2514,7 @@ const CAPTURE_MODE_FULL = 'full';
     const unsubscribeFeedButton = document.getElementById('ctx-unsubscribe-feed');
     const renameFolderButton = document.getElementById('ctx-rename-folder');
     const deleteFolderButton = document.getElementById('ctx-delete-folder');
+    const refetchScopeButton = document.getElementById('ctx-refetch-scope');
     const folderRemoveStarsButton = document.getElementById('ctx-folder-remove-stars');
     const folderRemoveTagsButton = document.getElementById('ctx-folder-remove-tags');
     const youtubeSyncButton = document.getElementById('ctx-youtube-sync');
@@ -6243,6 +6244,10 @@ const CAPTURE_MODE_FULL = 'full';
           const inSaved = !!document.querySelector('nav.tree.saved-mode');
           setMenuItemVisible(folderRemoveStarsButton, inSaved);
           setMenuItemVisible(folderRemoveTagsButton, inSaved);
+          // Batch re-fetch only replaces content Lectio is KEEPING, so it is a
+          // Saved-view action too — in the Feeds view the scope would be empty.
+          setMenuItemVisible(refetchScopeButton, inSaved);
+          labelRefetchScopeButton();
         }
         setMenuItemVisible(disableFeedButton, false);
         // Detect the YouTube folder by CONTENT (any feed in it is a YouTube feed),
@@ -6314,6 +6319,8 @@ const CAPTURE_MODE_FULL = 'full';
         setMenuItemVisible(deleteFolderButton, false);
         setMenuItemVisible(youtubeSyncButton, false);
         setMenuItemVisible(disableFeedButton, true);
+        setMenuItemVisible(refetchScopeButton, !!document.querySelector('nav.tree.saved-mode'));
+        labelRefetchScopeButton();
         updateFolderSubmenuOptions();
         hideFolderSubmenu();
 
@@ -6361,6 +6368,8 @@ const CAPTURE_MODE_FULL = 'full';
       setMenuItemVisible(deleteFolderButton, false);
       setMenuItemVisible(youtubeSyncButton, false);
       setMenuItemVisible(disableFeedButton, true);
+      setMenuItemVisible(refetchScopeButton, !!document.querySelector('nav.tree.saved-mode'));
+      labelRefetchScopeButton();
       updateFolderSubmenuOptions();
       hideFolderSubmenu();
       showContextMenu(event);
@@ -8234,7 +8243,7 @@ const CAPTURE_MODE_FULL = 'full';
               thumb.closest('.post-thumbnail')?.classList.add('is-empty');
             }
           }
-          showToast('Image cache cleared');
+          showToastMessage('Image cache cleared');
         }
       } catch (e) {
         // ignore
@@ -12656,6 +12665,131 @@ const CAPTURE_MODE_FULL = 'full';
         window.alert('Could not clear curation.');
       }
     };
+
+    // Batch re-fetch. Deliberately slow — the estimate is shown up front and the
+    // job runs in the background, because a hundred articles paced politely is a
+    // quarter of an hour and no one should sit on a spinner for that.
+    function refetchScopeParams() {
+      if (contextTargetType === 'feed' && contextFeedUrl) {
+        return { list_feed_url: contextFeedUrl, label: contextFolderName || 'this feed' };
+      }
+      if (contextFolderId) {
+        return { folder_id: Number(contextFolderId), label: contextFolderName || 'this folder' };
+      }
+      return null;
+    }
+
+    function labelRefetchScopeButton() {
+      if (!refetchScopeButton) return;
+      refetchScopeButton.textContent = refetchRunning
+        ? 'Cancel batch re-fetch' : 'Re-fetch all articles…';
+      refetchScopeButton.classList.toggle('danger', refetchRunning);
+    }
+
+    function humanDuration(seconds) {
+      const mins = Math.round((seconds || 0) / 60);
+      if (mins < 1) return 'under a minute';
+      if (mins < 90) return `about ${mins} minute${mins === 1 ? '' : 's'}`;
+      return `about ${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? '' : 's'}`;
+    }
+
+    let refetchPollTimer = null;
+    // A 15-minute job the user cannot stop is a trap, so the same menu item flips
+    // to Cancel while one is running. Kept current by the poller.
+    let refetchRunning = false;
+
+    function pollRefetchScope() {
+      window.clearTimeout(refetchPollTimer);
+      refetchPollTimer = window.setTimeout(async () => {
+        let job = null;
+        try {
+          const resp = await fetch('/saved/refetch-scope/status');
+          job = await resp.json();
+        } catch (_) { /* keep polling; a blip is not the end of the job */ }
+        if (!job || job.idle) { refetchRunning = false; return; }
+        refetchRunning = !!job.running;
+        if (job.running) {
+          // Update a toast that is still on screen rather than raising a new one:
+          // a quarter-hour job must not nag every few seconds.
+          const live = document.getElementById('toast-message');
+          if (live) {
+            const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+            live.textContent = `Re-fetching: ${job.done}/${job.total} (${pct}%)`;
+          }
+          pollRefetchScope();
+          return;
+        }
+        const bits = [`${job.ok} re-fetched`];
+        if (job.archive) bits.push(`${job.archive} from the archive`);
+        if (job.refused) bits.push(`${job.refused} refused (left alone)`);
+        if (job.dead) bits.push(`${job.dead} gone`);
+        if (job.failed) bits.push(`${job.failed} failed`);
+        refetchRunning = false;
+        if (job.finished_at && (Date.now() / 1000 - job.finished_at) < 120) {
+          showToastMessage(`Batch re-fetch done — ${bits.join(', ')}.`);
+        }
+      }, 4000);
+    }
+
+    refetchScopeButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const params = refetchScopeParams();
+      hideAllContextMenus();
+      if (refetchRunning) {
+        try {
+          await fetch('/saved/refetch-scope/cancel', { method: 'POST' });
+          showToastMessage('Stopping the batch re-fetch after the current article.');
+        } catch (_) {
+          window.alert('Could not cancel the batch re-fetch.');
+        }
+        return;
+      }
+      if (!params) return;
+      const qs = new URLSearchParams();
+      if (params.list_feed_url) qs.set('list_feed_url', params.list_feed_url);
+      if (params.folder_id !== undefined) qs.set('folder_id', String(params.folder_id));
+      let preview;
+      try {
+        preview = await (await fetch(`/saved/refetch-scope/preview?${qs}`)).json();
+      } catch (_) {
+        window.alert('Could not check what would be re-fetched.');
+        return;
+      }
+      if (!preview.count) {
+        window.alert(`Nothing kept in ${params.label} to re-fetch.`);
+        return;
+      }
+      const ok = window.confirm(
+        `Re-fetch ${preview.count} kept article${preview.count === 1 ? '' : 's'} in ` +
+        `${params.label}, across ${preview.hosts} site${preview.hosts === 1 ? '' : 's'}?\n\n` +
+        `This is paced to be polite and will take ${humanDuration(preview.estimate_seconds)}. ` +
+        `It runs in the background — you can keep using Lectio.\n\n` +
+        `Each article's current copy is snapshotted first, so any result can be reverted, ` +
+        `and a page that is plainly a different article is refused rather than written.`);
+      if (!ok) return;
+      try {
+        const resp = await fetch('/saved/refetch-scope', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder_id: params.folder_id ?? null,
+                                 list_feed_url: params.list_feed_url || null }),
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+          window.alert(data.error || 'Could not start the batch re-fetch.');
+          return;
+        }
+        showToastMessage(`Re-fetching ${data.total} article${data.total === 1 ? '' : 's'} in the ` +
+                         `background — ${humanDuration(data.estimate_seconds)}.`);
+        pollRefetchScope();
+      } catch (_) {
+        window.alert('Could not start the batch re-fetch.');
+      }
+    });
+
+    // A job started in another tab (or before a reload) should still report in.
+    pollRefetchScope();
 
     folderRemoveStarsButton?.addEventListener('click', (event) => {
       event.preventDefault();

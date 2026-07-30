@@ -37,11 +37,13 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
-from services import tenancy  # noqa: E402
+from services import refetch_batch, tenancy  # noqa: E402
 
-_GLOBAL_DELAY = 2.0        # seconds between requests, whatever the host
-_PER_HOST_DELAY = 10.0     # and at least this long between two hits on one host
-_HOST_FAILURE_LIMIT = 4    # drop a host after this many consecutive failures
+# Shared with the background job behind the UI action, so the two cannot drift —
+# a "be gentle" guarantee that holds in only one entry point is not a guarantee.
+_GLOBAL_DELAY = refetch_batch.GLOBAL_DELAY
+_PER_HOST_DELAY = refetch_batch.PER_HOST_DELAY
+_HOST_FAILURE_LIMIT = refetch_batch.HOST_FAILURE_LIMIT
 
 
 def _eligible(folder_id: int | None, feed_url: str | None) -> list[tuple[str, str, str]]:
@@ -77,15 +79,7 @@ def run(uid: str, folder_id: int | None, feed_url: str | None,
     targets = _eligible(folder_id, feed_url)
     # Interleave hosts so no site sees a run of back-to-back requests even before
     # the per-host delay applies.
-    by_host: dict[str, list] = defaultdict(list)
-    for row in targets:
-        by_host[(urlparse(row[2]).netloc or "").lower()].append(row)
-    ordered: list = []
-    while by_host:
-        for host in list(by_host):
-            ordered.append(by_host[host].pop(0))
-            if not by_host[host]:
-                del by_host[host]
+    ordered = refetch_batch.interleave_by_host(targets)
     if limit:
         ordered = ordered[:limit]
 
@@ -95,13 +89,10 @@ def run(uid: str, folder_id: int | None, feed_url: str | None,
     # global one: a single-feed scope is one host, so 89 articles is 89 * 10s, not
     # 89 * 2s. Understating the runtime of a deliberately slow job is the one
     # number that must not be wrong.
-    per_host_counts: dict[str, int] = defaultdict(int)
-    for _f, _e, _link in ordered:
-        per_host_counts[(urlparse(_link).netloc or "").lower()] += 1
-    slowest_host = max(per_host_counts.values()) if per_host_counts else 0
-    est = max(len(ordered) * _GLOBAL_DELAY * 1.5, slowest_host * _PER_HOST_DELAY) / 60
+    hosts = {refetch_batch.host_of(link) for _f, _e, link in ordered}
+    est = refetch_batch.estimate_seconds(ordered) / 60
     print(f"      pacing: {_GLOBAL_DELAY}s global, {_PER_HOST_DELAY}s per host across "
-          f"{len(per_host_counts)} host(s) — roughly {est:.0f} min")
+          f"{len(hosts)} host(s) — roughly {est:.0f} min")
     if not apply:
         for _f, _e, link in ordered[:8]:
             print(f"   would re-fetch  {link[:88]}")

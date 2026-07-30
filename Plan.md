@@ -1522,7 +1522,7 @@ source-fetch fills the tags in with no work from us.
 ⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
 uses the same source-page fetch, so it went blind on the same date.
 
-### 7e. Batch re-fetch over a folder or feed — script, 2026-07-30
+### 7e. Batch re-fetch over a folder or feed — script + UI, 2026-07-30
 
 `scripts/refetch_scope.py`. Josh: "Needs to be gentle!" — so pacing is the design:
 2s global gap, **10s per host**, hosts dropped after 4 consecutive failures, nothing
@@ -1540,9 +1540,20 @@ index, so the guard refused every one and **the Wayback fallback recovered every
 one** — 13k-28k characters each where the feed carried teasers. 89 kept articles on
 that feed, ~15 min for the full pass.
 
-**Not offered as a UI button yet.** A bulk network job wants a log, resumability and
-Ctrl-C, none of which a request gives you; a background job with a progress endpoint
-is the follow-up if it is wanted from the device.
+**Shipped as a UI action too (2026-07-30).** Right-click a feed or folder in the
+Saved tree → *Re-fetch all articles…*: `GET /saved/refetch-scope/preview` shows the
+count, host count and runtime before you commit, `POST /saved/refetch-scope` runs it
+on a background thread (via `_run_in_user_context`, so the thread keeps the tenancy
+user), and status polling reports progress and the outcome breakdown. The same menu
+item cancels a run. One job at a time per user — two overlapping runs would each
+honor the pacing and together double the rate every host sees.
+
+Pacing now lives in `services/refetch_batch.py` and is imported by both the route and
+the script, so the two cannot drift.
+
+Deferred from the UI version: resumability across a restart (the job is in memory, so
+a container rebuild mid-run loses the remainder — re-running is safe and skips
+nothing important), and a per-run log file like the script writes.
 
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
