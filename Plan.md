@@ -1439,6 +1439,14 @@ something before it is published, so a candidate later than the Instapaper save
 timestamp + 1 day is rejected. That guard threw out ~189 dates a plain regex sweep
 would have accepted.
 
+**Re-fetch now learns a date too (2026-07-30).** `mine_publish_date` runs on the
+page a re-fetch already fetched — no extra request, since `fetch_readability_article`
+and `fetch_full_page_article` hand the raw body back through a `capture` dict
+(readability strips head metadata, which is where the date lives). It writes **only
+when the entry has no date or sits at the epoch**, and never over an
+`entry_date_overrides` row: re-fetch used to *move* `published` and destroyed 105
+real dates before that was caught.
+
 **1,278 remain at 1970 deliberately**: 324 have no captured HTML, the rest have HTML
 with no date in it. Guessing there would re-create the original bug. `<time>` is
 tried last for the same reason — a page has many, and the first is often a

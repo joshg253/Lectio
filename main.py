@@ -10831,7 +10831,57 @@ _READABILITY_BROWSER_UA = (
 )
 
 
-def fetch_readability_article(source_url: str) -> tuple[str, str]:
+# Publish-date sources in a page's head, ordered by how much publishers maintain
+# them. <time> is LAST on purpose: a page has many and the first often belongs to a
+# comment or a "latest posts" rail. Measured over the archive when the recovery
+# script was written: article:published_time carried 1,811 of 2,030 hits.
+_PUBDATE_SOURCES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("og:article:published_time", re.compile(
+        r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("og:reversed-attr-order", re.compile(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I)),
+    ("json-ld:datePublished", re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)),
+    ("itemprop:datePublished", re.compile(
+        r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("meta:date", re.compile(
+        r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("time:datetime", re.compile(r'<time[^>]+datetime=["\']([^"\']+)', re.I)),
+)
+
+
+def mine_publish_date(raw_html: str | None) -> datetime | None:
+    """The article's publish date from a page's own metadata, or None.
+
+    Range-checked rather than trusted: a 1900 or 2099 value is a template
+    placeholder, and a future date is a clock problem, not a publication.
+    """
+    if not raw_html:
+        return None
+    now = datetime.now(timezone.utc)
+    for _name, pattern in _PUBDATE_SOURCES:
+        for m in pattern.finditer(raw_html):
+            raw = (m.group(1) or "").strip()
+            dt = None
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                ymd = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
+                if ymd:
+                    try:
+                        dt = datetime(int(ymd.group(1)), int(ymd.group(2)), int(ymd.group(3)),
+                                      tzinfo=timezone.utc)
+                    except ValueError:
+                        dt = None
+            if dt is None:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if 1990 < dt.year and dt <= now + timedelta(days=2):
+                return dt
+    return None
+
+
+def fetch_readability_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
     route and save-article capture. Raises on fetch/extraction failure.
@@ -10842,7 +10892,11 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
     with a browser identity. That retry is not about winning an arms race — a
     host that blocks by IP still refuses — but about not *mistaking a refusal
     for a deletion*: the caller flags 404/410 as "the article is gone", and a
-    bot-wall answering 404 turned a live article into a delete prompt."""
+    bot-wall answering 404 turned a live article into a delete prompt.
+
+    *capture*, when given, receives the raw response body under ``"raw_html"``.
+    readability strips head metadata, so a caller wanting the page's publish date
+    would otherwise have to fetch it a second time."""
     headers = {"User-Agent": READABILITY_USER_AGENT}
     with url_guard.build_client(timeout=12.0, headers=headers) as client:
         response = url_guard.safe_get(client, source_url, headers=headers)
@@ -10859,7 +10913,11 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
             LOGGER.debug("readability: browser-identity retry failed for %s", source_url, exc_info=True)
     response.raise_for_status()
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        if capture is not None:
+            capture["raw_html"] = response.text
         return markdown_to_article_html(response.text, source_url)
+    if capture is not None:
+        capture["raw_html"] = response.text
     return extract_readability_article(response.text, source_url)
 
 
@@ -11034,12 +11092,17 @@ def _whole_body_content(raw_html: str) -> str:
     return html_sanitize.sanitize_html(body_html).strip()
 
 
-def fetch_full_page_article(source_url: str) -> tuple[str, str]:
+def fetch_full_page_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, body_html)`` without readability
-    extraction — see extract_full_page_article. Markdown is still converted."""
+    extraction — see extract_full_page_article. Markdown is still converted.
+
+    *capture* receives the raw body under ``"raw_html"``, so a caller can mine the
+    page's publish date from the fetch it already made."""
     with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
         response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
     response.raise_for_status()
+    if capture is not None:
+        capture["raw_html"] = response.text
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
         return markdown_to_article_html(response.text, source_url)
     return extract_full_page_article(response.text, source_url)
@@ -26426,6 +26489,7 @@ async def refresh_saved_article_content(
             "feed_url": feed_url,
             "entry_id": entry_id,
             "url": result.get("source_url") or entry_id,
+            "dated": result.get("dated"),
         })
     # Only the saved feed has a meaningful fallback: re-running the save path
     # can create the entry when it is genuinely absent. Anywhere else, the
@@ -26598,7 +26662,17 @@ def _refresh_captured_article_for_current_user(
     *mode* ``"full"`` captures the whole page body instead of readability-
     extracting it — the escape hatch for pages readability mangles. See
     extract_full_page_article."""
-    extract = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
+    _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
+    # Keep the page we already fetched, so a date can be mined from it without a
+    # second request. readability strips head metadata, which is where the date is.
+    _capture: dict = {}
+
+    def extract(url: str):
+        try:
+            return _base(url, capture=_capture)
+        except TypeError:
+            return _base(url)          # a caller-supplied extractor without the kwarg
+
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.refresh_captured_article(
@@ -26609,7 +26683,51 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
+    if result.get("ok"):
+        try:
+            result["dated"] = _apply_mined_publish_date(
+                feed_url, entry_id, _capture.get("raw_html"))
+        except Exception:  # noqa: BLE001 — a date is a bonus, never a failure
+            LOGGER.warning("re-fetch date mining failed for %s", entry_id, exc_info=True)
     return result
+
+
+def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None) -> str | None:
+    """Set a publish date mined from the page, but ONLY when we have none.
+
+    Deliberately narrow. Re-fetch used to move `published` and destroyed 105 real
+    dates before that was caught, so this never overwrites a date the entry
+    already has, and never touches an entry whose date the user pinned by hand.
+    It exists for the ~1,278 entries still sitting at the Unix epoch because their
+    importer had no date to give — a re-fetch is a free chance to learn one.
+    """
+    if not raw_html:
+        return None
+    with get_meta_connection() as conn:
+        if conn.execute(
+            "SELECT 1 FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone():
+            return None        # an explicit correction outranks anything inferred
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        row = db.execute(
+            "SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
+        ).fetchone()
+        current = str(row[0] or "") if row else ""
+        # Only an absent or epoch date qualifies as "we don't know".
+        if current and not current.startswith("1970-01-01"):
+            return None
+        mined = mine_publish_date(raw_html)
+        if mined is None:
+            return None
+        stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
+                   (stored, feed_url, entry_id))
+        db.commit()
+    invalidate_unread_counts_cache()
+    LOGGER.info("[re-fetch] learned publish date %s for %s", stored, entry_id)
+    return stored
 
 
 @app.post("/articles/save")
