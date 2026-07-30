@@ -1959,6 +1959,17 @@ worked there either.** Josh confirmed he does not recall that site working in In
 So this costs the migration nothing — do not log it as a regression when comparing
 coverage.
 
+**Resolution: the host migration, not a proxy.** Josh is leaving OVH when the
+prepaid year ends; a non-EEA host makes these feeds work with no code at all. A
+per-feed `proxy_url` was designed and deliberately NOT built — one feed does not
+justify the machinery, and the obvious free option is doubtful: a Cloudflare Worker
+egresses from the colo nearest its caller, so a call from Germany likely leaves
+Frankfurt and gets 451'd exactly as before. Untested, and cheap to test if it ever
+matters (a ~12-line Worker plus `curl "…/?u=https://ifconfig.co/country"`).
+
+⚠ **Re-check EEA-blocked feeds after the host move** — thecentersquare.com is the
+known one, and any US local-news feed that failed to subscribe is a candidate.
+
 Distinguish it from the other walls when triaging: 451 = geo (legal, unfixable);
 403 + "Just a moment…" = Cloudflare (washingtonstatestandard, realpython, behance);
 plain 403 = ordinary bot rules. Only the middle kind might ever lift on its own.
