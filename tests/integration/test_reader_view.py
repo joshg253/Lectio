@@ -302,3 +302,56 @@ def test_tag_panel_absent_in_the_feeds_scope(monkeypatch):
                                            "scope": "feeds"}).text
     assert "id='reader-tag-btn'" not in body
     assert "id='reader-tag-panel'" not in body
+
+
+# --- archived-copy plausibility -------------------------------------------
+def test_a_failed_extraction_does_not_beat_the_feed_content(monkeypatch):
+    """An implausibly thin archived copy is a FAILED extraction, not a short post.
+
+    readability sometimes locks onto a sidebar widget instead of the body:
+    illogicalcontraption's 2011 entry archived as a 168-byte "Contact:" block while
+    the feed held 9,208 bytes of the actual post. Because the archive won
+    unconditionally, the article read as empty online and offline alike — 520 of
+    6,000 archived copies on the live library are in this state (8.7%).
+    """
+    monkeypatch.setattr(main, "_resolve_archived_readability_html",
+                        lambda f, e: '<div><h2>Contact:</h2><p>a(at)b.com</p></div>')
+    monkeypatch.setattr(main, "get_entry_detail",
+                        lambda f, e: {"content_html": "<p>" + ("real prose " * 80) + "</p>"})
+    monkeypatch.setattr(main, "_prepend_reader_lead_image", lambda f, e, h: h)
+
+    out = main.resolve_reader_article_html("feed", "entry", "")
+    assert "real prose" in out
+    assert "Contact:" not in out
+
+
+def test_a_picture_post_archive_is_plausible(monkeypatch):
+    """Images count as substance in their own right. A comic or photo post is
+    legitimately almost text-free — the illogicalcontraption entry is 16 images and
+    57 characters — so a text-length-only test would call every one of them a
+    failed extraction."""
+    comic = '<p>(Click for full size)</p><img src="a.jpg"><img src="b.jpg">'
+    assert main._archived_copy_is_plausible(comic)
+    assert not main._archived_copy_is_plausible('<div><h2>Contact:</h2><p>a(at)b.com</p></div>')
+
+
+def test_images_outweigh_text_when_choosing_a_copy():
+    """Images lead in the comparison because the failure being corrected is a text
+    widget beating a picture post — and on that comparison a text-length test came
+    down to 57 characters against 47, which is not a margin to trust."""
+    widget = "<div><h2>Contact:</h2><p>illogicalcontraption(at)yahoo(dot)com</p></div>"
+    pictures = '<p>(Click individual images for full size)</p>' + ('<img src="x.jpg">' * 16)
+    assert main._reader_copy_is_richer(pictures, widget)
+    assert not main._reader_copy_is_richer(widget, pictures)
+
+
+def test_a_thin_archive_is_still_used_when_nothing_is_richer(monkeypatch):
+    """A genuinely short article must still render: the thin copy is the fallback,
+    not a reason to show an error."""
+    monkeypatch.setattr(main, "_resolve_archived_readability_html",
+                        lambda f, e: "<p>A very short but real post.</p>")
+    monkeypatch.setattr(main, "get_entry_detail", lambda f, e: {"content_html": ""})
+    monkeypatch.setattr(main, "_prepend_reader_lead_image", lambda f, e, h: h)
+
+    out = main.resolve_reader_article_html("feed", "entry", "")
+    assert "A very short but real post." in out

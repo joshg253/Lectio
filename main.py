@@ -16605,6 +16605,50 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
     return lead_html + body
 
 
+# Below this many characters of *text*, an archived readability copy is treated as
+# a failed extraction rather than a short article. Chosen to clear a sidebar widget
+# ("Contact: …" at 168 bytes) while sitting well under any real post; a genuinely
+# short article still renders, because the archive is kept as the fallback when
+# nothing richer exists.
+_MIN_ARCHIVED_ARTICLE_TEXT = 400
+
+
+def _reader_text_length(html_text: str | None) -> int:
+    """Visible-text length of a fragment — tags carry no reading value, so a
+    markup-heavy widget must not out-measure real prose."""
+    if not html_text:
+        return 0
+    return len(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_text)).strip())
+
+
+def _reader_img_count(html_text: str | None) -> int:
+    return len(re.findall(r"<img\b", html_text or "", re.IGNORECASE))
+
+
+def _archived_copy_is_plausible(html_text: str) -> bool:
+    """Does an archived readability copy look like a real article body?
+
+    Text length alone is not enough. A picture post is legitimately almost text-
+    free — illogicalcontraption's 2011 entry is 16 images and 57 characters — so
+    images count as substance in their own right, or every comic and photo post
+    would be judged a failed extraction.
+    """
+    return (_reader_text_length(html_text) >= _MIN_ARCHIVED_ARTICLE_TEXT
+            or _reader_img_count(html_text) >= 2)
+
+
+def _reader_copy_is_richer(candidate: str, current: str) -> bool:
+    """Is *candidate* more of an article than *current*? Images first, then text.
+
+    Images lead because the failure being corrected is a text widget beating a
+    picture post; on that comparison a text-length test came down to 57 characters
+    against 47, which is not a margin to trust.
+    """
+    cand = (_reader_img_count(candidate), _reader_text_length(candidate))
+    cur = (_reader_img_count(current), _reader_text_length(current))
+    return cand > cur
+
+
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
     """Return sanitized article HTML for the e-ink reader, preferring the offline
     archived readability copy, then a live readability extraction of *link*, then
@@ -16613,8 +16657,19 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
     ingest), so the caller embeds the result directly. The entry's lead image is
     prepended (readability strips it; Lectio tracks it separately)."""
     archived_html = _resolve_archived_readability_html(feed_url, entry_id)
-    if archived_html:
+    if archived_html and _archived_copy_is_plausible(archived_html):
         return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
+    # An implausibly short archived copy is a FAILED extraction, not a short
+    # article: readability sometimes locks onto a sidebar widget instead of the
+    # body. illogicalcontraption's 2011 post archived as a 168-byte "Contact:"
+    # block while the feed held 9,208 bytes of the actual post — and because the
+    # archive won unconditionally, the article read as empty online and offline
+    # alike. Prefer the stored feed content when it is genuinely richer.
+    if archived_html and feed_url and entry_id:
+        detail = get_entry_detail(feed_url, entry_id)
+        stored = str((detail or {}).get("content_html") or "")
+        if stored and _reader_copy_is_richer(stored, archived_html):
+            return _prepend_reader_lead_image(feed_url, entry_id, stored)
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
@@ -16626,6 +16681,9 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
         detail = get_entry_detail(feed_url, entry_id)
         if detail and detail.get("content_html"):
             return _prepend_reader_lead_image(feed_url, entry_id, str(detail["content_html"]))
+    if archived_html:
+        # Thin, but better than nothing — a genuinely short article ends up here.
+        return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     esc = html.escape(link or "", quote=True)
     tail = (
         f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
