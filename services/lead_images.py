@@ -597,11 +597,78 @@ class LeadImageService:
             return html
 
         def _drop(m: re.Match[str]) -> str:
-            if "<img" not in m.group(0).lower():
-                return m.group(0)
-            return "" if self.is_social_link_href(m.group(1)) else m.group(0)
+            block = m.group(0)
+            if "<img" not in block.lower():
+                return block
+            href = m.group(1)
+            if not self.is_social_link_href(href):
+                return block
+            # ⚠ A social link is NOT enough on its own. A Tumblr-hosted webcomic
+            # wraps its comic in a link to its own Tumblr post, so host-only
+            # matching deleted the comic (theycantalk.com, and every Tumblr
+            # webcomic like it).
+            #
+            # The discriminator: a share ICON is hosted by the SITE and links OUT
+            # to the network, while a platform's own media is hosted BY that
+            # platform and links to it. So keep the image when it lives on the
+            # same service the link points at.
+            src_m = re.search(r'<img\b[^>]*\bsrc\s*=\s*[\"\']([^\"\']+)', block, re.IGNORECASE)
+            if src_m and self._same_service(src_m.group(1), href):
+                return block
+            return ""
 
         return self._ANCHOR_WITH_IMG_RE.sub(_drop, html)
+
+    @staticmethod
+    def _registrable_suffix(url: str) -> str:
+        """The last two labels of a URL's host — a cheap "same service" key.
+
+        Good enough for this comparison: 64.media.tumblr.com and
+        theycantalk.tumblr.com both reduce to tumblr.com, while accu.org does not.
+        """
+        try:
+            host = (urlparse(url).netloc or "").split("@")[-1].split(":")[0].lower()
+        except ValueError:
+            return ""
+        labels = [p for p in host.split(".") if p]
+        return ".".join(labels[-2:]) if len(labels) >= 2 else host
+
+    # Services whose media lives on a different domain from the site. Without
+    # these, a YouTube poster image (i.ytimg.com) linking to youtube.com reads as
+    # "site icon linking out" and would be stripped.
+    _SERVICE_CDN_ALIASES = {
+        "ytimg.com": "youtube.com",
+        "youtu.be": "youtube.com",
+        "fbcdn.net": "facebook.com",
+        "cdninstagram.com": "instagram.com",
+        "twimg.com": "twitter.com",
+        "redd.it": "reddit.com",
+        "redditmedia.com": "reddit.com",
+        "redditstatic.com": "reddit.com",
+        "staticflickr.com": "flickr.com",
+        "vimeocdn.com": "vimeo.com",
+        "jtvnw.net": "twitch.tv",
+        "bsky.network": "bsky.app",
+        "sndcdn.com": "soundcloud.com",
+        "bcbits.com": "bandcamp.com",
+    }
+
+    @classmethod
+    def _service_key(cls, url: str) -> str:
+        suffix = cls._registrable_suffix(url)
+        return cls._SERVICE_CDN_ALIASES.get(suffix, suffix)
+
+    @classmethod
+    def _same_service(cls, image_url: str, link_url: str) -> bool:
+        """Is the image hosted by the very service the link points at?
+
+        The discriminator between a share icon and a platform's own media: an icon
+        is hosted by the SITE and links OUT, while platform media is hosted BY the
+        platform. Aliases cover services that serve media from a separate domain.
+        """
+        a = cls._service_key(image_url)
+        b = cls._service_key(link_url)
+        return bool(a) and a == b
 
     def _strip_related_post_blocks(self, html: str) -> str:
         """Remove related/recent/more-posts containers from source-page HTML.

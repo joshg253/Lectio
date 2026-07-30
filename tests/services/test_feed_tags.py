@@ -451,6 +451,28 @@ def test_suppressed_tag_list_keeps_original_casing(service):
     assert service.suppressed_tag_list(feed) == ["Popular Deals"]
 
 
+def test_dismissing_a_multi_word_tag_works(monkeypatch, service):
+    """The chips are rendered NORMALIZED (lowercased, spaces to hyphens), so the ×
+    sends "popular-deals" while the stored feed tag is "Popular Deals".
+
+    A plain lowercase compare gives "popular deals" and misses — so every
+    multi-word tag came back after being dismissed, while single-word ones like
+    "python" stuck because they normalize to themselves. Reported as "I removed
+    #popular-deals from a bunch of these now, keep seeing it" alongside "other tags
+    I've removed elsewhere seem to stay gone", which is what identified it.
+    """
+    import main
+
+    feed = "https://slickdeals.net/rss"
+    service.record_entry_tags(feed, [("e1", ["Popular Deals", "Nintendo Switch"])])
+    monkeypatch.setattr(main, "feed_tag_service", service)
+
+    # As the chip sends it: normalized, not the feed's raw casing.
+    service.set_tag_suppressed(feed, "popular-deals", True)
+
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Nintendo Switch"]
+
+
 def test_suggestions_drop_dismissed_tags(monkeypatch, service):
     """End to end through the suggestion path: the chip disappears, the row stays.
 

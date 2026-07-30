@@ -8310,8 +8310,14 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
+    # Compare through normalize_tag_value on BOTH sides. The chips are rendered
+    # normalized (lowercased, spaces to hyphens), so the × sends "popular-deals"
+    # while the stored feed tag is "Popular Deals" — a plain lowercase compare
+    # gives "popular deals" and misses. Single-word tags normalize to themselves,
+    # which is why "python" and "accu" stuck and every multi-word tag came back.
+    dismissed_norm = {normalize_tag_value(d) for d in dismissed}
     return [t for t in tags
-            if t.strip().lower() not in dismissed][:MAX_FEED_TAG_SUGGESTIONS]
+            if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()

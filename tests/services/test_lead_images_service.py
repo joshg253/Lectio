@@ -1720,3 +1720,35 @@ def test_ad_server_urls_are_rejected():
     # Words that merely start with "ad" are not ad servers.
     assert not L.is_ad_url("https://example.com/adventure-photos/hero.jpg")
     assert not L.is_ad_url("https://example.com/img/badges/award.png")
+
+
+def test_a_platforms_own_media_is_not_a_share_icon():
+    """⚠ A social link is NOT enough on its own to call an image chrome.
+
+    A Tumblr-hosted webcomic wraps its comic in a link to its own Tumblr post, so
+    host-only matching DELETED the comic — theycantalk.com and every Tumblr
+    webcomic like it. The discriminator: a share icon is hosted by the SITE and
+    links OUT to the network, while a platform's own media is hosted BY that
+    platform.
+    """
+    import main
+    svc = main.lead_image_service
+
+    comic = ('<a href="https://theycantalk.tumblr.com/post/823519750908002304">'
+             '<img src="https://64.media.tumblr.com/a/s1280x1920/comic.jpg"></a>')
+    assert "comic.jpg" in svc._strip_social_link_images(comic)
+
+    icon = '<a href="https://bsky.app/profile/accuorg"><img src="/img/bsky.png"></a>'
+    assert "bsky.png" not in svc._strip_social_link_images(icon)
+
+
+def test_service_cdn_media_survives():
+    """Services that serve media from a separate domain need an alias, or a
+    YouTube poster (i.ytimg.com) linking to youtube.com reads as "site icon
+    linking out" and gets stripped."""
+    import main
+    svc = main.lead_image_service
+
+    html = ('<a href="https://www.youtube.com/watch?v=x">'
+            '<img src="https://i.ytimg.com/vi/x/hqdefault.jpg"></a>')
+    assert "hqdefault.jpg" in svc._strip_social_link_images(html)

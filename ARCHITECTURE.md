@@ -1474,8 +1474,13 @@ suppression belongs to the user. Resist a third heuristic; the first two each
 looked convincing against the data that motivated them.
 
 The × on a chip records that decision in `suppressed_feed_tags (feed_url, tag)`,
-matched case-insensitively so a publisher re-casing `ILLUSTRATION` cannot resurrect
-a dismissed chip. **Per feed, not global** — `Forum` is noise on Slickdeals and may
+compared through `normalize_tag_value` on **both** sides. That matters: the chips are
+rendered normalized (lowercased, spaces to hyphens), so the × sends `popular-deals`
+while the stored feed tag is `Popular Deals`. A plain lowercase compare yields
+`popular deals` and misses — so every **multi-word** tag reappeared after being
+dismissed while single-word ones like `python` stuck, because those normalize to
+themselves. The asymmetry ("other tags I've removed elsewhere seem to stay gone") is
+what identified it. **Per feed, not global** — `Forum` is noise on Slickdeals and may
 be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
 `entry_feed_tags` rows stay and keep feeding the tag-filtered feed adapters. Undo
 lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way
