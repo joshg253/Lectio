@@ -228,3 +228,10 @@ def test_archived_at_column_lifts_into_archived_entries(tmp_path):
     finally:
         main.close_thread_db_pools()
         tenancy._layout = saved
+
+
+def test_fresh_schema_has_suppressed_feed_tags(fresh_meta):
+    """Any new meta-DB table must be created by ensure_meta_schema, which re-runs
+    per tenant at startup — miss that and existing users 500 on the entry pane."""
+    assert "suppressed_feed_tags" in _tables(fresh_meta)
+    assert {"feed_url", "tag", "suppressed_at"} <= _columns(fresh_meta, "suppressed_feed_tags")

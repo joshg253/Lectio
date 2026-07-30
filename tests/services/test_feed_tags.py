@@ -29,6 +29,16 @@ def conn():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE suppressed_feed_tags (
+            feed_url TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            suppressed_at REAL NOT NULL,
+            PRIMARY KEY (feed_url, tag)
+        )
+        """
+    )
     yield c
     c.close()
 
@@ -385,3 +395,80 @@ def test_a_leading_hash_is_stripped():
         '<a href="/categories/python/">python</a><a href="/tags/python/">#python</a>'
     )
     assert out == ["python"]
+
+
+# --- manual per-(feed, tag) dismissal ---
+def test_dismissed_tags_are_scoped_to_their_feed(service):
+    """Per feed, not global: "Forum" is noise on Slickdeals and might be a real
+    topic elsewhere."""
+    a, b = "https://slickdeals.net/rss", "https://example.test/other"
+    service.set_tag_suppressed(a, "Forum", True)
+
+    assert service.suppressed_tags(a) == {"forum"}
+    assert service.suppressed_tags(b) == set()
+
+
+def test_dismissal_is_case_insensitive(service):
+    """A publisher changing "ILLUSTRATION" to "Illustration" must not quietly
+    resurrect a chip that was already dismissed."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "ILLUSTRATION", True)
+
+    assert "illustration" in service.suppressed_tags(feed)
+
+
+def test_restore_removes_it_whatever_the_casing(service):
+    """A mis-clicked × must have a way back, and the stored row may differ in case
+    from whatever the caller is looking at now."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+    service.set_tag_suppressed(feed, "popular deals", False)
+
+    assert service.suppressed_tags(feed) == set()
+
+
+def test_dismissal_does_not_delete_the_stored_tag(service):
+    """This hides a chip; it does not forget a fact. The rows still feed the
+    tag-filtered feed adapters."""
+    feed = "https://example.test/f"
+    service.record_entry_tags(feed, [("e1", ["Popular Deals", "keepme"])])
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+
+    assert service.get_tags_for_entry(feed, "e1") == ["Popular Deals", "keepme"]
+
+
+def test_blank_tags_are_ignored(service):
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "   ", True)
+    assert service.suppressed_tags(feed) == set()
+
+
+def test_suppressed_tag_list_keeps_original_casing(service):
+    """The undo list shows the user what they dismissed, not a lowercased version."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+
+    assert service.suppressed_tag_list(feed) == ["Popular Deals"]
+
+
+def test_suggestions_drop_dismissed_tags(monkeypatch, service):
+    """End to end through the suggestion path: the chip disappears, the row stays.
+
+    This is the replacement for two reverted heuristics. Automatic suppression hid
+    tags the user wanted — "Lessons" on a guitar-lesson feed reads as boilerplate
+    to every frequency- or name-based rule yet is the correct filing tag — so the
+    judgment belongs to the person filing.
+    """
+    import main
+
+    feed = "https://slickdeals.net/rss"
+    service.record_entry_tags(feed, [("e1", ["Popular Deals", "Nintendo Switch"])])
+    monkeypatch.setattr(main, "feed_tag_service", service)
+
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]
+
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Nintendo Switch"]
+
+    service.set_tag_suppressed(feed, "Popular Deals", False)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]

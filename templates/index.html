@@ -2460,6 +2460,13 @@
               <span id="feed-prop-alias-status" class="feed-prop-inline-status"></span>
             </span>
           </dd>
+          {# Undo for dismissed suggestion chips. A mis-click on the × must not be
+             permanent, and this is the only place the decision is visible. #}
+          <dt>Hidden tags</dt>
+          <dd id="feed-prop-hidden-tags-row">
+            <ul id="feed-prop-hidden-tag-list" class="feed-prop-alias-list"></ul>
+            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden.</span>
+          </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">
             <select id="feed-prop-folder-select" class="feed-prop-strategy-select" style="width:auto" aria-label="Feed folder">

@@ -150,6 +150,11 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Feed tag suggestions** — tags the feed (or its page) provides appear as chips
+  under a post, so filing is one tap. A chip you never want from that feed gets an
+  **×**; it stays hidden until you restore it from Feed Properties → *Hidden tags*.
+  Nothing is hidden automatically: a feed tagging every post "Lessons" is boilerplate
+  by any measure and still exactly the tag you want when filing a guitar lesson.
 - **Sort is remembered per view** — Feeds and Saved each keep their own order, so
   reading a publish-date backlog in one doesn't re-sort the other. Views with a
   natural order of their own (the Saved Inbox opens most-recently-starred) use it

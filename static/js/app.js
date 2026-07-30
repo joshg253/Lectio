@@ -4028,6 +4028,86 @@ const CAPTURE_MODE_FULL = 'full';
       node.textContent = value && String(value).trim() ? String(value) : '-';
     }
 
+    // --- Feed Properties → "Hidden tags" (dismissed suggestion chips) ---
+    // The undo path for the × on a suggestion chip. Suppression is manual because
+    // no automatic rule separates a useless tag ("VinylDeals" — the subreddit)
+    // from a wanted one ("Lessons" — what the post IS); both read as boilerplate
+    // to any frequency or feed-name test. A mis-click must not be permanent, and
+    // this list is the only place the decision is visible.
+    function renderFeedPropHiddenTags(feedUrl, tags) {
+      const list = document.getElementById('feed-prop-hidden-tag-list');
+      const empty = document.getElementById('feed-prop-hidden-tag-empty');
+      if (!list) return;
+      list.textContent = '';
+      const rows = Array.isArray(tags) ? tags : [];
+      if (empty) empty.hidden = rows.length > 0;
+      for (const tag of rows) {
+        const li = document.createElement('li');
+        li.className = 'feed-prop-alias-item';
+        const name = document.createElement('code');
+        name.textContent = '#' + tag;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'feed-prop-inline-btn feed-prop-hidden-tag-del';
+        del.textContent = 'Restore';
+        del.dataset.tag = tag;
+        del.dataset.feedUrl = feedUrl || '';
+        li.append(name, del);
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('feed-prop-hidden-tag-list')?.addEventListener('click', async (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('.feed-prop-hidden-tag-del') : null;
+      if (!btn) return;
+      event.preventDefault();
+      btn.disabled = true;
+      try {
+        const body = new URLSearchParams({
+          feed_url: btn.dataset.feedUrl || '', tag: btn.dataset.tag || '', dismissed: '0',
+        });
+        const resp = await fetch('/feed-tags/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+          body: body.toString(),
+          credentials: 'same-origin',
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        renderFeedPropHiddenTags(btn.dataset.feedUrl || '', data.suppressed || []);
+      } catch (err) {
+        btn.disabled = false;
+        alert('Could not restore that tag: ' + err);
+      }
+    });
+
+    // Dismiss a suggestion chip from the entry pane.
+    document.addEventListener('click', async (event) => {
+      const btn = event.target instanceof Element
+        ? event.target.closest('.dismiss-feed-tag') : null;
+      if (!btn) return;
+      event.preventDefault();
+      const tag = btn.getAttribute('data-dismiss-feed-tag') || '';
+      const feedUrl = document.getElementById('entry-tags-form')
+        ?.querySelector('input[name="feed_url"]')?.value || '';
+      if (!tag || !feedUrl) return;
+      const chip = btn.closest('.entry-tag-chip');
+      if (chip) chip.hidden = true;      // optimistic: the chip is going away
+      try {
+        const resp = await fetch('/feed-tags/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+          body: new URLSearchParams({ feed_url: feedUrl, tag, dismissed: '1' }).toString(),
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      } catch (err) {
+        if (chip) chip.hidden = false;   // put it back rather than lie
+        console.error('dismiss feed tag failed:', err);
+      }
+    });
+
     // --- Feed Properties → "Other domains" (declared domain migrations) ---
     // These rules rewrite an author's dead domains onto the current one at
     // ingest, and feed the global dedupe alias map. Until this list existed the
@@ -4151,6 +4231,7 @@ const CAPTURE_MODE_FULL = 'full';
       setFeedPropText(feedPropWebsite, '-');
       if (feedPropWebsiteOpen) feedPropWebsiteOpen.hidden = true;
       renderFeedPropAliases(feedUrl, []);
+      renderFeedPropHiddenTags(feedUrl, []);
       setFeedPropText(feedPropXml, feedUrl);
       if (feedPropXmlOpen) { feedPropXmlOpen.href = safeHttpUrl(feedUrl) || '#'; feedPropXmlOpen.hidden = !feedUrl; }
       // "View posts" — open this feed's list in the reader. Prefer the sidebar
@@ -4251,6 +4332,7 @@ const CAPTURE_MODE_FULL = 'full';
           feedPropWebsiteOpen.hidden = !ws;
         }
         renderFeedPropAliases(feedUrl, data.url_rewrites || []);
+        renderFeedPropHiddenTags(feedUrl, data.suppressed_tags || []);
         setFeedPropText(feedPropXml, data.feed_url || feedUrl);
         if (feedPropXmlOpen) {
           const xu = (data.feed_url || feedUrl || '').trim();

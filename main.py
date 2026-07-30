@@ -3176,6 +3176,23 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
+        #
+        # Manual rather than heuristic on purpose: two automatic rules were tried
+        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
+        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
+        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
+        # Scoped per feed because a tag useless on one feed can matter on another.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppressed_feed_tags (
+                feed_url TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                suppressed_at REAL NOT NULL,
+                PRIMARY KEY (feed_url, tag)
+            )
+            """
+        )
         # The read-later "done" axis, deliberately its own table rather than a
         # column on saved_entries. A saved_entries row *is* the star, and the
         # star is the TODO axis: "I still have to decide what to do with this."
@@ -8263,7 +8280,7 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
-    **Nothing is filtered automatically, and that is a considered position.**
+    **Nothing is filtered automatically; dismissal is the user's, per (feed, tag).**
 
     Two heuristics were tried and both hid tags the user wanted:
 
@@ -8281,15 +8298,19 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     The difference between "VinylDeals" (a place, useless) and "Lessons" (a kind of
     content, wanted) is semantic, and no signal in the feed metadata expresses it.
     **Showing a useless chip is cheap — it is ignored. Hiding a wanted one is
-    invisible**, so the default is to show everything and let the user dismiss
-    per (feed, tag). See Plan.md 7c-1.
+    invisible**, so everything is shown until the user says otherwise. The × on a
+    chip records that decision in `suppressed_feed_tags`, undoable from Feed
+    Properties. Resist a third heuristic — the first two each looked convincing
+    against the data that motivated them.
     """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
+        dismissed = feed_tag_service.suppressed_tags(feed_url)
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
-    return tags[:MAX_FEED_TAG_SUGGESTIONS]
+    return [t for t in tags
+            if t.strip().lower() not in dismissed][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()
@@ -8774,6 +8795,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "url_rewrites": [
                 {"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)
             ],
+            # Dismissed suggestion chips, so a mis-clicked × has a way back.
+            "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -26454,6 +26477,31 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/feed-tags/dismiss")
+def dismiss_feed_tag(
+    request: Request,
+    feed_url: str = Form(...),
+    tag: str = Form(...),
+    dismissed: int = Form(default=1),
+):
+    """Hide (or restore) one feed-tag suggestion chip for one feed.
+
+    The replacement for two failed heuristics. Automatic suppression hid tags the
+    user wanted — "Lessons" on a guitar-lesson feed reads as boilerplate to every
+    frequency- or name-based rule, yet it is the correct filing tag. The judgment
+    is semantic, so it belongs to the person filing.
+
+    Per feed, not global: "Forum" is noise on Slickdeals and might be a real topic
+    elsewhere. The stored rows in `entry_feed_tags` are untouched either way —
+    this hides a chip, it does not forget a fact.
+    """
+    feed_tag_service.set_tag_suppressed(feed_url, tag, bool(dismissed))
+    return JSONResponse({
+        "ok": True, "feed_url": feed_url, "tag": tag, "dismissed": bool(dismissed),
+        "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
+    })
 
 
 @app.post("/entries/discard")

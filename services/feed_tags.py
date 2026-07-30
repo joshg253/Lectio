@@ -277,6 +277,54 @@ class FeedTagService:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def suppressed_tags(self, feed_url: str) -> set[str]:
+        """Tags the user has dismissed for this feed. Compared case-insensitively,
+        because a publisher changing "ILLUSTRATION" to "Illustration" must not
+        quietly resurrect a chip that was already dismissed."""
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(
+                    "SELECT tag FROM suppressed_feed_tags WHERE feed_url = ?", (feed_url,)
+                ).fetchall()
+        except Exception:
+            LOGGER.warning("suppressed tag lookup failed for %s", feed_url, exc_info=True)
+            return set()
+        return {str(r[0]).strip().lower() for r in rows}
+
+    def set_tag_suppressed(self, feed_url: str, tag: str, suppressed: bool) -> None:
+        """Dismiss (or restore) one suggestion chip for one feed."""
+        clean = (tag or "").strip()
+        if not clean:
+            return
+        with self._get_meta_connection() as conn:
+            if suppressed:
+                conn.execute(
+                    "INSERT OR REPLACE INTO suppressed_feed_tags (feed_url, tag, suppressed_at)"
+                    " VALUES (?, ?, ?)",
+                    (feed_url, clean, time.time()),
+                )
+            else:
+                # Delete case-insensitively: the stored row may differ in case from
+                # whatever the caller is looking at now.
+                conn.execute(
+                    "DELETE FROM suppressed_feed_tags WHERE feed_url = ?"
+                    " AND LOWER(tag) = LOWER(?)",
+                    (feed_url, clean),
+                )
+
+    def suppressed_tag_list(self, feed_url: str) -> list[str]:
+        """Dismissed tags as stored (original casing), for the Feed Properties
+        undo list — there has to be a way back from a mis-click."""
+        try:
+            with self._get_meta_connection() as conn:
+                rows = conn.execute(
+                    "SELECT tag FROM suppressed_feed_tags WHERE feed_url = ? ORDER BY tag",
+                    (feed_url,),
+                ).fetchall()
+        except Exception:
+            return []
+        return [str(r[0]) for r in rows]
+
     def delete_for_feed(self, feed_url: str) -> int:
         with self._get_meta_connection() as conn:
             return conn.execute(

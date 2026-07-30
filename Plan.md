@@ -1503,9 +1503,11 @@ Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022
 
 `VinylDeals` is a *place*; `Lessons` is a *kind of content*. That is semantic and
 no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
-invisible** — so show everything and let the user dismiss per (feed, tag). That is
-the work to build: a `suppressed_feed_tags(feed_url, tag)` table, an × on the chip,
-and an undo path in Feed Properties.
+invisible** — so everything is shown and the user dismisses per (feed, tag).
+
+**BUILT 2026-07-29:** `suppressed_feed_tags(feed_url, tag)`, an × on each chip
+(`POST /feed-tags/dismiss`), and an undo list at Feed Properties → *Hidden tags*.
+Case-insensitive, per feed, and it never deletes the stored `entry_feed_tags` rows.
 
 **More page-tag examples Josh flagged, not yet handled** (2026-07-29). All are
 "there IS a usable tag here and we are not taking it", i.e. the same tier work:

@@ -1436,9 +1436,16 @@ content, wanted) is **semantic**, and nothing in the feed metadata expresses it.
 
 ⚠ The asymmetry is what decides the default: **a useless chip is cheap, because it
 is ignored. A hidden wanted one is invisible.** So everything is shown and the
-suppression belongs to the user, per (feed, tag) — see Plan.md 7c-1. Resist a
-third heuristic; the first two each looked convincing against the data that
-motivated them.
+suppression belongs to the user. Resist a third heuristic; the first two each
+looked convincing against the data that motivated them.
+
+The × on a chip records that decision in `suppressed_feed_tags (feed_url, tag)`,
+matched case-insensitively so a publisher re-casing `ILLUSTRATION` cannot resurrect
+a dismissed chip. **Per feed, not global** — `Forum` is noise on Slickdeals and may
+be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
+`entry_feed_tags` rows stay and keep feeding the tag-filtered feed adapters. Undo
+lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way
+back and that list is the only place the decision is visible.
 
 **"All Saved" is a separate node**, not a mode of the Inbox: everything kept
 minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay
