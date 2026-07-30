@@ -12,6 +12,10 @@
 (function () {
   "use strict";
 
+  // Articles saved for offline, and the number of articles the manifest is asked
+  // to supply images for. These MUST agree: they are two halves of one set.
+  const OFFLINE_ARTICLE_COUNT = 20;
+
   const statusEl = document.getElementById("rm-offline-status");
   const btn = document.getElementById("rm-offline-btn");
   if (!statusEl || !btn) return;
@@ -70,7 +74,7 @@
     let data;
     try {
       const qs = new URLSearchParams(location.search);
-      const params = new URLSearchParams({ n: "20" });
+      const params = new URLSearchParams({ n: String(OFFLINE_ARTICLE_COUNT) });
       for (const k of ["folder_id", "tag", "kept"]) {
         if (qs.get(k)) params.set(k, qs.get(k));
       }
@@ -88,9 +92,14 @@
     // from _reader_href without the active sort, while the real links carry
     // sort=starred — so every cached article sat under a URL nothing navigates
     // to. Reading the hrefs the page actually has makes a mismatch impossible.
+    // Capped to the SAME count the manifest was asked for. The list renders up to
+    // 150 rows, so taking every href cached 150 articles while asking for images
+    // from only the first 20 — the rest went offline with no pictures at all,
+    // which is exactly what "images weren't included" looked like on the device.
     const domHrefs = Array.from(document.querySelectorAll(".rm-item-link"))
       .map((a) => a.getAttribute("href"))
-      .filter((h) => h && h.indexOf("/read") === 0);
+      .filter((h) => h && h.indexOf("/read") === 0)
+      .slice(0, OFFLINE_ARTICLE_COUNT);
     // Keep only the server's image URLs; its article guesses are superseded.
     const imageUrls = (data.urls || []).filter((u) => u.indexOf("/read") !== 0);
     // This page first: it is the entry point, and without it the saved hyperlink

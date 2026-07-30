@@ -1371,51 +1371,37 @@ pull without evading a bot wall:
 
 Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
 
-### 7b. Offline reading on the Supernote (raised 2026-07-29, not started)
+### 7b. Offline reading on the Supernote — WORKS (2026-07-30)
 
-The Supernote is WiFi-only, so with no WiFi there is no way to work the backlog.
-The content is not the problem — every kept article is already captured
-server-side (readability HTML in the starred archive), so this is delivery only.
+**Confirmed on the device: WiFi off, article opens.** A service worker serves the
+navigation itself, which is what makes it work at all — the browser has no launcher,
+so Read Mode is reached from a saved hyperlink, and a cache the browser cannot
+navigate to is useless.
 
-**Device facts, measured rather than assumed** (UA logged via
-`_READ_MODE_UA_SEEN`):
+Route taken, after the alternatives were eliminated by measurement:
 
-    Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A.210505.003; wv)
-    AppleWebKit/537.36 … Chrome/96.0.4664.92 Safari/537.36
+- **Downloads are impossible.** The Supernote's WebView has no download handler:
+  `<a download>` is a silent no-op and long-press offers only text selection. That
+  killed self-contained HTML, EPUB-by-download, and bundles in one go.
+- **Service workers DO register** there (Android 11 WebView, Chrome 96), precache,
+  and intercept navigation.
 
-- **Chrome 96** — Service Worker, Cache API and IndexedDB are all supported at
-  that version, so features are not the blocker.
-- **`wv` = Android WebView, not Chrome.** The host app decides whether service
-  workers are enabled and whether storage survives; WebView browsers often clear
-  cache on exit, there is no PWA install, and no offline start URL. If the
-  browser cannot reopen the page with WiFi off, a perfectly cached article is
-  unreachable. **This, not feature support, is the risk.**
-- **It reports Nomad on a Manta** — the model is hardcoded. Auto-detect must
-  match "Supernote", never the model name.
+Two bugs found on the way, both mine, both instructive:
 
-**Three routes:**
+- `ignoreSearch` in the offline fallback stripped the query string, and for `/read`
+  the query string IS the article's identity — so every article matched the cached
+  BROWSE page and re-rendered the list. A cache miss that looked like a navigation
+  going nowhere.
+- **Article and image coverage diverged.** The page cached every `.rm-item-link` in
+  the DOM (up to 150 rows) while asking the manifest for images from only the first
+  20, so most cached articles had no pictures. Reported as "seemed like images
+  weren't included". Both halves now derive from one `OFFLINE_ARTICLE_COUNT`.
 
-- **(a) Service Worker + Cache API + an IndexedDB action queue.** The only option
-  that keeps *triage* working offline (Archive/Delete/Tag replayed on reconnect).
-  Also means revisiting the reader page's deliberate `Cache-Control: no-store`
-  (main.py), which is why prefetch shipped as images-only, and caching image
-  bytes client-side — the `/api/img` cache is server-side, so cached articles
-  would otherwise render with broken images.
-- **(b) EPUB export of the next N Inbox articles.** Lands in Supernote's own
-  storage; its native reader handles e-ink pagination and annotation far better
-  than a WebView, and nothing web-platform has to hold up. **Loses in-EPUB
-  triage** — read offline, file on reconnect.
-- **(c) One self-contained HTML bundle** (images as data URIs). No worker needed,
-  no triage either, and several MB for 20 articles — against the grain of #12.
-
-**Leaning (b)**, because a WebView is a poor offline host and that is a property
-of the device, not something to engineer around. **If offline triage is the real
-requirement it is (a), and probe first** — feature detection is not the question;
-the question is whether a cached page still loads after the browser has been
-closed and WiFi turned off.
-
-Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
-pile; at ~420 it is a meaningful unit.
+Residual limitation: images at **cross-origin** URLs still cannot be cached — a
+no-cors response is opaque and indistinguishable from a failure. Measured small: 3
+of 45 images across 25 Inbox articles, because most reader images are already
+same-origin (`/starred-asset/…` from the archive, or `/api/img`). If it ever
+matters, routing reader images through `/api/img` would close it.
 
 ### 7c-2. Epoch-dated articles — 2,030 of 3,308 recovered offline (2026-07-29)
 
