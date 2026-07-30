@@ -2430,7 +2430,11 @@
       </div>
       <div class="hl-tab-bar feed-prop-tab-bar" role="tablist">
         <button type="button" class="hl-tab-btn hl-tab-btn--active" data-feed-prop-tab="info" role="tab" aria-selected="true">Info</button>
+        {# Split from one overloaded "Tuning" tab: what arrives / how it looks /
+           upkeep were three unrelated jobs sharing a panel. #}
+        <button type="button" class="hl-tab-btn" data-feed-prop-tab="content" role="tab" aria-selected="false">Content</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="tuning" role="tab" aria-selected="false">Tuning</button>
+        <button type="button" class="hl-tab-btn" data-feed-prop-tab="maint" role="tab" aria-selected="false">Maintenance</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="history" role="tab" aria-selected="false">History</button>
         <button type="button" class="hl-tab-btn" data-feed-prop-tab="automations" role="tab" aria-selected="false">Automations</button>
       </div>
@@ -2471,10 +2475,10 @@
           </dd>
           {# Undo for dismissed suggestion chips. A mis-click on the × must not be
              permanent, and this is the only place the decision is visible. #}
-          <dt>Hidden tags</dt>
+          <dt>Hidden suggested tags</dt>
           <dd id="feed-prop-hidden-tags-row">
             <ul id="feed-prop-hidden-tag-list" class="feed-prop-alias-list"></ul>
-            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden.</span>
+            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden — every tag this feed provides is offered as a suggestion.</span>
           </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">
@@ -2518,7 +2522,7 @@
           <button type="button" id="feed-prop-unsubscribe-btn" class="feed-prop-unsubscribe-btn" hidden>Unsubscribe from feed</button>
         </div>
       </div>
-      <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>
+      <div id="feed-prop-tab-content" class="feed-prop-tab-panel" hidden>
         <!-- dev.to filtered feeds: filter config -->
         <div id="feed-prop-devto-section" hidden>
           <h4 class="feed-prop-section-title">dev.to filters</h4>
@@ -2553,8 +2557,6 @@
             </label>
           </div>
         </div>
-        <!-- Non-YouTube feeds: image strategy + display controls -->
-        <div id="feed-prop-img-section">
           <h4 class="feed-prop-section-title">Content</h4>
           <div class="feed-prop-toggles">
             {# Opt-in per feed: a *partial* feed is all stubs by design, so
@@ -2564,7 +2566,10 @@
               <span>Hide subscriber-only posts (auto-mark as read at fetch time)</span>
             </label>
           </div>
-
+      </div>
+      <div id="feed-prop-tab-tuning" class="feed-prop-tab-panel" hidden>
+        <!-- Non-YouTube feeds: image strategy + display controls -->
+        <div id="feed-prop-img-section">
           <h4 class="feed-prop-section-title">
             Strategy comparison
             <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">
@@ -2674,6 +2679,8 @@
             </div>
           </div>
         </div>
+      </div>
+      <div id="feed-prop-tab-maint" class="feed-prop-tab-panel" hidden>
         <!-- Maintenance: backfill embeds (re-parse) -->
         <div id="feed-prop-maint-section">
           <h4 class="feed-prop-section-title">Maintenance</h4>

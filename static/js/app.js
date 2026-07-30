@@ -2682,7 +2682,6 @@ const CAPTURE_MODE_FULL = 'full';
     const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
-    const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
     const feedPropTabHistory = document.getElementById('feed-prop-tab-history');
     const feedPropTabAutomations = document.getElementById('feed-prop-tab-automations');
     const feedPropYtSection = document.getElementById('feed-prop-yt-section');
@@ -2699,10 +2698,12 @@ const CAPTURE_MODE_FULL = 'full';
           b.classList.toggle('hl-tab-btn--active', b === btn);
           b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
         });
-        if (feedPropTabInfo) feedPropTabInfo.hidden = tab !== 'info';
-        if (feedPropTabTuning) feedPropTabTuning.hidden = tab !== 'tuning';
-        if (feedPropTabHistory) feedPropTabHistory.hidden = tab !== 'history';
-        if (feedPropTabAutomations) feedPropTabAutomations.hidden = tab !== 'automations';
+        // Panel ids follow the tab name, so a new tab needs no wiring here.
+        // The previous version named each one, which is why splitting Tuning
+        // would otherwise have left the new panels permanently hidden.
+        document.querySelectorAll('.feed-prop-tab-panel').forEach(panel => {
+          panel.hidden = panel.id !== `feed-prop-tab-${tab}`;
+        });
       });
     });
     let entryArticle = document.querySelector('.entry');
@@ -4307,10 +4308,11 @@ const CAPTURE_MODE_FULL = 'full';
         b.classList.toggle('hl-tab-btn--active', isInfo);
         b.setAttribute('aria-selected', isInfo ? 'true' : 'false');
       });
-      if (feedPropTabInfo) feedPropTabInfo.hidden = false;
-      if (feedPropTabTuning) feedPropTabTuning.hidden = true;
-      if (feedPropTabHistory) feedPropTabHistory.hidden = true;
-      if (feedPropTabAutomations) feedPropTabAutomations.hidden = true;
+      // Same id-derived rule as the tab handler, so opening the modal cannot
+      // leave a newly added panel visible alongside Info.
+      document.querySelectorAll('.feed-prop-tab-panel').forEach(panel => {
+        panel.hidden = panel.id !== 'feed-prop-tab-info';
+      });
       feedPropertiesModal.removeAttribute('hidden');
 
       try {

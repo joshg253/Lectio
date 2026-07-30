@@ -150,6 +150,9 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
+  filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
+  thumbnails, feed type), *Maintenance*, *History*, *Automations*.
 - **Hide subscriber-only posts** — a per-feed toggle for paywalled feeds. A paid
   Substack post arrives as nothing but a "Read more" link, which Lectio spots
   without any marker from the publisher, and marks read at fetch time so it drops
