@@ -335,56 +335,6 @@ def test_category_attribute_is_split_too():
     assert out == ["Security", "CORS"]
 
 
-# --- low-signal (boilerplate) tag suppression ---
-def _seed_feed(service, feed: str, per_entry: dict[str, list[str]]) -> None:
-    service.record_entry_tags(feed, list(per_entry.items()))
-
-
-def test_a_tag_on_every_entry_is_low_signal(service):
-    """A tag the feed puts on everything says nothing about any one entry.
-
-    Live examples: 2,525 slickdeals posts tagged "Popular Deals", 576
-    r/VinylDeals posts tagged "VinylDeals", all 555 talkpython.fm episodes
-    carrying the same eight tags. Reported as "'popular-deals' is a useless tag"
-    and generalized by Josh as "likely similar where the tag is just the
-    subreddit".
-    """
-    feed = "https://old.reddit.com/r/VinylDeals/.rss"
-    _seed_feed(service, feed, {f"e{i}": ["VinylDeals", f"topic{i}"] for i in range(12)})
-
-    assert service.low_signal_tags(feed) == {"VinylDeals"}
-
-
-def test_a_varying_tag_survives(service):
-    """A coverage rule rather than a blocklist, so "python" keeps working on a
-    Python-heavy feed precisely because it is not on literally everything."""
-    feed = "https://example.test/dev"
-    per = {f"e{i}": (["python"] if i % 2 else ["rust"]) for i in range(12)}
-    _seed_feed(service, feed, per)
-
-    assert service.low_signal_tags(feed) == set()
-
-
-def test_small_feeds_are_left_alone(service):
-    """Below the minimum, coverage is noise: three of four entries sharing a tag
-    is not evidence of boilerplate, and suppressing there would gut a new feed."""
-    feed = "https://example.test/new"
-    _seed_feed(service, feed, {f"e{i}": ["news"] for i in range(4)})
-
-    assert service.low_signal_tags(feed) == set()
-
-
-def test_low_signal_does_not_delete_stored_rows(service):
-    """Suggestions are filtered; the table is untouched. It is also the data
-    foundation for tag-filtered feed adapters, where "every post here is tagged
-    VinylDeals" is a fact worth keeping."""
-    feed = "https://old.reddit.com/r/VinylDeals/.rss"
-    _seed_feed(service, feed, {f"e{i}": ["VinylDeals"] for i in range(12)})
-
-    assert service.low_signal_tags(feed) == {"VinylDeals"}
-    assert service.get_tags_for_entry(feed, "e0") == ["VinylDeals"]
-
-
 # --- page tag extraction: taxonomy URLs ---
 def test_taxonomy_url_anchors_are_tags_whatever_their_class():
     """A link to /tags/<slug>/ IS a tag link. Hugo marks them only by URL shape —

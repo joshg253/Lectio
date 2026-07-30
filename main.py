@@ -8263,17 +8263,33 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
-    Tags that this feed puts on essentially every entry are dropped — they carry
-    no per-entry signal and crowd out the ones that do. See
-    FeedTagService.low_signal_tags; the stored rows are untouched.
+    **Nothing is filtered automatically, and that is a considered position.**
+
+    Two heuristics were tried and both hid tags the user wanted:
+
+    1. *Coverage* — suppress a tag on ~every entry, on the theory that it carries
+       no per-entry signal. Killed by a guitarplayer.com tag feed: "Lessons" is on
+       every post AND is exactly the right tag when filing a guitar lesson. These
+       chips are for **filing**, not for telling entries apart, so uniformity is
+       not disqualifying at all.
+    2. *Feed-name echo* — suppress a uniform tag that restates the feed's title.
+       Killed by the live title, "Latest from Guitar Player in Lessons": a tag
+       feed puts its tag in its own name, so "Lessons" echoes it too. Matching the
+       feed URL fails identically — `/r/VinylDeals/` and `/feeds/tag/lessons` have
+       the same shape.
+
+    The difference between "VinylDeals" (a place, useless) and "Lessons" (a kind of
+    content, wanted) is semantic, and no signal in the feed metadata expresses it.
+    **Showing a useless chip is cheap — it is ignored. Hiding a wanted one is
+    invisible**, so the default is to show everything and let the user dismiss
+    per (feed, tag). See Plan.md 7c-1.
     """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
-        low = feed_tag_service.low_signal_tags(feed_url)
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
-    return [t for t in tags if t not in low][:MAX_FEED_TAG_SUGGESTIONS]
+    return tags[:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()

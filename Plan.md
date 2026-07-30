@@ -1435,13 +1435,35 @@ tag-classed-anchor branches, and whichever path let containing text in.
 
 Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022`
 
+**⚠ Automatic suppression of feed-tag suggestions was tried twice and REVERTED
+(2026-07-29). Do not attempt a third heuristic without reading this.**
+
+- *Coverage* (tag on ~90% of a feed's entries) caught `Popular Deals`, `Forum`,
+  `VinylDeals`, `LaptopDeals`, talkpython's 8-tag block — 661 pairs. Then Josh:
+  "Lessons should be the category". A guitarplayer tag feed puts `Lessons` on every
+  post and it is the right filing tag. **Suggestions are for filing, not for
+  discriminating within a feed, so uniformity is not disqualifying.**
+- *Feed-name echo* (uniform AND tag tokens ⊆ feed-title tokens, camelCase split)
+  looked right: it suppressed `Popular Deals`/`VinylDeals` and kept `Lessons`
+  against the title "Guitar Player" — **which was an assumed title.** The live one
+  is "Latest from Guitar Player in Lessons", so it suppressed `Lessons` too. Feed
+  URLs fail the same way: `/r/VinylDeals/` vs `/feeds/tag/lessons`.
+
+`VinylDeals` is a *place*; `Lessons` is a *kind of content*. That is semantic and
+no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
+invisible** — so show everything and let the user dismiss per (feed, tag). That is
+the work to build: a `suppressed_feed_tags(feed_url, tag)` table, an × on the chip,
+and an undo path in Feed Properties.
+
 **More page-tag examples Josh flagged, not yet handled** (2026-07-29). All are
 "there IS a usable tag here and we are not taking it", i.e. the same tier work:
 
 - `guitarplayer.com` — a `DEALS` tag on the post is not picked up
-  (`?feed_url=…/feeds/tag/lessons`, entry `wu6rVpzS4PyZRihCreDbEF`). Note the feed
-  URL is itself a tag feed (`/feeds/tag/lessons`), so "lessons" is boilerplate
-  by the coverage rule while `DEALS` is the per-post signal.
+  (`?feed_url=…/feeds/tag/lessons`, entry `wu6rVpzS4PyZRihCreDbEF`).
+- **Sub-categories from the URL path** — `guitarplayer.com/lessons/advice-tips`
+  carries "Lessons" *and* "Advice & Tips" as path segments. A post URL's own path
+  is a taxonomy source no current tier reads; it would also give the parent
+  category for free on sites that do not link it.
 
 Also still open from the same pass: Real Python's page tag block mixes taxonomies
 (`ai` is a topic, `intermediate` is a **skill level**). A four-word stop-list
