@@ -1417,6 +1417,36 @@ closed and WiFi turned off.
 Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
 pile; at ~420 it is a meaningful unit.
 
+### 7c-2. Epoch-dated articles — 2,030 of 3,308 recovered offline (2026-07-29)
+
+The Instapaper importer had stored save timestamps as publish dates; repairing that
+left 3,308 entries at the Unix epoch. `scripts/recover_publish_dates.py` recovered
+**2,030 (61%) with no network requests at all** — every date came from page HTML
+already captured in the starred archive, which also means it works for articles
+whose sites are long dead:
+
+| source | n |
+|---|---|
+| `article:published_time` (Open Graph) | 1,811 |
+| URL path (`/2019/07/06/`) | 90 |
+| JSON-LD `datePublished` | 89 |
+| `<time datetime=…>` | 40 |
+
+**The save date as an upper bound is what makes the `<time>` tier safe.** The HTML
+was captured *recently*, not when the article was saved, so a stray `<time>` can be
+years newer than the article (a comment, a "latest posts" rail). You cannot save
+something before it is published, so a candidate later than the Instapaper save
+timestamp + 1 day is rejected. That guard threw out ~189 dates a plain regex sweep
+would have accepted.
+
+**1,278 remain at 1970 deliberately**: 324 have no captured HTML, the rest have HTML
+with no date in it. Guessing there would re-create the original bug. `<time>` is
+tried last for the same reason — a page has many, and the first is often a
+comment's.
+
+Manual `entry_date_overrides` are never touched; an explicit correction outranks
+anything inferred.
+
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
 gottadeal posts carry a real category line on the page:
