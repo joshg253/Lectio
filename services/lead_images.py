@@ -224,6 +224,34 @@ class LeadImageService:
         "rss", "feed", "email", "mailto", "share", "vimeo", "flickr", "twitch",
         "patreon", "kofi", "ko-fi", "substack", "signal", "snapchat", "x",
     )
+    # Ad-server URLs. Once the social row is stripped from an image-less post, the
+    # next best-scoring "picture" is whatever the ad slots render — accu.org served
+    # ads.accu.org/www/delivery/avw.php. Matched by host prefix and by the Revive/
+    # OpenX delivery-script shape, which is what self-hosted ad servers look like.
+    _AD_HOST_RE = re.compile(
+        r"^(?:ads?|adserver|adservice|banners?|promo)\d*\.", re.IGNORECASE)
+    _AD_NETWORK_HOST_RE = re.compile(
+        r"(?:^|\.)(?:doubleclick\.net|googlesyndication\.com|googleadservices\.com|"
+        r"adnxs\.com|taboola\.com|outbrain\.com|criteo\.(?:com|net)|"
+        r"zedo\.com|openx\.net|pubmatic\.com|rubiconproject\.com)$", re.IGNORECASE)
+    _AD_PATH_RE = re.compile(
+        r"/(?:www/)?delivery/[a-z]+\.php|/(?:adserver|adframe|ad_?frame|banner(?:s|ad)?)/",
+        re.IGNORECASE)
+
+    @classmethod
+    def is_ad_url(cls, url: str) -> bool:
+        """True for ad-server image URLs — never an article's own picture."""
+        if not url:
+            return False
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return False
+        host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
+        if host and (cls._AD_HOST_RE.match(host) or cls._AD_NETWORK_HOST_RE.search(host)):
+            return True
+        return bool(cls._AD_PATH_RE.search(parsed.path or ""))
+
     _SOCIAL_ICON_STEM_RE = re.compile(
         r"^(?:(?:icon|social|share|follow|logo)[._-]*)?"
         r"(?:" + "|".join(re.escape(n) for n in _SOCIAL_ICON_NAMES) + r")"
@@ -511,6 +539,69 @@ class LeadImageService:
             result.append(html[pos:])
             html = "".join(result)
         return html
+
+    # Hosts a social/share icon links to. This is the SPELLING-INDEPENDENT signal:
+    # accu.org's row of icons is /img/bsky.png, /img/mastadon.png (their typo),
+    # /img/facebook.png … and a filename list will always be one misspelling
+    # behind. What every one of them has in common is an enclosing <a> pointing at
+    # the network itself.
+    _SOCIAL_LINK_HOST_RE = re.compile(
+        r"(?:^|\.)(?:"
+        r"bsky\.app|twitter\.com|x\.com|facebook\.com|fb\.com|instagram\.com|"
+        r"linkedin\.com|youtube\.com|youtu\.be|github\.com|gitlab\.com|"
+        r"reddit\.com|tumblr\.com|pinterest\.[a-z.]+|t\.me|telegram\.me|"
+        r"whatsapp\.com|discord\.(?:com|gg)|threads\.net|tiktok\.com|"
+        r"flickr\.com|vimeo\.com|twitch\.tv|patreon\.com|ko-fi\.com|"
+        r"substack\.com|snapchat\.com|bandcamp\.com|soundcloud\.com"
+        r")$",
+        re.IGNORECASE,
+    )
+    # Mastodon has no single host, so it is matched by shape instead: any host
+    # containing "mastodon", or a fediverse profile path (/@handle).
+    _FEDIVERSE_PATH_RE = re.compile(r"^/@[^/]+/?$")
+    # <a …>…<img …></a>, bounded so a stray unclosed anchor cannot make this scan
+    # the rest of the document.
+    _ANCHOR_WITH_IMG_RE = re.compile(
+        r"<a\b[^>]*\bhref\s*=\s*[\"\']([^\"\']+)[\"\'][^>]*>.{0,400}?</a>",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    @classmethod
+    def is_social_link_href(cls, href: str) -> bool:
+        """True when a link points at a social network rather than at content."""
+        if not href:
+            return False
+        try:
+            parsed = urlparse(href)
+        except ValueError:
+            return False
+        host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
+        if not host:
+            return False
+        if cls._SOCIAL_LINK_HOST_RE.search(host):
+            return True
+        if "mastodon" in host:
+            return True
+        return bool(cls._FEDIVERSE_PATH_RE.match(parsed.path or ""))
+
+    def _strip_social_link_images(self, html: str) -> str:
+        """Drop <a href="<social host>">…<img></a> blocks before scoring.
+
+        Same tactic as _strip_related_post_blocks: remove the chrome rather than
+        try to recognize it one filename at a time. On an image-less post the
+        site's share row is otherwise the best-scoring picture on the page —
+        accu.org showed its Bluesky icon, and once that was rejected by name it
+        showed the misspelled Mastodon one instead.
+        """
+        if not html or "<a" not in html.lower():
+            return html
+
+        def _drop(m: re.Match[str]) -> str:
+            if "<img" not in m.group(0).lower():
+                return m.group(0)
+            return "" if self.is_social_link_href(m.group(1)) else m.group(0)
+
+        return self._ANCHOR_WITH_IMG_RE.sub(_drop, html)
 
     def _strip_related_post_blocks(self, html: str) -> str:
         """Remove related/recent/more-posts containers from source-page HTML.
@@ -1790,6 +1881,7 @@ class LeadImageService:
                 self._TRACKER_URL_PATTERNS.search(resolved)
                 or self._AVATAR_HINT_PATTERNS.search(resolved)
                 or self.is_social_icon_url(resolved)
+                or self.is_ad_url(resolved)
                 or self._PLACEHOLDER_URL_PATTERNS.search(resolved)
             ):
                 continue
@@ -2080,7 +2172,7 @@ class LeadImageService:
         # themes embed grids of OTHER posts whose thumbnails also carry the
         # comic/featured classes, and the greedy first-match below would otherwise
         # return a sibling post's image (e.g. karlkerschl.com's featured-posts row).
-        html_text = self._strip_related_post_blocks(html_text)
+        html_text = self._strip_social_link_images(self._strip_related_post_blocks(html_text))
         for tag_match in self._IMG_TAG_RE.finditer(html_text):
             tag = tag_match.group(0)
             attrs = self._parse_img_attrs(tag)
@@ -2106,7 +2198,7 @@ class LeadImageService:
         """Like _extract_preferred_source_image_url but also returns the winning img's alt text."""
         # Drop related/recent-post containers so a sibling post's thumbnail can't
         # win when the article itself has no og:image or hero image of its own.
-        html_text = self._strip_related_post_blocks(html_text)
+        html_text = self._strip_social_link_images(self._strip_related_post_blocks(html_text))
         best_url: str | None = None
         best_alt: str | None = None
         best_score = -1
@@ -2448,7 +2540,7 @@ class LeadImageService:
         # e.g. "?ref=twemoji" in its query isn't mistaken for an emoji sprite.
         if self._EMOJI_URL_PATTERNS.search(parsed.netloc + parsed.path):
             return False
-        if self.is_social_icon_url(image_url):
+        if self.is_social_icon_url(image_url) or self.is_ad_url(image_url):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False

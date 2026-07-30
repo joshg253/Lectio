@@ -1674,3 +1674,49 @@ def test_articles_about_social_networks_keep_their_images():
         "https://x.test/img/hero-landscape.jpg",
     ):
         assert not LeadImageService.is_social_icon_url(url), url
+
+
+def test_social_link_anchors_are_stripped_before_scoring():
+    """The spelling-independent signal, and the reason a filename list is not
+    enough: accu.org's icon row is /img/bsky.png, /img/mastadon.png (their typo),
+    /img/facebook.png … so a name list is always one misspelling behind. What they
+    share is an enclosing <a> pointing at the network itself.
+    """
+    import main
+    svc = main.lead_image_service
+    html = (
+        '<a href="https://bsky.app/profile/x"><img src="/img/bsky.png"></a>'
+        '<a href="https://mastodon.social/@ACCU"><img src="/img/mastadon.png"></a>'
+        '<a href="https://example.com/article"><img src="/img/real-photo.jpg"></a>'
+    )
+    out = svc._strip_social_link_images(html)
+    assert "bsky.png" not in out
+    assert "mastadon.png" not in out
+    assert "real-photo.jpg" in out          # a content link keeps its image
+
+
+def test_social_link_detection():
+    from services.lead_images import LeadImageService as L
+
+    assert L.is_social_link_href("https://bsky.app/profile/x")
+    assert L.is_social_link_href("https://mastodon.social/@ACCU")
+    assert L.is_social_link_href("https://fosstodon.org/@someone")   # any instance
+    assert L.is_social_link_href("https://www.github.com/accu-org")
+    # A link to an article that merely mentions a network is not a social link.
+    assert not L.is_social_link_href("https://blog.example.com/2026/07/twitter-analysis")
+    assert not L.is_social_link_href("https://example.com/@notprofile/post")
+
+
+def test_ad_server_urls_are_rejected():
+    """Once the social row is stripped from an image-less post, the ad slots are
+    the next best-scoring "picture" — accu.org served
+    ads.accu.org/www/delivery/avw.php."""
+    from services.lead_images import LeadImageService as L
+
+    assert L.is_ad_url("https://ads.accu.org/www/delivery/avw.php?zoneid=2")
+    assert L.is_ad_url("https://ad.example.com/x.gif")
+    assert L.is_ad_url("https://pagead2.googlesyndication.com/x.png")
+    assert L.is_ad_url("https://example.com/adserver/banner.png")
+    # Words that merely start with "ad" are not ad servers.
+    assert not L.is_ad_url("https://example.com/adventure-photos/hero.jpg")
+    assert not L.is_ad_url("https://example.com/img/badges/award.png")
