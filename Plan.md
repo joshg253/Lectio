@@ -1522,6 +1522,28 @@ source-fetch fills the tags in with no work from us.
 ⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
 uses the same source-page fetch, so it went blind on the same date.
 
+### 7e. Batch re-fetch over a folder or feed — script, 2026-07-30
+
+`scripts/refetch_scope.py`. Josh: "Needs to be gentle!" — so pacing is the design:
+2s global gap, **10s per host**, hosts dropped after 4 consecutive failures, nothing
+parallel, and the runtime estimate accounts for the per-host delay (a single-feed
+scope is one host, so 89 articles is 89x10s, not 89x2s — understating the runtime of
+a deliberately slow job is the one number that must not be wrong).
+
+Safe to run in bulk only because every single-re-fetch protection applies per entry:
+the slug guard refuses a wrong page instead of overwriting, the previous body is
+snapshotted so any result is revertible, a refusal falls back to the archive, and a
+missing publish date is learned.
+
+**Proven on informit** (4-article slice): all four live pages now serve the section
+index, so the guard refused every one and **the Wayback fallback recovered every
+one** — 13k-28k characters each where the feed carried teasers. 89 kept articles on
+that feed, ~15 min for the full pass.
+
+**Not offered as a UI button yet.** A bulk network job wants a log, resumability and
+Ctrl-C, none of which a request gives you; a background job with a progress endpoint
+is the follow-up if it is wanted from the device.
+
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
 gottadeal posts carry a real category line on the page:
