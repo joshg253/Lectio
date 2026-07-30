@@ -4001,6 +4001,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Paywalled/subscriber-only posts: a Substack paid post ships a body that
+        # is nothing but a "Read more" link back to itself, so it can be spotted
+        # without any explicit marker (Substack provides none).
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_paywalled INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -4215,14 +4222,22 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts", "inject_source_images"})
+_DISPLAY_PREF_KEYS = frozenset({
+    "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
+    "hide_shorts", "hide_paywalled", "inject_source_images",
+})
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
 _DISPLAY_PREF_SQLS: dict[str, str] = {
     k: f"UPDATE feed_display_prefs SET {k} = ? WHERE feed_url = ?"
     for k in _DISPLAY_PREF_KEYS
 }
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
+_DISPLAY_PREF_DEFAULTS: dict = {
+    "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
+    "show_image_caption": -1, "hide_shorts": 0, "hide_paywalled": 0,
+    "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
+    "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
+}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -6653,6 +6668,76 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     return 0
 
 
+# A paywalled post's body is a stub: below this much visible text, and with its
+# only link pointing back at the post itself, there is no article here.
+_PAYWALL_STUB_MAX_TEXT = 120
+
+
+def is_paywall_stub(content_html: str | None, entry_link: str | None) -> bool:
+    """Is this entry body a subscriber-only stub rather than an article?
+
+    Substack marks paid posts nowhere in its feed — no category, no audience
+    field. What it does is ship a body containing only a "Read more" link back to
+    the post. Measured on abortretry.fail: 17 of 20 items were 9-character stubs
+    ("Read more") against three real posts of 19k-38k characters, so the
+    separation is not marginal.
+
+    Requiring the link to point at the ENTRY'S OWN URL is what keeps this from
+    firing on a short real post: a two-line link roundup has links that go
+    elsewhere.
+    """
+    if not content_html:
+        return False
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", content_html)).strip()
+    if len(text) > _PAYWALL_STUB_MAX_TEXT:
+        return False
+    hrefs = re.findall(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)', content_html, re.IGNORECASE)
+    if not hrefs:
+        return False
+    own = (entry_link or "").split("?", 1)[0].rstrip("/")
+    return bool(own) and any(h.split("?", 1)[0].rstrip("/") == own for h in hrefs)
+
+
+def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
+    """Auto-mark subscriber-only stubs read on feeds with hide-paywalled enabled.
+
+    Marks read rather than filtering the list, exactly as hide-shorts does: the
+    posts stay findable under All, and nothing is deleted for a paywall that might
+    lift. Per feed and opt-in, because a *partial* feed is all stubs by design —
+    switching this on there would empty it.
+    """
+    try:
+        with get_meta_connection() as conn:
+            targets = {
+                str(r["feed_url"])
+                for r in conn.execute(
+                    "SELECT feed_url FROM feed_display_prefs WHERE hide_paywalled = 1"
+                ).fetchall()
+            } & set(refreshed_feed_urls)
+        if not targets:
+            return 0
+        marked = 0
+        with get_reader() as reader:
+            for feed_u in targets:
+                for entry in reader.get_entries(feed=feed_u, read=False):
+                    body = ""
+                    if getattr(entry, "content", None):
+                        body = str(entry.content[0].value or "")
+                    elif entry.summary:
+                        body = str(entry.summary)
+                    if is_paywall_stub(body, str(entry.link or "")):
+                        reader.mark_entry_as_read((feed_u, entry.id))
+                        upsert_entry_read_state(feed_u, str(entry.id))
+                        marked += 1
+        if marked:
+            invalidate_unread_counts_cache()
+            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", marked)
+        return marked
+    except Exception:
+        LOGGER.exception("[automation] error applying hide-paywalled")
+        return 0
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
@@ -6686,6 +6771,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         LOGGER.exception("[guid-churn] error during cross-feed dedup")
 
     _apply_hide_shorts(refreshed_feed_urls)
+    _apply_hide_paywalled(refreshed_feed_urls)
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
@@ -8785,6 +8871,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
@@ -11947,20 +12034,22 @@ def list_entries_for_feeds(
     if light_records:
         try:
             _keys = [(str(r["feed_url"]), str(r["id"])) for r in light_records]
-            _tconn = sqlite3.connect(f"file:{tenancy.reader_db_path()}?mode=ro", uri=True, timeout=5.0)
-            try:
+            # reader's own connection, not a second one: an independent handle can
+            # lose a lock race with the refresh worker, and this code's except
+            # branch would then quietly report "no tags" — hiding the re-fetch
+            # menu at random. Surfaced as an intermittent test failure.
+            with get_reader() as _r:
+                _tdb = _r._storage.get_db()
                 for _i in range(0, len(_keys), 400):
                     _chunk = _keys[_i:_i + 400]
                     _ph = ",".join("(?,?)" for _ in _chunk)
                     _flat = [v for k in _chunk for v in k]
-                    for _f, _e in _tconn.execute(
+                    for _f, _e in _tdb.execute(
                         f"SELECT DISTINCT feed, id FROM entry_tags"  # nosemgrep: placeholders only
                         f" WHERE (feed, id) IN ({_ph}) AND key LIKE ?",
                         _flat + [f"{MANUAL_TAG_KEY_PREFIX}%"],
                     ):
                         _visible_tagged.add((str(_f), str(_e)))
-            finally:
-                _tconn.close()
         except Exception:  # noqa: BLE001 — a missing flag only hides a menu item
             LOGGER.warning("visible-tag probe failed", exc_info=True)
 

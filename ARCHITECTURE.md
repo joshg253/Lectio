@@ -1469,6 +1469,28 @@ rows, the entry-pane headline, Read Mode rows and the reader headline);
 `title_plain` — the same string with those tags stripped — is used everywhere that
 cannot render markup: `title=` attributes, `<title>`, exports, email.
 
+**Numbers-only tags are dropped at capture, from feed categories and page scraping
+alike.** They are comment counts, post ids, pagination and bare years — Josh's test
+was "trying to think where a numbers-only tag would be useful … definitely mixed are
+useful", so anything carrying a non-digit survives: `80s`, `3d`, `2.5 Admins`,
+`2020 election`, `Windows 11`. A stray `84` reached lemire.me's suggestions this way
+and 580 stored rows were bare numbers.
+
+Separately, **an archive year-list is dropped as a run**: nwcpp.org carries
+2000–2026 down the side of every page and all sixteen landed on one post. Five or
+more distinct 4-digit years on a single page is a sidebar, not a tag set, so the
+whole run goes rather than any single year being judged on its own.
+
+**Subscriber-only posts are detectable without any marker.** Substack publishes
+none — no category, no audience field — but ships a body containing only a "Read
+more" link back to the post. `is_paywall_stub` requires both a body under ~120
+characters of text *and* that its only link points at the entry's own URL, which is
+what keeps it off a genuinely short post (a link roundup points elsewhere). Measured
+on abortretry.fail: 17 of 20 items were 9-character stubs against three real posts of
+19k–38k. The per-feed `hide_paywalled` pref marks them read at fetch time, mirroring
+`hide_shorts` — non-destructive, still findable under All, and opt-in because a
+*partial* feed is all stubs by design and enabling it there would empty the feed.
+
 **Feed-tag suggestions are NOT filtered automatically, and that is a considered
 position.** Two heuristics were tried on live data and both hid tags the user
 wanted:

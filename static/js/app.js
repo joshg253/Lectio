@@ -2689,6 +2689,7 @@ const CAPTURE_MODE_FULL = 'full';
     const feedPropImgSection = document.getElementById('feed-prop-img-section');
     const feedPropDevSection = document.getElementById('feed-prop-dev-section');
     const feedPropHideShorts = document.getElementById('feed-prop-hide-shorts');
+    const feedPropHidePaywalled = document.getElementById('feed-prop-hide-paywalled');
     const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
     const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
     document.querySelectorAll('[data-feed-prop-tab]').forEach(btn => {
@@ -4268,6 +4269,7 @@ const CAPTURE_MODE_FULL = 'full';
       setActivePreset('');
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
+      if (feedPropHidePaywalled) feedPropHidePaywalled.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
       const _thumbCustomRow = document.getElementById('feed-prop-thumb-custom-row');
@@ -4427,6 +4429,10 @@ const CAPTURE_MODE_FULL = 'full';
         setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
 
+        if (feedPropHidePaywalled) {
+          feedPropHidePaywalled.checked = !!data.hide_paywalled;
+          feedPropHidePaywalled.dataset.feedUrl = feedUrl;
+        }
         if (feedPropHideShorts) {
           feedPropHideShorts.checked = !!data.hide_shorts;
           feedPropHideShorts.dataset.feedUrl = feedUrl;
@@ -6048,6 +6054,22 @@ const CAPTURE_MODE_FULL = 'full';
       const feedUrl = feedPropRefreshBtn.dataset.feedUrl;
       if (!feedUrl) return;
       doStrategyRefresh(feedUrl, feedPropRefreshBtn.dataset.entryId || '');
+    });
+
+    feedPropHidePaywalled?.addEventListener('change', async () => {
+      const feedUrl = feedPropHidePaywalled.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        const r = await saveDisplayPref(feedUrl, 'hide_paywalled',
+                                        feedPropHidePaywalled.checked ? 1 : 0);
+        if (!r?.ok) throw new Error(r?.error || 'save failed');
+        showToastMessage(feedPropHidePaywalled.checked
+          ? 'Subscriber-only posts will be marked read at the next fetch.'
+          : 'Subscriber-only posts will be left unread.');
+      } catch (e) {
+        feedPropHidePaywalled.checked = !feedPropHidePaywalled.checked;
+        showToastMessage('Could not save that setting.');
+      }
     });
 
     feedPropHideShorts?.addEventListener('change', async () => {

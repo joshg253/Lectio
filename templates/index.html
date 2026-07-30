@@ -2555,6 +2555,16 @@
         </div>
         <!-- Non-YouTube feeds: image strategy + display controls -->
         <div id="feed-prop-img-section">
+          <h4 class="feed-prop-section-title">Content</h4>
+          <div class="feed-prop-toggles">
+            {# Opt-in per feed: a *partial* feed is all stubs by design, so
+               enabling this there would empty it. #}
+            <label class="feed-prop-toggle-row">
+              <input type="checkbox" id="feed-prop-hide-paywalled" class="feed-prop-checkbox" />
+              <span>Hide subscriber-only posts (auto-mark as read at fetch time)</span>
+            </label>
+          </div>
+
           <h4 class="feed-prop-section-title">
             Strategy comparison
             <button type="button" id="feed-prop-refresh-btn" class="feed-prop-refresh-btn" title="Re-run strategy comparison for the current entry">

@@ -494,3 +494,55 @@ def test_suggestions_drop_dismissed_tags(monkeypatch, service):
 
     service.set_tag_suppressed(feed, "Popular Deals", False)
     assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]
+
+
+def test_numbers_only_tags_are_dropped_from_both_sources():
+    """A numbers-only tag carries nothing — a comment count, a post id, pagination,
+    a bare year. Josh's call: "trying to think where a numbers-only tag would be
+    useful … definitely mixed are useful".
+
+    A stray "84" was harvested from lemire.me this way, and 580 stored rows were
+    bare numbers.
+    """
+    class _Tag:
+        def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+
+    class _Entry:
+        def __init__(self, tags): self.tags = tags
+
+    assert extract_page_tags('<a href="/tag/84/">84</a><a href="/tag/rust/">rust</a>') == ["rust"]
+    assert extract_feed_entry_tags(_Entry([_Tag("2014"), _Tag("666")])) == []
+
+
+def test_mixed_tags_containing_digits_survive():
+    """Anything with a non-digit is real vocabulary and must be kept."""
+    class _Tag:
+        def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+
+    class _Entry:
+        def __init__(self, tags): self.tags = tags
+
+    out = extract_feed_entry_tags(_Entry([
+        _Tag("80s"), _Tag("3d"), _Tag("2.5 Admins"), _Tag("2020 election"),
+        _Tag("Windows 11"), _Tag("Doom (1993)"),
+    ]))
+    assert out == ["80s", "3d", "2.5 Admins", "2020 election", "Windows 11", "Doom (1993)"]
+
+
+def test_an_archive_year_list_is_not_a_set_of_tags():
+    """nwcpp.org carries 2000-2026 down the side of every page, and all sixteen
+    were harvested onto one post. A real post might carry a year or two; nothing
+    carries fifteen — so the whole run is dropped rather than any single year being
+    judged."""
+    page = "".join(f'<a href="/tags/{y}/">{y}</a>' for y in range(2000, 2016))
+    page += '<a href="/tags/cplusplus/">cplusplus</a>'
+    assert extract_page_tags(page) == ["cplusplus"]
+
+
+def test_one_or_two_years_on_a_page_survive():
+    """A music or photo post legitimately tags a year, and that is not an archive
+    list."""
+    page = '<a href="/tags/1985/">1985</a><a href="/tags/synthpop/">synthpop</a>'
+    # (the bare-numeric page rule still drops "1985" itself; the point here is that
+    # the archive-run rule does not fire and take the real tag with it)
+    assert "synthpop" in extract_page_tags(page)
