@@ -10989,6 +10989,36 @@ _PUBDATE_SOURCES: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 
 _WAYBACK_AVAILABILITY = "https://archive.org/wayback/available"
+# Query parameters that identify a CAMPAIGN, not an article. Archives are keyed on
+# the URL as crawled, so a feed's tracking suffix means "no snapshot" even when the
+# article is archived — informit's ?p=2433607&WT.rss_f=…&WT.rss_a=… found nothing
+# while the bare ?p=2433607 found it immediately.
+_TRACKING_PARAM_RE = re.compile(
+    r"^(?:utm_|wt\.|at_|mc_|pk_|ga_|hsa_|vero_|matomo_|piwik_|"
+    r"fbclid|gclid|dclid|msclkid|igshid|mkt_tok|ncid|cmpid|cid|ref|referrer|source|spm)",
+    re.IGNORECASE,
+)
+
+
+def strip_tracking_params(url: str) -> str:
+    """Drop campaign/tracking query parameters, keeping the identifying ones.
+
+    Deliberately a denylist, not a keeplist: for a URL like
+    ``article.aspx?p=2433607`` the query IS the article's identity, so guessing at
+    what to keep would throw the article away.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if not _TRACKING_PARAM_RE.match(k)]
+    if len(kept) == len(parse_qsl(parts.query, keep_blank_values=True)):
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       urlencode(kept, doseq=True), parts.fragment))
 
 
 def wayback_snapshot_url(source_url: str) -> str | None:
@@ -11002,6 +11032,16 @@ def wayback_snapshot_url(source_url: str) -> str | None:
     """
     if not source_url or not source_url.startswith(("http://", "https://")):
         return None
+    found = _wayback_lookup(source_url)
+    if found:
+        return found
+    # Retry without tracking parameters: the archive was crawled from links that
+    # carried none, so a feed's ?WT.rss_a=… suffix reads as an unarchived URL.
+    cleaned = strip_tracking_params(source_url)
+    return _wayback_lookup(cleaned) if cleaned != source_url else None
+
+
+def _wayback_lookup(source_url: str) -> str | None:
     try:
         headers = {"User-Agent": READABILITY_USER_AGENT}
         with url_guard.build_client(timeout=10.0, headers=headers) as client:
