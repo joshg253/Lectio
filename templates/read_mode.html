@@ -121,7 +121,7 @@
         {% for it in list_items %}
         <li class="rm-item{% if it.read %} rm-read{% endif %}">
           <a class="rm-item-link" href="{{ it.href }}">
-            <span class="rm-item-title">{{ it.title }}</span>
+            <span class="rm-item-title">{% if it.title_html %}{{ it.title_html | safe }}{% else %}{{ it.title }}{% endif %}</span>
             {# Source and date share a line: on a small e-ink screen a third
                line per row costs more than the date is worth. #}
             {% if it.subtitle or it.date %}

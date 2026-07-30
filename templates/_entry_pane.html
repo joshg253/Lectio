@@ -15,16 +15,20 @@
         data-post-lead-image-url="{{ (selected_entry.lead_image_url or '') if (selected_entry.show_as_thumb and selected_entry.sync_list_thumb) else '' }}"
       >
         {% set _dur = selected_entry.duration_display %}
-        {% set _title_text = selected_entry.title or "(untitled)" %}
+        {% set _title_text = selected_entry.title_plain or selected_entry.title or "(untitled)" %}
         {% set _display_title = ("[" ~ _dur ~ "] " ~ _title_text) if _dur else _title_text %}
+        {# title_html renders the feed's inline formatting; the title= attribute
+           and every other plain context use the tag-stripped text. #}
+        {% set _title_markup = selected_entry.title_html or (selected_entry.title or "(untitled)") %}
+        {% set _display_markup = (("[" ~ _dur ~ "] ") | e ~ _title_markup) if _dur else _title_markup %}
         {% if selected_entry.link %}<a
           class="entry-pane-title-link"
           href="{{ selected_entry.link }}"
           title="{{ _display_title }}"
-          >{{ _display_title }}</a
+          >{{ _display_markup | safe }}</a
         >{% else %}<span class="entry-pane-title-link"
           title="{{ _display_title }}"
-          >{{ _display_title }}</span
+          >{{ _display_markup | safe }}</span
         >{% endif %}
       </h2>
     </div>

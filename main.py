@@ -11959,6 +11959,10 @@ def list_entries_for_feeds(
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
+                # Inline formatting a feed put in the title (<em>), rendered
+                # rather than escaped. Everything else stays literal text, so a
+                # C++ title's std::vector<T> survives — see sanitize_inline_title.
+                "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
                 "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
@@ -14259,6 +14263,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "feed_url": entry.feed_url,
             "id": entry.id,
             "title": _display_title(entry) or entry.title,
+            # Two forms of the same string: title_html renders the feed's inline
+            # formatting (<em>), title_plain drops those tags for the title=
+            # attribute and any other context that cannot render HTML. Everything
+            # not on the tiny allowlist stays literal, so `std::vector<T>` in a
+            # C++ post title survives — see sanitize_inline_title.
+            "title_html": html_sanitize.sanitize_inline_title(
+                _display_title(entry) or entry.title or ""),
+            "title_plain": html_sanitize.title_plain_text(
+                _display_title(entry) or entry.title or ""),
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
@@ -16813,7 +16826,9 @@ def build_reader_page(
     manual_tags: tuple[str, ...] = (),
     all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
-    esc_title = html.escape(title or "(untitled)")
+    # Same allowlist as the list rows: the feed's <em> renders, and a literal
+    # <T> or <chrono> in a C++ title stays visible text.
+    esc_title = html_sanitize.sanitize_inline_title(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
     esc_back = html.escape(back_href or "/read", quote=True)
     esc_feed = html.escape(feed_url or "", quote=True)
@@ -17205,6 +17220,8 @@ def _build_feeds_mode_context(
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "title_html": html_sanitize.sanitize_inline_title(
+            str(it.get("title") or it.get("link") or "(untitled)")),
         "subtitle": str(it.get("feed_title") or ""),
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
@@ -17347,6 +17364,8 @@ def _build_read_mode_context(
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "title_html": html_sanitize.sanitize_inline_title(
+            str(it.get("title") or it.get("link") or "(untitled)")),
         "subtitle": _read_mode_subtitle(it),
         "date": _read_mode_date(it),
         "read": bool(it.get("read", False)),
@@ -17501,7 +17520,10 @@ def read_offline_copy(
         LOGGER.warning("offline copy: reader.css unreadable", exc_info=True)
 
     date_display = _read_mode_date(detail)
-    esc_title = html.escape(title)
+    # <title> cannot contain markup, so it gets the tag-stripped text; the <h1>
+    # gets the same inline allowlist the on-screen reader uses.
+    esc_title = html.escape(html_sanitize.title_plain_text(title))
+    head_title = html_sanitize.sanitize_inline_title(title)
     doc = (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
         f"<title>{esc_title}</title>"
@@ -17513,7 +17535,7 @@ def read_offline_copy(
         "height:auto!important;overflow:visible!important}</style>"
         "</head><body class='reader-body'>"
         "<main class='reader-columns'>"
-        f"<h1 class='reader-title'>{esc_title}</h1>"
+        f"<h1 class='reader-title'>{head_title}</h1>"
         + (f"<p class='reader-dateline'>{html.escape(date_display)}</p>" if date_display else "")
         + article_html
         + (f"<p class='reader-dateline'>Source: {html.escape(link)}</p>" if link else "")

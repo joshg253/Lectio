@@ -1415,6 +1415,24 @@ rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
 
+**Titles render a tiny inline allowlist, by escape-then-restore.** Feeds put `<em>`
+in titles — and they also put `std::vector<T>` and `#include <chrono>` in them.
+Measured on the live library: of 21 titles containing angle brackets, only 6 are
+markup; 11 are C++ generics and the rest are header names. **Treating titles as
+HTML would silently delete those**, mangling a C++ post title, which is a worse
+failure than showing `<em>` literally.
+
+`sanitize_inline_title` escapes the whole string and then restores only bare tags
+from a short list (`em`, `i`, `strong`, `b`, `code`, `sub`, `sup`, …). That ordering
+is what makes it provably safe: an attribute or an unknown tag cannot survive a
+round trip through escaping, so `<em onmouseover=…>` and `<img onerror=…>` stay
+escaped text with no allowlist to argue about.
+
+Records carry both forms. `title_html` is used where the title is visible text (post
+rows, the entry-pane headline, Read Mode rows and the reader headline);
+`title_plain` — the same string with those tags stripped — is used everywhere that
+cannot render markup: `title=` attributes, `<title>`, exports, email.
+
 **Feed-tag suggestions are NOT filtered automatically, and that is a considered
 position.** Two heuristics were tried on live data and both hid tags the user
 wanted:

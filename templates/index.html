@@ -666,7 +666,7 @@
                 <a class="post-main-link"
                   href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}"
                   data-article-url="{{ post.link or '' }}">
-                  <div class="post-title" title="{{ post.link or '' }}">{{ post.title or "(untitled)" }}</div>
+                  <div class="post-title" title="{{ post.link or '' }}">{% if post.title_html %}{{ post.title_html | safe }}{% else %}{{ post.title or "(untitled)" }}{% endif %}</div>
                 </a>
               </div>
             </div>

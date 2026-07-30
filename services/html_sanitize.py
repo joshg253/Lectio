@@ -14,6 +14,7 @@ BeautifulSoup instead.
 """
 from __future__ import annotations
 
+import html as html_stdlib
 import re
 from urllib.parse import urlparse
 
@@ -106,6 +107,48 @@ _ALLOWED_STYLE_VALUES: dict[str, frozenset[str]] = {
     "text-transform": frozenset({"none", "uppercase", "lowercase", "capitalize"}),
     "font-variant": frozenset({"normal", "small-caps"}),
 }
+
+
+# Inline formatting a feed may use in a TITLE. Deliberately tiny, and applied by
+# escaping everything first and then restoring only these — so no attribute can
+# survive and no unknown tag is ever interpreted.
+#
+# The strictness is the point. Measured on the live library, only 21 titles contain
+# angle brackets and most are NOT markup: 11 are C++ generics (`std::vector<T>`),
+# 2 are headers (`#include <chrono>`), plus <bits>, <dead>, <guitar>. Treating
+# titles as HTML would silently DELETE those, mangling a C++ post title, which is
+# far worse than showing <em> literally. Only 6 titles actually want formatting.
+_TITLE_INLINE_TAGS = (
+    "em", "i", "strong", "b", "code", "sub", "sup", "mark", "small", "u", "s",
+    "del", "ins", "kbd", "var", "cite", "q",
+)
+_TITLE_RESTORE_RE = re.compile(
+    r"&lt;(/?)(" + "|".join(_TITLE_INLINE_TAGS) + r")&gt;", re.IGNORECASE
+)
+_TITLE_STRIP_RE = re.compile(
+    r"</?(?:" + "|".join(_TITLE_INLINE_TAGS) + r")>", re.IGNORECASE
+)
+
+
+def sanitize_inline_title(value: str | None) -> str:
+    """Escape a title, then restore only bare inline formatting tags.
+
+    Escape-then-restore rather than allowlist-then-drop: it is provably safe (an
+    attribute or an unknown tag cannot survive a round trip through escaping) and
+    it leaves `<T>` and `<chrono>` as the literal text they are.
+    """
+    if not value:
+        return ""
+    escaped = html_stdlib.escape(str(value), quote=False)
+    return _TITLE_RESTORE_RE.sub(lambda m: f"<{m.group(1)}{m.group(2).lower()}>", escaped)
+
+
+def title_plain_text(value: str | None) -> str:
+    """A title with the inline formatting tags removed, for contexts that cannot
+    render HTML at all — attribute values, the browser tab, exports, email."""
+    if not value:
+        return ""
+    return _TITLE_STRIP_RE.sub("", str(value))
 
 
 def _sanitize_style_attr(value: str) -> str:
