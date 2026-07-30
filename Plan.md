@@ -1942,6 +1942,32 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
 
+### 10a. EEA geo-blocks are NOT a migration loss (2026-07-30)
+
+Some US local-news sites answer **451 Unavailable For Legal Reasons** to any EEA
+IP — a GDPR position by the publisher, not a bot wall:
+
+> "We recognise you are attempting to access this website from a country belonging
+> to the European Economic Area (EEA) … and therefore cannot grant you access."
+
+The VPS is in Germany, so these refuse Lectio, and the *feed* URL 451s identically
+— server-side fetching cannot work, and routing around a legal geo-restriction is
+not something to build. thecentersquare.com is the example.
+
+**But Inoreader is Sofia-based (Innologica), so it is EEA too and these sites never
+worked there either.** Josh confirmed he does not recall that site working in Ino.
+So this costs the migration nothing — do not log it as a regression when comparing
+coverage.
+
+Distinguish it from the other walls when triaging: 451 = geo (legal, unfixable);
+403 + "Just a moment…" = Cloudflare (washingtonstatestandard, realpython, behance);
+plain 403 = ordinary bot rules. Only the middle kind might ever lift on its own.
+
+**The way through for an individual article is the browser extension** — the user's
+own browser has a non-EEA IP and posts the page Lectio cannot reach. 451 is already
+in `_BLOCKED_STATUSES`, so a re-fetch says "blocked, use the extension" rather than
+offering to delete the article as gone.
+
 ### 10. Inoreader replacement — the migration (start ~Dec 2026)
 
 **Scheduled, not urgent**: renewal is 2027-03-16, so starting around Dec 2026 leaves
