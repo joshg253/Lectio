@@ -166,6 +166,32 @@ class StarredArchiveService:
     # Asset lookup (used by render layer)
     # ------------------------------------------------------------------
 
+    def asset_ad_hashes(self) -> set[str]:
+        """Asset hashes that are ad creatives, by stored size or by source URL.
+
+        Inline images in an archived article are rewritten to /starred-asset/<hash>,
+        so the URL the reader sees carries no filename to judge — the ad detection
+        that works on live content is blind there. The archive kept both the
+        dimensions and the original URL, which is enough to recognize them.
+        """
+        from services.lead_images import LeadImageService
+
+        out: set[str] = set()
+        try:
+            with self._get_archive_connection() as conn:
+                for row in conn.execute("SELECT asset_hash, width, height FROM archived_asset"):
+                    if LeadImageService.is_ad_dimension(row["width"], row["height"]):
+                        out.add(str(row["asset_hash"]))
+                for row in conn.execute(
+                    "SELECT DISTINCT asset_hash, source_url FROM archived_asset_link"
+                ):
+                    if LeadImageService.is_ad_url(str(row["source_url"] or "")):
+                        out.add(str(row["asset_hash"]))
+        except sqlite3.Error:
+            LOGGER.warning("asset ad-hash scan failed", exc_info=True)
+            return set()
+        return out
+
     def get_asset(self, asset_hash: str) -> tuple[bytes, str] | None:
         try:
             with self._get_archive_connection() as conn:

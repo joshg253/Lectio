@@ -1752,3 +1752,32 @@ def test_service_cdn_media_survives():
     html = ('<a href="https://www.youtube.com/watch?v=x">'
             '<img src="https://i.ytimg.com/vi/x/hqdefault.jpg"></a>')
     assert "hqdefault.jpg" in svc._strip_social_link_images(html)
+
+
+def test_ad_slot_names_and_sizes_are_rejected():
+    """Publishers upload house ads to the same media directory as everything else,
+    so host and path say nothing — decibelmagazine served
+    "…-hero-superbanner.gif" out of wp-content."""
+    from services.lead_images import LeadImageService as L
+
+    assert L.is_ad_url("https://decibelmagazine.com/wp-content/uploads/x-hero-superbanner.gif")
+    assert L.is_ad_url("https://x.test/img/leaderboard-728x90.png")
+    assert L.is_ad_url("https://x.test/img/sponsored-post-header.jpg")
+    # 728x90 is the IAB leaderboard: a slot fill, never a photograph.
+    assert L.is_ad_dimension(728, 90)
+    assert not L.is_ad_dimension(1200, 800)
+
+
+def test_bare_banner_is_not_an_ad():
+    """⚠ Deliberately excluded. Sites name hero/header images banner.jpg all the
+    time, and an existing og:image test caught exactly that false positive when
+    bare "banner" was in the list. The creative that motivated the rule
+    ("…-content-banner.jpg") is caught by its 728x90 size instead, which is the
+    stronger signal.
+    """
+    from services.lead_images import LeadImageService as L
+
+    assert not L.is_ad_url("https://cdn.example.com/banner.jpg")
+    assert not L.is_ad_url("https://x.test/img/site-banner.png")
+    # A section ABOUT sponsors is not a creative: only the filename is matched.
+    assert not L.is_ad_url("https://x.test/sponsors/our-partners-hero.jpg")

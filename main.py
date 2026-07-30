@@ -13291,6 +13291,77 @@ _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
 
+_ad_asset_hashes_cache = _PerUserDict()
+_ad_asset_hashes_lock = threading.Lock()
+
+
+def _ad_asset_hashes() -> set[str]:
+    """Cached per user: which /starred-asset/<hash> images are ad creatives.
+
+    Cached because it scans every archived asset, and the answer only changes when
+    new articles are captured. Invalidated on process restart, which is often
+    enough for a set that grows slowly.
+    """
+    with _ad_asset_hashes_lock:
+        cached = _ad_asset_hashes_cache.get("v")
+        if cached is not None:
+            return cached
+    try:
+        hashes = starred_archive_service.asset_ad_hashes()
+    except Exception:  # noqa: BLE001 — never block a render on this
+        LOGGER.warning("ad-asset hash scan failed", exc_info=True)
+        hashes = set()
+    with _ad_asset_hashes_lock:
+        _ad_asset_hashes_cache["v"] = hashes
+    return hashes
+
+
+def _strip_ad_images(html_text):
+    """Remove ad creatives from an article body, and their emptied wrappers.
+
+    Publishers upload house ads to the same media directory as everything else, so
+    the signals are the filename ("…-hero-superbanner.gif", "…-content-banner.jpg")
+    and IAB slot sizes (728x90 and friends). In an ARCHIVED article the images have
+    been rewritten to /starred-asset/<hash> and carry no filename at all, so those
+    are matched against the archive's own record of each asset's size and original
+    URL — otherwise the reader would keep showing ads the pane had dropped.
+    """
+    if not html_text or "<img" not in html_text.lower():
+        return html_text
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html_text, "html.parser")
+    ad_hashes: set[str] | None = None
+    removed = 0
+    for img in soup.find_all("img"):
+        src = str(img.get("src") or "")
+        if not src:
+            continue
+        is_ad = lead_image_service.is_ad_url(src)
+        if not is_ad and STARRED_ASSET_URL_PREFIX in src:
+            if ad_hashes is None:
+                ad_hashes = _ad_asset_hashes()
+            digest = src.rsplit("/", 1)[-1].split("?", 1)[0]
+            is_ad = digest in ad_hashes
+        if not is_ad:
+            continue
+        # Climb through wrappers the image leaves empty (a linked ad is
+        # <a><img></a>, often inside a centering <div>), so no gap is left behind.
+        target = img
+        for _ in range(3):
+            parent = target.parent
+            if parent is None or parent.name in ("body", "[document]", None):
+                break
+            if parent.get_text(strip=True) or len(parent.find_all("img")) > 1:
+                break
+            target = parent
+        target.decompose()
+        removed += 1
+    if not removed:
+        return html_text
+    return str(soup).strip() or None
+
+
 _BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "figure"})
 # Real blocks only, for the "is this <br> at a block boundary" test. Inline tags
 # are deliberately absent: a <br> before a <span> is separating text, and removing
@@ -13498,7 +13569,9 @@ def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
     # false-positive on a full-URL search.
     if lead_image_url:
         _lead_parsed = urlparse(lead_image_url)
-        if lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path):
+        if (lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path)
+                or lead_image_service.is_ad_url(lead_image_url)
+                or lead_image_service.is_social_icon_url(lead_image_url)):
             lead_image_url = None
     # Try source scraping when the entry has never been processed (ABSENT cache) and
     # the feed provides no inline image — covers article-only feeds where the best
@@ -14090,7 +14163,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
-        content_html = _collapse_block_spacers(content_html)
+        content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
@@ -16594,6 +16667,14 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
         lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
     except Exception:
         lead = None
+    # Cached leads outlive the rules that chose them: a row stored before ad and
+    # social-icon rejection existed would still be prepended here, so the reader
+    # showed decibelmagazine's "…-hero-superbanner.gif" above the article even
+    # after the body strip removed the mid-article copy. Checked at render, which
+    # also means a stale row is harmless rather than needing a sweep.
+    if lead and (lead_image_service.is_ad_url(lead)
+                 or lead_image_service.is_social_icon_url(lead)):
+        return body
     if not lead or lead in body or html.escape(lead, quote=True) in body:
         return body
     lead_html = (
@@ -16656,7 +16737,7 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
     capture, live via sanitize_readability_html, stored via reader_sanitize at
     ingest), so the caller embeds the result directly. The entry's lead image is
     prepended (readability strips it; Lectio tracks it separately)."""
-    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
+    archived_html = _strip_ad_images(_resolve_archived_readability_html(feed_url, entry_id))
     if archived_html and _archived_copy_is_plausible(archived_html):
         return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     # An implausibly short archived copy is a FAILED extraction, not a short

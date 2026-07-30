@@ -237,6 +237,32 @@ class LeadImageService:
     _AD_PATH_RE = re.compile(
         r"/(?:www/)?delivery/[a-z]+\.php|/(?:adserver|adframe|ad_?frame|banner(?:s|ad)?)/",
         re.IGNORECASE)
+    # Ad-slot names publishers put in the FILENAME. decibelmagazine.com uploads
+    # its house ads to wp-content like any other image, so host and path say
+    # nothing — "…-hero-superbanner.gif", "…-content-banner.jpg" do.
+    # ⚠ Bare "banner" is deliberately NOT here. Sites name hero/header images
+    # banner.jpg all the time — an existing og:image test caught exactly that
+    # false positive. Only unambiguous ad-slot vocabulary qualifies; the
+    # "…-content-banner.jpg" creative that motivated this is caught instead by its
+    # 728x90 size, which is the stronger signal anyway.
+    _AD_SLOT_NAME_RE = re.compile(
+        r"superbanner|leaderboard|skyscraper|halfpage|billboard|"
+        r"\bmpu\b|sponsored|advertisement|house[-_]?ad|ad[-_]?banner",
+        re.IGNORECASE)
+    # IAB standard ad sizes. An image at exactly one of these is a slot fill, not
+    # a photograph — 728x90 is the leaderboard decibelmagazine served mid-article.
+    _AD_DIMENSIONS = frozenset({
+        (728, 90), (970, 250), (970, 90), (300, 250), (336, 280), (300, 600),
+        (160, 600), (120, 600), (320, 50), (320, 100), (468, 60), (234, 60),
+        (250, 250), (200, 200), (180, 150), (125, 125),
+    })
+
+    @classmethod
+    def is_ad_dimension(cls, width: object, height: object) -> bool:
+        try:
+            return (int(width), int(height)) in cls._AD_DIMENSIONS
+        except (TypeError, ValueError):
+            return False
 
     @classmethod
     def is_ad_url(cls, url: str) -> bool:
@@ -250,7 +276,12 @@ class LeadImageService:
         host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
         if host and (cls._AD_HOST_RE.match(host) or cls._AD_NETWORK_HOST_RE.search(host)):
             return True
-        return bool(cls._AD_PATH_RE.search(parsed.path or ""))
+        path = parsed.path or ""
+        if cls._AD_PATH_RE.search(path):
+            return True
+        # Filename only, not the whole path: a site section called /sponsors/ is a
+        # page about sponsors, while "…-superbanner.gif" is the creative itself.
+        return bool(cls._AD_SLOT_NAME_RE.search(path.rsplit("/", 1)[-1]))
 
     _SOCIAL_ICON_STEM_RE = re.compile(
         r"^(?:(?:icon|social|share|follow|logo)[._-]*)?"
