@@ -114,6 +114,38 @@
           <span id="rm-offline-status" class="rm-offline-status">Checking support…</span>
           <pre id="rm-offline-detail" class="rm-offline-detail" hidden></pre>
         </div>
+
+        {# Bulk actions for the drilled-into node. Visible buttons, not a context
+           menu: Read Mode has no right-click and long-press offers only text
+           selection. Plain forms, so they work with no JS. #}
+        {% if node_actions %}
+        <div class="rm-actions" role="group" aria-label="Actions for this view">
+          {% if node_actions.confirm_delete_tag %}
+          <form method="post" action="/tags/delete" class="rm-action-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="tag" value="{{ node_actions.tag }}">
+            <span class="rm-action-warn">Delete #{{ node_actions.tag }} from every post? This cannot be undone.</span>
+            <button type="submit" class="rm-sort-opt rm-action-danger">Yes, delete #{{ node_actions.tag }}</button>
+          </form>
+          <a class="rm-sort-opt" href="{{ node_actions.cancel_href }}">Cancel</a>
+          {% else %}
+          <span class="rm-sort-label">Actions</span>
+          {% if node_actions.tag %}
+          {# First tap only arms it; the confirm above spells out what goes. #}
+          <a class="rm-sort-opt rm-action-danger" href="{{ node_actions.confirm_href }}">Delete #{{ node_actions.tag }} everywhere</a>
+          {% endif %}
+          {% if node_actions.star_count %}
+          <form method="post" action="/saved/unstar-scope" class="rm-action-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if node_actions.folder_id is not none %}<input type="hidden" name="folder_id" value="{{ node_actions.folder_id }}">{% endif %}
+            {% if node_actions.list_feed_url %}<input type="hidden" name="list_feed_url" value="{{ node_actions.list_feed_url }}">{% endif %}
+            {% if node_actions.tag %}<input type="hidden" name="tag" value="{{ node_actions.tag }}">{% endif %}
+            <button type="submit" class="rm-sort-opt">Unstar all {{ node_actions.star_count }} here</button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endif %}
       </header>
 
       {% if list_items %}

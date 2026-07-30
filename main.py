@@ -17400,6 +17400,7 @@ def _build_read_mode_context(
     *,
     folder_id: int | None,
     tag: str | None,
+    list_feed_url: str | None = None,
     archived: bool,
     q: str | None,
     items: list[dict],
@@ -17407,6 +17408,7 @@ def _build_read_mode_context(
     sort: str = _READ_SORT_DEFAULT,
     resume_sort: str | None = None,
     all_saved: bool = False,
+    confirm_delete_tag: str | None = None,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
@@ -17522,7 +17524,35 @@ def _build_read_mode_context(
     _saved_search_fields = _read_mode_search_fields(
         scope="saved", folder_id=folder_id, tag=tag, archived=archived,
     )
+    # Bulk actions for the node you drilled into. Read Mode has no right-click and
+    # long-press offers only text selection, so these are visible buttons with big
+    # tap targets — the same plain-navigation model as the Sort switcher, which
+    # means they work with no JS and cost one e-ink repaint each.
+    node_actions = None
+    if node_selected and not archived and (tag or list_feed_url):
+        _scope_stars = len(_scope_starred_keys(folder_id, list_feed_url, tag))
+        node_actions = {
+            "tag": tag or "",
+            "folder_id": folder_id,
+            "list_feed_url": list_feed_url or "",
+            "star_count": _scope_stars,
+            # Deleting a tag is irreversible, so it takes two taps rather than a
+            # modal: the first re-renders this row with the count spelled out. A
+            # browser confirm() is an awkward thing to hit on that WebView.
+            "confirm_delete_tag": bool(tag) and confirm_delete_tag == "1",
+            "confirm_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                              list_feed_url=list_feed_url) + (
+                ("&" if "?" in _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                                 list_feed_url=list_feed_url) else "?")
+                + "confirm_delete_tag=1"),
+            "cancel_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                             list_feed_url=list_feed_url),
+        }
     return {
+        "node_actions": node_actions,
+        # request is None in unit tests that build the context directly; the
+        # actions row simply renders without a token there.
+        "csrf_token": _csrf_token_for(request) if request is not None else "",
         "sort_options": _read_mode_sort_options(
             sort,
             lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key,
@@ -17792,6 +17822,7 @@ def reader_view(
     sort: str | None = Query(default=None),
     resume_sort: str | None = Query(default=None),
     kept: str | None = Query(default=None),
+    confirm_delete_tag: str | None = Query(default=None),
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
@@ -17859,9 +17890,11 @@ def reader_view(
             )
         else:
             context = _build_read_mode_context(
-                request, folder_id=folder_id, tag=tag_val, archived=archived_view,
+                request, folder_id=folder_id, tag=tag_val, list_feed_url=feed_scope,
+                archived=archived_view,
                 q=q_val, items=items, node_selected=node_selected, sort=sort_val,
                 resume_sort=resume_sort_val, all_saved=all_saved_view,
+                confirm_delete_tag=confirm_delete_tag,
             )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
@@ -26860,6 +26893,84 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+def _scope_starred_keys(
+    folder_id: int | None, list_feed_url: str | None, tag: str | None
+) -> list[tuple[str, str]]:
+    """The starred entries inside a drilled-down view: feed and/or tag.
+
+    Scoped exactly as the user drilled — "a single feed with stars I don't need"
+    means feed AND tag together, not either alone. Stars only: a tagged-but-
+    unstarred entry has no star to remove, and unstarring is not the way to drop a
+    tag (that is Delete tag everywhere).
+    """
+    normalized_tag = normalize_tag_value(tag)
+    with get_meta_connection() as conn:
+        if list_feed_url:
+            feeds = {list_feed_url}
+        elif folder_id is not None:
+            feeds = set(get_folder_feed_urls(conn, int(folder_id)))
+        else:
+            feeds = set(get_all_reader_feed_urls())
+        # Disabled feeds keep their stars visible, so they keep them removable too.
+        starred = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries"
+            ) if str(f) in feeds
+        }
+    if normalized_tag:
+        starred &= get_entry_keys_for_manual_tag(feeds, normalized_tag)
+    return sorted(starred)
+
+
+@app.get("/saved/unstar-scope/preview")
+def preview_unstar_scope(
+    folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+):
+    """How many stars the current view holds. Changes nothing.
+
+    The count comes from the server so the button can state the exact number
+    before it is pressed — the rule every bulk action here follows, because a
+    number the client guessed is a number the action does not honor.
+    """
+    keys = _scope_starred_keys(folder_id, list_feed_url, tag)
+    return JSONResponse({"ok": True, "count": len(keys),
+                         "tag": normalize_tag_value(tag), "feed_url": list_feed_url})
+
+
+@app.post("/saved/unstar-scope")
+def apply_unstar_scope(
+    request: Request,
+    folder_id: int | None = Form(default=None),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+):
+    """Remove every star in the drilled-down view.
+
+    Recomputes the set server-side from the scope rather than trusting an id list,
+    matching the other bulk actions.
+
+    Goes through ``apply_star_state`` per entry rather than one bulk DELETE. That
+    is not fastidiousness: the unstar path releases the offline capture and
+    hard-deletes a `lectio:saved` husk once no keep signal remains, and a bulk
+    DELETE would skip both — leaving orphaned captures and invisible husks behind.
+    Tags are untouched; dropping a tag is *Delete tag everywhere*.
+    """
+    keys = _scope_starred_keys(folder_id, list_feed_url, tag)
+    for feed_u, entry_id in keys:
+        try:
+            apply_star_state(feed_u, entry_id, False)
+        except Exception:  # noqa: BLE001 — one bad entry must not abort the sweep
+            LOGGER.warning("unstar-scope failed for %s/%s", feed_u, entry_id, exc_info=True)
+    invalidate_unread_counts_cache()
+    LOGGER.info("[unstar-scope] removed %d star(s) (feed=%s tag=%s folder=%s)",
+                len(keys), list_feed_url, tag, folder_id)
+    if is_async_action_request(request, "lectio-ajax"):
+        return JSONResponse({"ok": True, "unstarred": len(keys)})
+    return RedirectResponse(url=request.headers.get("referer") or "/read", status_code=303)
 
 
 @app.post("/feed-tags/dismiss")

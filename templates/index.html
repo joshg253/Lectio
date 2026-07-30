@@ -1379,6 +1379,10 @@
 
   <div id="tag-context-menu" class="context-menu" hidden>
     <button type="button" id="ctx-tag-rename" class="context-menu-item">Rename tag…</button>
+    {# Scoped to the CURRENT view, not the whole tag: the case this serves is
+       "drilled down to a single feed with stars I don't need". The label carries
+       the server's count so the set is stated before the click. #}
+    <button type="button" id="ctx-tag-unstar-scope" class="context-menu-item">Unstar all in this view</button>
     <button type="button" id="ctx-tag-delete" class="context-menu-item danger">Delete tag everywhere</button>
   </div>
 

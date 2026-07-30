@@ -6363,6 +6363,51 @@ const CAPTURE_MODE_FULL = 'full';
       showTagContextMenu(event);
     }, true);
 
+    // "Unstar all in this view" — scoped to the tag AND whatever feed/folder is
+    // currently active, which is the case it exists for ("drilled down to a single
+    // feed with stars I don't need"). The count comes from the server so the
+    // confirm states the real set rather than one the client guessed.
+    document.getElementById('ctx-tag-unstar-scope')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const tagName = contextTagName;
+      hideAllContextMenus();
+      if (!tagName) return;
+      const qs = new URLSearchParams(location.search);
+      const scope = new URLSearchParams({ tag: tagName });
+      for (const k of ['folder_id', 'list_feed_url']) {
+        if (qs.get(k)) scope.set(k, qs.get(k));
+      }
+      let count = 0;
+      try {
+        const resp = await fetch('/saved/unstar-scope/preview?' + scope.toString(),
+                                 { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        count = (await resp.json()).count || 0;
+      } catch (err) {
+        showToastMessage('Could not count the stars here: ' + err);
+        return;
+      }
+      if (!count) { showToastMessage('No stars in this view.'); return; }
+      const where = qs.get('list_feed_url') ? 'this feed' : 'this view';
+      if (!window.confirm(`Remove the star from ${count} post(s) tagged #${tagName} in ${where}?` +
+                          `\n\nThe tag and the offline copy are kept — only the star is removed.`)) return;
+      try {
+        const resp = await fetch('/saved/unstar-scope', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+          credentials: 'same-origin',
+          body: scope.toString(),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        showToastMessage(`Unstarred ${data.unstarred || 0} post(s).`);
+        window.location.reload();
+      } catch (err) {
+        showToastMessage('Unstarring failed: ' + err);
+      }
+    });
+
     document.getElementById('ctx-tag-delete')?.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();

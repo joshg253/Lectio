@@ -491,3 +491,10 @@ body.rm-body {
 .rm-offline { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .4rem; }
 .rm-offline-status { font-size: .85rem; }
 .rm-offline-detail { font-size: .75rem; white-space: pre-wrap; word-break: break-all; margin: .25rem 0 0; width: 100%; }
+
+/* Bulk actions for the selected node. Big tap targets; danger reads as inverted
+   rather than coloured, since hue is meaningless on grayscale e-ink. */
+.rm-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .4rem; }
+.rm-action-form { display: inline; margin: 0; }
+.rm-action-danger { border-width: 2px; font-weight: 700; }
+.rm-action-warn { font-size: .85rem; font-weight: 700; }

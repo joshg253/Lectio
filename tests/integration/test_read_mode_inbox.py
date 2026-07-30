@@ -243,3 +243,65 @@ def test_inbox_excludes_archived_in_every_sort_order(configured):
             archived=False, limit=150, kept_scope="starred",
         )
         assert "done" not in {r["id"] for r in rows}, sort_key
+
+
+# --- node bulk actions ----------------------------------------------------
+def test_scope_starred_keys_honors_tag_and_feed_together(configured):
+    """"Drilled down to a single feed with stars I don't need" means feed AND tag,
+    not either alone."""
+    keys = main._scope_starred_keys(None, None, "python")
+    assert {e for _f, e in keys} == {"both"}          # starred AND tagged python
+
+    # Same tag, a feed that holds none of it.
+    assert main._scope_starred_keys(None, "https://other.test/feed", "python") == []
+
+
+def test_scope_starred_keys_ignores_unstarred_tagged_entries(configured):
+    """A tagged-but-unstarred entry has no star to remove, and unstarring is not
+    how you drop a tag — that is Delete tag everywhere."""
+    keys = main._scope_starred_keys(None, None, "python")
+    assert "filed" not in {e for _f, e in keys}
+
+
+def test_unstar_scope_removes_stars_and_keeps_tags(configured):
+    class _Req:
+        headers: dict = {}
+        session: dict = {}
+
+    main.apply_unstar_scope(_Req(), folder_id=None, list_feed_url=None, tag="python")
+
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM saved_entries WHERE entry_id = 'both'").fetchone() is None
+    # The tag is untouched: dropping a tag is a different action entirely.
+    assert main.get_manual_tags_for_entry(FEED, "both") == ["python"]
+    # An untagged star elsewhere in the library is out of scope and survives.
+    with main.get_meta_connection() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM saved_entries WHERE entry_id = 'todo'").fetchone() is not None
+
+
+def test_delete_tag_takes_two_taps(configured):
+    """Irreversible, so the first tap only arms it — a browser confirm() is an
+    awkward thing to hit on the Supernote's WebView."""
+    armed = main._build_read_mode_context(
+        None, folder_id=1, tag="python", archived=False, q=None, items=[],
+        node_selected=True, confirm_delete_tag="1",
+    )
+    assert armed["node_actions"]["confirm_delete_tag"] is True
+
+    unarmed = main._build_read_mode_context(
+        None, folder_id=1, tag="python", archived=False, q=None, items=[],
+        node_selected=True,
+    )
+    assert unarmed["node_actions"]["confirm_delete_tag"] is False
+    assert "confirm_delete_tag=1" in unarmed["node_actions"]["confirm_href"]
+
+
+def test_no_actions_row_on_the_archive_node(configured):
+    """Archive is a review surface, not a place to bulk-destroy curation."""
+    ctx = main._build_read_mode_context(
+        None, folder_id=None, tag=None, archived=True, q=None, items=[],
+        node_selected=True,
+    )
+    assert ctx["node_actions"] is None

@@ -150,6 +150,11 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Bulk actions on the view you drilled into** — pick a tag (optionally narrowed
+  to one feed) and either **unstar everything here** or **delete the tag
+  everywhere**. The button carries the real count, so the set is stated before you
+  press it. Both work in Read Mode too, as visible buttons rather than a
+  right-click menu, and deleting a tag there takes two taps.
 - **Feed tag suggestions** — tags the feed (or its page) provides appear as chips
   under a post, so filing is one tap. A chip you never want from that feed gets an
   **×**; it stays hidden until you restore it from Feed Properties → *Hidden tags*.

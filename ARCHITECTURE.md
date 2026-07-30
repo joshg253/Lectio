@@ -1415,6 +1415,26 @@ rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
 
+**Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons
+rather than a menu.** `_scope_starred_keys(folder_id, list_feed_url, tag)` resolves
+the stars in the *current* view — feed **and** tag together, since the case is
+"drilled down to a single feed with stars I don't need". Stars only: a tagged-but-
+unstarred entry has no star to remove, and unstarring is not how a tag is dropped
+(that is *Delete tag everywhere*, which already existed in the sidebar context menu).
+
+`POST /saved/unstar-scope` recomputes the set server-side and goes through
+`apply_star_state` **per entry** rather than issuing one bulk `DELETE`. That is not
+fastidiousness: the unstar path releases the offline capture and hard-deletes a
+`lectio:saved` husk once no keep signal remains, and a bulk delete skips both,
+leaving orphaned captures and invisible husks.
+
+Read Mode has no right-click, and long-press there offers only text selection — so
+the actions render as visible buttons in the browse header, plain forms in the same
+navigation model as the Sort switcher (no JS, one e-ink repaint). **Deleting a tag
+takes two taps**, the first arming a row that spells out what goes, because a
+browser `confirm()` is awkward to hit on that WebView. The row never appears on the
+Archive node: that is a review surface, not a place to bulk-destroy curation.
+
 **Re-fetch is gated on KEPT, not on the star.** Both re-fetch items (readability
 and whole-page) appear when the post is one Lectio is keeping — a capture, starred,
 **or manually tagged** — because only then is there a stored copy worth replacing.
