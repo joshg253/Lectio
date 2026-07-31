@@ -17006,6 +17006,7 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
     already there. Readability extraction usually strips the opening image (Lectio
     tracks it separately as the lead image), so without this the first image is
     missing in Read Mode — the normal reader view re-adds it client-side."""
+    body = proxy_reader_images(body)
     if not (feed_url and entry_id):
         return body
     try:
@@ -17073,6 +17074,43 @@ def _reader_copy_is_richer(candidate: str, current: str) -> bool:
     cand = (_reader_img_count(candidate), _reader_text_length(candidate))
     cur = (_reader_img_count(current), _reader_text_length(current))
     return cand > cur
+
+
+_READER_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc\s*=\s*)(["\'])(.*?)\2', re.IGNORECASE | re.DOTALL)
+
+
+def proxy_reader_images(content: str) -> str:
+    """Point every remote <img> in the e-ink reader at /api/img.
+
+    Offline reading needs the page to request the SAME URLs the precache
+    manifest stores, and the manifest can only list same-origin ones — so an
+    article whose images are absolute (blogspot, most feeds) precached its HTML
+    and none of its pictures, and read fine with every image broken.
+
+    Proxying also removes a quieter dependency: those srcs are frequently
+    ``http://`` on an ``https://`` page, and they load today only because Chrome
+    silently upgrades them. That upgrade needs the network, which is precisely
+    what offline does not have.
+
+    Same guard, cache and user-agent as any other /api/img load. srcset is
+    dropped alongside, or the browser picks a direct URL over the proxied src and
+    the manifest misses it again.
+    """
+    if "<img" not in content.lower():
+        return content
+
+    def _rewrite(m: re.Match) -> str:
+        prefix, quote_ch, src = m.group(1), m.group(2), html.unescape(m.group(3).strip())
+        if not src or src.startswith(("data:", "/")):
+            return m.group(0)
+        if not src.lower().startswith(("http://", "https://")):
+            return m.group(0)
+        return f'{prefix}{quote_ch}/api/img?u={quote(src, safe="")}{quote_ch}'
+
+    out = _READER_IMG_SRC_RE.sub(_rewrite, content)
+    return re.sub(
+        r'\s+(?:srcset|data-srcset|data-src|data-lazy-src)\s*=\s*(?:"[^"]*"|\'[^\']*\')',
+        "", out, flags=re.IGNORECASE)
 
 
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
@@ -17783,11 +17821,20 @@ def _build_read_mode_context(
     folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
     folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
 
-    inbox, feed_inbox_counts, archived_count, filed = _read_mode_saved_index()
+    inbox, _feed_inbox_counts, archived_count, filed = _read_mode_saved_index()
 
-    def _folder_inbox_count(fid: int) -> int:
+    # Folder nodes count KEPT (starred or tagged), not starred alone. The badge
+    # has to agree with what opening the folder lists, and a saved folder lists
+    # kept — only the Inbox node is narrowed to stars. Counting stars here made
+    # Booze read 11 against the main app's 67, and hid outright the three folders
+    # whose saved items are all tagged and none starred.
+    _feed_kept_counts: dict[str, int] = {}
+    for _f, _e in (inbox | filed):
+        _feed_kept_counts[_f] = _feed_kept_counts.get(_f, 0) + 1
+
+    def _folder_kept_count(fid: int) -> int:
         feeds = folder_feed_urls_by_id.get(fid, set())
-        return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
+        return sum(c for f, c in _feed_kept_counts.items() if f in feeds)
 
     on_all = (folder_id == root_id and not tag and not archived and not q
               and not all_saved)
@@ -17824,7 +17871,7 @@ def _build_read_mode_context(
         fid = int(row["id"])
         if fid == root_id:
             continue
-        c = _folder_inbox_count(fid)
+        c = _folder_kept_count(fid)
         if not c:
             continue
         folder_nodes.append({
@@ -17833,7 +17880,7 @@ def _build_read_mode_context(
             "count": c,
             "active": (not archived and not tag and folder_id == fid),
         })
-    uncat = _folder_inbox_count(UNCATEGORIZED_FOLDER_ID)
+    uncat = _folder_kept_count(UNCATEGORIZED_FOLDER_ID)
     if uncat:
         folder_nodes.append({
             "label": "Uncategorized", "glyph": "▸",  # ▸

@@ -363,3 +363,45 @@ def test_an_unknown_root_never_makes_something_the_inbox():
     """Better to lose the Inbox's default sort than to hand a folder the
     Inbox's narrower star-only scope."""
     assert not main._read_is_inbox_node(1, None, False, None, "saved", None)
+
+
+# ── folder badges must agree with what opening the folder lists ──
+def test_saved_folder_nodes_count_kept_not_starred(configured):
+    """Read Mode showed Booze as 11 where the main app said 67, and hid outright
+    three folders whose saved items are all tagged and none starred.
+
+    A saved folder LISTS kept (starred or tagged) — only the Inbox node narrows to
+    stars — so counting stars on the badge made the two views disagree about what
+    exists, which is the mismatch Read Mode is meant not to have.
+    """
+    inbox, _feed_counts, _archived, filed = main._read_mode_saved_index()
+
+    assert {e for _f, e in inbox} == {"todo", "both"}          # starred only
+    assert {e for _f, e in (inbox | filed)} == {"todo", "both", "filed"}
+
+
+# ── offline images ──
+def test_reader_images_are_proxied_to_the_same_origin():
+    """The precache manifest can only list same-origin URLs, so an article with
+    absolute image srcs cached its HTML and none of its pictures — it read fine
+    offline with every image broken."""
+    html = main.proxy_reader_images(
+        '<p>x</p><img src="http://3.bp.blogspot.com/x/Boil.JPG">')
+
+    assert 'src="/api/img?u=http%3A%2F%2F3.bp.blogspot.com%2Fx%2FBoil.JPG"' in html
+
+
+def test_proxying_leaves_alone_what_is_already_safe():
+    for src in ('/api/img?u=x', 'data:image/png;base64,AAAA'):
+        html = f'<img src="{src}">'
+        assert main.proxy_reader_images(html) == html
+
+
+def test_srcset_is_dropped_so_the_browser_cannot_route_around_the_proxy():
+    """Left in place the browser picks a direct URL over the proxied src, and the
+    manifest misses the image again."""
+    out = main.proxy_reader_images(
+        '<img src="https://x.test/a.jpg" srcset="https://x.test/a-2x.jpg 2x">')
+
+    assert "srcset" not in out
+    assert "/api/img?u=https%3A%2F%2Fx.test%2Fa.jpg" in out
