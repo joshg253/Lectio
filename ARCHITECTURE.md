@@ -867,6 +867,15 @@ The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
 
+**A URL can carry a month without carrying a day.** `url_inferred_pubdate` reads
+the `/YYYY/MM/DD/` permalink; `url_inferred_pubmonth` reads `/YYYY/MM/` and
+resolves it to the first of the month. The day is a placeholder, the month is not
+— WordPress generates the permalink from the publish date. It is the last tier in
+`recover_publish_dates.py` for that reason, but on blog.guitar-pro.com (67 of the
+68 entries it recovered) it is also the *only honest* signal: those pages publish
+`dateModified` and nothing else, so mining the page would have dated a 2021 post
+to October 2024. A real month beats a precise-looking lie.
+
 **A re-fetch moves Received, never Pub.** Surfacing a re-pulled capture at the top of the backlog used to be done by writing `entries.published = now` — which corrupted the data it sorted by. Pub means the date the article was published, and re-fetching does not republish it; worse, under a **Pub oldest** sort the bump did the opposite of surfacing, sending the article to the far end of the list. Measured on the live library 2026-07-25: **101 entries** had lost their real publish dates this way, some by 16 years. `replace_entry_content(bump_received=...)` now moves the Received date instead — which is honest ("this content arrived just now"), sorts correctly in both directions, and needs no new per-entry field. Both received columns move together: `first_updated` backs `Entry.added`, which the UI displays and the render-path sort reads, and `recent_sort` backs the list's SQL fast path.
 
 `scripts/restore_bumped_publish_dates.py` repairs entries already damaged. The original date is recovered from the starred archive (`archived_entry.published_at`), which snapshots each entry's dates at capture and is untouched by a content re-fetch, and is cross-checked against reader's own `recent_sort` (the entry's original sort position, likewise untouched). Only forward drift qualifies — a bump can only move a date later — and by default only rows where the two independent records agree are restored; on the live library that was all 101, with zero disagreements.

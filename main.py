@@ -9173,6 +9173,17 @@ def datetime_sort_value(dt: datetime | None) -> float:
 # feed actually said (or '—').
 _URL_PUBDATE_RE = re.compile(r"/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$|\?)")
 
+# WordPress's other common permalink shape: /YYYY/MM/slug, no day. blog.guitar-pro.com
+# uses it for all 67 of its undated entries. Month precision beats no date at all —
+# these otherwise sit at the Unix epoch and sort to one end — and the month itself is
+# trustworthy, since a WordPress permalink is generated from the publish date.
+#
+# Deliberately NOT filled in from the page: that site publishes `dateModified` and
+# nothing else ("Last update: oct. 21, 2024" on a post whose URL says 2021/04), so
+# reading a date off the page would be wrong by three and a half years. A real
+# month beats a precise-looking lie.
+_URL_PUBMONTH_RE = re.compile(r"/(\d{4})/(\d{1,2})/(?:$|[^0-9])")
+
 
 def url_inferred_pubdate(link: str | None) -> datetime | None:
     if not link:
@@ -9190,6 +9201,23 @@ def url_inferred_pubdate(link: str | None) -> datetime | None:
         return datetime(year, month, day, tzinfo=timezone.utc)
     except (ValueError, OverflowError):
         return None
+
+
+def url_inferred_pubmonth(link: str | None) -> datetime | None:
+    """The /YYYY/MM/ permalink shape, resolved to the first of that month.
+
+    Month precision, and the day is a placeholder rather than a claim — see
+    ``_URL_PUBMONTH_RE`` for why this is still the best signal those posts have.
+    """
+    if not link:
+        return None
+    match = _URL_PUBMONTH_RE.search(link)
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    if not (2000 <= year <= 2099 and 1 <= month <= 12):
+        return None
+    return datetime(year, month, 1, tzinfo=timezone.utc)
 
 
 # Some feeds prefix entry titles with the date ("2024-01-15: …", "2024/01/15

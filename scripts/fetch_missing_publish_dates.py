@@ -33,6 +33,14 @@ datagenetics.com (27). A 25-entry sample returned **zero** dates, and probing on
 page per host across 8 hosts also returned zero. One of those answered 404 with the
 404 page's own date — the exact wrong answer the guards reject.
 
+**2026-07-31: fetching would have been the wrong tool for the biggest cluster.**
+blog.guitar-pro.com serves only a `dateModified` — "Last update: oct. 21, 2024" on
+a post published in April 2021 — so a fetch-based pass would have written a date
+wrong by three and a half years, and the guards here would not have caught it
+(the page IS the article; only its date is stale). All 68 came back offline from
+the `/YYYY/MM/` permalink instead, via `recover_publish_dates.py`. Worth checking
+whether a date is *inferable* before deciding it must be *fetched*.
+
 Kept because it is written, safe and cheap to re-run: if a batch of new epoch-dated
 entries arrives from a site that *does* publish metadata, this is the tool. Sample
 with --limit before committing to a full pass.
