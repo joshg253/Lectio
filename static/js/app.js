@@ -2875,6 +2875,12 @@ const CAPTURE_MODE_FULL = 'full';
       let nextFolderId = nextUrl.searchParams.get('folder_id');
       let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
+      // The scope the URL itself names, captured before the fallbacks below
+      // reassign nextFolderId/nextFeedUrl from whatever row is currently lit.
+      // Tag links must follow the URL, not the leftover selection: inheriting it
+      // is the bug they are being repointed to fix.
+      const scopeFolderId = nextUrl.searchParams.get('folder_id');
+      const scopeFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
       const nextHome = nextUrl.searchParams.get('home') === '1'
         || (nextStarOnly && nextUrl.searchParams.get('saved_home') === '1');
@@ -3016,8 +3022,29 @@ const CAPTURE_MODE_FULL = 'full';
 
       for (const tagLink of document.querySelectorAll('.tag-link, .entry-tag-link')) {
         const href = tagLink.getAttribute('href') || '';
-        const tagValue = new URL(href, window.location.origin).searchParams.get('tag');
+        const tagUrl = new URL(href, window.location.origin);
+        const tagValue = tagUrl.searchParams.get('tag');
         tagLink.classList.toggle('active', Boolean(nextTag) && tagValue === nextTag);
+
+        // Re-point the link at the scope we are looking at NOW. The pane-swap
+        // path never re-renders the tree, so a server-rendered folder_id sticks
+        // around for the life of the page: open Video Games, click Feeds, then
+        // click #gamedev and you land back in Video Games. Same staleness would
+        // apply to a feed scope and to the filter the tag view resumes to.
+        if (scopeFolderId) {
+          tagUrl.searchParams.set('folder_id', scopeFolderId);
+        } else {
+          tagUrl.searchParams.delete('folder_id');
+        }
+        if (scopeFeedUrl) {
+          tagUrl.searchParams.set('list_feed_url', scopeFeedUrl);
+        } else {
+          tagUrl.searchParams.delete('list_feed_url');
+        }
+        // A tag view forces read_filter=all and carries the filter to come back
+        // to; that must be the one in effect now, not one from a page load ago.
+        tagUrl.searchParams.set('resume_read_filter', nextResumeReadFilter);
+        tagLink.setAttribute('href', tagUrl.pathname + tagUrl.search);
       }
 
       // Sidebar tree-filter state: hide sidebar feeds with 0 unread when the

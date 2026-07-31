@@ -867,6 +867,18 @@ The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
 
+**The tree is not re-rendered by pane-swap navigation, so anything the server
+stamped into it goes stale.** `updateScopeActiveState` already re-derives active
+rows and mode blocks for that reason; sidebar tag links now get the same
+treatment, because their server-rendered `folder_id` otherwise survives every SPA
+navigation for the life of the page — open a folder, click Feeds, click a tag,
+and you are back in the folder you left. The stamp reads the URL's *own*
+`folder_id`/`list_feed_url`, captured before the fallbacks in that function
+reassign them from whichever row is still lit: those fallbacks exist to stop
+active-state flicker on bare URLs, and reusing their result here would reproduce
+the staleness rather than fix it. `resume_read_filter` is refreshed alongside,
+since a tag view forces `read_filter=all` and carries the filter to come back to.
+
 **A URL can carry a month without carrying a day.** `url_inferred_pubdate` reads
 the `/YYYY/MM/DD/` permalink; `url_inferred_pubmonth` reads `/YYYY/MM/` and
 resolves it to the first of the month. The day is a placeholder, the month is not
