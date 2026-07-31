@@ -2320,6 +2320,10 @@ const CAPTURE_MODE_FULL = 'full';
       document.querySelector('.saved-tree-children')
         ?.classList.toggle('is-collapsed', collapsed);
       savedFoldersHeaderBtn?.classList.toggle('is-collapsed', collapsed);
+      // Marked on the tree rather than derived with :has(), so the rule works on
+      // the older WebViews the e-ink device runs too.
+      document.querySelector('nav.tree')
+        ?.classList.toggle('saved-folders-collapsed', collapsed);
     }
 
     if (savedFoldersHeaderBtn) {

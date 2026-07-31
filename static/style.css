@@ -2201,8 +2201,35 @@ button:hover, .button-link:hover {
 }
 
 .tags-tree-body {
-  max-height: min(35vh, 260px);
+  /* About half the column while Folders is expanded — the folder tree is the
+     primary index and should keep the top half. */
+  max-height: 50vh;
   overflow: auto;
+}
+
+/* The block holding the scope tabs and the folder tree grows to fill by default.
+   With Folders collapsed it has nothing to show, so it has to shrink to its
+   content — otherwise it keeps half the column and the Tags header lands in the
+   middle of the sidebar rather than under the collapsed Folders header.
+   Scoped to saved-mode: the same collapse state must not shrink the Feeds tree. */
+nav.tree.saved-mode.saved-folders-collapsed .root-tree-block {
+  flex: 0 0 auto;
+}
+
+/* Folders collapsed: Tags takes the space instead of staying pinned to the
+   bottom, so its header sits directly under the collapsed Folders header. Only
+   while Tags is open — collapsed, it still parks at the bottom. */
+nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) {
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-body {
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 /* Saved's Folders section, collapsing the same way Tags does. */

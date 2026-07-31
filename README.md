@@ -185,6 +185,10 @@ The short version:
   when set, for all three axes: unread, starred, tagged. On a phone, tapping the
   tag button reveals a finger-sized ✕ on each tag, since the desktop's hover-to-
   reveal control is unreachable by touch.
+- **Saved's two sections share the column** — collapse *Folders* and *Tags* rises
+  to fill the space, its header directly under the collapsed one. Collapsed, Tags
+  still parks at the bottom; open alongside an expanded Folders, it takes about
+  half.
 - **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
   *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
   tag only ever filtered kept articles, so it now lives only where it applies.
