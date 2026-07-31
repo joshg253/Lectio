@@ -13343,7 +13343,15 @@ const CAPTURE_MODE_FULL = 'full';
       event.preventDefault();
       link.closest('.hamburger-menu')?.removeAttribute('open');
       loadScopePanesWithoutFullRefresh(targetUrl.toString()).then(() => {
-        try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(1); } catch(e) {}
+        // On a phone, advance to the post list — except for the FEEDS/SAVED scope
+        // tabs. Those switch which tree you are browsing; the user has not picked
+        // anything to read yet, so jumping to posts takes the folder list away
+        // exactly when it is needed. Reported on a Galaxy S21+.
+        try {
+          if (window.isSingleMode && window.isSingleMode() && !link.matches('.scope-tab')) {
+            setSinglePaneLevel(1);
+          }
+        } catch(e) {}
       }).catch(() => {});
     });
 

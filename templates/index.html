@@ -1034,7 +1034,11 @@
       if (window.loadScopePanesWithoutFullRefresh) {
         loadScopePanesWithoutFullRefresh(navUrl).then(()=> {
           try {
-            if (window.isSingleMode && window.isSingleMode()) {
+            // Scope tabs (FEEDS / SAVED) switch which tree you are browsing —
+            // nothing has been picked to read yet, so advancing to the post list
+            // takes the folder list away exactly when it is needed. Every other
+            // tree link (folder, feed, tag) does mean "show me these posts".
+            if (window.isSingleMode && window.isSingleMode() && !a.matches('.scope-tab')) {
               setSinglePaneLevel(1);
             }
           } catch(e){}
