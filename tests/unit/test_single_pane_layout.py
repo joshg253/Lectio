@@ -162,14 +162,12 @@ def test_the_omissions_are_the_ones_asked_for():
         assert f'body[data-layout-mode="single"] {sel}' in CSS
 
 
-def test_the_add_tags_form_stays_in_the_flow():
-    """The tag button toggles it, so hiding it with the chips would make the
-    button do nothing. It now rides in .entry-tags-extra with them, which is only
-    hidden when it is genuinely empty."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:400]
-    assert "display: flex;" in block
-    empty = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra:empty'):][:120]
-    assert "display: none;" in empty
+def test_the_add_tags_form_appears_with_the_row_it_belongs_to():
+    """It rides in .entry-tags-extra with the chips, which the tag button reveals.
+    Hiding it unconditionally would make that button do nothing at all."""
+    sel = ('body[data-layout-mode="single"] .entry-tags-row'
+           ':has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra')
+    assert "display: flex;" in CSS[CSS.index(sel):][:400]
 
 
 # ── phone article view, second pass ──
@@ -290,14 +288,33 @@ def test_removing_a_tag_is_reachable_without_a_mouse():
     assert "width: 1.75rem;" in block
 
 
-def test_the_chips_are_one_grid_item_so_the_buttons_keep_their_row():
+def test_the_tag_row_is_hidden_until_tags_is_opened():
+    """The glyph already says whether the post is tagged, so a permanent chips row
+    was a second line of phone screen for information already on the first."""
+    closed = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:150]
+    assert "display: none;" in closed
+
+
+def test_the_opened_tag_row_is_one_grid_item_below_every_glyph():
     """As loose children each chip claimed its own grid cell, which pushed the view
-    buttons off the first row entirely the moment a post had a tag."""
+    buttons off the first row the moment a post had a tag."""
     assert 'class="entry-tags-extra"' in ENTRY_PANE
     block = CSS[CSS.index(".entry-tags-extra {"):][:120]
     assert "display: contents;" in block
-    phone = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:300]
+    sel = ('body[data-layout-mode="single"] .entry-tags-row'
+           ':has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra')
+    phone = CSS[CSS.index(sel):][:400]
     assert "grid-column: 1 / -1;" in phone and "grid-row: 2;" in phone
+
+
+def test_the_title_is_the_way_out_and_it_opens_a_new_tab():
+    """Nothing outside Lectio should replace the Lectio tab, and on a phone this
+    replaces the open-in-new-tab glyph entirely."""
+    assert 'target="_blank"' in ENTRY_PANE
+    block = ENTRY_PANE[ENTRY_PANE.index('class="entry-pane-title-link"'):][:400]
+    assert 'target="_blank"' in block
+    assert 'rel="noopener noreferrer"' in block
+    assert 'body[data-layout-mode="single"] #entry-open-tab-button' in CSS
 
 
 def test_the_uniform_glyph_box_is_scoped_to_the_glyph_buttons():

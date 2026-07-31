@@ -22,9 +22,14 @@
            and every other plain context use the tag-stripped text. #}
         {% set _title_markup = selected_entry.title_html or (selected_entry.title or "(untitled)") %}
         {% set _display_markup = (("[" ~ _dur ~ "] ") | e ~ _title_markup) if _dur else _title_markup %}
+        {# The title is the way out to the article itself. Opens in a new tab:
+           nothing outside Lectio should replace the Lectio tab, and on a phone
+           this replaces the open-in-new-tab glyph entirely. #}
         {% if selected_entry.link %}<a
           class="entry-pane-title-link"
           href="{{ selected_entry.link }}"
+          target="_blank"
+          rel="noopener noreferrer"
           title="{{ _display_title }}"
           >{{ _display_markup | safe }}</a
         >{% else %}<span class="entry-pane-title-link"
