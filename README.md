@@ -174,6 +174,10 @@ The short version:
   the stack rather than leaving the page. It is the *same* app, not a second
   reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
   full-image webcomic view all work there without being ported.
+- **Landscape is 40/60, and the divider drags** — a rotated phone gets the list
+  and the article at 40/60 rather than an even split, resizable by fingertip and
+  remembered separately from the desktop's three-pane widths.
+- **Swipe left or right in an article** to move through the list.
 - **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
   the post list rather than replacing it, so you can see what you are leaving.
   Tapping the dimmed list, or picking a folder, closes it.

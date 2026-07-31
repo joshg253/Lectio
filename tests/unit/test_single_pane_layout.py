@@ -410,3 +410,53 @@ def test_the_date_holds_its_place_beside_the_truncated_name():
     block = block[:block.index("}")]
     assert "flex: 0 0 auto;" in block
     assert "white-space: nowrap;" in block
+
+
+# ── landscape (medium) split, and swiping between articles ──
+def test_the_landscape_split_is_driven_by_a_variable_not_two_fr():
+    """Rotating a phone lands in medium mode, which was a hardcoded 1fr/1fr — an
+    even split, and a divider that could not move because the grid never read the
+    pane widths."""
+    block = CSS[CSS.index('body[data-layout-mode="medium"] .panes {'):]
+    block = block[:block.index("}")]
+    assert "var(--pane-medium-posts, 40%)" in block
+    assert "1fr) var(--resizer-size) minmax(320px" not in block
+
+
+def test_the_landscape_split_is_remembered_apart_from_the_desktop_one():
+    """Three panes and two panes are different layouts; a width that suits one is
+    wrong in the other."""
+    assert "lectio-pane-medium-posts" in APP_JS
+    assert "lectio-pane-medium-posts" != "PANE_LEFT_KEY"
+    assert "restoreMediumSplit()" in APP_JS
+    assert "persistMediumSplit" in APP_JS
+
+
+def test_medium_resizing_does_not_run_the_three_pane_maths():
+    """One divider, not two — the desktop calculation subtracts a left pane that
+    is not on screen here."""
+    block = APP_JS[APP_JS.index("function handleResize(clientX)"):][:900]
+    assert "data-layout-mode') === 'medium'" in block
+
+
+def test_the_divider_gets_a_finger_sized_grab_area_on_touch():
+    """8px is a mouse target. Widened with a pseudo-element so the visible bar does
+    not get fatter."""
+    assert "@media (pointer: coarse)" in CSS
+    block = CSS[CSS.index("@media (pointer: coarse)"):][:600]
+    assert "left: -8px;" in block and "right: -8px;" in block
+
+
+def test_swiping_the_article_moves_through_the_list():
+    block = INDEX[INDEX.index("function bindArticleSwipe"):][:2400]
+    assert "navigateEntry(dx < 0 ? 1 : -1)" in block          # left = forward
+
+
+def test_the_swipe_refuses_gestures_that_are_really_something_else():
+    """Anything looser steals ordinary scrolling and text selection."""
+    block = INDEX[INDEX.index("function bindArticleSwipe"):][:2400]
+    assert "MIN_DISTANCE = 60" in block                        # not a tap
+    assert "MAX_DURATION = 700" in block                       # not a slow drag
+    assert "Math.abs(dx) < Math.abs(dy) * 2" in block          # not a scroll
+    # Sideways-scrollable content and controls own their own gestures.
+    assert "pre, table" in block

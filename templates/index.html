@@ -972,6 +972,51 @@
       if (link) loadEntryPaneWithoutFullRefresh(link.href);
     }
 
+    // Swipe left/right in the article to move through the list, the way you would
+    // page through anything else on a phone. Deliberately conservative about what
+    // counts as a swipe: a mostly-horizontal, reasonably long, reasonably quick
+    // drag that did not start on something interactive or sideways-scrollable.
+    // Anything looser steals ordinary scrolling and text selection.
+    (function bindArticleSwipe() {
+      const MIN_DISTANCE = 60;      // px — shorter than this is a tap or a jitter
+      const MAX_DURATION = 700;     // ms — slower than this is a considered drag
+      let startX = 0;
+      let startY = 0;
+      let startedAt = 0;
+      let tracking = false;
+
+      document.addEventListener('touchstart', (event) => {
+        tracking = false;
+        if (event.touches.length !== 1) return;
+        const pane = document.querySelector('.pane-entry');
+        if (!pane || !pane.contains(event.target)) return;
+        // Wide code blocks and tables scroll sideways themselves; controls own
+        // their own gestures.
+        if (event.target.closest('a, button, input, textarea, select, pre, table, .entry-tags-row')) {
+          return;
+        }
+        const touch = event.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startedAt = Date.now();
+        tracking = true;
+      }, { passive: true });
+
+      document.addEventListener('touchend', (event) => {
+        if (!tracking) return;
+        tracking = false;
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) return;
+        if (Date.now() - startedAt > MAX_DURATION) return;
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        if (Math.abs(dx) < MIN_DISTANCE) return;
+        if (Math.abs(dx) < Math.abs(dy) * 2) return;   // mostly vertical: a scroll
+        // Left takes you forward, matching the direction the list runs.
+        navigateEntry(dx < 0 ? 1 : -1);
+      }, { passive: true });
+    })();
+
 
     window.setSinglePaneLevel = setSinglePaneLevel;
     window.isSingleMode = () => layoutMode === 'single';

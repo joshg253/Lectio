@@ -2484,10 +2484,43 @@ const CAPTURE_MODE_FULL = 'full';
       }, { passive: false });
     }
 
+    // Medium (landscape phone / narrow window) has two panes and one divider, and
+    // remembers its split separately from the three-pane desktop one — they are
+    // different layouts and a width that suits one is wrong in the other.
+    const PANE_MEDIUM_KEY = 'lectio-pane-medium-posts';
+    const MEDIUM_MIN_POSTS = 240;
+    const MEDIUM_MIN_ENTRY = 260;
+
+    function persistMediumSplit(px) {
+      try { window.localStorage.setItem(PANE_MEDIUM_KEY, String(Math.round(px))); }
+      catch (e) { /* private mode */ }
+    }
+
+    function restoreMediumSplit() {
+      if (!panes) return;
+      const saved = Number.parseFloat(window.localStorage.getItem(PANE_MEDIUM_KEY) || '');
+      if (!Number.isFinite(saved)) return;
+      const total = panes.getBoundingClientRect().width;
+      const max = total - RESIZER_SIZE - MEDIUM_MIN_ENTRY;
+      if (max <= MEDIUM_MIN_POSTS) return;
+      rootStyle.setProperty('--pane-medium-posts',
+        `${Math.min(Math.max(saved, MEDIUM_MIN_POSTS), max)}px`);
+    }
+
+    restoreMediumSplit();
+
     function handleResize(clientX) {
       if (!panes || !activeResizer) return;
       const rect = panes.getBoundingClientRect();
       const total = rect.width;
+      // Medium has a single divider; the three-pane maths below does not apply.
+      if (document.body.getAttribute('data-layout-mode') === 'medium') {
+        const max = total - RESIZER_SIZE - MEDIUM_MIN_ENTRY;
+        if (max <= MEDIUM_MIN_POSTS) return;
+        const desired = Math.min(Math.max(clientX - rect.left, MEDIUM_MIN_POSTS), max);
+        rootStyle.setProperty('--pane-medium-posts', `${desired}px`);
+        return;
+      }
       const leftWidth = pxVar('--pane-left', '280');
       const middleWidth = pxVar('--pane-middle', '420');
       if (activeResizer === 'left-middle') {
@@ -2520,7 +2553,14 @@ const CAPTURE_MODE_FULL = 'full';
       const wasResizing = Boolean(activeResizer);
       activeResizer = null;
       document.body.classList.remove('resizing');
-      if (wasResizing) persistPaneWidths();
+      if (!wasResizing) return;
+      if (document.body.getAttribute('data-layout-mode') === 'medium') {
+        const v = Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--pane-medium-posts'));
+        if (Number.isFinite(v)) persistMediumSplit(v);
+        return;
+      }
+      persistPaneWidths();
     }
     window.addEventListener('mouseup', endResize);
     window.addEventListener('touchend', endResize);
