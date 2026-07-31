@@ -188,7 +188,7 @@ The short version:
 - **Saved's two sections share the column** — collapse *Folders* and *Tags* rises
   to fill the space, its header directly under the collapsed one. Collapsed, Tags
   still parks at the bottom; open alongside an expanded Folders, it takes about
-  half.
+  an even share of what is left after the app chrome.
 - **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
   *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
   tag only ever filtered kept articles, so it now lives only where it applies.

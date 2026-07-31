@@ -98,10 +98,30 @@ def test_collapsed_tags_still_parks_at_the_bottom():
     assert "margin-top: auto;" in base[:base.index("}")]
 
 
-def test_tags_is_capped_while_folders_is_open():
-    """"only open to ~halfway when Folders is expanded"."""
-    block = CSS[CSS.index(".tags-tree-body {"):]
-    assert "max-height: 50vh;" in block[:block.index("}")]
+def test_the_two_saved_lists_split_the_leftover_space_evenly():
+    """A 50vh cap measured half the BROWSER, while the folder list got half minus
+    the logo, the Feeds/Saved tabs and both section headers — so Tags visibly won.
+    Reported as "Folders seems to have to share its half with the logo,
+    FEEDS/SAVED, and the Tags collapser"."""
+    root = CSS[CSS.index("nav.tree.saved-mode .root-tree-block {"):]
+    root = root[:root.index("}")]
+    tags = CSS[CSS.index("nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) {"):]
+    tags = tags[:tags.index("}")]
+    assert "flex: 1 1 var(--saved-tabs-offset);" in root
+    assert "flex: 1 1 0;" in tags
+    # The cap is lifted in Saved; it still applies in Feeds, where Tags is a
+    # footer under a full-height folder list.
+    lifted = CSS[CSS.index("nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) .tags-tree-body"):]
+    assert "max-height: none;" in lifted[:lifted.index("}")]
+
+
+def test_the_offset_exists_because_equal_blocks_are_not_equal_lists():
+    """The root block carries the Feeds/Saved tab row that the tags block does
+    not, so an even split of the leftover still left the folder list ~54px
+    shorter. Measured to 4px at 700, 900 and 1200px tall."""
+    root = CSS[CSS.index("nav.tree.saved-mode .root-tree-block {"):]
+    root = root[:root.index("}")]
+    assert "--saved-tabs-offset: 54px;" in root
 
 
 def test_the_collapse_flag_is_a_class_not_a_has_selector():

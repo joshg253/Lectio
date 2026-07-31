@@ -2201,10 +2201,38 @@ button:hover, .button-link:hover {
 }
 
 .tags-tree-body {
-  /* About half the column while Folders is expanded — the folder tree is the
-     primary index and should keep the top half. */
+  /* Only a ceiling for the Feeds tree, where Tags is a footer under a full-height
+     folder list. In Saved the two sections split the column instead — see below,
+     where the cap is lifted. */
   max-height: 50vh;
   overflow: auto;
+}
+
+/* Saved, both sections open: split what is left over EQUALLY. A 50vh cap on the
+   tags list measured half the *browser*, while the folder list got half minus the
+   logo, the Feeds/Saved tabs and both section headers — so Tags visibly won. Two
+   flex:1 1 0 blocks divide the leftover after that chrome instead. */
+nav.tree.saved-mode .root-tree-block {
+  /* The basis offsets the extra chrome this block carries and the tags block does
+     not — the Feeds/Saved tab row above the Folders header. Splitting the leftover
+     evenly (basis 0 on both) still left the folder list ~54px shorter, because
+     "equal blocks" is not "equal lists". */
+  --saved-tabs-offset: 54px;
+  flex: 1 1 var(--saved-tabs-offset);
+  min-height: 0;
+}
+
+nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) .tags-tree-body {
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 /* The block holding the scope tabs and the folder tree grows to fill by default.
