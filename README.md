@@ -174,6 +174,9 @@ The short version:
   the stack rather than leaving the page. It is the *same* app, not a second
   reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
   full-image webcomic view all work there without being ported.
+- **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
+  the post list rather than replacing it, so you can see what you are leaving.
+  Tapping the dimmed list, or picking a folder, closes it.
 - **Curation state reads at a glance** — grey outline when unset, filled accent
   when set, for all three axes: unread, starred, tagged. On a phone, tapping the
   tag button reveals a finger-sized ✕ on each tag, since the desktop's hover-to-

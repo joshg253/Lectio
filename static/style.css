@@ -299,6 +299,10 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .pane-folders {
    feed-appearance feature (lead images, per-feed thumbnail crop/zoom, embeds, the
    full-image webcomic view) arrives here without being ported. */
 body[data-layout-mode="single"] .panes {
+  /* Drop the stacking context. .panes carries z-index:1, which scoped the
+     drawer's z-index INSIDE it — so the whole grid sat below the backdrop and the
+     backdrop swallowed every tap meant for the folder tree. */
+  z-index: auto;
   grid-template-columns: 1fr;
   grid-template-rows: 1fr;
   padding: 0;
@@ -322,9 +326,8 @@ body[data-layout-mode="single"] .pane-resizer {
   display: none;
 }
 
-/* Exactly one pane on screen. Hidden panes are display:none rather than
+/* Posts and article swap places; hidden ones are display:none rather than
    translated off-canvas so their images are not laid out or fetched. */
-body[data-layout-mode="single"] .pane-folders,
 body[data-layout-mode="single"] .pane-posts,
 body[data-layout-mode="single"] .pane-entry {
   display: none;
@@ -333,15 +336,60 @@ body[data-layout-mode="single"] .pane-entry {
   box-shadow: none;
 }
 
-body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders,
+/* The post list stays on screen behind the folder drawer (level 0), which is the
+   point of the drawer: you can see what you are leaving. */
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-posts,
 body[data-layout-mode="single"][data-single-pane-level="1"] .pane-posts,
 body[data-layout-mode="single"][data-single-pane-level="2"] .pane-entry {
   display: flex;
 }
 
-/* The medium-mode floating folder drawer must not leak into single mode. */
+/* Folders are a drawer, not a pane: it slides over the list rather than
+   replacing it. Off-canvas rather than display:none so the slide can animate,
+   which is safe here because the tree holds no images to fetch. */
+body[data-layout-mode="single"] .pane-folders {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(330px, 78vw);
+  z-index: 300;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  transform: translateX(-100%);
+  transition: transform 180ms ease;
+}
+
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-layout-mode="single"] .pane-folders {
+    transition: none;
+  }
+}
+
+/* The dimmed list behind the drawer doubles as the way out of it. */
 body[data-layout-mode="single"] #medium-pane-backdrop {
-  display: none !important;
+  display: none;
+}
+
+body[data-layout-mode="single"][data-single-pane-level="0"] #medium-pane-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 290;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* Hamburger in the top-left of the list, in place of a text back button — the
+   drawer is not somewhere you navigate "back" to. */
+body[data-layout-mode="single"] .single-menu-btn {
+  padding-left: 0;
+  padding-right: 0.2rem;
 }
 
 /* ── Phone: article view ──────────────────────────────────────────────────────

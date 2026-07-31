@@ -77,16 +77,57 @@ def test_the_back_controls_are_delegated():
 
 
 # ── CSS ──
-def test_exactly_one_pane_shows_per_level():
-    for level, pane in ((0, "pane-folders"), (1, "pane-posts"), (2, "pane-entry")):
+def test_folders_are_a_drawer_over_the_list_not_a_pane_replacing_it():
+    """Modelled on Inoreader, at Josh's request: a hamburger top-left and the tree
+    sliding over the list you were reading rather than swapping it out — you can
+    see what you are leaving."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .pane-folders {'):][:600]
+    assert "position: fixed;" in block
+    assert "transform: translateX(-100%);" in block
+    open_block = CSS[CSS.index('body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders'):][:200]
+    assert "transform: none;" in open_block
+
+
+def test_the_list_stays_on_screen_behind_the_drawer():
+    assert ('body[data-layout-mode="single"][data-single-pane-level="0"] .pane-posts,'
+            in CSS)
+
+
+def test_the_panes_grid_drops_its_stacking_context_on_a_phone():
+    """.panes carries z-index:1, which scoped the drawer's z-index inside it — the
+    whole grid sat below the backdrop, which then swallowed every tap meant for the
+    folder tree. Higher z-index on the drawer cannot fix that; the context has to
+    go."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .panes {'):][:500]
+    assert "z-index: auto;" in block
+
+
+def test_the_backdrop_is_unhidden_rather_than_out_specified():
+    """A global [hidden] { display: none !important } beats any selector, so the
+    attribute has to come off."""
+    assert "[hidden] { display: none !important; }" in CSS
+    assert "mediumPaneBackdrop.toggleAttribute('hidden', !showBackdrop)" in INDEX
+
+
+def test_the_menu_button_replaces_the_back_arrow_on_the_list():
+    """The drawer is not somewhere you navigate "back" to."""
+    assert 'class="single-back-btn single-menu-btn"' in INDEX
+    block = INDEX[INDEX.index('single-menu-btn"'):][:300]
+    assert ">menu<" in block
+
+
+def test_other_levels_still_swap_panes():
+    for level, pane in ((1, "pane-posts"), (2, "pane-entry")):
         assert f'body[data-layout-mode="single"][data-single-pane-level="{level}"] .{pane}' in CSS
 
 
-def test_hidden_panes_are_display_none_not_merely_offscreen():
-    """Translating them off-canvas would still lay out and fetch their images —
-    on a phone that is the expensive half of the page."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .pane-folders,'):]
-    assert "display: none;" in block[:400]
+def test_hidden_content_panes_are_display_none_not_merely_offscreen():
+    """Translating them off-canvas would still lay out and fetch their images — on
+    a phone that is the expensive half of the page. The folder drawer is the one
+    exception, and it is exempt for a reason: it holds no images, and it has to be
+    in the layout to slide."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .pane-posts,\nbody[data-layout-mode="single"] .pane-entry {'):]
+    assert "display: none;" in block[:300]
 
 
 def test_the_phone_uses_the_measured_viewport_height():
