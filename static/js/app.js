@@ -1471,6 +1471,122 @@ const CAPTURE_MODE_FULL = 'full';
       document.getElementById('unstar-tagged-btn')?.click();  // re-scan
     });
 
+    // ── Archive old stars ("Inbox bankruptcy") ─────────────────────────────
+    // A cutoff, not a checklist: the premise is that these are items you are
+    // never going to review one by one. Safe in a way the unstar sweep is not —
+    // archiving keeps the tag, the offline copy and pruning-exemption, and each
+    // item can be un-archived individually.
+    let _aoDays = 30;
+    let _aoToken = 0;   // guards against an out-of-order preview reply
+
+    const _aoRender = async () => {
+      const results = document.getElementById('archive-old-results');
+      const intro = results.querySelector('.archive-old-intro');
+      const list = results.querySelector('.archive-old-list');
+      const choices = document.getElementById('archive-old-choices');
+      const okBtn = document.getElementById('archive-old-ok');
+      const token = ++_aoToken;
+      intro.textContent = 'Measuring…';
+      okBtn.hidden = true;
+      okBtn.disabled = true;
+      let data;
+      try {
+        const resp = await fetch(`/saved/archive-old/preview?days=${_aoDays}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (err) {
+        if (token === _aoToken) intro.textContent = 'Measuring failed: ' + err;
+        return;
+      }
+      if (token !== _aoToken) return;   // a later cutoff click superseded this
+
+      choices.innerHTML = '';
+      (data.day_choices || []).forEach(d => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'settings-secondary-btn archive-old-choice' +
+                      (d === _aoDays ? ' active' : '');
+        b.textContent = d >= 365 ? `${Math.round(d / 365)} year` :
+                        d >= 30 ? `${Math.round(d / 30)} month${d >= 60 ? 's' : ''}` :
+                        `${d} days`;
+        b.dataset.days = String(d);
+        if (d === _aoDays) b.setAttribute('aria-pressed', 'true');
+        choices.appendChild(b);
+      });
+
+      const t = data.totals || {};
+      intro.textContent =
+        `${(t.to_archive || 0).toLocaleString()} of ${(t.starred || 0).toLocaleString()} ` +
+        `starred article(s) are older than ${data.days} days. ` +
+        `The Inbox would go to ${(t.remaining || 0).toLocaleString()}.`;
+
+      // The age spread, so the headline number can actually be checked. A lone
+      // total is impossible to sanity-check before thousands of items move.
+      list.innerHTML = '';
+      const table = document.createElement('table');
+      table.className = 'archive-old-table';
+      (data.buckets || []).forEach(b => {
+        const tr = document.createElement('tr');
+        const td1 = document.createElement('td');
+        td1.textContent = b.label;
+        const td2 = document.createElement('td');
+        td2.textContent = (b.count || 0).toLocaleString();
+        tr.append(td1, td2);
+        table.appendChild(tr);
+      });
+      list.appendChild(table);
+
+      okBtn.hidden = false;
+      okBtn.disabled = !(t.to_archive || 0);
+      okBtn.dataset.count = String(t.to_archive || 0);
+      okBtn.textContent = (t.to_archive || 0)
+        ? `Archive ${(t.to_archive).toLocaleString()} article(s)`
+        : 'Nothing to archive';
+    };
+
+    document.getElementById('archive-old-btn')?.addEventListener('click', () => {
+      document.getElementById('archive-old-results').hidden = false;
+      _aoRender();
+    });
+
+    document.getElementById('archive-old-choices')?.addEventListener('click', (ev) => {
+      const b = ev.target.closest?.('.archive-old-choice');
+      if (!b) return;
+      _aoDays = Number(b.dataset.days) || 30;
+      _aoRender();
+    });
+
+    document.getElementById('archive-old-ok')?.addEventListener('click', async () => {
+      const btn = document.getElementById('archive-old-ok');
+      const n = Number(btn.dataset.count || 0);
+      if (!n) return;
+      if (!confirm(`Archive ${n.toLocaleString()} starred article(s) older than ` +
+                   `${_aoDays} days?\n\nThey leave the Inbox and are marked read. ` +
+                   `Tags, the offline copy and protection from cleanup are all kept, ` +
+                   `and any item can be un-archived.`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Archiving…';
+      let data;
+      try {
+        const resp = await fetch('/saved/archive-old', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ days: _aoDays }),
+        });
+        data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      } catch (err) {
+        // Leave it disabled and drop the stale count: an enabled button would
+        // promise a number its label no longer describes.
+        delete btn.dataset.count;
+        alert('Archiving failed: ' + err);
+        _aoRender();
+        return;
+      }
+      alert(`Archived ${(data.archived || 0).toLocaleString()} article(s).`);
+      _aoRender();
+    });
+
     // ── Purge old posts utility ────────────────────────────────────────────
     document.getElementById('purge-old-btn')?.addEventListener('click', () => {
       const panel = document.getElementById('purge-old-panel');

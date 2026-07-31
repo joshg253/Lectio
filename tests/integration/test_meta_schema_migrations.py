@@ -210,6 +210,21 @@ def test_archived_at_column_lifts_into_archived_entries(tmp_path):
         conn = main.get_meta_connection()
         rows = list(conn.execute("SELECT archived_at FROM archived_entries"))
         assert len(rows) == 1 and rows[0]["archived_at"] == "2026-01-01"
+
+        # And the source is cleared, which is what makes it ONE-TIME rather than
+        # merely idempotent. Leaving the column populated made every restart
+        # re-lift it: un-archiving deleted the archived_entries row, the column
+        # survived, and the next deploy resurrected the item. Reported live as
+        # "I've unarchived them 3 times now and they keep coming back".
+        assert conn.execute(
+            "SELECT COUNT(*) FROM saved_entries WHERE archived_at IS NOT NULL"
+        ).fetchone()[0] == 0
+
+        # The real test of one-time-ness: un-archive, reboot, stay un-archived.
+        main.set_entry_archived("f", "archived", False)
+        main.close_thread_db_pools()
+        main.ensure_meta_schema()
+        assert main.get_archived_saved_keys() == set()
     finally:
         main.close_thread_db_pools()
         tenancy._layout = saved

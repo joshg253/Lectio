@@ -1225,12 +1225,26 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   ("ignore for now"), and an Archive view in the regular app ("don't think we
   need it at all", conditional on History being browsable in reverse order).
 
-  **PR D (next): "archive starred older than X days" utility.** Manual, never
-  automatic, preview-then-apply like the unstar panel. Josh will run it at 30
-  days first — that leaves ~420 in the Inbox out of 9,979. This is what makes the
-  Inbox usable without redefining what a star means, and it retires #5: those
-  1,786 starred+tagged items get archived like everything else, keeping both tag
-  and capture, instead of being unstarred and losing the TODO axis.
+  **PR D landed 2026-07-29**: Settings → Feeds → Utilities → **Archive old
+  stars**. Cutoff chips (7d/30d/90d/6mo/1yr) with an age-spread table, because a
+  lone total cannot be sanity-checked before thousands of items move. Manual,
+  never automatic. Measured live:
+
+  | cutoff | archives | Inbox left |
+  |---|---|---|
+  | 7 days | 9,827 | 175 |
+  | **30 days** | **9,581** | **421** |
+  | 90 days | 3,461 | 6,541 |
+  | 1 year | 3,130 | 6,872 |
+
+  The 1–3 month bucket alone holds 6,120 (the filing run of ~2 months ago), which
+  is why 90 days barely helps.
+
+  **This retires #5.** Those 1,786 starred+tagged items get archived like the
+  rest, keeping tag *and* capture, instead of being unstarred and losing the TODO
+  axis. **⚠ The bulk path deliberately does not write `read_history`** — capped at
+  2,000 rows, it is the only reverse-chronological record of what has been dealt
+  with, and 9,000 bulk archives would evict all of it.
 
   **PR E (after): pinned tags.** Promote any tag to a top-level node in both
   modes. Store the pin **separately from the tag name** — Josh floated a `##tag`
@@ -1308,6 +1322,52 @@ pull without evading a bot wall:
   scan. Fixing this means spoofing a browser UA, which we don't do.
 
 Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
+
+### 7b. Offline reading on the Supernote (raised 2026-07-29, not started)
+
+The Supernote is WiFi-only, so with no WiFi there is no way to work the backlog.
+The content is not the problem — every kept article is already captured
+server-side (readability HTML in the starred archive), so this is delivery only.
+
+**Device facts, measured rather than assumed** (UA logged via
+`_READ_MODE_UA_SEEN`):
+
+    Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A.210505.003; wv)
+    AppleWebKit/537.36 … Chrome/96.0.4664.92 Safari/537.36
+
+- **Chrome 96** — Service Worker, Cache API and IndexedDB are all supported at
+  that version, so features are not the blocker.
+- **`wv` = Android WebView, not Chrome.** The host app decides whether service
+  workers are enabled and whether storage survives; WebView browsers often clear
+  cache on exit, there is no PWA install, and no offline start URL. If the
+  browser cannot reopen the page with WiFi off, a perfectly cached article is
+  unreachable. **This, not feature support, is the risk.**
+- **It reports Nomad on a Manta** — the model is hardcoded. Auto-detect must
+  match "Supernote", never the model name.
+
+**Three routes:**
+
+- **(a) Service Worker + Cache API + an IndexedDB action queue.** The only option
+  that keeps *triage* working offline (Archive/Delete/Tag replayed on reconnect).
+  Also means revisiting the reader page's deliberate `Cache-Control: no-store`
+  (main.py), which is why prefetch shipped as images-only, and caching image
+  bytes client-side — the `/api/img` cache is server-side, so cached articles
+  would otherwise render with broken images.
+- **(b) EPUB export of the next N Inbox articles.** Lands in Supernote's own
+  storage; its native reader handles e-ink pagination and annotation far better
+  than a WebView, and nothing web-platform has to hold up. **Loses in-EPUB
+  triage** — read offline, file on reconnect.
+- **(c) One self-contained HTML bundle** (images as data URIs). No worker needed,
+  no triage either, and several MB for 20 articles — against the grain of #12.
+
+**Leaning (b)**, because a WebView is a poor offline host and that is a property
+of the device, not something to engineer around. **If offline triage is the real
+requirement it is (a), and probe first** — feature detection is not the question;
+the question is whether a cached page still loads after the browser has been
+closed and WiFi turned off.
+
+Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
+pile; at ~420 it is a meaningful unit.
 
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 

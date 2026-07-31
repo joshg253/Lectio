@@ -67,6 +67,7 @@ from services import content_edits
 from services import link_canonical
 from services import saved_articles as saved_articles_service
 from services import saved_autofile as saved_autofile_service
+from services import archive_old_stars as archive_old_stars_service
 from services import unstar_tagged as unstar_tagged_service
 from services import instapaper_import as instapaper_import_service
 from services import scraper_service
@@ -3366,15 +3367,26 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE saved_entries ADD COLUMN archived_at TIMESTAMP DEFAULT NULL")
         except Exception:
             pass
-        # One-time lift of the legacy column into the new table. Idempotent via
-        # INSERT OR IGNORE, so it is safe on every boot and during a rolling
-        # deploy where old code may still be writing the column.
+        # One-time lift of the legacy column into the new table — and it must be
+        # ONE-TIME, not merely idempotent. The first version relied on INSERT OR
+        # IGNORE and left the column populated, so every boot re-lifted it:
+        # un-archiving deleted the archived_entries row, the old column survived,
+        # and the next restart brought the item back. Reported as "I've
+        # unarchived them 3 times now and they keep coming back" — a resurrection
+        # bug that is invisible until something restarts the app.
+        #
+        # Clearing the source in the same transaction is what makes it one-time,
+        # and it also removes the second source of truth. A marker flag would
+        # leave a populated column that still looks authoritative to the next
+        # person reading the schema.
         try:
             conn.execute(
                 "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
                 "SELECT feed_url, entry_id, archived_at FROM saved_entries "
                 "WHERE archived_at IS NOT NULL"
             )
+            conn.execute("UPDATE saved_entries SET archived_at = NULL WHERE archived_at IS NOT NULL")
+            conn.commit()
         except Exception:
             pass
         conn.execute(
@@ -11307,6 +11319,7 @@ def list_entries_for_feeds(
     selected_tag: str | None = None,
     search_query: str | None = None,
     kept_scope: str = "kept",
+    archived: bool | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -11399,6 +11412,20 @@ def list_entries_for_feeds(
         set(saved_entries_set) if kept_scope == "starred"
         else saved_entries_set | tagged_entries_set
     )
+    # The Archive (done) axis, applied here rather than by the caller because it
+    # has to happen BEFORE the limit clip. Filtering afterwards means the caller
+    # only ever sees archived items that sorted into the first N of the whole
+    # kept backlog — with 24k kept and a 150 limit, the Archive view showed
+    # whatever happened to land at the top and nothing else. It looked fine under
+    # newest-first (recent archives sort high) and returned nothing under
+    # "Recently starred", where an archived item has no star date at all.
+    archive_filter_keys = get_archived_saved_keys() if archived is not None else set()
+    # Archived counts as kept, the same third keep signal `entry_has_keep_signal`
+    # and `_prune_entries` honor. Archiving REMOVES the star, so an archived item
+    # with no tag is otherwise not "kept" by any axis and would be unreachable in
+    # the very view built to show it.
+    if archived and kept_scope != "starred":
+        kept_entries_set = kept_entries_set | archive_filter_keys
 
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
@@ -11460,6 +11487,18 @@ def list_entries_for_feeds(
                 star_keys = kept_entries_set & get_entry_keys_for_manual_tag(
                     set(feed_urls), normalized_selected_tag
                 )
+            if archived is not None:
+                # Narrow to the done-axis BEFORE the window clip below, for the
+                # same reason the tag filter moved up here: _sorted_star_key_window
+                # sorts and clips in SQL over the raw keys, so anything filtered
+                # afterwards is chosen from a window computed against the whole
+                # kept set. With one archived post among 24k kept, "oldest first"
+                # put it far outside the first 150 and the Archive node rendered
+                # "Nothing here" while its count said 1.
+                star_keys = {
+                    k for k in star_keys
+                    if (k in archive_filter_keys) == archived
+                }
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -11661,6 +11700,9 @@ def list_entries_for_feeds(
                     continue
             # Kept view keeps anything starred OR tagged (the unified keep axis).
             if normalized_star_only and (entry.feed_url, entry.id) not in kept_entries_set:
+                continue
+            if archived is not None and \
+                    (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
                 continue
             # Unread composes with star_only (Saved view narrowed to unread);
             # history stays exclusive with starred (it sorts by read time).
@@ -12100,8 +12142,15 @@ def merge_orphan_saved_entries(
     sort_dir: str,
     limit: int,
     only_feed_url: str | None = None,
+    archived: bool | None = None,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
+
+    *archived* (the done-axis) must be applied HERE, not by the caller: this
+    re-sorts and re-clips to *limit*, so a caller filtering afterwards sees only
+    the archived rows that survived a clip made against the unfiltered list. That
+    is what made the Archive view show nothing under some sort orders — a single
+    archived post sorted to the bottom and fell outside the window.
 
     Orphans are starred entries whose feed is no longer in any folder; their
     metadata comes entirely from the starred archive. Rendered alongside live
@@ -12111,7 +12160,15 @@ def merge_orphan_saved_entries(
     canonically) — used when the user clicks the feed link of an orphaned save
     to browse just that unsubscribed feed's archived items.
     """
+    archived_keys = get_archived_saved_keys() if archived is not None else set()
+    if archived is not None:
+        posts = [p for p in posts
+                 if ((str(p["feed_url"]), str(p["id"])) in archived_keys) == archived]
+
     orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls)
+    if archived is not None:
+        orphans = [o for o in orphans
+                   if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
     if only_feed_url is not None:
         target = normalize_feed_url(only_feed_url)
         orphans = [o for o in orphans if normalize_feed_url(o["feed_url"]) == target]
@@ -16447,10 +16504,12 @@ def resolve_reader_backlog(
         selected_tag=tag,
         search_query=search_query,
         kept_scope=kept_scope,
+        archived=archived,
     )
 
     # Parity with the Saved list: surface archive-only orphans (saves whose feed
     # was unsubscribed) in the whole-backlog star view — root, no feed/tag/query.
+    _merged_orphans = False
     if (
         star_only
         and not list_feed_url
@@ -16465,11 +16524,15 @@ def resolve_reader_backlog(
                 sort_by=sort_by,
                 sort_dir=sort_dir,
                 limit=limit,
+                archived=archived,
             )
+            _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("reader backlog orphan merge failed: %s", exc)
 
-    if archived is not None:
+    if archived is not None and not _merged_orphans:
+        # Both list_entries_for_feeds and merge_orphan_saved_entries apply this
+        # before their own clips; this covers the path where the merge is skipped.
         archived_keys = get_archived_saved_keys()
         posts = [
             p for p in posts
@@ -17151,7 +17214,17 @@ def _build_read_mode_context(
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn
-# the Supernote Manta's UA for the e-ink auto-detect (it isn't in access logs).
+# the e-ink devices' UA for auto-detect (it isn't in access logs).
+#
+# Captured 2026-07-29 from Josh's Manta:
+#   Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A.210505.003; wv)
+#   AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/96.0.4664.92 …
+#
+# ⚠ It says **Nomad on a Manta** — the model is hardcoded in Supernote's browser,
+# not detected, and the Build fingerprint is stock Android 11. So an auto-detect
+# must match "Supernote", never the model. `wv` also matters: this is an Android
+# WebView, so storage persistence and service-worker availability are the host
+# app's call, not the web platform's — see the offline-reading note in Plan.md.
 _READ_MODE_UA_SEEN: set[str] = set()
 
 
@@ -24842,6 +24915,112 @@ async def apply_unstar_tagged(request: Request):
     })
 
 
+def _current_archive_old_stars_plan(days: int) -> dict:
+    """Assemble the archive-old-stars plan for the current user. Read-only."""
+    with get_meta_connection() as conn:
+        starred_at: dict[tuple[str, str], datetime] = {}
+        for feed, eid, when in conn.execute(
+            "SELECT feed_url, entry_id, saved_at FROM saved_entries"
+        ):
+            starred_at[(str(feed), str(eid))] = _parse_stored_dt(when)
+    return archive_old_stars_service.build_archive_plan(
+        starred_at, get_archived_saved_keys(), days=days,
+    )
+
+
+@app.get("/saved/archive-old/preview")
+def preview_archive_old_stars(days: int = Query(archive_old_stars_service.DEFAULT_DAYS)):
+    """Preview which stars would be archived. Changes nothing."""
+    plan = _current_archive_old_stars_plan(days)
+    return JSONResponse({
+        "ok": True,
+        "days": plan["days"],
+        "cutoff": plan["cutoff"],
+        "totals": plan["totals"],
+        "buckets": plan["buckets"],
+        "day_choices": list(archive_old_stars_service.DAY_CHOICES),
+    })
+
+
+@app.post("/saved/archive-old")
+async def apply_archive_old_stars(request: Request):
+    """Archive every star older than N days — the Inbox bankruptcy pass.
+
+    Recomputes the plan server-side from the given ``days`` rather than trusting a
+    client id list, the same as the unstar-tagged apply.
+
+    **Reversible per item, and nothing is lost**: the tag, the offline capture and
+    pruning-exemption all survive, because archived is itself a keep signal. This
+    is why it is the right instrument for the Inbox backlog and #5's unstar sweep
+    is not — see services/archive_old_stars.py.
+
+    Written in bulk rather than by looping the single-entry route, for two
+    reasons beyond speed:
+
+    - **It must not write ``read_history``.** That table is capped at 2,000 rows
+      and is the only reverse-chronological record of what has been dealt with —
+      the thing that made dropping a separate Archive view acceptable. Pushing
+      9,000 bulk archives through it would evict the entire real history.
+    - **No capture-release check is needed.** The archived rows are written first,
+      so every entry provably still carries a keep signal; the per-entry
+      ``entry_has_keep_signal`` probe would be two queries each to answer "yes".
+    """
+    body = await request.json()
+    try:
+        days = int(body.get("days", archive_old_stars_service.DEFAULT_DAYS))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "days must be a number"}, status_code=400)
+
+    plan = _current_archive_old_stars_plan(days)
+    keys = plan["to_archive"]
+    if not keys:
+        return JSONResponse({"ok": True, "archived": 0, "days": days})
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with get_meta_connection() as conn:
+        conn.execute("PRAGMA busy_timeout = 20000")
+        for start in range(0, len(keys), 400):
+            chunk = keys[start:start + 400]
+            conn.executemany(
+                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "VALUES (?, ?, ?)",
+                [(f, e, now_iso) for f, e in chunk],
+            )
+            # The star comes off: the TODO is discharged.
+            placeholders = ",".join("(?,?)" for _ in chunk)
+            conn.execute(
+                f"DELETE FROM saved_entries WHERE (feed_url, entry_id) IN ({placeholders})",
+                [v for k in chunk for v in k],
+            )
+            # Read at the override level too, so a refresh can't un-read them.
+            conn.executemany(
+                "INSERT OR REPLACE INTO entry_read_state (feed_url, entry_id, read_at) "
+                "VALUES (?, ?, ?)",
+                [(f, e, now_iso) for f, e in chunk],
+            )
+        conn.commit()
+
+    marked_read = 0
+    try:
+        with get_reader() as reader:
+            for feed_url, entry_id in keys:
+                try:
+                    reader.mark_entry_as_read((feed_url, entry_id))
+                    marked_read += 1
+                except Exception:  # noqa: BLE001 — a missing entry is not fatal here
+                    pass
+    except Exception:
+        LOGGER.warning("archive-old-stars: reader mark-read pass failed", exc_info=True)
+
+    # A behind-the-back write leaves the generation-guarded counts stale.
+    invalidate_unread_counts_cache()
+    LOGGER.info("[archive-old-stars] archived %d star(s) older than %dd (marked read: %d)",
+                len(keys), days, marked_read)
+    return JSONResponse({
+        "ok": True, "archived": len(keys), "days": days, "marked_read": marked_read,
+    })
+
+
 @app.post("/saved/autofile/non-feed-subscription")
 async def mark_non_feed_subscription(request: Request):
     """Mark or unmark a *subscription* as not really a feed.
@@ -26136,12 +26315,20 @@ def discard_entry(
     would ever show; `apply_star_state` removes those outright.
 
     This exists as a route because the gesture has an **order** the client was
-    previously trusted to get right: tags must be cleared *before* the unstar,
-    since the capture is only released once no keep signal remains. Reversed, the
-    captured copy is stranded with nothing keeping it. That is server-side
+    previously trusted to get right: **every** keep signal must be cleared before
+    the unstar, since the capture is only released once none remains. Reversed,
+    the captured copy is stranded with nothing keeping it. That is server-side
     knowledge, so it now lives on the server.
+
+    That includes the **archived** row, which is easy to forget and fails
+    quietly twice over: the entry stays listed in Archive forever, and — because
+    archived *is* a keep signal — the unstar below sees one and skips releasing
+    the offline capture, so Delete keeps the contents it exists to drop.
+    Deleting an archived item is not a contradiction: Archive means "done, keep
+    it", Delete means "done, don't", so Delete has to win.
     """
     set_manual_tags_for_entry(feed_url, entry_id, "")
+    set_entry_archived(feed_url, entry_id, False)
     apply_star_state(feed_url, entry_id, False)
     mark_entry_read_everywhere(feed_url, entry_id)
     return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "discarded": True})

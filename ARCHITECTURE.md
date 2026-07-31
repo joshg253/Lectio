@@ -1077,9 +1077,16 @@ keep it, or drop it, without opening it.
 `saved_entries` row *is* the star, and Archive **removes** the star — so state
 stored on that row could not outlive the act that sets it. The table also lets a
 tagged-but-unstarred entry be archived, which the column could never represent.
-Migrated by lifting the legacy `saved_entries.archived_at` column on every boot
-(`INSERT OR IGNORE`, so it is idempotent and rolling-deploy safe); the column is
-still created but nothing reads it. This also deleted the unstar-tagged panel's
+Migrated by lifting the legacy `saved_entries.archived_at` column **once**, then
+clearing the column in the same transaction. **Idempotent is not enough here.**
+The first version used `INSERT OR IGNORE` and left the column populated, so every
+boot re-lifted it: un-archiving deleted the `archived_entries` row, the old column
+survived, and the next restart resurrected the item. It surfaced as "I've
+unarchived them 3 times now and they keep coming back", and it is invisible until
+something restarts the app — the same shape as the starred-archive backfill that
+re-created orphan star rows at every boot. Clearing the source is also what
+removes the second source of truth; a marker flag would leave a populated column
+that still reads as authoritative. This also deleted the unstar-tagged panel's
 `archived_at_lost` warning outright — unstarring can no longer discard archived
 state, so there is nothing to warn about.
 
@@ -1174,9 +1181,13 @@ of the inbox.*
   them. `_prune_entries` honors the same three signals, or retention would delete
   archived posts nightly — they are read and unstarred, exactly its target shape.
 - **Ordering is server-side.** `POST /entries/archive` writes the archived row
-  *before* unstarring, and `POST /entries/discard` clears tags *before*
-  unstarring, both for the same reason: the capture is released only when the
-  last keep signal goes. Delete used to be a client-side chain of two POSTs with
+  *before* unstarring, and `POST /entries/discard` clears tags **and the archived
+  row** *before* unstarring, both for the same reason: the capture is released
+  only when the last keep signal goes. Delete forgetting the archived row failed
+  quietly twice — the entry stayed listed in Archive forever, and the unstar saw
+  a surviving keep signal and skipped releasing the capture, so Delete kept the
+  contents it exists to drop. Deleting an archived item is not a contradiction:
+  Archive means "done, keep it", Delete means "done, don't", so Delete wins. Delete used to be a client-side chain of two POSTs with
   that ordering encoded in a comment in `reader.js`; it is one route now, because
   the constraint is a property of the storage layer, not of the caller.
 
@@ -1197,6 +1208,25 @@ main app's Saved view) or `"starred"` (the Inbox). `_read_mode_saved_index` retu
 *filed* (tagged minus archived) alongside the inbox, because the tag counts must
 still be counted over filed items — counting them over a starred-only inbox would
 empty most of the tree.
+
+**The Archive filter is applied before every clip, and there are three.**
+`_sorted_star_key_window` sorts and clips *in SQL over the raw kept keys*,
+`list_entries_for_feeds` clips its light records, and `merge_orphan_saved_entries`
+re-sorts and re-clips after appending archive-only orphans. The done-axis filter
+originally sat downstream of all three, in `resolve_reader_backlog`, so it chose
+archived rows out of a window computed against the *unfiltered* backlog.
+
+Live symptom (2026-07-29): one archived post among 24,672 kept. Newest-first
+found it, because a recent post sorts high; oldest-first and Recently-starred
+returned nothing, because it sorted to the far end and fell outside the first
+150. The Archive node rendered "Nothing here" while its own count — read straight
+from `archived_entries` — said 1. **A count and a list computed at different
+layers is the recurring bug in this area**; it is the same shape as the
+9,979-vs-24,695 tree mismatch.
+
+`kept_entries_set` also folds in the archived keys, because archiving removes the
+star: an archived, untagged entry is kept by no other axis and would be
+unreachable in the one view built to show it.
 
 **"All Saved" is a separate node**, not a mode of the Inbox: everything kept
 minus archived, i.e. what the main app's Saved view shows. The Inbox has to stay

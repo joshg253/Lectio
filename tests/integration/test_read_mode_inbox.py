@@ -192,3 +192,54 @@ def test_all_saved_is_not_treated_as_the_inbox(configured):
     assert main._read_is_inbox_node(1, None, False, None, "saved") is True
     href = main._read_browse_href(1, None, False, None, kept_all=True)
     assert "kept=all" in href
+
+
+@pytest.mark.parametrize("sort_key", ["new", "old", "recent", "starred"])
+def test_archive_view_finds_its_items_in_every_sort_order(configured, sort_key):
+    """The archived filter must be applied BEFORE every clip, not after any.
+
+    Three separate places clip: `_sorted_star_key_window` sorts and clips in SQL
+    over the raw kept keys, `list_entries_for_feeds` clips its light records, and
+    `merge_orphan_saved_entries` re-sorts and re-clips after appending orphans.
+    Filtering downstream of any of them picks archived rows out of a window
+    computed against the *unfiltered* backlog.
+
+    Live symptom: one archived post among 24,672 kept. Newest-first found it (a
+    recent post sorts high), oldest-first and Recently-starred returned nothing —
+    the Archive node said "Nothing here" while its own count said 1.
+    """
+    sort_by, sort_dir = main._READ_SORTS[sort_key]
+    rows = main.resolve_reader_backlog(
+        folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
+        tag=None, sort_by=sort_by, sort_dir=sort_dir, search_query=None,
+        archived=True, limit=150, kept_scope="kept",
+    )
+    assert [r["id"] for r in rows] == ["done"]
+
+
+def test_archive_view_reaches_an_untagged_unstarred_item(configured):
+    """Archiving removes the star, so an archived item with no tag is kept by
+    nothing else — it must still be reachable in the view built to show it."""
+    with main.get_reader() as reader:
+        reader.add_entry({"feed_url": FEED, "id": "bare", "link": "https://example.test/bare"})
+    main.set_entry_archived(FEED, "bare", True)
+
+    rows = main.resolve_reader_backlog(
+        folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
+        tag=None, sort_by="post", sort_dir="desc", search_query=None,
+        archived=True, limit=150, kept_scope="kept",
+    )
+    assert "bare" in {r["id"] for r in rows}
+
+
+def test_inbox_excludes_archived_in_every_sort_order(configured):
+    """The mirror of the above: the archived=False side must clip correctly too,
+    or a done item reappears in the queue it was cleared from."""
+    for sort_key in ("new", "old", "recent", "starred"):
+        sort_by, sort_dir = main._READ_SORTS[sort_key]
+        rows = main.resolve_reader_backlog(
+            folder_id=None, list_feed_url=None, read_filter="all", star_only=True,
+            tag=None, sort_by=sort_by, sort_dir=sort_dir, search_query=None,
+            archived=False, limit=150, kept_scope="starred",
+        )
+        assert "done" not in {r["id"] for r in rows}, sort_key

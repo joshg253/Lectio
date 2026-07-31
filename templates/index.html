@@ -230,6 +230,21 @@
           {# Folders that hold saved articles — the Saved counterpart of the
              feeds tree; visible only in Saved mode (badges = total saved). #}
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
+            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
+               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
+            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
+            <div class="tree-folder-group">
+              <div class="tree-folder-row">
+                <span class="tree-toggle-spacer"></span>
+                <a
+                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
+                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
+                >
+                  <span class="name">Inbox</span>
+                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
+                </a>
+              </div>
+            </div>
             {# "All": the whole starred backlog — what the header itself used to
                load. Sits at folder level so opening it is a deliberate click. #}
             <div class="tree-folder-group">
@@ -243,21 +258,6 @@
                   <span class="name">All</span>
                   {% set _saved_total = saved_counts_by_folder.get(root_folder_row.id, 0) %}
                   {% if _saved_total %}<span class="count">{{ _saved_total }}</span>{% endif %}
-                </a>
-              </div>
-            </div>
-            {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
-               a pinned tag bucket; file items out by removing the 'inbox' tag. #}
-            {% set _inbox_tag_row = (tag_rows | selectattr('name', 'equalto', 'inbox') | list | first) if tag_rows else none %}
-            <div class="tree-folder-group">
-              <div class="tree-folder-row">
-                <span class="tree-toggle-spacer"></span>
-                <a
-                  href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}{{ _saved_rfq }}&tag=inbox"
-                  class="tree-item child-item saved-folder-item saved-inbox-item {% if selected_star_only and selected_tag == 'inbox' %}active{% endif %}"
-                >
-                  <span class="name">Inbox</span>
-                  {% if _inbox_tag_row %}<span class="count">{{ _inbox_tag_row.count }}</span>{% endif %}
                 </a>
               </div>
             </div>
@@ -2264,6 +2264,7 @@
             <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
             <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
             <button type="button" id="unstar-tagged-btn" class="settings-secondary-btn" title="Find starred articles that also carry a tag — the tag already keeps them, so the star is redundant">Unstar tagged articles</button>
+            <button type="button" id="archive-old-btn" class="settings-secondary-btn" title="Clear the Saved Inbox of stars you are plainly not getting to — archives them, keeping tags and the offline copy">Archive old stars</button>
             <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
             <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
             <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
@@ -2341,6 +2342,24 @@
             <div class="dedup-inline-actions">
               <button type="button" id="unstar-tagged-selectall" class="settings-secondary-btn" hidden title="Check every topical tag, leaving any queue-like tag unchecked">Select all topical tags</button>
               <button type="button" id="unstar-tagged-ok" class="danger" hidden disabled>Unstar selected</button>
+            </div>
+          </div>
+          <!-- Archive old stars: the Inbox bankruptcy pass. A cutoff rather than
+               a checklist, because the whole point is that these are items you
+               are never going to review individually. Archiving (not unstarring)
+               is what keeps the tag, the offline copy and pruning-exemption, and
+               it is reversible per item — so this is safe in a way #5's unstar
+               sweep was not. -->
+          <div id="archive-old-results" hidden>
+            <p class="action-modal-label archive-old-intro"></p>
+            <p class="action-modal-hint">A star means <em>to-do</em>. Anything starred long ago is not something you are still getting to, so this archives it: it leaves the Inbox and is marked read, while its tags, its offline copy and its protection from cleanup all stay. Un-archive any item to put it back.</p>
+            <div class="archive-old-cutoff">
+              <span class="action-modal-label">Archive stars older than</span>
+              <span id="archive-old-choices" class="archive-old-choices"></span>
+            </div>
+            <div class="archive-old-list"></div>
+            <div class="dedup-inline-actions">
+              <button type="button" id="archive-old-ok" class="danger" hidden disabled>Archive</button>
             </div>
           </div>
           <div id="saved-autofile-results" hidden>
