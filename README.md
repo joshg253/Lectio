@@ -174,6 +174,9 @@ The short version:
   the stack rather than leaving the page. It is the *same* app, not a second
   reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
   full-image webcomic view all work there without being ported.
+- **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
+  *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
+  tag only ever filtered kept articles, so it now lives only where it applies.
 - **On a phone the article view is one pinned row** — `< Posts`, then mark/star/tag,
   then reader view / web view / open in tab / share. Title, byline and feed · date
   scroll away with the article instead of taking half the screen. Suggestion chips

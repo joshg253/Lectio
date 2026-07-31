@@ -1966,6 +1966,25 @@ button:hover, .button-link:hover {
   overflow: auto;
 }
 
+/* Saved's Folders section, collapsing the same way Tags does. */
+.saved-section-header-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+
+.saved-section-header-row[hidden] {
+  display: none;
+}
+
+.tree-children.saved-tree-children.is-collapsed {
+  display: none;
+}
+
+#saved-folders-header-btn.is-collapsed .tags-collapse-chevron {
+  transform: rotate(-90deg);
+}
+
 .tags-tree-block.is-collapsed .tags-tree-body {
   display: none;
 }

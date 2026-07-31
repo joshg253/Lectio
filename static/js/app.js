@@ -2297,6 +2297,28 @@ const CAPTURE_MODE_FULL = 'full';
       }
     }
 
+    // Saved's Folders section collapses like Tags does, with its own remembered
+    // state — the two sections are independent, which is the point of splitting
+    // them.
+    const savedFoldersHeaderBtn = document.getElementById('saved-folders-header-btn');
+    const SAVED_FOLDERS_COLLAPSED_KEY = 'lectio-saved-folders-collapsed';
+
+    function applySavedFoldersCollapsed(collapsed) {
+      document.querySelector('.saved-tree-children')
+        ?.classList.toggle('is-collapsed', collapsed);
+      savedFoldersHeaderBtn?.classList.toggle('is-collapsed', collapsed);
+    }
+
+    if (savedFoldersHeaderBtn) {
+      applySavedFoldersCollapsed(
+        window.localStorage.getItem(SAVED_FOLDERS_COLLAPSED_KEY) === '1');
+      savedFoldersHeaderBtn.addEventListener('click', () => {
+        const next = !savedFoldersHeaderBtn.classList.contains('is-collapsed');
+        window.localStorage.setItem(SAVED_FOLDERS_COLLAPSED_KEY, next ? '1' : '0');
+        applySavedFoldersCollapsed(next);
+      });
+    }
+
     async function markProblematicFeedsViewed() {
       if (problematicFeedsViewedThisSession) return;
       problematicFeedsViewedThisSession = true;
@@ -2974,6 +2996,12 @@ const CAPTURE_MODE_FULL = 'full';
       // pane-swap path doesn't re-render the tree, so toggle them here.
       document.querySelector('.saved-tree-children')?.toggleAttribute('hidden', !nextStarOnly);
       document.querySelector('.feeds-tree-children')?.toggleAttribute('hidden', nextStarOnly);
+      // Saved's own section chrome: the Folders header, and Tags — which is a
+      // Saved-only section now. The tree is not re-rendered on a mode switch, so
+      // the server-side condition alone would leave whichever state the last full
+      // page load happened to produce.
+      document.querySelector('.saved-section-header-row')?.toggleAttribute('hidden', !nextStarOnly);
+      document.getElementById('tags-tree-block')?.toggleAttribute('hidden', !nextStarOnly);
       // saved-mode drives the pinned layout (All Feeds stuck above Tags while
       // the saved sublist scrolls).
       document.querySelector('nav.tree')?.classList.toggle('saved-mode', nextStarOnly);

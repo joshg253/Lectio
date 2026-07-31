@@ -231,7 +231,18 @@
           </div>
 
           {# Folders that hold saved articles — the Saved counterpart of the
-             feeds tree; visible only in Saved mode (badges = total saved). #}
+             feeds tree; visible only in Saved mode (badges = total saved).
+             Collapsible, so Saved's two sections (Folders and Tags) can each be
+             folded away independently. The Feeds tree has no such header: it is
+             the only section there, and a collapse control for the whole of it
+             would just be a way to empty the sidebar. #}
+          <div class="saved-section-header-row"{% if not selected_star_only %} hidden{% endif %}>
+            <button type="button" class="tags-header section-block-header"
+                    id="saved-folders-header-btn">
+              Folders
+              <span class="tags-collapse-chevron material-symbols-rounded" aria-hidden="true">expand_more</span>
+            </button>
+          </div>
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
             {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
                a pinned tag bucket; file items out by removing the 'inbox' tag. #}
@@ -380,7 +391,9 @@
           </div>
         </div>
 
-        <div class="tree-block tags-tree-block" id="tags-tree-block">
+        {# Tags are a Saved-mode section. In the Feeds tree they duplicated a
+           filter that only ever applied to kept articles anyway. #}
+        <div class="tree-block tags-tree-block" id="tags-tree-block"{% if not selected_star_only %} hidden{% endif %}>
           <div class="tags-header-row">
             <button type="button" class="tags-header section-block-header" id="tags-header-btn">
               Tags
