@@ -128,3 +128,16 @@ def test_the_collapse_flag_is_a_class_not_a_has_selector():
     """:has() is unsupported on the older WebViews in play here, and this rule
     decides layout rather than a nicety."""
     assert "classList.toggle('saved-folders-collapsed', collapsed)" in APP_JS
+
+
+def test_the_scope_tabs_pin_in_both_modes():
+    """Reported: "FEEDS/SAVED is pinned in SAVED view, but not in FEEDS view". They
+    are the mode switch — a switch that scrolls out of reach is one you have to
+    hunt for. Feeds mode used to scroll the whole root block as one, tabs included."""
+    assert ".tree .root-tree-block {" in CSS          # both modes, not just saved
+    tabs = CSS[CSS.index(".scope-tabs {\n  flex: 0 0 auto;"):][:80]
+    assert "flex: 0 0 auto;" in tabs
+    feeds = CSS[CSS.index(".tree:not(.saved-mode) .feeds-tree-children {"):]
+    feeds = feeds[:feeds.index("}")]
+    assert "overflow-y: auto;" in feeds              # the list scrolls, not the block
+    assert "min-height: 0;" in feeds

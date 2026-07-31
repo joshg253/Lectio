@@ -1830,6 +1830,10 @@ const CAPTURE_MODE_FULL = 'full';
       scheduleToastFade(nextToast, 3800);
     }
 
+    // The layout shell in index.html is a separate scope and needs to talk to the
+    // user too — swiping past the last article, for one.
+    window.showToastMessage = showToastMessage;
+
     async function copyTextToClipboard(text) {
       if (!text) {
         return false;
@@ -13092,6 +13096,11 @@ const CAPTURE_MODE_FULL = 'full';
           }
         });
       }
+
+      // Swiping through articles hits the end of the VISIBLE window long before
+      // the end of the list; it needs the same "show me more" the scroll
+      // sentinel triggers.
+      window.revealNextPostChunk = () => revealNextChunk();
 
       function revealNextChunk() {
         const items = getPostItems();

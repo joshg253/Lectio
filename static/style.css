@@ -1353,9 +1353,27 @@ body[data-single-mode="1"] #folders-collapse-btn {
   border-top: 1px solid var(--tree-line);
 }
 
-/* Saved mode: the (long) saved folder list is the scrollable region and the
-   All Feeds row pins to the bottom above Tags, mirroring how Tags itself is
-   pinned. Feeds mode keeps the whole root block scrolling as one. */
+/* The Feeds/Saved tabs pin in BOTH modes: they are the mode switch, and a switch
+   that scrolls out of reach is one you have to hunt for. Feeds mode used to
+   scroll the whole root block as one, so the tabs left with it.
+   In Saved the (long) folder list is the scrollable region and the All Feeds row
+   also pins, to the bottom above Tags. */
+.scope-tabs {
+  flex: 0 0 auto;
+}
+
+.tree .root-tree-block {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tree:not(.saved-mode) .feeds-tree-children {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .tree.saved-mode .root-tree-block {
   display: flex;
   flex-direction: column;

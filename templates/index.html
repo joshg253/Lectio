@@ -958,18 +958,39 @@
     }
 
 
-    function navigateEntry(direction) {
-      // find active post in posts pane
-      const posts = Array.from(document.querySelectorAll('.post-item')).filter(p=>!p.classList.contains('post-item-hidden'));
+    // Returns what happened, so a caller can say so: 'ok', 'start', 'end',
+    // 'pending' (waiting on the next chunk) or 'none' (nothing selected).
+    function navigateEntry(direction, isRetry = false) {
+      const all = Array.from(document.querySelectorAll('.post-item'));
+      const posts = all.filter(p => !p.classList.contains('post-item-hidden'));
       const active = document.querySelector('.post-item.active');
-      if (!active) return;
+      if (!active) return 'none';
       const idx = posts.indexOf(active);
-      if (idx === -1) return;
+      if (idx === -1) return 'none';
       const nextIdx = idx + direction;
-      if (nextIdx < 0 || nextIdx >= posts.length) return;
+      if (nextIdx < 0) return 'start';
+      if (nextIdx >= posts.length) {
+        // The list renders in chunks, so the end of the VISIBLE window is not
+        // the end of the list. Ask for the next chunk and try once more before
+        // telling the user there is nothing left — otherwise "no more articles"
+        // is simply wrong every 50 posts.
+        const moreLoaded = all.length > posts.length;
+        const moreOnServer = Boolean(document.getElementById('posts-chunk-sentinel'));
+        if (!isRetry && (moreLoaded || moreOnServer)) {
+          try { window.revealNextPostChunk && window.revealNextPostChunk(); } catch (e) {}
+          window.setTimeout(() => {
+            if (navigateEntry(direction, true) === 'end') {
+              window.showToastMessage && window.showToastMessage('No more articles.');
+            }
+          }, 450);
+          return 'pending';
+        }
+        return 'end';
+      }
       const target = posts[nextIdx];
       const link = target.querySelector('.post-main-link');
       if (link) loadEntryPaneWithoutFullRefresh(link.href);
+      return 'ok';
     }
 
     // Swipe left/right in the article to move through the list, the way you would
@@ -1013,7 +1034,15 @@
         if (Math.abs(dx) < MIN_DISTANCE) return;
         if (Math.abs(dx) < Math.abs(dy) * 2) return;   // mostly vertical: a scroll
         // Left takes you forward, matching the direction the list runs.
-        navigateEntry(dx < 0 ? 1 : -1);
+        const forward = dx < 0;
+        const result = navigateEntry(forward ? 1 : -1);
+        // Say so, rather than looking broken. 'pending' stays quiet: it is
+        // fetching, and it reports for itself if it comes back empty.
+        if (result === 'end') {
+          window.showToastMessage && window.showToastMessage('No more articles.');
+        } else if (result === 'start') {
+          window.showToastMessage && window.showToastMessage('Already at the first article.');
+        }
       }, { passive: true });
     })();
 

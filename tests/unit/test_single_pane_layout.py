@@ -448,8 +448,9 @@ def test_the_divider_gets_a_finger_sized_grab_area_on_touch():
 
 
 def test_swiping_the_article_moves_through_the_list():
-    block = INDEX[INDEX.index("function bindArticleSwipe"):][:2400]
-    assert "navigateEntry(dx < 0 ? 1 : -1)" in block          # left = forward
+    block = INDEX[INDEX.index("function bindArticleSwipe"):][:3000]
+    assert "navigateEntry(forward ? 1 : -1)" in block         # left = forward
+    assert "const forward = dx < 0;" in block
 
 
 def test_the_swipe_refuses_gestures_that_are_really_something_else():
@@ -460,3 +461,28 @@ def test_the_swipe_refuses_gestures_that_are_really_something_else():
     assert "Math.abs(dx) < Math.abs(dy) * 2" in block          # not a scroll
     # Sideways-scrollable content and controls own their own gestures.
     assert "pre, table" in block
+
+
+def test_running_out_of_articles_says_so():
+    """Reported: "Otherwise it just looks like it\'s not working"."""
+    block = INDEX[INDEX.index("function bindArticleSwipe"):][:3000]
+    assert "No more articles." in block
+    assert "Already at the first article." in block
+
+
+def test_the_end_of_a_chunk_is_not_reported_as_the_end_of_the_list():
+    """The list renders in chunks and navigateEntry only sees the visible window,
+    so "no more articles" would have been wrong every 50 posts — and swiping would
+    have stopped dead there even though more were already loaded."""
+    block = INDEX[INDEX.index("function navigateEntry"):][:2000]
+    assert "revealNextPostChunk" in block
+    assert "posts-chunk-sentinel" in block
+    assert "'pending'" in block
+    # It retries once before giving up, and only the retry may report the end.
+    assert "navigateEntry(direction, true) === 'end'" in block
+
+
+def test_the_shell_can_reach_the_toast_and_the_chunk_loader():
+    """index.html is a separate scope from app.js."""
+    assert "window.showToastMessage = showToastMessage;" in APP_JS
+    assert "window.revealNextPostChunk =" in APP_JS
