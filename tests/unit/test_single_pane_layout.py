@@ -96,3 +96,25 @@ def test_the_phone_uses_the_measured_viewport_height():
 
 def test_the_medium_folder_drawer_cannot_leak_into_single_mode():
     assert 'body[data-layout-mode="single"] #medium-pane-backdrop' in CSS
+
+
+# ── which links advance the pane ──
+def test_both_spa_interceptors_exempt_the_scope_tabs():
+    """FEEDS / SAVED switch which tree you are browsing; nothing has been picked to
+    read, so advancing to the post list takes the folder list away exactly when it
+    is needed. Reported on a Galaxy S21+.
+
+    Asserted in BOTH files on purpose: index.html and app.js each register a click
+    interceptor matching .tree-item, so a rule applied to only one of them is not
+    applied at all. Fixing app.js alone left the browser behavior unchanged.
+    """
+    assert "!a.matches('.scope-tab')" in INDEX
+    assert "!link.matches('.scope-tab')" in APP_JS
+
+
+def test_there_really_are_two_interceptors_to_keep_in_step():
+    """Both match .tree-item, which is why the exemption has to be in both. If this
+    fails because one was removed, the paired assertion above is the thing to
+    simplify — not to delete."""
+    assert ".feed-link, .tag-link, .tree-item" in INDEX          # index.html's
+    assert ".tree-item, .feed-link, .tag-link" in APP_JS         # app.js's
