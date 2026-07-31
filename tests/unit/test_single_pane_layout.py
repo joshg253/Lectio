@@ -253,3 +253,29 @@ def test_the_meta_line_keeps_the_date_beside_the_feed_name():
     byline = CSS[CSS.index('body[data-layout-mode="single"] .entry-author-inline {'):][:150]
     assert "order: -1;" in byline
     assert "flex-basis: 100%;" in byline
+
+
+def test_the_star_is_size_compensated_against_its_neighbours():
+    """Every star variant in Material Symbols — star, star_outline, star_border,
+    grade — draws to a 17px ink box where circle and sell fill 20px at the same
+    font-size. It is the typeface, not the glyph name, so swapping names fixes
+    nothing. The button box is a fixed width, so this moves the glyph and not the
+    pitch."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-save-indicator'):][:200]
+    assert "font-size: 1.65rem;" in block
+
+
+def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
+    """Reported: "filled star after toggle looks about the same as outline star".
+    FILL does work — the axis is served (FILL@0..1) and measurably changes the
+    glyph — but at a glance, in the same muted grey, a filled star and an outline
+    star read alike. Colour is the convention the toggle beside it already uses:
+    the read indicator is accent when unread and muted when read.
+
+    Both stars carry it, so the same post cannot read as saved in the article pane
+    and unsaved in the list.
+    """
+    for sel in ('.entry-save-toggle[title^="Remove"] .entry-save-indicator',
+                '.post-save-toggle[title^="Remove"] .post-save-indicator'):
+        block = CSS[CSS.index(sel):][:400]
+        assert "color: var(--accent);" in block
