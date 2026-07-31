@@ -2804,5 +2804,14 @@
   </div>
   <script src="/static/media-player.js?v={{ static_asset_version }}"></script>
 
+<div id="refetch-pill" class="refetch-pill" hidden aria-live="polite">
+    <div class="refetch-pill-row">
+      <span class="refetch-pill-scope" id="refetch-pill-scope"></span>
+      <button type="button" class="refetch-pill-btn" id="refetch-pill-cancel">Stop</button>
+    </div>
+    <div class="refetch-pill-bar"><span id="refetch-pill-bar-fill" style="width:0%"></span></div>
+    <div class="refetch-pill-meta" id="refetch-pill-meta"></div>
+    <div class="refetch-pill-queue" id="refetch-pill-queue"></div>
+  </div>
 </body>
 </html>

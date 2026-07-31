@@ -1551,6 +1551,11 @@ honor the pacing and together double the rate every host sees.
 Pacing now lives in `services/refetch_batch.py` and is imported by both the route and
 the script, so the two cannot drift.
 
+A second scope started while one runs is **queued**, not refused (Josh, same day:
+"I cannot queue/start a batch for another Feed/Folder while one is running"), and a
+fixed status pill shows the running scope, progress, measured time remaining and the
+queue — the batch had no visible surface at all once its toast faded.
+
 Deferred from the UI version: resumability across a restart (the job is in memory, so
 a container rebuild mid-run loses the remainder — re-running is safe and skips
 nothing important), and a per-run log file like the script writes.

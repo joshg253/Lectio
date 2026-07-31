@@ -128,21 +128,65 @@ def test_status_is_idle_before_anything_runs(configured):
     assert json.loads(bytes(main.refetch_scope_status().body))["idle"] is True
 
 
-def test_a_second_run_is_refused_while_one_is_going(configured):
-    """Two overlapping runs would each honor the pacing and together double the
-    rate every host sees — the politeness guarantee only holds one job at a time."""
+class _Req:
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+def _start(payload):
     import asyncio
+    resp = asyncio.run(main.start_refetch_scope(_Req(payload)))
+    return resp.status_code, json.loads(bytes(resp.body))
 
+
+def test_a_second_scope_is_queued_not_refused(configured):
+    """Only one batch may run at a time — two overlapping runs would each honor the
+    pacing and together double the rate every host sees. But that is a reason to
+    serialize them, not to make the user wait at the keyboard and come back."""
     job = main._refetch_job_state(create=True)
-    job.update({"running": True, "done": 0, "total": 5})
+    job.update({"running": True, "done": 0, "total": 5, "queue": []})
 
-    class _Req:
-        async def json(self):
-            return {"list_feed_url": FEED_A}
+    status, body = _start({"list_feed_url": FEED_A})
 
-    resp = asyncio.run(main.start_refetch_scope(_Req()))
+    assert status == 200
+    assert (body["queued"], body["position"]) == (True, 1)
+    assert [q["list_feed_url"] for q in job["queue"]] == [FEED_A]
 
-    assert resp.status_code == 409
+
+def test_queueing_the_same_scope_twice_is_refused(configured):
+    """Running a scope twice back to back re-fetches every article again for
+    nothing, at someone else's expense."""
+    job = main._refetch_job_state(create=True)
+    job.update({"running": True, "queue": []})
+    _start({"list_feed_url": FEED_A})
+
+    status, body = _start({"list_feed_url": FEED_A})
+
+    assert status == 409
+    assert len(job["queue"]) == 1
+
+
+def test_an_empty_scope_is_rejected_before_it_can_be_queued(configured):
+    status, _body = _start({"list_feed_url": "https://nothing.test/feed"})
+
+    assert status == 400
+
+
+def test_the_queue_is_visible_in_the_status(configured):
+    """The complaint that started this: a background job you cannot see."""
+    job = main._refetch_job_state(create=True)
+    job.update({"running": True, "done": 2, "total": 5, "scope": "A", "queue": []})
+    _start({"list_feed_url": FEED_A})
+
+    body = json.loads(bytes(main.refetch_scope_status().body))
+
+    assert body["running"] is True
+    assert (body["done"], body["total"], body["scope"]) == (2, 5, "A")
+    assert [q["count"] for q in body["queue"]] == [2]
+    assert "list_feed_url" not in body["queue"][0]   # label/count only, not internals
 
 
 def test_the_status_payload_never_exposes_the_cancel_flag(configured):
@@ -182,7 +226,6 @@ def test_outcomes_are_counted_apart(configured, monkeypatch):
 
     assert (job["ok"], job["archive"], job["refused"], job["dead"], job["failed"]) == (
         1, 1, 1, 1, 1)
-    assert job["running"] is False
 
 
 def test_one_exploding_entry_does_not_end_the_run(configured, monkeypatch):
@@ -229,4 +272,77 @@ def test_cancel_stops_the_run_partway(configured, monkeypatch):
     _run([], rows=rows, job=job)
 
     assert job["done"] == 1
-    assert job["running"] is False
+
+
+def test_a_queued_scope_can_be_dropped_without_stopping_the_run(configured):
+    import asyncio
+
+    job = main._refetch_job_state(create=True)
+    job.update({"running": True, "queue": []})
+    _start({"list_feed_url": FEED_A})
+
+    asyncio.run(main.cancel_refetch_scope(_Req({"queued_index": 0})))
+
+    assert job["queue"] == []
+    assert job["running"] is True          # the batch in flight is untouched
+
+
+def test_cancel_all_empties_the_queue_too(configured):
+    import asyncio
+
+    job = main._refetch_job_state(create=True)
+    job.update({"running": True, "queue": []})
+    _start({"list_feed_url": FEED_A})
+
+    asyncio.run(main.cancel_refetch_scope(_Req({"all": True})))
+
+    assert job["queue"] == []
+    assert job["cancel"] is True
+
+
+def test_the_worker_drains_the_queue_and_stays_running_throughout(configured, monkeypatch):
+    """`running` must not blink off between scopes — the status pill reads it, and
+    a pill that vanishes mid-queue is the same invisibility this fixed."""
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
+                        lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+    seen_running = []
+    real = main._run_refetch_batch
+
+    def _spy(rows, job):
+        seen_running.append(job["running"])
+        real(rows, job)
+
+    monkeypatch.setattr(main, "_run_refetch_batch", _spy)
+
+    job = main._refetch_job_state(create=True)
+    main._refetch_begin(job, "A", [("f", "x", "https://a.test/x")], 10)
+    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A,
+                     "label": "B", "count": 2, "estimate_seconds": 20}]
+
+    main._refetch_worker([("f", "x", "https://a.test/x")], job)
+
+    assert seen_running == [True, True]     # never observed as stopped mid-queue
+    assert job["running"] is False          # ... but off once the queue drained
+    assert [h["scope"] for h in job["history"]] == ["A", "B"]
+
+
+def test_a_queued_scope_is_resolved_when_it_starts_not_when_it_is_queued(configured,
+                                                                        monkeypatch):
+    """An hour in a queue is long enough for what is kept in the scope to change,
+    so re-fetching the list captured at queue time would act on stale membership."""
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user",
+                        lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+    resolved = []
+    monkeypatch.setattr(main, "_scope_refetchable",
+                        lambda fid, feed: resolved.append((fid, feed)) or [])
+
+    job = main._refetch_job_state(create=True)
+    main._refetch_begin(job, "A", [], 0)
+    job["queue"] = [{"folder_id": None, "list_feed_url": FEED_A,
+                     "label": "B", "count": 99, "estimate_seconds": 20}]
+
+    main._refetch_worker([], job)
+
+    assert resolved == [(None, FEED_A)]

@@ -12698,7 +12698,96 @@ const CAPTURE_MODE_FULL = 'full';
     // to Cancel while one is running. Kept current by the poller.
     let refetchRunning = false;
 
-    function pollRefetchScope() {
+    const refetchPill = document.getElementById('refetch-pill');
+    const refetchPillScope = document.getElementById('refetch-pill-scope');
+    const refetchPillMeta = document.getElementById('refetch-pill-meta');
+    const refetchPillQueue = document.getElementById('refetch-pill-queue');
+    const refetchPillBar = document.getElementById('refetch-pill-bar-fill');
+    const refetchPillCancel = document.getElementById('refetch-pill-cancel');
+
+    function labelRefetchScopeButton() {
+      if (!refetchScopeButton) return;
+      refetchScopeButton.textContent = refetchRunning
+        ? 'Re-fetch all articles… (queue)' : 'Re-fetch all articles…';
+    }
+
+    function humanDuration(seconds) {
+      const mins = Math.round((seconds || 0) / 60);
+      if (mins < 1) return 'under a minute';
+      if (mins < 90) return `about ${mins} minute${mins === 1 ? '' : 's'}`;
+      const hrs = Math.round(mins / 60);
+      return `about ${hrs} hour${hrs === 1 ? '' : 's'}`;
+    }
+
+    function renderRefetchPill(job) {
+      if (!refetchPill) return;
+      if (!job || !job.running) {
+        refetchPill.hidden = true;
+        return;
+      }
+      refetchPill.hidden = false;
+      const done = job.done || 0;
+      const total = job.total || 0;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      if (refetchPillScope) refetchPillScope.textContent = `Re-fetching ${job.scope || ''}`;
+      if (refetchPillBar) refetchPillBar.style.width = `${pct}%`;
+      // Remaining time from the job's own pace, not the original estimate: after a
+      // few articles the measured rate is the honest number.
+      let remaining = '';
+      if (job.started_at && done > 0 && done < total) {
+        const perItem = (Date.now() / 1000 - job.started_at) / done;
+        remaining = ` · ${humanDuration(perItem * (total - done))} left`;
+      }
+      const bits = [];
+      if (job.archive) bits.push(`${job.archive} from archive`);
+      if (job.refused) bits.push(`${job.refused} refused`);
+      if (job.dead) bits.push(`${job.dead} gone`);
+      if (job.failed) bits.push(`${job.failed} failed`);
+      if (refetchPillMeta) {
+        refetchPillMeta.textContent =
+          `${done}/${total} (${pct}%)${remaining}${bits.length ? ` · ${bits.join(', ')}` : ''}`;
+      }
+      if (refetchPillQueue) {
+        refetchPillQueue.textContent = '';
+        (job.queue || []).forEach((q, i) => {
+          const row = document.createElement('div');
+          row.className = 'refetch-pill-queue-item';
+          const name = document.createElement('span');
+          name.textContent = `Next: ${q.label} (${q.count})`;
+          const drop = document.createElement('button');
+          drop.type = 'button';
+          drop.className = 'refetch-pill-btn';
+          drop.textContent = 'Remove';
+          drop.addEventListener('click', async () => {
+            await fetch('/saved/refetch-scope/cancel', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ queued_index: i }),
+            }).catch(() => {});
+            pollRefetchScope(300);
+          });
+          row.append(name, drop);
+          refetchPillQueue.appendChild(row);
+        });
+      }
+    }
+
+    refetchPillCancel?.addEventListener('click', async () => {
+      const alsoQueue = (refetchPillQueue?.childElementCount || 0) > 0
+        ? window.confirm('Also drop what is queued behind this one?\n\nOK drops the queue too; Cancel stops only the current batch.')
+        : false;
+      try {
+        await fetch('/saved/refetch-scope/cancel', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ all: alsoQueue }),
+        });
+        showToastMessage('Stopping after the current article.');
+      } catch (_) {
+        window.alert('Could not cancel the batch re-fetch.');
+      }
+      pollRefetchScope(500);
+    });
+
+    function pollRefetchScope(delay) {
       window.clearTimeout(refetchPollTimer);
       refetchPollTimer = window.setTimeout(async () => {
         let job = null;
@@ -12706,29 +12795,42 @@ const CAPTURE_MODE_FULL = 'full';
           const resp = await fetch('/saved/refetch-scope/status');
           job = await resp.json();
         } catch (_) { /* keep polling; a blip is not the end of the job */ }
-        if (!job || job.idle) { refetchRunning = false; return; }
+        if (!job) { pollRefetchScope(10000); return; }
+        const wasRunning = refetchRunning;
         refetchRunning = !!job.running;
+        renderRefetchPill(job);
+        labelRefetchScopeButton();
         if (job.running) {
-          // Update a toast that is still on screen rather than raising a new one:
-          // a quarter-hour job must not nag every few seconds.
-          const live = document.getElementById('toast-message');
-          if (live) {
-            const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
-            live.textContent = `Re-fetching: ${job.done}/${job.total} (${pct}%)`;
-          }
-          pollRefetchScope();
+          pollRefetchScope(4000);
           return;
         }
-        const bits = [`${job.ok} re-fetched`];
-        if (job.archive) bits.push(`${job.archive} from the archive`);
-        if (job.refused) bits.push(`${job.refused} refused (left alone)`);
-        if (job.dead) bits.push(`${job.dead} gone`);
-        if (job.failed) bits.push(`${job.failed} failed`);
-        refetchRunning = false;
-        if (job.finished_at && (Date.now() / 1000 - job.finished_at) < 120) {
-          showToastMessage(`Batch re-fetch done — ${bits.join(', ')}.`);
+        // Announce the finish once, on the transition — the pill is gone by then.
+        if (wasRunning) {
+          const last = (job.history || [])[job.history.length - 1];
+          if (last) {
+            const bits = [`${last.ok} re-fetched`];
+            if (last.archive) bits.push(`${last.archive} from the archive`);
+            if (last.refused) bits.push(`${last.refused} refused (left alone)`);
+            if (last.dead) bits.push(`${last.dead} gone`);
+            if (last.failed) bits.push(`${last.failed} failed`);
+            showToastMessage(`${last.cancelled ? 'Batch re-fetch stopped' : 'Batch re-fetch done'} — ${bits.join(', ')}.`);
+          }
         }
-      }, 4000);
+        if (!job.idle) pollRefetchScope(15000);
+      }, delay === undefined ? 4000 : delay);
+    }
+
+    // Batch re-fetch. Deliberately slow — the estimate is shown up front and the
+    // job runs in the background, because a hundred articles paced politely is a
+    // quarter of an hour and no one should sit on a spinner for that.
+    function refetchScopeParams() {
+      if (contextTargetType === 'feed' && contextFeedUrl) {
+        return { list_feed_url: contextFeedUrl, label: contextFolderName || 'this feed' };
+      }
+      if (contextFolderId) {
+        return { folder_id: Number(contextFolderId), label: contextFolderName || 'this folder' };
+      }
+      return null;
     }
 
     refetchScopeButton?.addEventListener('click', async (event) => {
@@ -12736,15 +12838,6 @@ const CAPTURE_MODE_FULL = 'full';
       event.stopPropagation();
       const params = refetchScopeParams();
       hideAllContextMenus();
-      if (refetchRunning) {
-        try {
-          await fetch('/saved/refetch-scope/cancel', { method: 'POST' });
-          showToastMessage('Stopping the batch re-fetch after the current article.');
-        } catch (_) {
-          window.alert('Could not cancel the batch re-fetch.');
-        }
-        return;
-      }
       if (!params) return;
       const qs = new URLSearchParams();
       if (params.list_feed_url) qs.set('list_feed_url', params.list_feed_url);
@@ -12760,11 +12853,14 @@ const CAPTURE_MODE_FULL = 'full';
         window.alert(`Nothing kept in ${params.label} to re-fetch.`);
         return;
       }
+      const waiting = preview.busy
+        ? `\n\nA batch is already running${preview.queued ? ` with ${preview.queued} queued behind it` : ''}, so this one will be queued and start when that finishes.`
+        : '';
       const ok = window.confirm(
         `Re-fetch ${preview.count} kept article${preview.count === 1 ? '' : 's'} in ` +
         `${params.label}, across ${preview.hosts} site${preview.hosts === 1 ? '' : 's'}?\n\n` +
         `This is paced to be polite and will take ${humanDuration(preview.estimate_seconds)}. ` +
-        `It runs in the background — you can keep using Lectio.\n\n` +
+        `It runs in the background — you can keep using Lectio.${waiting}\n\n` +
         `Each article's current copy is snapshotted first, so any result can be reverted, ` +
         `and a page that is plainly a different article is refused rather than written.`);
       if (!ok) return;
@@ -12780,16 +12876,17 @@ const CAPTURE_MODE_FULL = 'full';
           window.alert(data.error || 'Could not start the batch re-fetch.');
           return;
         }
-        showToastMessage(`Re-fetching ${data.total} article${data.total === 1 ? '' : 's'} in the ` +
-                         `background — ${humanDuration(data.estimate_seconds)}.`);
-        pollRefetchScope();
+        showToastMessage(data.queued
+          ? `Queued ${data.label} (${data.total} articles) — position ${data.position}.`
+          : `Re-fetching ${data.total} article${data.total === 1 ? '' : 's'} in the background — ${humanDuration(data.estimate_seconds)}.`);
+        pollRefetchScope(500);
       } catch (_) {
         window.alert('Could not start the batch re-fetch.');
       }
     });
 
-    // A job started in another tab (or before a reload) should still report in.
-    pollRefetchScope();
+    // A job started in another tab (or before a reload) should still show up.
+    pollRefetchScope(800);
 
     folderRemoveStarsButton?.addEventListener('click', (event) => {
       event.preventDefault();

@@ -27356,6 +27356,20 @@ def _scope_refetchable(folder_id: int | None, list_feed_url: str | None
     return refetch_batch.interleave_by_host(rows)
 
 
+def _refetch_scope_label(folder_id: int | None, list_feed_url: str | None) -> str:
+    """Human name for a scope, so the status pill says what is running."""
+    if list_feed_url:
+        with get_reader() as reader:
+            feed = reader.get_feed(list_feed_url, None)
+        return str(getattr(feed, "user_title", None) or getattr(feed, "title", None)
+                   or list_feed_url)
+    if folder_id is not None:
+        with get_meta_connection() as conn:
+            row = conn.execute("SELECT name FROM folders WHERE id = ?", (int(folder_id),)).fetchone()
+        return str(row[0]) if row else f"folder {folder_id}"
+    return "everything"
+
+
 @app.get("/saved/refetch-scope/preview")
 def preview_refetch_scope(
     folder_id: int | None = Query(default=None),
@@ -27363,27 +27377,63 @@ def preview_refetch_scope(
 ):
     """How many articles a batch re-fetch would touch, and how long it would take."""
     rows = _scope_refetchable(folder_id, list_feed_url)
+    job = _refetch_job_state()
     return JSONResponse({
         "ok": True,
         "count": len(rows),
         "hosts": len({refetch_batch.host_of(r[2]) for r in rows}),
         "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
+        # So the confirm can say "this will be queued behind N" rather than the
+        # caller discovering it only after committing.
+        "busy": bool(job and job.get("running")),
+        "queued": len(job.get("queue") or []) if job else 0,
     })
+
+
+def _refetch_status_payload(job: dict | None) -> dict:
+    if job is None:
+        return {"ok": True, "running": False, "idle": True, "queue": [], "history": []}
+    out = {k: v for k, v in job.items()
+           if k not in ("cancel", "cancel_all", "queue", "history")}
+    out["ok"] = True
+    out["queue"] = [{"label": q["label"], "count": q["count"],
+                     "estimate_seconds": q["estimate_seconds"]}
+                    for q in (job.get("queue") or [])]
+    out["history"] = list(job.get("history") or [])[-5:]
+    return out
 
 
 @app.get("/saved/refetch-scope/status")
 def refetch_scope_status():
-    """Progress of the running (or last) batch, for the caller to poll."""
-    job = _refetch_job_state()
-    if job is None:
-        return JSONResponse({"ok": True, "running": False, "idle": True})
-    return JSONResponse({"ok": True, **{k: v for k, v in job.items() if k != "cancel"}})
+    """Progress of the running batch, what is queued behind it, and recent runs.
+
+    Polled by the status pill, which is the only place a background job that runs
+    for a quarter of an hour is actually visible.
+    """
+    return JSONResponse(_refetch_status_payload(_refetch_job_state()))
 
 
 @app.post("/saved/refetch-scope/cancel")
-def cancel_refetch_scope():
+async def cancel_refetch_scope(request: Request):
+    """Stop the current run; optionally drop what is queued behind it too."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — a bare cancel needs no body
+        body = {}
     job = _refetch_job_state()
-    if job and job.get("running"):
+    if not job:
+        return JSONResponse({"ok": True, "cancelling": False})
+    if body.get("queued_index") is not None:
+        # Drop one queued scope without touching the run in flight.
+        idx = int(body["queued_index"])
+        queue = job.get("queue") or []
+        if 0 <= idx < len(queue):
+            queue.pop(idx)
+        return JSONResponse({"ok": True, "dropped": True})
+    if body.get("all"):
+        job["cancel_all"] = True
+        (job.get("queue") or []).clear()
+    if job.get("running"):
         job["cancel"] = True
         return JSONResponse({"ok": True, "cancelling": True})
     return JSONResponse({"ok": True, "cancelling": False})
@@ -27391,11 +27441,19 @@ def cancel_refetch_scope():
 
 @app.post("/saved/refetch-scope")
 async def start_refetch_scope(request: Request):
-    """Start a paced batch re-fetch over a folder or feed.
+    """Start a paced batch re-fetch over a folder or feed, or queue one behind the
+    run in flight.
 
     A background thread rather than a request: a hundred articles at ten seconds a
-    host is a quarter of an hour, which no request should hold open. The caller
-    polls /status.
+    host is a quarter of an hour, which no request should hold open. Progress is
+    polled from /status.
+
+    **Queued, not refused.** Only one batch may run at a time — two overlapping
+    runs would each honor the pacing and together double the rate every site sees
+    — but that is a reason to serialize them, not to make the user wait at the
+    keyboard and remember to come back. Queued scopes are resolved to entries when
+    they start, not when they are queued, so a queue that waits an hour still acts
+    on what is kept *now*.
 
     Bulk is only reasonable because every protection the single re-fetch has
     applies per entry — the guard refuses a wrong page rather than overwriting, the
@@ -27407,31 +27465,76 @@ async def start_refetch_scope(request: Request):
     list_feed_url = body.get("list_feed_url") or None
     if folder_id is None and not list_feed_url:
         return JSONResponse({"ok": False, "error": "Pick a feed or a folder."}, status_code=400)
+    folder_id = int(folder_id) if folder_id is not None else None
 
-    job = _refetch_job_state(create=True)
-    if job.get("running"):
-        return JSONResponse({"ok": False, "error": "A batch re-fetch is already running."},
-                            status_code=409)
-
-    rows = _scope_refetchable(int(folder_id) if folder_id is not None else None, list_feed_url)
+    rows = _scope_refetchable(folder_id, list_feed_url)
     if not rows:
         return JSONResponse({"ok": False, "error": "Nothing kept here to re-fetch."},
                             status_code=400)
+    label = _refetch_scope_label(folder_id, list_feed_url)
+    estimate = int(refetch_batch.estimate_seconds(rows))
 
-    job.update({
-        "running": True, "cancel": False, "done": 0, "total": len(rows),
-        "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
-        "scope": list_feed_url or f"folder {folder_id}",
-        "started_at": time.time(),
-        "estimate_seconds": int(refetch_batch.estimate_seconds(rows)),
-    })
+    job = _refetch_job_state(create=True)
+    with _refetch_jobs_lock:
+        if job.get("running"):
+            queue = job.setdefault("queue", [])
+            if any(q["folder_id"] == folder_id and q["list_feed_url"] == list_feed_url
+                   for q in queue):
+                return JSONResponse({"ok": False, "error": f"{label} is already queued."},
+                                    status_code=409)
+            queue.append({"folder_id": folder_id, "list_feed_url": list_feed_url,
+                          "label": label, "count": len(rows),
+                          "estimate_seconds": estimate})
+            return JSONResponse({"ok": True, "queued": True, "position": len(queue),
+                                 "total": len(rows), "estimate_seconds": estimate,
+                                 "label": label})
+        _refetch_begin(job, label, rows, estimate)
+
     uid = tenancy.current_user_id()
     threading.Thread(
-        target=lambda: _run_in_user_context(uid, _run_refetch_batch, rows, job),
+        target=lambda: _run_in_user_context(uid, _refetch_worker, rows, job),
         daemon=True,
     ).start()
     return JSONResponse({"ok": True, "started": True, "total": len(rows),
-                         "estimate_seconds": job["estimate_seconds"]})
+                         "estimate_seconds": estimate, "label": label})
+
+
+def _refetch_begin(job: dict, label: str, rows: list, estimate: int) -> None:
+    job.update({
+        "running": True, "cancel": False, "done": 0, "total": len(rows),
+        "ok": 0, "archive": 0, "refused": 0, "dead": 0, "failed": 0, "skipped": 0,
+        "scope": label, "started_at": time.time(), "finished_at": None,
+        "estimate_seconds": estimate,
+    })
+    job.setdefault("queue", [])
+    job.setdefault("history", [])
+
+
+def _refetch_worker(rows: list[tuple[str, str, str]], job: dict) -> None:
+    """Run the current batch, then drain the queue one scope at a time."""
+    while True:
+        _run_refetch_batch(rows, job)
+        job["history"].append({
+            "scope": job.get("scope"), "done": job.get("done"), "total": job.get("total"),
+            "ok": job.get("ok"), "archive": job.get("archive"), "refused": job.get("refused"),
+            "dead": job.get("dead"), "failed": job.get("failed"),
+            "finished_at": job.get("finished_at"),
+            "cancelled": bool(job.get("cancel")),
+        })
+        with _refetch_jobs_lock:
+            queue = job.get("queue") or []
+            if job.get("cancel_all") or not queue:
+                job["cancel_all"] = False
+                job["running"] = False
+                return
+            nxt = queue.pop(0)
+        # Resolved now, not when queued: an hour in a queue is long enough for what
+        # is kept in the scope to have changed.
+        rows = _scope_refetchable(nxt["folder_id"], nxt["list_feed_url"])
+        if not rows:
+            continue
+        with _refetch_jobs_lock:
+            _refetch_begin(job, nxt["label"], rows, nxt["estimate_seconds"])
 
 
 def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
@@ -27471,7 +27574,9 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
                 host_failures[host] = host_failures.get(host, 0) + 1
             job["done"] += 1
     finally:
-        job["running"] = False
+        # Deliberately does NOT clear `running`: the worker owns the lifecycle so
+        # the status stays continuously running across a queued scope. Clearing it
+        # here made the pill blink out between batches.
         job["finished_at"] = time.time()
         LOGGER.info("[refetch-batch] %s: ok=%d archive=%d refused=%d dead=%d failed=%d",
                     job.get("scope"), job["ok"], job["archive"], job["refused"],
