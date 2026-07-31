@@ -76,9 +76,29 @@ The short version:
   same tags. You can **sort** (newest / oldest / received — oldest is how you
   read a comic backlog), see each post's **date** in the list and under the
   headline, and **tag from the device** by tapping names in a panel rather than
-  typing. **Archive** takes an item out of the inbox but keeps its star and
-  tags; **Delete** removes it from Saved entirely (star *and* tags, with a
-  confirm naming them). An article is marked read when you
+  typing.
+
+  **Archive and Delete are the two ways to deal with a saved item.** A star
+  means *to-do*, not *unread* — you can read something and still not have
+  decided what to do with it — so saved items carry a second layer beyond
+  read/unread. **Archive** means "done, but keep the contents": it drops the
+  star, takes the item out of the inbox, and marks it read, while tags, the
+  offline copy, and protection from cleanup all survive. **Delete** means "done,
+  and I don't need this": star and tags both go (with a confirm naming the
+  tags), along with the offline copy. Neither removes an ordinary feed post —
+  it simply goes back to being one. Both mark the item read, because acting on
+  something from the list *is* dealing with it, and both show up in **History**.
+
+  **Inbox** holds what you have starred and not yet dealt with — a star means
+  *to-do*, so tagged-but-unstarred articles live under **Tags** instead of
+  padding the queue. It opens most-recently-starred, because a to-do pile is
+  ordered by when you added to it; pick another order and it sticks, and leaving
+  the Inbox restores whatever order that view had before.
+
+  **All Saved** sits next to it with everything kept — the same set the main
+  app's Saved view shows.
+
+  An article is marked read when you
   reach its **last page**, not when you open it — so browsing the backlog to
   decide what to read no longer clears it behind you. A one-page article counts
   as read as soon as it's open, since the whole thing is on screen.

@@ -269,3 +269,58 @@ def test_junk_tags_dropped_at_capture():
     assert extract_feed_entry_tags(raw) == ["Wildfire"]
     html = '<meta name="keywords" content="uncategorized, General, linux">'
     assert extract_page_tags(html) == ["linux"]
+
+
+class _Tag:
+    def __init__(self, term): self.term, self.label, self.scheme = term, None, None
+
+
+class _Entry:
+    def __init__(self, tags=None, category=None):
+        if tags is not None:
+            self.tags = tags
+        if category is not None:
+            self.category = category
+
+
+def test_html_entities_in_tags_are_decoded():
+    """Feeds ship C&#43;&#43; for C++, &amp; for &, &#xF1; for ñ. Undecoded,
+    each is a distinct tag from its readable twin and matches nothing a user
+    would ever type. 99 such rows were live when this was found."""
+    out = extract_feed_entry_tags(_Entry(tags=[
+        _Tag("C&#43;&#43;"), _Tag("bricks &amp; minifigs"), _Tag("Bu&#xF1;uel"),
+    ]))
+    assert out == ["C++", "bricks & minifigs", "Buñuel"]
+
+
+def test_semicolon_packed_category_splits_into_separate_tags():
+    """andrewlock.net emits one <category> holding every tag, so the post
+    showed a single unusable 'ASP.NET Core;Security;CSRF;CORS'."""
+    out = extract_feed_entry_tags(_Entry(tags=[_Tag("ASP.NET Core;Security;CSRF;CORS")]))
+    assert out == ["ASP.NET Core", "Security", "CSRF", "CORS"]
+
+
+def test_entities_are_decoded_before_splitting():
+    """The ordering is the whole subtlety, and getting it backwards is worse
+    than not splitting at all.
+
+    Of 124 live tags containing a ';', only 25 still did once decoded — the
+    other 99 were entity terminators. Splitting the raw text turns C&#43;&#43;
+    into ['C&', '43', '&', '43', ''] instead of 'C++'.
+    """
+    assert extract_feed_entry_tags(_Entry(tags=[_Tag("C&#43;&#43;")])) == ["C++"]
+    # A tag that genuinely packs values AND carries an entity gets both right.
+    out = extract_feed_entry_tags(_Entry(tags=[_Tag("C&#43;&#43;;Security")]))
+    assert out == ["C++", "Security"]
+
+
+def test_commas_are_not_split():
+    """Deliberate: the comma-bearing tags on live data are one junk forum value
+    ('9,41,44,… Forum'), which splitting would explode into 19 numeric tags."""
+    out = extract_feed_entry_tags(_Entry(tags=[_Tag("Machine Learning, AI")]))
+    assert out == ["Machine Learning, AI"]
+
+
+def test_category_attribute_is_split_too():
+    out = extract_feed_entry_tags(_Entry(category="Security;CORS"))
+    assert out == ["Security", "CORS"]

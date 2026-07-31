@@ -1,7 +1,8 @@
 """Per-folder retention ("delete read posts N days after read", nightly) and
 the Purge utility (delete posts older than a date from selected folders).
-Both run through _prune_entries: starred posts, manually tagged posts, and
-the Saved Articles feed are never deleted; deletes are tombstoned."""
+Both run through _prune_entries: any post carrying a keep signal — starred
+(TODO), manually tagged (filed), or archived (done) — and the Saved Articles feed
+are never deleted; deletes are tombstoned."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -81,6 +82,23 @@ def test_retention_deletes_only_old_read_unprotected(configured):
                             (FEED,)).fetchone()
         assert not conn.execute("SELECT 1 FROM entry_read_state WHERE feed_url = ? AND entry_id = 'old-read'",
                                 (FEED,)).fetchone()
+
+
+def test_retention_protects_archived_posts(configured):
+    """Archive is the third keep signal, and the easiest to leave out.
+
+    Archiving *removes* the star and marks the item read — which is exactly the
+    shape retention deletes. Without an explicit exemption, "Archive keeps its
+    contents" would mean "contents deleted N days later", silently and nightly.
+    """
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, exist_ok=True)
+        _seed(reader, entry_id="archived", published=OLD, read=True, read_at=LONG_AGO)
+    main.set_entry_archived(FEED, "archived", True)   # note: no star, no tag
+
+    assert main._prune_entries([FEED], read_cutoff=datetime.now() - timedelta(days=7)) == 0
+    with main.get_reader() as reader:
+        assert _exists(reader, "archived")
 
 
 def test_retention_falls_back_to_reader_read_modified(configured):

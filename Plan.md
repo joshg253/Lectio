@@ -1183,11 +1183,81 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   the inbox.* Delete now clears tags **then** unstars — that order matters,
   because the unstar route only removes the offline archive when no tags remain.
   Archive is hidden for a tag-kept item rather than silently doing nothing.
-- **Archive for tag-kept items** — still not possible. `archived_at` lives on
-  `saved_entries`, where row existence *is* the star, so "done but keep the tag"
-  has nowhere to live. Needs a schema change (a `kept_only` column, or a separate
-  archived table) plus the startup per-user migration — skip that and existing
-  tenants 500. Worth doing if marking tag-kept items done becomes a real workflow.
+- **Archive for tag-kept items** — **schema landed 2026-07-29 (PR A).** The
+  separate-table option won: `saved_entries` row existence means "starred" in 115
+  places across 13 files, so a `kept_only` column would have needed every one of
+  them audited, and any miss turns an archived item back into a starred one.
+  `archived_entries` leaves all 115 untouched. Legacy `saved_entries.archived_at`
+  is lifted on every boot (`INSERT OR IGNORE`) and no longer read.
+
+  **Josh's workflow definition (2026-07-29), which drove the whole design:**
+  *Archive = mark this To Read item as read, keep its contents. Delete = I'm done
+  with this, don't necessarily delete it now but don't protect it anymore.* A star
+  is a **TODO**, not a keep — saved items needed a second read/unread layer
+  because you can read something and still not have decided what to do with it.
+  The model is triaging an email inbox from the list without opening things.
+
+  | | Archive | Delete |
+  |---|---|---|
+  | star (TODO) | removed | removed |
+  | tags | kept | cleared |
+  | read state | marked read | marked read |
+  | inbox | out | out |
+  | offline capture | kept | released |
+  | pruning | exempt | not protected |
+
+  **PR B landed 2026-07-29**: Archive unstars + marks read (both levels, plus
+  `read_history`), works on tag-kept items, and `archived_entries` membership is
+  now a third keep signal in `entry_has_keep_signal` and `_prune_entries`. Delete
+  became `POST /entries/discard` — one route instead of a client-side chain,
+  because the tags-before-unstar ordering is a storage-layer property.
+
+  **PR C landed 2026-07-29**: Inbox = starred − archived (was kept − archived =
+  24,672, the whole library); tag tree counts *filed* items so it doesn't empty;
+  new `starred` sort (`saved_at`) as the Inbox default; `resume_sort` so that
+  order doesn't follow you out; Read Mode Tags section renders open.
+
+  **All Saved node added** the same day, after the Inbox narrowing landed: the
+  ~15k tagged-but-unstarred items were still reachable under Tags, but Read Mode
+  had no flat "everything kept" view while the main app did.
+
+  **Not built, by decision:** row-level Archive/Delete in the Read Mode list
+  ("ignore for now"), and an Archive view in the regular app ("don't think we
+  need it at all", conditional on History being browsable in reverse order).
+
+  **PR D (next): "archive starred older than X days" utility.** Manual, never
+  automatic, preview-then-apply like the unstar panel. Josh will run it at 30
+  days first — that leaves ~420 in the Inbox out of 9,979. This is what makes the
+  Inbox usable without redefining what a star means, and it retires #5: those
+  1,786 starred+tagged items get archived like everything else, keeping both tag
+  and capture, instead of being unstarred and losing the TODO axis.
+
+  **PR E (after): pinned tags.** Promote any tag to a top-level node in both
+  modes. Store the pin **separately from the tag name** — Josh floated a `##tag`
+  sigil, but that is the same magic-value-in-user-data problem as the `#archive`
+  auto-tag: typing `#inbox` instead of `##inbox` would silently change behavior,
+  and both `parse_manual_hashtags` and `normalize_tag_value` would have to learn
+  the sigil.
+
+- **⚠ #5's premise may no longer hold.** It unstars starred+tagged entries because
+  "after tag-as-keep a tag is a keep signal, so the star is redundant." Under the
+  workflow above star = TODO and tag = filing, so starred+tagged means "filed, and
+  I still have to deal with it" — an ordinary state, not redundancy. Unstarring
+  the 1,786 affected items would erase the TODO axis from everything already
+  filed, with no undo. Re-decide before running it.
+
+- **Read Mode has no per-row actions.** Archive/Delete exist only inside the
+  reader, so the email-triage flow the model describes (deal with it from the
+  list, without opening) isn't actually possible yet. Deferred 2026-07-29.
+
+- **⚠ `read_history` is capped at 2,000 rows** (`READ_HISTORY_CAP`,
+  [main.py:9098](main.py#L9098)) and is currently full — oldest entry 2026-07-08,
+  about three weeks. Dropping the regular-app Archive view was made conditional
+  on History being browsable in reverse order, which it is (`ORDER BY read_at
+  DESC`). But Archive and Delete now both write history, so triage volume flows
+  through that cap and the window will shrink. Read Mode's Archive node is the
+  durable record; History is a convenience. Raising the cap is a one-line change
+  and awaiting a number.
 - ~~**Tag from inside Read Mode**~~ — **DONE 2026-07-28.** A `#n` button opens a
   panel of every tag in the library as large toggles (applied first, inverted),
   tap to add or remove, with "+ New" revealing a text field only when needed.
@@ -1224,6 +1294,20 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
 Reassess the "pinned saved-tag shortcuts" and "badge counts total instead of
 unread" ideas *after* #4 lands — auto-filing changes what the tree looks like, so
 judging those now would be premature.
+
+### 7a. Feed tags — Real Python has none to pull (2026-07-29)
+
+Reported as "can pull some tags from page". Checked, and there is nothing to
+pull without evading a bot wall:
+
+- **The Atom feed carries zero `<category>` elements** — 0 across 50 entries.
+- **The page fallback cannot run.** `extract_page_tags` already fires whenever a
+  feed supplies no tags (main.py, via the lead-image source-HTML cache or its
+  deferred fetch), but `realpython.com` answers a non-browser client with a
+  Cloudflare interstitial ("Just a moment…"), so there is no article HTML to
+  scan. Fixing this means spoofing a browser UA, which we don't do.
+
+Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
 
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 

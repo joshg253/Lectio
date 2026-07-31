@@ -1363,15 +1363,14 @@ const CAPTURE_MODE_FULL = 'full';
       }
       if (token !== _utCountToken) return;  // a later click already superseded this
       const n = data.totals?.to_unstar || 0;
-      const lost = data.totals?.archived_at_lost || 0;
       btn.dataset.count = String(n);
       btn.textContent = n ? `Unstar ${n} article(s)` : 'Nothing to unstar';
       btn.disabled = !n;
+      // The archived-state warning that used to live here is gone: Archive is
+      // its own table now, so unstarring cannot discard it.
       if (warn) {
-        warn.hidden = !lost;
-        warn.textContent = lost
-          ? `${lost} of these carry Read Mode progress (archived_at), which is stored on the star row and will be lost. The offline copy itself is kept.`
-          : '';
+        warn.hidden = true;
+        warn.textContent = '';
       }
     };
 

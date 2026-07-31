@@ -44,6 +44,16 @@ def meta_conn():
     )
     conn.execute(
         """
+        CREATE TABLE archived_entries (
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            archived_at TIMESTAMP NOT NULL,
+            PRIMARY KEY(feed_url, entry_id)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE entry_read_state (
             feed_url TEXT NOT NULL,
             entry_id TEXT NOT NULL,
@@ -139,8 +149,9 @@ def test_resave_resurfaces_an_archived_read_article(reader, meta_conn):
     save_article(reader, meta_conn, url, extract=_extract_ok)
     # Simulate the prior archived+read state (as an Instapaper Archive import left it).
     meta_conn.execute(
-        "UPDATE saved_entries SET archived_at = '2019-10-31T23:47:54+00:00' WHERE entry_id = ?",
-        (url,),
+        "INSERT INTO archived_entries (feed_url, entry_id, archived_at) "
+        "VALUES (?, ?, '2019-10-31T23:47:54+00:00')",
+        (SAVED_FEED_URL, url),
     )
     # A read-state override row, as the earlier read state left behind — it would
     # re-mark the entry read on the next refresh if not cleared.

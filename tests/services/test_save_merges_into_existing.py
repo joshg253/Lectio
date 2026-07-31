@@ -39,6 +39,8 @@ def meta_conn():
         "CREATE TABLE saved_entries (feed_url TEXT NOT NULL, entry_id TEXT NOT NULL,"
         " saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, archived_at TIMESTAMP DEFAULT NULL,"
         " PRIMARY KEY(feed_url, entry_id))",
+        "CREATE TABLE archived_entries (feed_url TEXT NOT NULL, entry_id TEXT NOT NULL,"
+        " archived_at TIMESTAMP NOT NULL, PRIMARY KEY(feed_url, entry_id))",
         "CREATE TABLE entry_read_state (feed_url TEXT NOT NULL, entry_id TEXT NOT NULL,"
         " read_at TEXT NOT NULL, PRIMARY KEY(feed_url, entry_id))",
         "CREATE TABLE entry_title_overrides (feed_url TEXT NOT NULL, entry_id TEXT NOT NULL,"
@@ -100,8 +102,10 @@ def test_merge_resurfaces_an_archived_post(reader, meta_conn):
     """A save means "I want to read this" — it comes back to the Inbox."""
     reader.add_entry({"feed_url": FEED, "id": "guid-123", "link": LINK, "title": "t"})
     reader.mark_entry_as_read((FEED, "guid-123"))
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (FEED, "guid-123"))
     meta_conn.execute(
-        "INSERT INTO saved_entries (feed_url, entry_id, archived_at) VALUES (?, ?, '2020-01-01')",
+        "INSERT INTO archived_entries (feed_url, entry_id, archived_at) VALUES (?, ?, '2020-01-01')",
         (FEED, "guid-123"),
     )
     meta_conn.commit()
@@ -112,10 +116,10 @@ def test_merge_resurfaces_an_archived_post(reader, meta_conn):
     )
 
     row = meta_conn.execute(
-        "SELECT archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        "SELECT 1 FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
         (FEED, "guid-123"),
     ).fetchone()
-    assert row["archived_at"] is None
+    assert row is None
     assert reader.get_entry((FEED, "guid-123")).read is False
 
 

@@ -1,7 +1,7 @@
 """POST /instapaper/import — Instapaper CSV export into Saved Items.
 
 Verifies the orchestration around the pure parser: entries land in the Saved
-Articles feed, Instapaper's Archive maps to saved_entries.archived_at, custom
+Articles feed, Instapaper's Archive maps to the archived_entries table, custom
 folders / the Starred flag become manual tags, content fetch is deferred to
 the starred-archive worker (enqueued, not fetched inline), and re-import is
 idempotent.
@@ -87,16 +87,14 @@ def test_import_creates_saved_entries(configured):
     r = _upload(CSV)
     assert r.status_code == 303
     with main.get_meta_connection() as conn:
-        rows = dict(conn.execute(
-            "SELECT entry_id, archived_at FROM saved_entries"
-        ).fetchall())
-    assert set(rows) == {
+        saved = {e for (e,) in conn.execute("SELECT entry_id FROM saved_entries")}
+        archived = {e for (e,) in conn.execute("SELECT entry_id FROM archived_entries")}
+    assert saved == {
         "https://ex.test/unread", "https://ex.test/arch",
         "https://ex.test/folder", "https://ex.test/star",
     }
-    # Only the Archive-folder item is archived.
-    assert rows["https://ex.test/arch"] is not None
-    assert rows["https://ex.test/unread"] is None
+    # Only the Archive-folder item lands on the done axis.
+    assert archived == {"https://ex.test/arch"}
 
 
 def test_import_maps_folders_and_star_to_tags(configured):

@@ -365,8 +365,7 @@ def _merge_save_into_entry(
     )
     try:
         conn.execute(
-            "UPDATE saved_entries SET archived_at = NULL"
-            " WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
+            "DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
             (target_feed, target_id),
         )
         conn.execute(
@@ -466,8 +465,7 @@ def save_article(
         # unread so it resurfaces.
         try:
             cur = conn.execute(
-                "UPDATE saved_entries SET archived_at = NULL "
-                "WHERE feed_url = ? AND entry_id = ? AND archived_at IS NOT NULL",
+                "DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
                 (SAVED_FEED_URL, clean_url),
             )
             # entry_read_state is a read-state OVERRIDE re-applied on refresh, so

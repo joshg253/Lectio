@@ -3161,6 +3161,22 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # The read-later "done" axis, deliberately its own table rather than a
+        # column on saved_entries. A saved_entries row *is* the star, and the
+        # star is the TODO axis: "I still have to decide what to do with this."
+        # Done is independent — Archive removes the star but the item stays
+        # archived, so the state cannot live on a row that archiving deletes.
+        # NOT the offline "starred archive" (archived_entry), which is content.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS archived_entries (
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                archived_at TIMESTAMP NOT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS deleted_entries (
@@ -3341,11 +3357,24 @@ def ensure_meta_schema() -> None:
             )
         except Exception:
             pass
-        # Read Mode "Archive" state: a per-saved-item flag (NULL = inbox), kept
-        # separate from read/unread and from the star itself. NOT the offline
-        # "starred archive" (archived_entry) — this is a read-later done-state.
+        # Read Mode "Archive" state: originally a per-saved-item flag (NULL =
+        # inbox). Superseded by the archived_entries table above — see its
+        # comment for why the done-axis cannot live on the star row. The column
+        # is still created (old rows carry it, and it is the migration source)
+        # but nothing reads it after the backfill below.
         try:
             conn.execute("ALTER TABLE saved_entries ADD COLUMN archived_at TIMESTAMP DEFAULT NULL")
+        except Exception:
+            pass
+        # One-time lift of the legacy column into the new table. Idempotent via
+        # INSERT OR IGNORE, so it is safe on every boot and during a rolling
+        # deploy where old code may still be writing the column.
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "SELECT feed_url, entry_id, archived_at FROM saved_entries "
+                "WHERE archived_at IS NOT NULL"
+            )
         except Exception:
             pass
         conn.execute(
@@ -8970,7 +8999,10 @@ def title_inferred_pubdate(title: str | None) -> datetime | None:
 
 
 def normalize_sort_by(sort_by: str | None) -> str:
-    if sort_by in {"post", "received"}:
+    # "starred" orders by when the item was starred (saved_entries.saved_at),
+    # which is the Inbox's natural order — a to-do pile is newest-first by when
+    # you added it, not by when the article was published.
+    if sort_by in {"post", "received", "starred"}:
         return sort_by
     return DEFAULT_SORT_BY
 
@@ -11274,6 +11306,7 @@ def list_entries_for_feeds(
     star_only: bool = False,
     selected_tag: str | None = None,
     search_query: str | None = None,
+    kept_scope: str = "kept",
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -11299,16 +11332,25 @@ def list_entries_for_feeds(
 
     # Fetch app-managed entry metadata only for feeds in the active view.
     saved_entries_set: set[tuple[str, str]] = set()
+    saved_at_map: dict[tuple[str, str], datetime] = {}
     read_state_map: dict[tuple[str, str], datetime] = {}
     feed_url_values = tuple(feed_urls)
     placeholders = ",".join("?" for _ in feed_url_values)
     history_fast_keys: list[tuple[str, str]] = []
     with get_meta_connection() as conn:
         rows = conn.execute(
-            f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
+            f"SELECT feed_url, entry_id, saved_at FROM saved_entries WHERE feed_url IN ({placeholders})",
             feed_url_values,
         ).fetchall()
         saved_entries_set = {(row["feed_url"], row["entry_id"]) for row in rows}
+        # saved_at is written in two shapes — SQLite's CURRENT_TIMESTAMP
+        # ("2026-07-29 04:28:19") and ISO-8601 from imports/migrations
+        # ("2026-07-29T04:28:19+00:00"). Parsing rather than string-sorting is
+        # what keeps a single day's stars in the right order.
+        for row in rows:
+            dt = _parse_stored_dt(row["saved_at"])
+            if dt is not None:
+                saved_at_map[(row["feed_url"], row["entry_id"])] = dt
         if normalized_read_filter == "history" and not normalized_star_only:
             # Fast path: read_history table stores recent individually-read entries
             # in read order with timestamps. Avoids scanning all read entries in
@@ -11348,7 +11390,15 @@ def list_entries_for_feeds(
     tagged_entries_set = get_tagged_entry_keys(set(feed_urls)) if normalized_star_only else set()
     # Keys kept by either axis (star or tag) — drives the Kept view's fast path
     # and membership filter. `saved_entries_set` stays star-only (the `saved` flag).
-    kept_entries_set = saved_entries_set | tagged_entries_set
+    #
+    # *kept_scope* narrows that: "starred" restricts to the star axis alone, for
+    # Read Mode's Inbox. The Inbox is a to-do pile, and a tag is filing rather
+    # than a to-do — without this the Inbox lists the whole 24k library. The
+    # main app's Kept view keeps the default "kept" (star OR tag).
+    kept_entries_set = (
+        set(saved_entries_set) if kept_scope == "starred"
+        else saved_entries_set | tagged_entries_set
+    )
 
     with get_reader() as reader:
         # Build a map of feed_url → site homepage URL so favicons use the
@@ -11593,6 +11643,9 @@ def list_entries_for_feeds(
         if normalized_read_filter == "history" and not normalized_star_only:
             sort_key = "history_sort_value"
             sort_desc = True
+        elif normalized_sort_by == "starred":
+            sort_key = "saved_sort_value"
+            sort_desc = normalized_sort_dir == "desc"
         else:
             sort_key = "post_sort_value" if normalized_sort_by == "post" else "received_sort_value"
             sort_desc = normalized_sort_dir == "desc"
@@ -11639,7 +11692,13 @@ def list_entries_for_feeds(
                     continue
 
             sort_value: float
-            if sort_key == "history_sort_value":
+            if sort_key == "saved_sort_value":
+                # Unstarred-but-tagged entries have no saved_at. They can only
+                # appear here outside the Inbox (which is starred-only), and
+                # datetime_sort_value(None) parks them at the far end rather
+                # than interleaving them arbitrarily.
+                sort_value = datetime_sort_value(saved_at_map.get((entry.feed_url, entry.id)))
+            elif sort_key == "history_sort_value":
                 sort_value = datetime_sort_value(read_dt)
             elif sort_key == "post_sort_value":
                 # Fall back to URL-inferred (link or id) → title-inferred →
@@ -11792,6 +11851,12 @@ def list_entries_for_feeds(
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
                 "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
+                # When this was starred — carried so the orphan merge can re-sort
+                # by it after list_entries_for_feeds pops the sort values.
+                "saved_timestamp": (
+                    _sv.isoformat()
+                    if (_sv := saved_at_map.get((entry.feed_url, entry.id))) else None
+                ),
                 "post_display": format_datetime_for_ui(published_dt),
                 "received_display": format_datetime_for_ui(getattr(entry, "added", None)),
                 "read_display": format_datetime_for_ui(read_dt),
@@ -11812,26 +11877,163 @@ def list_entries_for_feeds(
 
 
 def get_archived_saved_keys() -> set[tuple[str, str]]:
-    """(feed_url, entry_id) of saved items the user has Archived in Read Mode
-    (archived_at set). Archived items keep their star but drop out of the Read
-    Mode inbox; they're reached via the Archive node or Search."""
+    """(feed_url, entry_id) of items the user has Archived — the read-later
+    "done" axis. Archived items drop out of the Read Mode inbox and are reached
+    via the Archive node or Search. Independent of the star: an entry can be
+    archived with no saved_entries row at all."""
     with get_meta_connection() as conn:
         return {
             (str(row["feed_url"]), str(row["entry_id"]))
-            for row in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
-            )
+            for row in conn.execute("SELECT feed_url, entry_id FROM archived_entries")
         }
 
 
 def set_entry_archived(feed_url: str, entry_id: str, archived: bool) -> None:
-    """Set/clear the Read Mode Archive flag on a saved item (no-op if unsaved)."""
+    """Set/clear the Archive (done) flag. Unlike the old column this works for
+    any entry, starred or not — archiving is what *removes* the star, so
+    requiring one would make the state unreachable the moment it was set."""
     with get_meta_connection() as conn:
-        conn.execute(
-            "UPDATE saved_entries SET archived_at = ? WHERE feed_url = ? AND entry_id = ?",
-            (datetime.now(timezone.utc).isoformat() if archived else None, feed_url, entry_id),
-        )
+        if archived:
+            conn.execute(
+                "INSERT OR REPLACE INTO archived_entries (feed_url, entry_id, archived_at) "
+                "VALUES (?, ?, ?)",
+                (feed_url, entry_id, datetime.now(timezone.utc).isoformat()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
         conn.commit()
+
+
+def is_entry_archived(feed_url: str, entry_id: str) -> bool:
+    """Single-entry Archive check, for the keep-signal test on the unstar path."""
+    with get_meta_connection() as conn:
+        return conn.execute(
+            "SELECT 1 FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone() is not None
+
+
+def entry_has_keep_signal(feed_url: str, entry_id: str, *, starred: bool) -> bool:
+    """Is *anything* still keeping this entry?
+
+    Three independent signals, and the offline capture plus pruning-exemption
+    are owed to the entry if **any** of them holds:
+
+    - **starred** — it is still a TODO;
+    - **manually tagged** — it is filed;
+    - **archived** — it is done, and "Archive keeps its contents" is the rule.
+
+    Archive is the one that is easy to forget, and forgetting it is destructive
+    rather than untidy: archiving unstars, so an archived-and-untagged entry
+    would otherwise read as "no keep signal" and lose the very contents Archive
+    promised to keep.
+    """
+    if starred:
+        return True
+    if get_manual_tags_for_entry(feed_url, entry_id):
+        return True
+    return is_entry_archived(feed_url, entry_id)
+
+
+def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
+    """Set/clear the star (the TODO axis) and everything that mirrors it.
+
+    Extracted from ``POST /entries/saved`` so Archive can reuse it: archiving is
+    *implemented* as an unstar, and re-implementing the capture/husk handling
+    beside it is how the two drift apart.
+
+    Unstarring releases the offline capture and hard-deletes a Saved Articles
+    husk **only when no keep signal remains** — see ``entry_has_keep_signal``.
+    Callers that are about to archive must therefore write the archived row
+    *first*, or this will tear down the contents Archive means to keep.
+    """
+    newly_starred = False
+    with get_meta_connection() as conn:
+        if saved:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                (feed_url, entry_id),
+            )
+            newly_starred = cur.rowcount > 0
+        else:
+            conn.execute(
+                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+                (feed_url, entry_id),
+            )
+        conn.commit()
+
+    # "On star, also send to…" — fire configured destinations once, only on a
+    # genuine new star (rowcount), off-request so the star stays snappy.
+    if newly_starred:
+        _uid = tenancy.current_user_id()
+        threading.Thread(
+            target=lambda: _run_in_user_context(_uid, _run_on_star_destinations, feed_url, entry_id),
+            daemon=True,
+        ).start()
+
+    # Mirror the save state into the archive: queue a capture when starred,
+    # mark for later removal when unstarred. The archive worker handles the
+    # actual fetching off-request.
+    try:
+        if saved:
+            starred_archive_service.enqueue_archive(feed_url, entry_id)
+        elif not entry_has_keep_signal(feed_url, entry_id, starred=False):
+            # Only release the capture when no keep signal remains — a tag or an
+            # Archive both keep it after the star is gone. Archive matters most
+            # here: archiving is *implemented* as an unstar, so missing it would
+            # delete the contents Archive exists to preserve.
+            starred_archive_service.enqueue_removal(feed_url, entry_id)
+            # A Saved Article that is now neither starred nor tagged is a husk —
+            # the read-later pile should hold only kept items. It's user-added
+            # and deletable, so remove it outright rather than leaving invisible
+            # cruft (which the host-review view would surface). Mirrors the
+            # source cleanup Move already does; a tag keeping it is handled above.
+            if saved_articles_service.is_saved_articles_feed(feed_url):
+                with get_reader() as reader:
+                    entry = reader.get_entry((feed_url, entry_id), None)
+                    if entry is not None:
+                        _hard_delete_entry(reader, feed_url, entry_id, entry)
+                invalidate_unread_counts_cache()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+
+
+def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
+    """Mark an entry read at both levels, the way a triage action means it.
+
+    reader's own read flag *and* ``entry_read_state`` — the latter is an
+    override re-applied on refresh, so marking read in reader alone doesn't
+    stick. Also appends to ``read_history``, which is what makes an archived or
+    deleted item findable afterwards in the History view.
+    """
+    try:
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+            feed = reader.get_feed(feed_url, None)
+            reader.mark_entry_as_read((feed_url, entry_id))
+    except Exception:
+        entry = feed = None
+        LOGGER.warning("mark_entry_read_everywhere: reader write failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    try:
+        upsert_entry_read_state(feed_url, entry_id)
+    except Exception:
+        LOGGER.warning("mark_entry_read_everywhere: read-state override failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    try:
+        append_read_history(
+            feed_url, entry_id,
+            str(getattr(entry, "title", None) or ""),
+            str(getattr(entry, "link", None) or ""),
+            str(getattr(feed, "title", None) or ""),
+        )
+    except Exception:
+        LOGGER.warning("mark_entry_read_everywhere: history append failed for %s/%s",
+                       feed_url, entry_id, exc_info=True)
+    invalidate_unread_counts_cache()
 
 
 def get_saved_unread_count() -> int:
@@ -11917,7 +12119,7 @@ def merge_orphan_saved_entries(
         return posts
 
     sort_desc = normalize_sort_dir(sort_dir) == "desc"
-    use_post = normalize_sort_by(sort_by) == "post"
+    normalized_orphan_sort = normalize_sort_by(sort_by)
 
     def _sort_value_from_epoch(epoch: float | None) -> str:
         # Mirrors datetime_sort_value — ISO-format string, empty for None.
@@ -11929,7 +12131,10 @@ def merge_orphan_saved_entries(
             return ""
 
     existing_keys = {(p["feed_url"], p["id"]) for p in posts}
-    sort_key = "post_sort_value" if use_post else "received_sort_value"
+    sort_key = {
+        "post": "post_sort_value",
+        "starred": "saved_sort_value",
+    }.get(normalized_orphan_sort, "received_sort_value")
 
     additions: list[dict] = []
     for orphan in orphans:
@@ -11952,6 +12157,7 @@ def merge_orphan_saved_entries(
                 "saved": True,
                 "post_sort_value": post_iso,
                 "received_sort_value": recv_iso,
+                "saved_sort_value": _sort_value_from_epoch(orphan.get("starred_at")),
                 "history_sort_value": "",
                 "post_timestamp": post_iso or None,
                 "received_timestamp": recv_iso or None,
@@ -11977,6 +12183,8 @@ def merge_orphan_saved_entries(
             p["post_sort_value"] = p.get("post_timestamp") or ""
         if "received_sort_value" not in p:
             p["received_sort_value"] = p.get("received_timestamp") or ""
+        if "saved_sort_value" not in p:
+            p["saved_sort_value"] = p.get("saved_timestamp") or ""
 
     combined = posts + additions
     combined.sort(key=lambda item: item.get(sort_key) or "", reverse=sort_desc)
@@ -11985,6 +12193,7 @@ def merge_orphan_saved_entries(
     for p in combined:
         p.pop("post_sort_value", None)
         p.pop("received_sort_value", None)
+        p.pop("saved_sort_value", None)
         p.pop("history_sort_value", None)
 
     return combined
@@ -16193,6 +16402,7 @@ def resolve_reader_backlog(
     search_query: str | None,
     archived: bool | None = None,
     limit: int = 250,
+    kept_scope: str = "kept",
 ) -> list[dict]:
     """Ordered entry backlog for the reader, mirroring the main list view's
     feed-set selection so the reader can "follow the Saved view filter": the root
@@ -16202,7 +16412,11 @@ def resolve_reader_backlog(
 
     ``archived`` is the Read Mode axis (independent of read/unread): ``False``
     hides Archived items (the inbox), ``True`` keeps only Archived items, ``None``
-    applies no archive filter."""
+    applies no archive filter.
+
+    ``kept_scope`` picks which keep signals count as "saved" — ``"kept"``
+    (starred OR tagged, the main app's Saved view) or ``"starred"`` (Read Mode's
+    Inbox, which is a to-do pile rather than the whole library)."""
     with get_meta_connection() as conn:
         snapshot = get_meta_structure_snapshot(conn)
         disabled_feed_urls = get_disabled_feed_urls(conn)
@@ -16232,6 +16446,7 @@ def resolve_reader_backlog(
         star_only=star_only,
         selected_tag=tag,
         search_query=search_query,
+        kept_scope=kept_scope,
     )
 
     # Parity with the Saved list: surface archive-only orphans (saves whose feed
@@ -16266,14 +16481,21 @@ def resolve_reader_backlog(
 def _read_scope_params(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
-    sort: str | None = None,
+    sort: str | None = None, resume_sort: str | None = None,
+    kept_all: bool = False,
 ) -> list[tuple[str, str]]:
     """Read Mode node scope shared by the browse URL and the reader prev/next
     URLs (scope / folder / feed / tag / Archive / search / sort).
 
     *sort* rides along so the chosen order survives every hop — pick Oldest in
     the browse pane and Next/Prev walk oldest-first too, instead of silently
-    reverting to the default at the first navigation."""
+    reverting to the default at the first navigation.
+
+    *resume_sort* is the order to restore on leaving the Inbox. The Inbox sorts
+    by most-recently-starred, which is meaningless anywhere else, so it must not
+    follow you out — but neither should leaving reset a folder you had set to
+    Oldest. Same shape as the main app's ``resume_read_filter``, which restores
+    your previous filter when you close History."""
     params: list[tuple[str, str]] = []
     if scope and scope != "saved":
         params.append(("scope", scope))
@@ -16287,18 +16509,24 @@ def _read_scope_params(
         params.append(("archived", "1"))
     if q:
         params.append(("q", q))
+    if kept_all:
+        params.append(("kept", "all"))
     if sort and sort != _READ_SORT_DEFAULT:
         params.append(("sort", sort))
+    if resume_sort and resume_sort != _READ_SORT_DEFAULT:
+        params.append(("resume_sort", resume_sort))
     return params
 
 
 def _read_browse_href(
     folder_id: int | None, tag: str | None, archived: bool, q: str | None,
     scope: str = "saved", list_feed_url: str | None = None,
-    sort: str | None = None,
+    sort: str | None = None, resume_sort: str | None = None,
+    kept_all: bool = False,
 ) -> str:
     """The 2-pane browse URL for a Read Mode node (no entry selected)."""
-    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort)
+    params = _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
+                                sort, resume_sort, kept_all)
     return "/read" + ("?" + urlencode(params) if params else "")
 
 
@@ -16313,11 +16541,13 @@ def _reader_href(
     scope: str = "saved",
     list_feed_url: str | None = None,
     sort: str | None = None,
+    kept_all: bool = False,
 ) -> str:
     """Build a /read URL that opens *entry* in the reader while carrying the
     current Read Mode node scope, so prev/next stay within the same list."""
     params = [("feed_url", feed_url), ("entry_id", entry_id)]
-    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url, sort)
+    params += _read_scope_params(folder_id, tag, archived, q, scope, list_feed_url,
+                                 sort, None, kept_all)
     return "/read?" + urlencode(params)
 
 
@@ -16349,7 +16579,6 @@ def build_reader_page(
     csrf_token: str,
     show_saved_actions: bool = True,
     date_display: str = "",
-    is_starred: bool = False,
     manual_tags: tuple[str, ...] = (),
     all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
@@ -16381,13 +16610,15 @@ def build_reader_page(
     # reader.css [aria-pressed]), which e-ink renders crisply.
     archive_glyph = "&#9636;"
     archive_title = "Un-archive" if is_archived else "Archive"
-    # Archive is the done-axis and it lives on the star row (saved_entries.
-    # archived_at), so an item kept only by a tag has nothing to archive. Hide
-    # the control there instead of shipping a button that silently does nothing.
+    # Always shown now. Archive used to be hidden for a tag-kept item, because
+    # the done-flag lived on the star row and an item kept only by a tag had
+    # nothing to set. The done-axis has its own table (archived_entries), so
+    # anything in the inbox can be marked done — which matters: tagged entries
+    # outnumber starred ones 16,479 to 10,002, and they were the ones with no
+    # way to be cleared from the device.
     archive_btn = (
         f"<button class='reader-ctl' id='reader-archive-btn' type='button'"
         f" aria-pressed='{'true' if is_archived else 'false'}' title='{archive_title}'>{archive_glyph}</button>"
-        if is_starred else ""
     )
     # Delete removes the item from Kept entirely — star *and* tags. The tag list
     # rides along so the confirm can name what is about to be lost.
@@ -16478,41 +16709,49 @@ def build_reader_page(
     return HTMLResponse(doc, headers={"Cache-Control": "no-store"})
 
 
-def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int]:
-    """→ (inbox key set, per-feed inbox counts, archived total).
+def _read_mode_saved_index() -> tuple[set[tuple[str, str]], dict[str, int], int, set[tuple[str, str]]]:
+    """→ (inbox key set, per-feed inbox counts, archived total, filed key set).
 
-    **The inbox is KEPT (starred OR tagged) minus Archived**, matching what the
-    list actually shows: `resolve_reader_backlog(star_only=True)` resolves
-    against `kept_entries_set = saved_entries_set | tagged_entries_set`, the same
-    definition the main app's Saved view uses.
+    **The Inbox is STARRED minus Archived**, and that is a deliberate narrowing
+    (2026-07-29). It briefly counted *kept* (starred OR tagged) minus archived,
+    which made it 24,672 items — the whole library, not an inbox.
 
-    This counted starred rows only, so the tree numbers never matched the list
-    they opened — measured 2026-07-28 at **9,979 against the sidebar's 24,695**,
-    because 16,479 entries are tagged versus 10,002 starred. Archiving was never
-    the gap (23 rows). Read Mode is meant to be the same app in an e-ink shape,
-    so a count that means something different here is simply wrong.
+    The split follows from what the two signals mean. **A star is a TODO**: "I
+    still have to decide what to do with this." **A tag is filing**: it is
+    already sorted, and filing something is not a to-do. So tagged-but-unstarred
+    entries are reachable through the tag tree, which is where you would look for
+    them, and they do not sit in a queue pretending to need attention.
 
-    Only starred rows can be Archived (`archived_at` lives on `saved_entries`),
-    so a tagged-but-unstarred entry is always in the inbox — which is right: it
-    has no "done" state to be in.
+    *filed* (tagged minus archived) is returned alongside because the tag nodes
+    must still count filed items — narrowing those to starred ones would empty
+    most of the tag tree.
+
+    Archived is its own axis (`archived_entries`), so any kept entry can be done,
+    and archiving is what removes the star — the archived set is not a subset of
+    the starred set.
     """
     with get_meta_connection() as conn:
-        rows = conn.execute("SELECT feed_url, entry_id, archived_at FROM saved_entries").fetchall()
-    archived_keys = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows if r["archived_at"] is not None}
-    kept: set[tuple[str, str]] = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
-    kept |= get_tagged_entry_keys(get_all_reader_feed_urls())
+        rows = conn.execute("SELECT feed_url, entry_id FROM saved_entries").fetchall()
+    archived_keys = get_archived_saved_keys()
+    starred: set[tuple[str, str]] = {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
+    tagged = get_tagged_entry_keys(get_all_reader_feed_urls())
 
-    inbox = kept - archived_keys
+    inbox = starred - archived_keys
+    filed = tagged - archived_keys
     feed_counts: dict[str, int] = {}
     for feed_url, _entry_id in inbox:
         feed_counts[feed_url] = feed_counts.get(feed_url, 0) + 1
-    return inbox, feed_counts, len(archived_keys)
+    return inbox, feed_counts, len(archived_keys), filed
 
 
-def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
-    """Manual-tag counts restricted to the non-archived saved set — only tags
-    that actually appear on inbox items, counted over inbox items."""
-    if not inbox:
+def _filed_tag_counts(filed: set[tuple[str, str]]) -> dict[str, int]:
+    """Manual-tag counts over the *filed* set (tagged minus archived).
+
+    Counted over filed rather than inbox items: the Inbox is starred-only now,
+    so counting there would empty most of the tag tree — the majority of tagged
+    entries carry no star, which is exactly why they are filed and not to-do.
+    """
+    if not filed:
         return {}
     prefix = MANUAL_TAG_KEY_PREFIX
     try:
@@ -16527,7 +16766,7 @@ def _inbox_tag_counts(inbox: set[tuple[str, str]]) -> dict[str, int]:
         rows = []
     counts: dict[str, int] = {}
     for key, feed, eid in rows:
-        if (str(feed), str(eid)) in inbox:
+        if (str(feed), str(eid)) in filed:
             name = str(key)[len(prefix):].strip().lower()
             if name:
                 counts[name] = counts.get(name, 0) + 1
@@ -16560,21 +16799,50 @@ _READ_SORTS: dict[str, tuple[str, str]] = {
     "new": ("post", "desc"),
     "old": ("post", "asc"),
     "recent": ("received", "desc"),
+    "starred": ("starred", "desc"),
 }
 _READ_SORT_DEFAULT = "new"
+# The Inbox is a to-do pile, so its natural order is when you added something to
+# it, not when the article was published. Every other node keeps the global
+# default — see _read_sort_for_node.
+_READ_SORT_INBOX_DEFAULT = "starred"
 _READ_SORT_LABELS: dict[str, str] = {
     "new": "Newest",
     "old": "Oldest",
     "recent": "Received",
+    "starred": "Recently starred",
 }
 
 
-def _read_mode_sort_options(current: str, href_for: Callable[[str], str]) -> list[dict]:
-    """The sort switcher for the browse pane — one link per order, current marked."""
+def _read_is_inbox_node(folder_id: int | None, tag: str | None,
+                        archived: bool, q: str | None, scope: str) -> bool:
+    """Is this the Inbox node? (saved scope, root folder, no tag/archive/search)"""
+    return scope != "feeds" and not tag and not archived and not q and folder_id is not None
+
+
+def _read_sort_for_node(sort: str | None, *, is_inbox: bool) -> str:
+    """The effective order for a node: an explicit choice, else the node default.
+
+    Only the Inbox differs — it is a to-do pile, so it opens most-recently-
+    starred. Everywhere else that order would be noise (most items never carried
+    a star at all), so the global newest-first default stands."""
+    if sort in _READ_SORTS:
+        return sort
+    return _READ_SORT_INBOX_DEFAULT if is_inbox else _READ_SORT_DEFAULT
+
+
+def _read_mode_sort_options(current: str, href_for: Callable[[str], str],
+                            *, include_starred: bool = True) -> list[dict]:
+    """The sort switcher for the browse pane — one link per order, current marked.
+
+    "Recently starred" is offered only where it means something: the saved scope,
+    where every row has a star date. In the feeds scope most entries were never
+    starred, so the order would be arbitrary."""
     return [
         {"key": key, "label": _READ_SORT_LABELS[key], "href": href_for(key),
          "active": key == current}
         for key in _READ_SORTS
+        if not (key == "starred" and not include_starred)
     ]
 
 
@@ -16736,6 +17004,8 @@ def _build_read_mode_context(
     items: list[dict],
     node_selected: bool = True,
     sort: str = _READ_SORT_DEFAULT,
+    resume_sort: str | None = None,
+    all_saved: bool = False,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
@@ -16753,19 +17023,42 @@ def _build_read_mode_context(
     folder_feed_urls_by_id[root_id] = set(all_reader_feed_urls)
     folder_feed_urls_by_id[UNCATEGORIZED_FOLDER_ID] = all_reader_feed_urls - all_feed_urls
 
-    inbox, feed_inbox_counts, archived_count = _read_mode_saved_index()
+    inbox, feed_inbox_counts, archived_count, filed = _read_mode_saved_index()
 
     def _folder_inbox_count(fid: int) -> int:
         feeds = folder_feed_urls_by_id.get(fid, set())
         return sum(c for f, c in feed_inbox_counts.items() if f in feeds)
 
-    on_all = folder_id == root_id and not tag and not archived and not q
+    on_all = (folder_id == root_id and not tag and not archived and not q
+              and not all_saved)
+    # Links *out* of the Inbox must not carry its most-recently-starred order —
+    # that ordering is meaningless in a folder where most items were never
+    # starred. Hand back the order you had before entering the Inbox instead.
+    outbound_sort = (resume_sort or _READ_SORT_DEFAULT) if on_all else sort
     folder_nodes: list[dict] = [{
-        # Empty glyph: "All" is plain navigation, so no expand arrow — but the
-        # spacer keeps its label aligned with the folder rows.
-        "label": "All", "glyph": "",
-        "href": _read_browse_href(root_id, None, False, None, sort=sort),
+        # "Inbox", not "All" — this node counts and lists `inbox`, which is
+        # STARRED minus archived, not everything saved. Calling it All was
+        # survivable while Archive held 23 items; now that archiving is half the
+        # triage model it is just wrong, and it sits directly above a node named
+        # Archive holding what it excludes. Filed (tagged) items live in the tag
+        # tree. (The feeds scope keeps "All": no archive axis there.)
+        # Empty glyph: plain navigation, so no expand arrow — but the spacer
+        # keeps its label aligned with the folder rows.
+        "label": "Inbox", "glyph": "",
+        # No sort= (the Inbox picks its own default), but resume_sort carries the
+        # order you were using so stepping out of the Inbox restores it.
+        "href": _read_browse_href(root_id, None, False, None,
+                                  resume_sort=(sort if not on_all else resume_sort)),
         "count": len(inbox), "active": on_all,
+    }, {
+        # Everything kept minus archived — what the main app's Saved view shows.
+        # The Inbox is deliberately narrower (starred only), so without this node
+        # the ~15k tagged-but-unstarred items would exist in one mode and not the
+        # other. They are all reachable under Tags; this is the flat view.
+        "label": "All Saved", "glyph": "",
+        "href": _read_browse_href(root_id, None, False, None, sort=outbound_sort,
+                                  kept_all=True),
+        "count": len(inbox | filed), "active": all_saved,
     }]
     for row in raw_folder_rows:
         fid = int(row["id"])
@@ -16776,7 +17069,7 @@ def _build_read_mode_context(
             continue
         folder_nodes.append({
             "label": str(row["name"]), "glyph": "▸",  # ▸
-            "href": _read_browse_href(fid, None, False, None, sort=sort),
+            "href": _read_browse_href(fid, None, False, None, sort=outbound_sort),
             "count": c,
             "active": (not archived and not tag and folder_id == fid),
         })
@@ -16784,7 +17077,7 @@ def _build_read_mode_context(
     if uncat:
         folder_nodes.append({
             "label": "Uncategorized", "glyph": "▸",  # ▸
-            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None, sort=sort),
+            "href": _read_browse_href(UNCATEGORIZED_FOLDER_ID, None, False, None, sort=outbound_sort),
             "count": uncat,
             "active": (not archived and not tag and folder_id == UNCATEGORIZED_FOLDER_ID),
         })
@@ -16792,16 +17085,18 @@ def _build_read_mode_context(
     # Manual-tag buckets restricted to the inbox: only tags on non-archived saved
     # items, counted over them. Tucked in a collapsed <details> (heavy taggers
     # have dozens); clicking narrows the inbox to that tag.
-    inbox_tag_counts = _inbox_tag_counts(inbox)
+    inbox_tag_counts = _filed_tag_counts(filed)
     tag_nodes = [{
         "label": "#" + name, "glyph": "",
-        "href": _read_browse_href(None, name, False, None, sort=sort),
+        "href": _read_browse_href(None, name, False, None, sort=outbound_sort),
         "count": inbox_tag_counts[name],
         "active": (not archived and tag == name),
     } for name in sorted(inbox_tag_counts)]
 
     if not node_selected:
         selected_label = "Saved"
+    elif all_saved:
+        selected_label = "All Saved"
     elif archived:
         selected_label = "Archive"
     elif q:
@@ -16809,7 +17104,7 @@ def _build_read_mode_context(
     elif tag:
         selected_label = "#" + tag
     else:
-        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "All")
+        selected_label = next((n["label"] for n in folder_nodes if n["active"]), "Inbox")
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
@@ -16818,7 +17113,7 @@ def _build_read_mode_context(
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
                              folder_id=folder_id, tag=tag, archived=archived, q=q,
-                             sort=sort),
+                             sort=sort, kept_all=all_saved),
     } for it in items]
 
     _saved_search_fields = _read_mode_search_fields(
@@ -16827,14 +17122,15 @@ def _build_read_mode_context(
     return {
         "sort_options": _read_mode_sort_options(
             sort,
-            lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key),
+            lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key,
+                                          resume_sort=resume_sort, kept_all=all_saved),
         ),
         "scope_tabs": _read_mode_scope_tabs("saved"),
         "folder_nodes": folder_nodes,
         "tag_nodes": tag_nodes,
         "archive_node": {
             "label": "Archive", "glyph": "▤",  # ▤
-            "href": _read_browse_href(None, None, True, None, sort=sort),
+            "href": _read_browse_href(None, None, True, None, sort=outbound_sort),
             "count": archived_count, "active": archived,
         },
         "list_items": list_items,
@@ -16843,7 +17139,11 @@ def _build_read_mode_context(
         "search_query": q or "",
         "search_fields": _saved_search_fields,
         "read_clear_search_href": _read_clear_search_href(_saved_search_fields),
-        "tags_open": bool(tag),  # expand the tag list when a tag is selected
+        # Open by default. Tags are no longer a side-bucket of the Inbox — the
+        # Inbox is starred-only, so filed items are reachable *only* here, and a
+        # collapsed <details> made them look absent (the "I don't see #inbox in
+        # eInk" report: it was there, behind the disclosure).
+        "tags_open": True,
         "scope": "saved",
         "exit_href": "/",
         "static_asset_version": STATIC_ASSET_VERSION,
@@ -16867,6 +17167,8 @@ def reader_view(
     q: str | None = Query(default=None),
     scope: str = Query(default="saved"),
     sort: str | None = Query(default=None),
+    resume_sort: str | None = Query(default=None),
+    kept: str | None = Query(default=None),
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
@@ -16891,10 +17193,25 @@ def reader_view(
     # A node is "selected" once the user picks All (root folder), a folder, a feed,
     # a tag, Archive, or a search. A bare /read has no node selected: it lands on
     # the tree only, so we never auto-load the whole (huge) backlog.
+    # "All Saved" — everything kept (starred OR tagged) minus archived, i.e. what
+    # the main app's Saved view shows. Its own node rather than a mode of the
+    # Inbox: the Inbox is the to-do pile and must stay small, but the two modes
+    # disagreeing about what exists is exactly the mismatch Read Mode is meant
+    # not to have.
+    all_saved_view = (not is_feeds) and kept == "all"
     node_selected = (folder_id is not None or bool(feed_scope) or bool(tag_val)
-                     or archived_view or bool(q_val))
+                     or archived_view or bool(q_val) or all_saved_view)
 
-    sort_val = sort if sort in _READ_SORTS else _READ_SORT_DEFAULT
+    # The Inbox opens most-recently-starred; every other node keeps newest-first.
+    # An explicit ?sort= always wins, so the switcher still works everywhere.
+    is_inbox = (not all_saved_view) and _read_is_inbox_node(
+        folder_id, tag_val, archived_view, q_val, scope)
+    sort_val = _read_sort_for_node(sort, is_inbox=is_inbox)
+    if is_feeds and sort_val == "starred":
+        # Feed entries mostly carry no star date, so this order would be noise.
+        # Reachable only by hand-editing the URL; the switcher never offers it.
+        sort_val = _READ_SORT_DEFAULT
+    resume_sort_val = resume_sort if resume_sort in _READ_SORTS else None
     _sort_by, _sort_dir = _READ_SORTS[sort_val]
 
     def _load_backlog(limit: int) -> list[dict]:
@@ -16904,6 +17221,9 @@ def reader_view(
             star_only=(not is_feeds),
             tag=tag_val, sort_by=_sort_by, sort_dir=_sort_dir, search_query=q_val,
             archived=archived_filter, limit=limit,
+            # The Inbox is the to-do pile (starred only); every other saved node
+            # — tags, Archive, search — still spans the whole kept set.
+            kept_scope=("starred" if is_inbox else "kept"),
         )
 
     # --- BROWSE: no article selected -> 2-pane tree + list -------------------
@@ -16918,6 +17238,7 @@ def reader_view(
             context = _build_read_mode_context(
                 request, folder_id=folder_id, tag=tag_val, archived=archived_view,
                 q=q_val, items=items, node_selected=node_selected, sort=sort_val,
+                resume_sort=resume_sort_val, all_saved=all_saved_view,
             )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
@@ -16931,7 +17252,7 @@ def reader_view(
         return _reader_href(
             rec["feed_url"], rec["id"],
             folder_id=folder_id, tag=tag_val, archived=archived_view, q=q_val, scope=scope,
-            list_feed_url=feed_scope, sort=sort_val,
+            list_feed_url=feed_scope, sort=sort_val, kept_all=all_saved_view,
         )
 
     current: dict | None = None
@@ -16981,7 +17302,6 @@ def reader_view(
         csrf_token=_csrf_token_for(request),
         show_saved_actions=not is_feeds,
         date_display=_read_mode_date(current),
-        is_starred=_entry_is_starred(cur_feed, cur_id),
         manual_tags=tuple(get_manual_tags_for_entry(cur_feed, cur_id)),
         all_tag_names=tuple(get_all_manual_tag_names()),
     )
@@ -22826,8 +23146,12 @@ def _prune_entries(
     Selection: with read_cutoff, read entries whose read time (meta read_at,
     falling back to reader's read_modified) is older; with published_cutoff,
     entries whose effective date (published/updated/added) is older — read
-    only unless include_unread. Always protected: starred/saved entries,
-    manually tagged entries, and the Saved Articles feed itself.
+    only unless include_unread. Always protected: **any entry carrying a keep
+    signal** — starred (TODO), manually tagged (filed), or archived (done) — plus
+    the Saved Articles feed itself. Archived is the newest of the three and the
+    one worth stating: Archive removes the star, so without an explicit exemption
+    an archived item would fall straight through into the prune, which is the
+    opposite of "Archive keeps its contents".
 
     Deletes are tombstoned (deleted_entries) so a refresh can't resurrect
     copies still inside the publisher's feed window. Returns the count
@@ -22838,10 +23162,17 @@ def _prune_entries(
 
     placeholders = ",".join("?" * len(feed_urls))
     with get_meta_connection() as conn:
-        starred = {
+        protected = {
             (str(r[0]), str(r[1]))
             for r in conn.execute(
                 f"SELECT feed_url, entry_id FROM saved_entries WHERE feed_url IN ({placeholders})",
+                feed_urls,
+            )
+        }
+        protected |= {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                f"SELECT feed_url, entry_id FROM archived_entries WHERE feed_url IN ({placeholders})",
                 feed_urls,
             )
         }
@@ -22868,7 +23199,7 @@ def _prune_entries(
 
         for feed, eid, read, read_modified, published, updated, first_updated in rows:
             pair = (str(feed), str(eid))
-            if pair in starred:
+            if pair in protected:
                 continue
             if read_cutoff is not None:
                 if not read:
@@ -23229,8 +23560,8 @@ def _swap_host_in_url(url: str, host_map: dict[str, str]) -> str:
 
 
 def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> str:
-    """Recreate one entry under its host-rewritten id, carrying the star
-    (+archived_at), manual tags, read state and offline archive, then delete the
+    """Recreate one entry under its host-rewritten id, carrying the star, the
+    archived (done) row, manual tags, read state and offline archive, then delete the
     old one. Returns "migrated" / "gone". Idempotent: an already-migrated entry
     no longer matches a from_host. Must run with the ingest rewrite hook in place
     so the feed re-serving the old guid updates the migrated entry, not a
@@ -23254,15 +23585,23 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
             reader.set_tag((feed, new_id), key)
             reader.delete_tag(src.resource_id, key, missing_ok=True)
     row = conn.execute(
-        "SELECT saved_at, archived_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
+        "SELECT saved_at FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
         (feed, old_id),
     ).fetchone()
     if row:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
-            "VALUES (?, ?, ?, ?)", (feed, new_id, row["saved_at"], row["archived_at"]),
+            "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+            (feed, new_id, row["saved_at"]),
         )
         conn.execute("DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
+    # The done-axis travels with the entry too, and independently of the star:
+    # an archived item may have no saved_entries row to carry it.
+    conn.execute(
+        "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+        "SELECT ?, ?, archived_at FROM archived_entries WHERE feed_url = ? AND entry_id = ?",
+        (feed, new_id, feed, old_id),
+    )
+    conn.execute("DELETE FROM archived_entries WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
     if src.read:
         reader.mark_entry_as_read((feed, new_id))
     conn.execute("DELETE FROM entry_link_overrides WHERE feed_url = ? AND entry_id = ?", (feed, old_id))
@@ -24433,14 +24772,7 @@ def _current_unstar_tagged_plan(keep_tags: set[str] | None = None) -> dict:
                 "SELECT feed_url, entry_id FROM saved_entries"
             )
         }
-        archived = {
-            (str(f), str(e)) for f, e in conn.execute(
-                "SELECT feed_url, entry_id FROM saved_entries WHERE archived_at IS NOT NULL"
-            )
-        }
-    plan = unstar_tagged_service.build_unstar_plan(
-        starred, tags_by_key, archived=archived, keep_tags=keep_tags,
-    )
+    plan = unstar_tagged_service.build_unstar_plan(starred, tags_by_key, keep_tags=keep_tags)
     plan["queue_like_tags"] = unstar_tagged_service.queue_like_tags(
         {row["tag"] for row in plan["per_tag"]}
     )
@@ -24487,7 +24819,7 @@ async def apply_unstar_tagged(request: Request):
     plan = _current_unstar_tagged_plan(keep)
     to_unstar = plan["to_unstar"]
     if not to_unstar:
-        return JSONResponse({"ok": True, "unstarred": 0, "archived_at_lost": 0})
+        return JSONResponse({"ok": True, "unstarred": 0})
 
     deleted = 0
     with get_meta_connection() as conn:
@@ -24507,7 +24839,6 @@ async def apply_unstar_tagged(request: Request):
     return JSONResponse({
         "ok": True,
         "unstarred": deleted,
-        "archived_at_lost": plan["totals"]["archived_at_lost"],
     })
 
 
@@ -25185,53 +25516,7 @@ def toggle_entry_saved(
     select_entry: int = Form(default=1),
 ):
     normalized_tag = normalize_tag_value(tag)
-    newly_starred = False
-    with get_meta_connection() as conn:
-        if saved:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
-                (feed_url, entry_id),
-            )
-            newly_starred = cur.rowcount > 0
-        else:
-            conn.execute(
-                "DELETE FROM saved_entries WHERE feed_url = ? AND entry_id = ?",
-                (feed_url, entry_id),
-            )
-        conn.commit()
-
-    # "On star, also send to…" — fire configured destinations once, only on a
-    # genuine new star (rowcount), off-request so the star stays snappy.
-    if newly_starred:
-        _uid = tenancy.current_user_id()
-        threading.Thread(
-            target=lambda: _run_in_user_context(_uid, _run_on_star_destinations, feed_url, entry_id),
-            daemon=True,
-        ).start()
-
-    # Mirror the save state into the archive: queue a capture when starred,
-    # mark for later removal when unstarred. The archive worker handles the
-    # actual fetching off-request.
-    try:
-        if saved:
-            starred_archive_service.enqueue_archive(feed_url, entry_id)
-        elif not get_manual_tags_for_entry(feed_url, entry_id):
-            # Only release the archive when no keep signal remains — a manually
-            # tagged entry keeps its capture even after it's unstarred.
-            starred_archive_service.enqueue_removal(feed_url, entry_id)
-            # A Saved Article that is now neither starred nor tagged is a husk —
-            # the read-later pile should hold only kept items. It's user-added
-            # and deletable, so remove it outright rather than leaving invisible
-            # cruft (which the host-review view would surface). Mirrors the
-            # source cleanup Move already does; a tag keeping it is handled above.
-            if saved_articles_service.is_saved_articles_feed(feed_url):
-                with get_reader() as reader:
-                    entry = reader.get_entry((feed_url, entry_id), None)
-                    if entry is not None:
-                        _hard_delete_entry(reader, feed_url, entry_id, entry)
-                invalidate_unread_counts_cache()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("starred archive enqueue failed for %s/%s: %s", feed_url, entry_id, exc)
+    apply_star_state(feed_url, entry_id, bool(saved))
 
     if is_async_action_request(request, "lectio-post-save-toggle"):
         return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "saved": bool(saved)})
@@ -25262,9 +25547,32 @@ def toggle_entry_archived(
     entry_id: str = Form(...),
     archived: int = Form(...),
 ):
-    """Read Mode: Archive / un-Archive a saved item. Keeps the star; only flips
-    saved_entries.archived_at so the item leaves (or rejoins) the inbox."""
-    set_entry_archived(feed_url, entry_id, bool(archived))
+    """Archive / un-Archive an item — the read-later **done** axis.
+
+    Josh's definition (2026-07-29): *"Archive is essentially just mark this To
+    Read item as Read. Keep its contents."* A star is a TODO, so archiving
+    discharges it: the star comes off, the item leaves the inbox, and it is
+    marked read at both levels because acting on something from the list is
+    dealing with it.
+
+    **Order is load-bearing.** The archived row is written *before* the unstar,
+    because ``apply_star_state`` releases the offline capture (and hard-deletes a
+    Saved Articles husk) when no keep signal remains. Archive is itself the keep
+    signal here, so unstarring first would destroy the contents this promises to
+    keep — for a URL-saved article the capture is often the only copy.
+
+    Un-archiving is the inverse: it restores the star, putting the item back on
+    the TODO pile it came from. Read state is deliberately *not* reverted — "read
+    but not archived" is a real state (you read it, you still haven't decided
+    what to do with it), and it is the whole reason this second axis exists.
+    """
+    if archived:
+        set_entry_archived(feed_url, entry_id, True)
+        apply_star_state(feed_url, entry_id, False)
+        mark_entry_read_everywhere(feed_url, entry_id)
+    else:
+        apply_star_state(feed_url, entry_id, True)
+        set_entry_archived(feed_url, entry_id, False)
     return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "archived": bool(archived)})
 
 
@@ -25808,6 +26116,35 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+@app.post("/entries/discard")
+def discard_entry(
+    request: Request,
+    feed_url: str = Form(...),
+    entry_id: str = Form(...),
+):
+    """Delete — the other half of the read-later triage pair.
+
+    Josh's definition (2026-07-29): *"I'm done with this but don't necessarily
+    need its contents stored; don't necessarily delete it now, but also don't
+    protect it anymore."* So: drop every keep signal (star **and** tags), mark it
+    read at both levels, and let the offline capture and pruning-exemption go
+    with them. The entry itself is not deleted — it goes back to being an
+    ordinary feed post and takes its chances with per-folder retention. The one
+    exception is a `lectio:saved` husk, which nothing else holds and no view
+    would ever show; `apply_star_state` removes those outright.
+
+    This exists as a route because the gesture has an **order** the client was
+    previously trusted to get right: tags must be cleared *before* the unstar,
+    since the capture is only released once no keep signal remains. Reversed, the
+    captured copy is stranded with nothing keeping it. That is server-side
+    knowledge, so it now lives on the server.
+    """
+    set_manual_tags_for_entry(feed_url, entry_id, "")
+    apply_star_state(feed_url, entry_id, False)
+    mark_entry_read_everywhere(feed_url, entry_id)
+    return JSONResponse({"ok": True, "feed_url": feed_url, "entry_id": entry_id, "discarded": True})
 
 
 @app.post("/tags/delete")
@@ -26809,13 +27146,19 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
             else:
                 summary["duplicates"] += 1
 
-            archived_at = saved_dt.isoformat() if bm.archived else None
             conn.execute(
-                "INSERT INTO saved_entries (feed_url, entry_id, saved_at, archived_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(feed_url, entry_id) DO UPDATE SET "
-                "archived_at = COALESCE(excluded.archived_at, saved_entries.archived_at)",
-                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat(), archived_at),
+                "INSERT OR IGNORE INTO saved_entries (feed_url, entry_id, saved_at) VALUES (?, ?, ?)",
+                (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat()),
             )
+            if bm.archived:
+                # Instapaper's archived bookmarks import straight onto the done
+                # axis. OR IGNORE, so re-importing never rewrites a date the
+                # user has since set by archiving here.
+                conn.execute(
+                    "INSERT OR IGNORE INTO archived_entries (feed_url, entry_id, archived_at) "
+                    "VALUES (?, ?, ?)",
+                    (saved_articles_service.SAVED_FEED_URL, bm.url, saved_dt.isoformat()),
+                )
             if bm.archived:
                 summary["archived"] += 1
 

@@ -163,3 +163,53 @@ def test_existing_db_gains_entry_feed_tags(tmp_path):
     finally:
         main.close_thread_db_pools()
         tenancy._layout = saved
+
+
+def test_archived_at_column_lifts_into_archived_entries(tmp_path):
+    """The done-axis migration must carry existing archived rows across.
+
+    Archive used to be a `saved_entries.archived_at` column. It moved to its own
+    table because Archive now *removes* the star, and state stored on the star
+    row cannot outlive it. The lift runs on every boot (INSERT OR IGNORE), so a
+    tenant that upgrades mid-flight keeps whatever it had already archived —
+    getting this wrong silently empties the Archive node.
+    """
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    tenancy.configure(
+        data_dir=tmp_path,
+        legacy_reader=tmp_path / "reader.sqlite",
+        legacy_meta=tmp_path / "meta.sqlite3",
+        legacy_starred=tmp_path / "starred.sqlite",
+    )
+    try:
+        legacy = sqlite3.connect(str(tenancy.meta_db_path()))
+        legacy.executescript(
+            """
+            CREATE TABLE saved_entries (
+                feed_url TEXT NOT NULL, entry_id TEXT NOT NULL,
+                saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                archived_at TIMESTAMP DEFAULT NULL,
+                PRIMARY KEY(feed_url, entry_id)
+            );
+            INSERT INTO saved_entries (feed_url, entry_id, archived_at)
+                VALUES ('f', 'archived', '2026-01-01'), ('f', 'inbox', NULL);
+            """
+        )
+        legacy.commit()
+        legacy.close()
+        main.close_thread_db_pools()
+
+        main.ensure_meta_schema()
+
+        assert main.get_archived_saved_keys() == {("f", "archived")}
+
+        # Idempotent: a second boot must not duplicate or overwrite the date.
+        main.close_thread_db_pools()
+        main.ensure_meta_schema()
+        conn = main.get_meta_connection()
+        rows = list(conn.execute("SELECT archived_at FROM archived_entries"))
+        assert len(rows) == 1 and rows[0]["archived_at"] == "2026-01-01"
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
