@@ -493,3 +493,71 @@ def test_the_snapshot_keeps_the_first_original(reader, meta_conn):
         (REAL_FEED, ARTICLE),
     ).fetchone()[0]
     assert "ORIGINAL feed body" in original
+
+
+# ── the short-title hole: informit again, 2026-07-31 ──
+_INDEX_HTML = ("<div>" + "".join(
+    f'<dl><dt><a class="title" href="http://x.test/a{i}">Some Article Title {i}</a></dt>'
+    f'<dd class="meta"><span>Feb 25, 2026</span></dd></dl>' for i in range(30)) + "</div>")
+_PROSE_HTML = "<p>" + ("Real prose about the subject at hand. " * 80) + "</p>"
+
+
+def test_an_opaque_url_with_a_short_title_falls_back_to_the_stored_title():
+    """The hole that destroyed two more informit articles during a batch re-fetch.
+
+    ``article.aspx?p=2438407&WT.rss_a=Classes in C#`` carries exactly one usable
+    subject word once digits and structural vocabulary are dropped — below the
+    three-word floor — so the guard stood down entirely and the section index
+    "Articles | InformIT" was written over the stored article.
+
+    With nothing in the slug to judge by, the stored title is the only reference
+    left. It is used ONLY in conjunction with the body's shape, because comparing
+    old title against new is exactly what the slug branch must not do.
+    """
+    from services.saved_articles import _page_is_a_different_article as different
+
+    url = ("http://www.informit.com/articles/article.aspx?p=2438407&WT.rss_f=Article"
+           "&WT.rss_a=Classes%20in%20C%23&WT.rss_ev=a")
+
+    assert different(url, "Articles | InformIT",
+                     old_title="Classes in C#", new_html=_INDEX_HTML)
+    # Without the stored title there is still nothing to judge by — unchanged.
+    assert not different(url, "Articles | InformIT")
+
+
+def test_a_corrected_title_on_a_prose_page_is_still_allowed():
+    """Re-fetch exists partly to replace a bad capture's title, so a new title that
+    shares nothing with the old one must NOT be refused on its own. The link-index
+    shape is what makes the stored-title check safe."""
+    from services.saved_articles import _page_is_a_different_article as different
+
+    url = "http://www.informit.com/articles/article.aspx?p=2438407&WT.rss_a=Classes"
+
+    assert not different(url, "A Completely Corrected Title",
+                         old_title="untitled junk capture", new_html=_PROSE_HTML)
+
+
+def test_a_link_roundup_that_echoes_its_own_title_is_allowed():
+    """Genuine link roundups exist — Techdirt's weekly history post is 95% anchor
+    text — so the shape alone must never be enough to refuse."""
+    from services.saved_articles import _page_is_a_different_article as different
+
+    url = "https://www.techdirt.com/?p=1524"
+
+    assert not different(url, "This Week In Techdirt History: July 19th",
+                         old_title="This Week In Techdirt History: July 12th",
+                         new_html=_INDEX_HTML)
+
+
+def test_link_index_detection_needs_both_quantity_and_density():
+    """Calibrated against 1,192 captured articles: p95 anchor-text ratio is 0.32,
+    p98 is 0.46. A handful of links in an essay is not an index."""
+    from services.saved_articles import looks_like_a_link_index
+
+    assert looks_like_a_link_index(_INDEX_HTML)
+    assert not looks_like_a_link_index(_PROSE_HTML)
+    assert not looks_like_a_link_index(_PROSE_HTML + '<a href="/x">one link</a>')
+    assert not looks_like_a_link_index("")
+    # Many links but mostly prose — a well-cited article.
+    cited = _PROSE_HTML + "".join(f'<a href="/n{i}">{i}</a>' for i in range(40))
+    assert not looks_like_a_link_index(cited)

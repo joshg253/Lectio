@@ -3709,6 +3709,82 @@ button:hover, .button-link:hover {
   opacity: 0;
 }
 
+/* Batch re-fetch status. A background job that runs for a quarter of an hour
+   needs somewhere to live that is not a toast — a toast fades and then the job is
+   invisible, which was the complaint. Bottom-left so it never covers the toast. */
+.refetch-pill {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(92vw, 26rem);
+  border: 1px solid var(--line);
+  background: var(--toast-bg);
+  color: var(--ink);
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 1190;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.refetch-pill[hidden] { display: none; }
+
+.refetch-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.refetch-pill-scope {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refetch-pill-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.refetch-pill-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.refetch-pill-meta,
+.refetch-pill-queue {
+  opacity: 0.75;
+  font-size: 0.95em;
+}
+
+.refetch-pill-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: space-between;
+}
+
+.refetch-pill-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.95em;
+  padding: 0;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
 .pane-resizer {
   width: var(--resizer-size);
   cursor: col-resize;

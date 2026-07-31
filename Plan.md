@@ -1371,51 +1371,37 @@ pull without evading a bot wall:
 
 Same class as the bot-walled feeds blocking #10 (see `inoreader-replacement`).
 
-### 7b. Offline reading on the Supernote (raised 2026-07-29, not started)
+### 7b. Offline reading on the Supernote — WORKS (2026-07-30)
 
-The Supernote is WiFi-only, so with no WiFi there is no way to work the backlog.
-The content is not the problem — every kept article is already captured
-server-side (readability HTML in the starred archive), so this is delivery only.
+**Confirmed on the device: WiFi off, article opens.** A service worker serves the
+navigation itself, which is what makes it work at all — the browser has no launcher,
+so Read Mode is reached from a saved hyperlink, and a cache the browser cannot
+navigate to is useless.
 
-**Device facts, measured rather than assumed** (UA logged via
-`_READ_MODE_UA_SEEN`):
+Route taken, after the alternatives were eliminated by measurement:
 
-    Mozilla/5.0 (Linux; Android 11; Supernote Nomad Build/RQ2A.210505.003; wv)
-    AppleWebKit/537.36 … Chrome/96.0.4664.92 Safari/537.36
+- **Downloads are impossible.** The Supernote's WebView has no download handler:
+  `<a download>` is a silent no-op and long-press offers only text selection. That
+  killed self-contained HTML, EPUB-by-download, and bundles in one go.
+- **Service workers DO register** there (Android 11 WebView, Chrome 96), precache,
+  and intercept navigation.
 
-- **Chrome 96** — Service Worker, Cache API and IndexedDB are all supported at
-  that version, so features are not the blocker.
-- **`wv` = Android WebView, not Chrome.** The host app decides whether service
-  workers are enabled and whether storage survives; WebView browsers often clear
-  cache on exit, there is no PWA install, and no offline start URL. If the
-  browser cannot reopen the page with WiFi off, a perfectly cached article is
-  unreachable. **This, not feature support, is the risk.**
-- **It reports Nomad on a Manta** — the model is hardcoded. Auto-detect must
-  match "Supernote", never the model name.
+Two bugs found on the way, both mine, both instructive:
 
-**Three routes:**
+- `ignoreSearch` in the offline fallback stripped the query string, and for `/read`
+  the query string IS the article's identity — so every article matched the cached
+  BROWSE page and re-rendered the list. A cache miss that looked like a navigation
+  going nowhere.
+- **Article and image coverage diverged.** The page cached every `.rm-item-link` in
+  the DOM (up to 150 rows) while asking the manifest for images from only the first
+  20, so most cached articles had no pictures. Reported as "seemed like images
+  weren't included". Both halves now derive from one `OFFLINE_ARTICLE_COUNT`.
 
-- **(a) Service Worker + Cache API + an IndexedDB action queue.** The only option
-  that keeps *triage* working offline (Archive/Delete/Tag replayed on reconnect).
-  Also means revisiting the reader page's deliberate `Cache-Control: no-store`
-  (main.py), which is why prefetch shipped as images-only, and caching image
-  bytes client-side — the `/api/img` cache is server-side, so cached articles
-  would otherwise render with broken images.
-- **(b) EPUB export of the next N Inbox articles.** Lands in Supernote's own
-  storage; its native reader handles e-ink pagination and annotation far better
-  than a WebView, and nothing web-platform has to hold up. **Loses in-EPUB
-  triage** — read offline, file on reconnect.
-- **(c) One self-contained HTML bundle** (images as data URIs). No worker needed,
-  no triage either, and several MB for 20 articles — against the grain of #12.
-
-**Leaning (b)**, because a WebView is a poor offline host and that is a property
-of the device, not something to engineer around. **If offline triage is the real
-requirement it is (a), and probe first** — feature detection is not the question;
-the question is whether a cached page still loads after the browser has been
-closed and WiFi turned off.
-
-Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
-pile; at ~420 it is a meaningful unit.
+Residual limitation: images at **cross-origin** URLs still cannot be cached — a
+no-cors response is opaque and indistinguishable from a failure. Measured small: 3
+of 45 images across 25 Inbox articles, because most reader images are already
+same-origin (`/starred-asset/…` from the archive, or `/api/img`). If it ever
+matters, routing reader images through `/api/img` would close it.
 
 ### 7c-2. Epoch-dated articles — 2,030 of 3,308 recovered offline (2026-07-29)
 
@@ -1535,6 +1521,50 @@ source-fetch fills the tags in with no work from us.
 
 ⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
 uses the same source-page fetch, so it went blind on the same date.
+
+### 7e. Batch re-fetch over a folder or feed — script + UI, 2026-07-30
+
+`scripts/refetch_scope.py`. Josh: "Needs to be gentle!" — so pacing is the design:
+2s global gap, **10s per host**, hosts dropped after 4 consecutive failures, nothing
+parallel, and the runtime estimate accounts for the per-host delay (a single-feed
+scope is one host, so 89 articles is 89x10s, not 89x2s — understating the runtime of
+a deliberately slow job is the one number that must not be wrong).
+
+Safe to run in bulk only because every single-re-fetch protection applies per entry:
+the slug guard refuses a wrong page instead of overwriting, the previous body is
+snapshotted so any result is revertible, a refusal falls back to the archive, and a
+missing publish date is learned.
+
+**Proven on informit** (4-article slice): all four live pages now serve the section
+index, so the guard refused every one and **the Wayback fallback recovered every
+one** — 13k-28k characters each where the feed carried teasers. 89 kept articles on
+that feed, ~15 min for the full pass.
+
+**Shipped as a UI action too (2026-07-30).** Right-click a feed or folder in the
+Saved tree → *Re-fetch all articles…*: `GET /saved/refetch-scope/preview` shows the
+count, host count and runtime before you commit, `POST /saved/refetch-scope` runs it
+on a background thread (via `_run_in_user_context`, so the thread keeps the tenancy
+user), and status polling reports progress and the outcome breakdown. The same menu
+item cancels a run. One job at a time per user — two overlapping runs would each
+honor the pacing and together double the rate every host sees.
+
+Pacing now lives in `services/refetch_batch.py` and is imported by both the route and
+the script, so the two cannot drift.
+
+A second scope started while one runs is **queued**, not refused (Josh, same day:
+"I cannot queue/start a batch for another Feed/Folder while one is running"), and a
+fixed status pill shows the running scope, progress, measured time remaining and the
+queue — the batch had no visible surface at all once its toast faded.
+
+Deferred from the UI version: resumability across a restart, and a per-run log file
+like the script writes.
+
+⚠ **The restart gap bit immediately (2026-07-31).** A batch on the informit feed was
+killed 4 minutes in by a container rebuild — 29 of 89 articles done, no trace in the
+logs because only the completion line logs. Re-running is safe, but a job with no
+persistence and no start/interrupt logging is invisible after the fact. Worth either
+persisting the queue+cursor to the meta DB, or at minimum logging a start line and
+marking the job interrupted on the next boot.
 
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
@@ -1941,6 +1971,43 @@ Two passes (`--scope dead-unsub` default, YouTube always excluded):
    (no full article to recover) or 403 bot-walls where the *site* is alive (the
    archive worker's live page-fetch beats Wayback). Order: retro-archive first,
    then Wayback only the DNS-dead residual.
+
+### 10a. EEA geo-blocks are NOT a migration loss (2026-07-30)
+
+Some US local-news sites answer **451 Unavailable For Legal Reasons** to any EEA
+IP — a GDPR position by the publisher, not a bot wall:
+
+> "We recognise you are attempting to access this website from a country belonging
+> to the European Economic Area (EEA) … and therefore cannot grant you access."
+
+The VPS is in Germany, so these refuse Lectio, and the *feed* URL 451s identically
+— server-side fetching cannot work, and routing around a legal geo-restriction is
+not something to build. thecentersquare.com is the example.
+
+**But Inoreader is Sofia-based (Innologica), so it is EEA too and these sites never
+worked there either.** Josh confirmed he does not recall that site working in Ino.
+So this costs the migration nothing — do not log it as a regression when comparing
+coverage.
+
+**Resolution: the host migration, not a proxy.** Josh is leaving OVH when the
+prepaid year ends; a non-EEA host makes these feeds work with no code at all. A
+per-feed `proxy_url` was designed and deliberately NOT built — one feed does not
+justify the machinery, and the obvious free option is doubtful: a Cloudflare Worker
+egresses from the colo nearest its caller, so a call from Germany likely leaves
+Frankfurt and gets 451'd exactly as before. Untested, and cheap to test if it ever
+matters (a ~12-line Worker plus `curl "…/?u=https://ifconfig.co/country"`).
+
+⚠ **Re-check EEA-blocked feeds after the host move** — thecentersquare.com is the
+known one, and any US local-news feed that failed to subscribe is a candidate.
+
+Distinguish it from the other walls when triaging: 451 = geo (legal, unfixable);
+403 + "Just a moment…" = Cloudflare (washingtonstatestandard, realpython, behance);
+plain 403 = ordinary bot rules. Only the middle kind might ever lift on its own.
+
+**The way through for an individual article is the browser extension** — the user's
+own browser has a non-EEA IP and posts the page Lectio cannot reach. 451 is already
+in `_BLOCKED_STATUSES`, so a re-fetch says "blocked, use the extension" rather than
+offering to delete the article as gone.
 
 ### 10. Inoreader replacement — the migration (start ~Dec 2026)
 

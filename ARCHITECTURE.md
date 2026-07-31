@@ -785,6 +785,65 @@ re-create the duplicate that filing removed — hence the split, and hence
 saved feed. Feed-provided entries are refused: their content belongs to the
 publisher and the next refresh would overwrite it anyway.
 
+**Batch re-fetch shares its pacing with the CLI, because a politeness guarantee
+that holds in one entry point is not a guarantee.** `services/refetch_batch.py`
+owns the delays (`GLOBAL_DELAY`, `PER_HOST_DELAY`, `HOST_FAILURE_LIMIT`), the
+host interleave and the runtime estimate; both `POST /saved/refetch-scope` and
+`scripts/refetch_scope.py` import them rather than defining their own. Bulk
+re-fetch spends someone else's bandwidth, so pacing is the design and not a
+setting.
+
+Three details are load-bearing:
+
+- **The estimate counts the per-host delay, not the global one.** A single-feed
+  scope is a single host, so 89 articles is 89 × 10s, not 89 × 2s. An early
+  version reported a 15-minute run as under 4 minutes — for a deliberately slow
+  job, the runtime is the one number that must not be understated.
+- **One job at a time, per user — but queued, not refused.** Two overlapping runs
+  would each honor the pacing and together double the rate every site sees, so
+  they are serialized; a second start appends to `job["queue"]` instead of
+  returning 409. Serializing is a scheduling constraint, not a reason to make the
+  user wait at the keyboard. A queued scope is resolved to entries when it
+  *starts*, not when it is queued, because an hour in a queue is long enough for
+  what is kept in the scope to change. The worker runs on a background thread
+  through `_run_in_user_context`, since a raw thread loses the tenancy user.
+- **The worker owns `running`, not the batch loop.** `_run_refetch_batch` handles
+  one scope and deliberately does not clear the flag; `_refetch_worker` drains the
+  queue and clears it once. Clearing it per batch made the status pill blink out
+  between queued scopes, i.e. exactly the invisibility the pill exists to fix.
+- **A refusal is not a failure.** The slug guard declining to overwrite a stored
+  copy is the guard working, and it is counted apart from a fetch that broke;
+  only a real failure counts toward dropping a host.
+
+Progress is visible in a fixed status pill (`#refetch-pill`) driven by
+`GET /saved/refetch-scope/status`, which reports the run in flight, the queue
+(labels and counts only — not the internals a client might try to set) and the
+last few completed runs. The pill is the surface for a job measured in
+quarter-hours; a toast fades and takes the job's only visible trace with it. Time
+remaining is computed from the job's own measured pace rather than the up-front
+estimate, which is the honest number once a few articles are in.
+
+**The mismatch guard has a second reference for opaque URLs.** `article.aspx?p=2438407&WT.rss_a=Classes in C#`
+carries one usable subject word once digits and structural vocabulary are dropped
+— below the guard's three-word floor — so it stood down entirely and informit's
+"Articles | InformIT" section index overwrote two stored articles during a batch
+run. When the slug gives nothing to judge by, the *stored* title becomes the
+reference, but only in conjunction with `looks_like_a_link_index(new_html)`.
+The conjunction is what makes it safe: the slug branch deliberately avoids
+old-vs-new titles (re-fetch exists partly to fix a bad title), and a genuine link
+roundup — Techdirt's weekly history post is 95% anchor text — still echoes its own
+stored title. Thresholds are calibrated against 1,192 captured articles: p95
+anchor-text ratio 0.32, p98 0.46, so the detector fires at 0.40 with a 20-anchor
+floor. Note the guard protects the *first* destruction only; once an entry holds
+the wrong page, its stored title is the wrong page's title.
+
+Scope is kept articles (starred or tagged) with an `http(s)` link — the same rule
+the single-article button uses, because an unkept feed entry is rewritten by the
+next refresh anyway. Everything the interactive re-fetch does still happens per
+entry: the previous body is snapshotted (so any one result is revertible), a
+plainly-different page is refused, a refusal falls back to the Wayback Machine,
+and a missing publish date is learned on the way.
+
 **Whole-page capture is an opt-in `mode`, on both the save and re-fetch paths.**
 `mode="full"` swaps `fetch_readability_article` for `fetch_full_page_article` —
 same sanitizer and post-processing tail (`_finalize_article_html`), but the
