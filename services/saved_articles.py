@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from urllib.parse import urldefrag, urlparse
+from urllib.parse import parse_qsl, unquote_plus, urldefrag, urlparse
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +79,87 @@ def ensure_saved_feed(reader) -> bool:
 # Duplicated rather than imported from main: services must not import the app
 # module. Kept next to its only use so the two cannot drift unnoticed.
 _MANUAL_TAG_KEY_PREFIX = "lectio.manual_tag."
+
+
+# Words too common to count as evidence that two titles are about the same thing.
+_TITLE_STOPWORDS = frozenset({
+    "a", "an", "and", "the", "of", "for", "to", "in", "on", "at", "by", "with",
+    "from", "is", "are", "be", "your", "you", "how", "what", "why", "it", "its",
+    "this", "that", "or", "as", "vs", "new", "part", "free",
+})
+
+
+def _title_words(value: str) -> set[str]:
+    """Significant lowercase words of a title, site suffix included — a shared
+    " - The Digital Reader" must not by itself make two titles look related."""
+    words = re.findall(r"[a-z0-9]+", (value or "").lower())
+    return {w for w in words if len(w) > 2 and w not in _TITLE_STOPWORDS}
+
+
+# Structural URL vocabulary: file extensions and CMS path furniture. These carry
+# no subject, and leaving them in is how informit.com defeated this guard —
+# /articles/article.aspx overlapped the site index title "Articles | InformIT",
+# so a wrong page read as the right one.
+_URL_STRUCTURAL_WORDS = frozenset({
+    "article", "articles", "index", "default", "page", "pages", "post", "posts",
+    "item", "items", "view", "show", "story", "stories", "content", "detail",
+    "details", "print", "amp", "html", "htm", "aspx", "php", "asp",
+    "cfm", "jsp", "shtml", "cgi", "www", "web", "site", "blog",
+})
+
+
+def _url_slug_words(url: str) -> set[str]:
+    """Significant words from a URL's path AND its query VALUES.
+
+    The STORED title cannot be the reference: re-fetch exists partly to replace a
+    bad capture's title ("Stale Listing Page" -> the real one), so comparing old
+    against new refuses exactly the case the feature is for. A URL does not change
+    when a site starts serving a parked page over it.
+
+    Query values matter as much as the path. Plenty of CMS URLs are
+    ``/articles/article.aspx?p=2432250&WT.rss_a=Working+with+the+PowerShell…`` —
+    the path is furniture and the subject is in the query, so reading the path
+    alone left nothing to compare against but boilerplate.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return set()
+    text = parsed.path
+    if parsed.query:
+        # Values only: keys are parameter names, never subject.
+        for _key, value in parse_qsl(parsed.query, keep_blank_values=False):
+            text += " " + unquote_plus(value)
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {
+        w for w in words
+        if len(w) > 2 and w not in _TITLE_STOPWORDS and w not in _URL_STRUCTURAL_WORDS
+    }
+
+
+def _page_is_a_different_article(source_url: str, new_title: str) -> bool:
+    """True when the page fetched from *source_url* is plainly not what lives there.
+
+    the-digital-reader served a parked "Empowering Relationships" page for a 2019
+    post; its slug (33-ornament-dingbat-and-other-decorative-fonts…) shares no word
+    with that title, while a real article's title almost always echoes its own slug.
+
+    Deliberately conservative — refusing a legitimate re-fetch is a nuisance, while
+    accepting a wrong one destroys the stored copy, which is why this fires only on
+    ZERO overlap and stands down whenever the slug carries too little to judge
+    (opaque ids like ``?p=1524``, date-only paths, short section URLs).
+    """
+    if not new_title:
+        return False
+    slug_words = _url_slug_words(source_url)
+    # Drop pure numbers: a date path (/2019/01/22/) is not evidence of subject.
+    slug_words = {w for w in slug_words if not w.isdigit()}
+    if len(slug_words) < 3:
+        return False
+    title_words = _title_words(new_title)
+    if len(title_words) < 2:
+        return False
+    return not (slug_words & title_words)
 
 
 def _has_manual_tag(reader, feed_url: str, entry_id: str) -> bool:
@@ -313,6 +395,49 @@ def refresh_captured_article(
     if not article_html:
         result["error"] = "Nothing could be extracted from the page."
         return result
+
+    # ⚠ A 200 does not mean the article is still there. the-digital-reader served
+    # a parked "Empowering Relationships" page for a 2019 post, and the re-fetch
+    # replaced the stored article AND its title with it — destroying the only copy,
+    # since the archive was rewritten too. Refuse when the fetched page is plainly
+    # a different article.
+    #
+    # The URL's own slug is the reference, NOT the stored title: re-fetch exists
+    # partly to replace a bad capture's title, so comparing old against new would
+    # refuse the very case the feature is for. A slug does not change when a site
+    # starts serving a parked page over it.
+    if _page_is_a_different_article(source_url, new_title):
+        result["error"] = (
+            "The page now at that URL looks like a different article "
+            f"(\u201c{new_title[:60]}\u201d) — the stored copy was left alone. "
+            "Use Edit URL if the article moved."
+        )
+        result["mismatch"] = True
+        return result
+
+    # Snapshot the body BEFORE replacing it, so a bad re-fetch is one click to
+    # undo. Two entries were destroyed this way before this existed — a parked
+    # page returning 200, and a URL whose subject lived only in its query string —
+    # and each needed a backup dive to recover. The guard above catches what it
+    # can recognize; this covers what it cannot.
+    #
+    # INSERT OR IGNORE keeps the FIRST original, matching the cleanup feature that
+    # shares this table: reverting means "as the feed served it", not "as the last
+    # re-fetch left it". Reusing the row also means the existing Revert control
+    # lights up with no further wiring.
+    try:
+        _original = read_entry_content_json(reader, feed_url, entry_id)
+        if _original is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO entry_content_edits"
+                " (feed_url, entry_id, original_content, ops, edited_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (feed_url, entry_id, _original, "[]",
+                 datetime.now(timezone.utc).isoformat()),
+            )
+    except Exception:  # noqa: BLE001 — never block a re-fetch on the snapshot
+        LOGGER.warning("refresh-capture: could not snapshot %s before replacing", entry_id,
+                       exc_info=True)
 
     try:
         # A feed entry keeps its date and gets its content pinned against the

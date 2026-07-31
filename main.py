@@ -4001,6 +4001,13 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_shorts INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Paywalled/subscriber-only posts: a Substack paid post ships a body that
+        # is nothing but a "Read more" link back to itself, so it can be spotted
+        # without any explicit marker (Substack provides none).
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_paywalled INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         try:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN inject_source_images INTEGER NOT NULL DEFAULT 0")
         except Exception:
@@ -4215,14 +4222,22 @@ def delete_setting(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
 
-_DISPLAY_PREF_KEYS = frozenset({"show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption", "hide_shorts", "inject_source_images"})
+_DISPLAY_PREF_KEYS = frozenset({
+    "show_lead_image_in_article", "show_lead_image_as_thumb", "show_image_caption",
+    "hide_shorts", "hide_paywalled", "inject_source_images",
+})
 # Pre-built UPDATE statements (one per column) so conn.execute() never receives an f-string.
 _DISPLAY_PREF_COLS: dict[str, str] = {k: k for k in _DISPLAY_PREF_KEYS}
 _DISPLAY_PREF_SQLS: dict[str, str] = {
     k: f"UPDATE feed_display_prefs SET {k} = ? WHERE feed_url = ?"
     for k in _DISPLAY_PREF_KEYS
 }
-_DISPLAY_PREF_DEFAULTS: dict = {"show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1, "show_image_caption": -1, "hide_shorts": 0, "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover", "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None}
+_DISPLAY_PREF_DEFAULTS: dict = {
+    "show_lead_image_in_article": 1, "show_lead_image_as_thumb": 1,
+    "show_image_caption": -1, "hide_shorts": 0, "hide_paywalled": 0,
+    "inject_source_images": 0, "feed_thumbnail_url": None, "thumb_crop": "cover",
+    "thumb_strategy": None, "smart_min_scale": None, "fill_zoom": None,
+}
 _VALID_THUMB_CROPS = frozenset({
     "cover", "cover-top-left", "cover-top", "cover-top-right",
     "cover-left", "cover-right",
@@ -4342,6 +4357,49 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: str) -> str | None:
+    """Fold *incoming* into the feed's existing tag_filter spec, and drop the
+    now-redundant rows. Returns the merged spec, or None when there is nothing to
+    merge with.
+
+    Signed tokens are deduped by TAG, with the incoming sign winning: re-adding
+    ``+rust`` where ``-rust`` was set is a correction, not a contradiction to
+    preserve.
+    """
+    rows = conn.execute(
+        "SELECT rowid, keyword FROM highlight_keywords"
+        " WHERE type = 'tag_filter' AND scope = 'feed' AND scope_id = ?"
+        " ORDER BY rowid",
+        (feed_url,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    by_tag: dict[str, str] = {}          # tag -> sign, insertion-ordered
+    for source in [str(r["keyword"] or "") for r in rows] + [incoming]:
+        for token in source.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            sign, tag = "", token
+            for prefix in ("++", "+", "-"):
+                if token.startswith(prefix):
+                    sign, tag = prefix, token[len(prefix):]
+                    break
+            tag = normalize_tag_value(tag)
+            if tag:
+                by_tag[tag] = sign
+    # Delete ALL of them, not just the extras: the caller's INSERT OR REPLACE keys
+    # on the keyword, which the merge has just changed, so leaving the first row
+    # behind would leave a rival rather than replace it.
+    conn.executemany(
+        "DELETE FROM highlight_keywords WHERE rowid = ?", [(r["rowid"],) for r in rows],
+    )
+    if len(rows) > 1:
+        LOGGER.info("[tag-filter] merged %d duplicate rule(s) for %s", len(rows) - 1, feed_url)
+    return ", ".join(f"{sign}{tag}" for tag, sign in by_tag.items())
+
+
 def add_highlight_keyword(
     conn: sqlite3.Connection,
     scope: str,
@@ -4381,6 +4439,15 @@ def add_highlight_keyword(
         delivery = "immediately"
     if webhook_format not in WEBHOOK_VALID_FORMATS:
         webhook_format = "generic"
+    # A feed can only have ONE tag_filter rule: get_feed_tag_filter_rule fetches a
+    # single row, so a second one is edited by nothing while still executing — two
+    # rules on the same dev.to feed ("-rust, -powerbi" and "-rust, -hindi,
+    # -javascript, -powerbi, -aws") were both running, invisibly. Merge into the
+    # existing rule rather than adding a rival.
+    if rule_type == "tag_filter" and scope == "feed":
+        merged = _merge_tag_filter_specs(conn, scope_id, keyword)
+        if merged is not None:
+            keyword = merged
     conn.execute(
         "INSERT OR REPLACE INTO highlight_keywords"
         " (scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
@@ -6653,6 +6720,76 @@ def _apply_hide_shorts(refreshed_feed_urls: set[str]) -> int:
     return 0
 
 
+# A paywalled post's body is a stub: below this much visible text, and with its
+# only link pointing back at the post itself, there is no article here.
+_PAYWALL_STUB_MAX_TEXT = 120
+
+
+def is_paywall_stub(content_html: str | None, entry_link: str | None) -> bool:
+    """Is this entry body a subscriber-only stub rather than an article?
+
+    Substack marks paid posts nowhere in its feed — no category, no audience
+    field. What it does is ship a body containing only a "Read more" link back to
+    the post. Measured on abortretry.fail: 17 of 20 items were 9-character stubs
+    ("Read more") against three real posts of 19k-38k characters, so the
+    separation is not marginal.
+
+    Requiring the link to point at the ENTRY'S OWN URL is what keeps this from
+    firing on a short real post: a two-line link roundup has links that go
+    elsewhere.
+    """
+    if not content_html:
+        return False
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", content_html)).strip()
+    if len(text) > _PAYWALL_STUB_MAX_TEXT:
+        return False
+    hrefs = re.findall(r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)', content_html, re.IGNORECASE)
+    if not hrefs:
+        return False
+    own = (entry_link or "").split("?", 1)[0].rstrip("/")
+    return bool(own) and any(h.split("?", 1)[0].rstrip("/") == own for h in hrefs)
+
+
+def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
+    """Auto-mark subscriber-only stubs read on feeds with hide-paywalled enabled.
+
+    Marks read rather than filtering the list, exactly as hide-shorts does: the
+    posts stay findable under All, and nothing is deleted for a paywall that might
+    lift. Per feed and opt-in, because a *partial* feed is all stubs by design —
+    switching this on there would empty it.
+    """
+    try:
+        with get_meta_connection() as conn:
+            targets = {
+                str(r["feed_url"])
+                for r in conn.execute(
+                    "SELECT feed_url FROM feed_display_prefs WHERE hide_paywalled = 1"
+                ).fetchall()
+            } & set(refreshed_feed_urls)
+        if not targets:
+            return 0
+        marked = 0
+        with get_reader() as reader:
+            for feed_u in targets:
+                for entry in reader.get_entries(feed=feed_u, read=False):
+                    body = ""
+                    if getattr(entry, "content", None):
+                        body = str(entry.content[0].value or "")
+                    elif entry.summary:
+                        body = str(entry.summary)
+                    if is_paywall_stub(body, str(entry.link or "")):
+                        reader.mark_entry_as_read((feed_u, entry.id))
+                        upsert_entry_read_state(feed_u, str(entry.id))
+                        marked += 1
+        if marked:
+            invalidate_unread_counts_cache()
+            LOGGER.info("[automation] hide-paywalled marked %d stub(s) read", marked)
+        return marked
+    except Exception:
+        LOGGER.exception("[automation] error applying hide-paywalled")
+        return 0
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:
@@ -6686,6 +6823,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         LOGGER.exception("[guid-churn] error during cross-feed dedup")
 
     _apply_hide_shorts(refreshed_feed_urls)
+    _apply_hide_paywalled(refreshed_feed_urls)
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────
         with get_meta_connection() as conn:
@@ -8785,6 +8923,7 @@ def get_feed_properties(feed_url: str) -> dict:
             "show_image_caption": int(_disp.get("show_image_caption", -1)),
             "caption_source": _disp.get("caption_source") or "auto",
             "hide_shorts": bool(_disp.get("hide_shorts", 0)),
+            "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "feed_thumbnail_url": _disp.get("feed_thumbnail_url") or None,
             "thumb_crop": str(_disp.get("thumb_crop") or "cover"),
@@ -10831,7 +10970,89 @@ _READABILITY_BROWSER_UA = (
 )
 
 
-def fetch_readability_article(source_url: str) -> tuple[str, str]:
+# Publish-date sources in a page's head, ordered by how much publishers maintain
+# them. <time> is LAST on purpose: a page has many and the first often belongs to a
+# comment or a "latest posts" rail. Measured over the archive when the recovery
+# script was written: article:published_time carried 1,811 of 2,030 hits.
+_PUBDATE_SOURCES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("og:article:published_time", re.compile(
+        r'<meta[^>]+(?:property|name)=["\']article:published_time["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("og:reversed-attr-order", re.compile(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']article:published_time["\']', re.I)),
+    ("json-ld:datePublished", re.compile(r'"datePublished"\s*:\s*"([^"]+)"', re.I)),
+    ("itemprop:datePublished", re.compile(
+        r'<meta[^>]+itemprop=["\']datePublished["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("meta:date", re.compile(
+        r'<meta[^>]+name=["\'](?:date|pubdate|publish-date|DC\.date[^"\']*)["\'][^>]*content=["\']([^"\']+)', re.I)),
+    ("time:datetime", re.compile(r'<time[^>]+datetime=["\']([^"\']+)', re.I)),
+)
+
+
+_WAYBACK_AVAILABILITY = "https://archive.org/wayback/available"
+
+
+def wayback_snapshot_url(source_url: str) -> str | None:
+    """The nearest Wayback snapshot of *source_url*, or None.
+
+    One small JSON call to archive.org's availability API — no crawling, no
+    scraping of the site that already refused us. This is the answer for an
+    article whose publisher now serves a parked page or a section index over its
+    own URL: the guard correctly refuses that page, and without a fallback the
+    user is left with nothing better.
+    """
+    if not source_url or not source_url.startswith(("http://", "https://")):
+        return None
+    try:
+        headers = {"User-Agent": READABILITY_USER_AGENT}
+        with url_guard.build_client(timeout=10.0, headers=headers) as client:
+            resp = url_guard.safe_get(
+                client, f"{_WAYBACK_AVAILABILITY}?url={quote_plus(source_url)}",
+                headers=headers,
+            )
+        resp.raise_for_status()
+        snap = ((resp.json() or {}).get("archived_snapshots") or {}).get("closest") or {}
+    except Exception:  # noqa: BLE001 — a missing fallback is not an error
+        LOGGER.info("wayback lookup failed for %s", source_url, exc_info=True)
+        return None
+    if not snap.get("available"):
+        return None
+    url = str(snap.get("url") or "")
+    return url or None
+
+
+def mine_publish_date(raw_html: str | None) -> datetime | None:
+    """The article's publish date from a page's own metadata, or None.
+
+    Range-checked rather than trusted: a 1900 or 2099 value is a template
+    placeholder, and a future date is a clock problem, not a publication.
+    """
+    if not raw_html:
+        return None
+    now = datetime.now(timezone.utc)
+    for _name, pattern in _PUBDATE_SOURCES:
+        for m in pattern.finditer(raw_html):
+            raw = (m.group(1) or "").strip()
+            dt = None
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                ymd = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
+                if ymd:
+                    try:
+                        dt = datetime(int(ymd.group(1)), int(ymd.group(2)), int(ymd.group(3)),
+                                      tzinfo=timezone.utc)
+                    except ValueError:
+                        dt = None
+            if dt is None:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if 1990 < dt.year and dt <= now + timedelta(days=2):
+                return dt
+    return None
+
+
+def fetch_readability_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, article_html)``: the
     readability-extracted, sanitized article body. Shared by the reader-view
     route and save-article capture. Raises on fetch/extraction failure.
@@ -10842,7 +11063,11 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
     with a browser identity. That retry is not about winning an arms race — a
     host that blocks by IP still refuses — but about not *mistaking a refusal
     for a deletion*: the caller flags 404/410 as "the article is gone", and a
-    bot-wall answering 404 turned a live article into a delete prompt."""
+    bot-wall answering 404 turned a live article into a delete prompt.
+
+    *capture*, when given, receives the raw response body under ``"raw_html"``.
+    readability strips head metadata, so a caller wanting the page's publish date
+    would otherwise have to fetch it a second time."""
     headers = {"User-Agent": READABILITY_USER_AGENT}
     with url_guard.build_client(timeout=12.0, headers=headers) as client:
         response = url_guard.safe_get(client, source_url, headers=headers)
@@ -10859,7 +11084,11 @@ def fetch_readability_article(source_url: str) -> tuple[str, str]:
             LOGGER.debug("readability: browser-identity retry failed for %s", source_url, exc_info=True)
     response.raise_for_status()
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
+        if capture is not None:
+            capture["raw_html"] = response.text
         return markdown_to_article_html(response.text, source_url)
+    if capture is not None:
+        capture["raw_html"] = response.text
     return extract_readability_article(response.text, source_url)
 
 
@@ -11034,12 +11263,17 @@ def _whole_body_content(raw_html: str) -> str:
     return html_sanitize.sanitize_html(body_html).strip()
 
 
-def fetch_full_page_article(source_url: str) -> tuple[str, str]:
+def fetch_full_page_article(source_url: str, *, capture: dict | None = None) -> tuple[str, str]:
     """Fetch *source_url* and return ``(title, body_html)`` without readability
-    extraction — see extract_full_page_article. Markdown is still converted."""
+    extraction — see extract_full_page_article. Markdown is still converted.
+
+    *capture* receives the raw body under ``"raw_html"``, so a caller can mine the
+    page's publish date from the fetch it already made."""
     with url_guard.build_client(timeout=12.0, headers={"User-Agent": READABILITY_USER_AGENT}) as client:
         response = url_guard.safe_get(client, source_url, headers={"User-Agent": READABILITY_USER_AGENT})
     response.raise_for_status()
+    if capture is not None:
+        capture["raw_html"] = response.text
     if _is_markdown_response(response.headers.get("content-type", ""), source_url):
         return markdown_to_article_html(response.text, source_url)
     return extract_full_page_article(response.text, source_url)
@@ -11875,6 +12109,34 @@ def list_entries_for_feeds(
     light_records = light_records[:limit]
 
     enrich_start = time.perf_counter()
+    # Which of the VISIBLE rows carry a manual tag: one query over the clipped
+    # window, not the whole backlog. `_manual_tags` above is filled only when a tag
+    # filter is active, so a kept flag derived from it read empty on ordinary rows
+    # — which is why re-fetch appeared in the entry pane but not from the post
+    # list, and only once a post had been starred.
+    _visible_tagged: set[tuple[str, str]] = set()
+    if light_records:
+        try:
+            _keys = [(str(r["feed_url"]), str(r["id"])) for r in light_records]
+            # reader's own connection, not a second one: an independent handle can
+            # lose a lock race with the refresh worker, and this code's except
+            # branch would then quietly report "no tags" — hiding the re-fetch
+            # menu at random. Surfaced as an intermittent test failure.
+            with get_reader() as _r:
+                _tdb = _r._storage.get_db()
+                for _i in range(0, len(_keys), 400):
+                    _chunk = _keys[_i:_i + 400]
+                    _ph = ",".join("(?,?)" for _ in _chunk)
+                    _flat = [v for k in _chunk for v in k]
+                    for _f, _e in _tdb.execute(
+                        f"SELECT DISTINCT feed, id FROM entry_tags"  # nosemgrep: placeholders only
+                        f" WHERE (feed, id) IN ({_ph}) AND key LIKE ?",
+                        _flat + [f"{MANUAL_TAG_KEY_PREFIX}%"],
+                    ):
+                        _visible_tagged.add((str(_f), str(_e)))
+        except Exception:  # noqa: BLE001 — a missing flag only hides a menu item
+            LOGGER.warning("visible-tag probe failed", exc_info=True)
+
     with get_meta_connection() as _prefs_conn:
         _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
     # Declared host migrations (feed_url_rewrites), so the proxy-rebase below
@@ -11965,6 +12227,10 @@ def list_entries_for_feeds(
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
+                # Starred OR tagged. Drives the re-fetch menu, which must not key
+                # on manual_tags (populated only under a tag filter) nor on the
+                # star alone — tag-as-keep made a tag a keep signal everywhere.
+                "kept": bool(is_saved or (entry.feed_url, entry.id) in _visible_tagged),
                 # Inline formatting a feed put in the title (<em>), rendered
                 # rather than escaped. Everything else stays literal text, so a
                 # C++ title's std::vector<T> survives — see sanitize_inline_title.
@@ -26396,6 +26662,8 @@ async def refresh_saved_article_content(
             "feed_url": feed_url,
             "entry_id": entry_id,
             "url": result.get("source_url") or entry_id,
+            "dated": result.get("dated"),
+            "from_archive": result.get("from_archive"),
         })
     # Only the saved feed has a meaningful fallback: re-running the save path
     # can create the entry when it is genuinely absent. Anywhere else, the
@@ -26568,7 +26836,17 @@ def _refresh_captured_article_for_current_user(
     *mode* ``"full"`` captures the whole page body instead of readability-
     extracting it — the escape hatch for pages readability mangles. See
     extract_full_page_article."""
-    extract = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
+    _base = fetch_full_page_article if mode == CAPTURE_MODE_FULL else fetch_readability_article
+    # Keep the page we already fetched, so a date can be mined from it without a
+    # second request. readability strips head metadata, which is where the date is.
+    _capture: dict = {}
+
+    def extract(url: str):
+        try:
+            return _base(url, capture=_capture)
+        except TypeError:
+            return _base(url)          # a caller-supplied extractor without the kwarg
+
     reader = get_reader()
     with get_meta_connection() as conn:
         result = saved_articles_service.refresh_captured_article(
@@ -26579,7 +26857,73 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
         )
+    # The live page was refused as a different article (parked page, section
+    # index). Ask the archive for the real one before giving up — the guard
+    # protects the stored copy, but on its own it leaves the user stuck.
+    if not result.get("ok") and (result.get("mismatch") or result.get("dead")):
+        snapshot = wayback_snapshot_url(result.get("source_url") or entry_id)
+        if snapshot:
+            LOGGER.info("[re-fetch] falling back to the archive for %s", entry_id)
+            _capture.clear()
+
+            def _from_archive(_url: str):
+                return _base(snapshot, capture=_capture)
+
+            with get_meta_connection() as conn:
+                archived_result = saved_articles_service.refresh_captured_article(
+                    reader, conn, feed_url, entry_id,
+                    extract=_from_archive,
+                    enqueue_archive=starred_archive_service.enqueue_archive,
+                )
+            if archived_result.get("ok"):
+                archived_result["from_archive"] = snapshot
+                result = archived_result
+
+    if result.get("ok"):
+        try:
+            result["dated"] = _apply_mined_publish_date(
+                feed_url, entry_id, _capture.get("raw_html"))
+        except Exception:  # noqa: BLE001 — a date is a bonus, never a failure
+            LOGGER.warning("re-fetch date mining failed for %s", entry_id, exc_info=True)
     return result
+
+
+def _apply_mined_publish_date(feed_url: str, entry_id: str, raw_html: str | None) -> str | None:
+    """Set a publish date mined from the page, but ONLY when we have none.
+
+    Deliberately narrow. Re-fetch used to move `published` and destroyed 105 real
+    dates before that was caught, so this never overwrites a date the entry
+    already has, and never touches an entry whose date the user pinned by hand.
+    It exists for the ~1,278 entries still sitting at the Unix epoch because their
+    importer had no date to give — a re-fetch is a free chance to learn one.
+    """
+    if not raw_html:
+        return None
+    with get_meta_connection() as conn:
+        if conn.execute(
+            "SELECT 1 FROM entry_date_overrides WHERE feed_url = ? AND entry_id = ?",
+            (feed_url, entry_id),
+        ).fetchone():
+            return None        # an explicit correction outranks anything inferred
+    with get_reader() as reader:
+        db = reader._storage.get_db()
+        row = db.execute(
+            "SELECT published FROM entries WHERE feed = ? AND id = ?", (feed_url, entry_id)
+        ).fetchone()
+        current = str(row[0] or "") if row else ""
+        # Only an absent or epoch date qualifies as "we don't know".
+        if current and not current.startswith("1970-01-01"):
+            return None
+        mined = mine_publish_date(raw_html)
+        if mined is None:
+            return None
+        stored = mined.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute("UPDATE entries SET published = ? WHERE feed = ? AND id = ?",
+                   (stored, feed_url, entry_id))
+        db.commit()
+    invalidate_unread_counts_cache()
+    LOGGER.info("[re-fetch] learned publish date %s for %s", stored, entry_id)
+    return stored
 
 
 @app.post("/articles/save")

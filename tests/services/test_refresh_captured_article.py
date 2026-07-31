@@ -56,6 +56,18 @@ def meta_conn():
     )
     conn.execute(
         """
+        CREATE TABLE entry_content_edits (
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            original_content TEXT NOT NULL,
+            ops TEXT NOT NULL,
+            edited_at TEXT NOT NULL,
+            PRIMARY KEY(feed_url, entry_id)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE entry_content_overrides (
             feed_url TEXT NOT NULL,
             entry_id TEXT NOT NULL,
@@ -334,3 +346,150 @@ def test_tagged_feed_entry_is_refetched_and_pinned(reader, meta_conn):
         "SELECT 1 FROM entry_content_overrides WHERE feed_url = ? AND entry_id = ?",
         (REAL_FEED, ARTICLE),
     ).fetchone() is not None
+
+
+def test_a_parked_page_at_the_url_is_refused(reader, meta_conn):
+    """⚠ A 200 does not mean the article is still there.
+
+    the-digital-reader served a parked "Empowering Relationships" page for a 2019
+    post, and the re-fetch replaced the stored article AND its title with it —
+    destroying the only copy, because the archive was rewritten too.
+
+    The reference is the URL's own SLUG, not the stored title: re-fetch exists
+    partly to replace a bad capture's title, so comparing old against new would
+    refuse the very case the feature is for. A slug does not change when a site
+    starts serving a parked page over it.
+    """
+    url = ("https://the-digital-reader.com/2019/01/22/"
+           "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": url, "link": url,
+        "title": "33 Ornament, Dingbat and Other Decorative Fonts",
+        "content": [{"value": "<p>The original article body.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, url))
+    meta_conn.commit()
+
+    def _parked(u):
+        return "Empowering Relationships - The Digital Reader", "<p>Unrelated filler.</p>"
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, url, extract=_parked)
+
+    assert result["ok"] is False
+    assert result.get("mismatch") is True
+    entry = reader.get_entry((REAL_FEED, url))
+    assert "original article body" in entry.content[0].value   # untouched
+    assert entry.title.startswith("33 Ornament")
+
+
+def test_the_guard_stands_down_when_it_cannot_judge():
+    """Conservative by design: refusing a legitimate re-fetch is a nuisance, while
+    accepting a wrong one destroys the stored copy. So it fires only on ZERO
+    overlap, and not at all when the slug carries too little to judge."""
+    from services.saved_articles import _page_is_a_different_article as different
+
+    rich = ("https://the-digital-reader.com/2019/01/22/"
+            "33-ornament-dingbat-and-other-decorative-fonts-for-your-next-ebook/")
+    assert different(rich, "Empowering Relationships - The Digital Reader")
+    assert not different(rich, "33 Ornament, Dingbat and Other Decorative Fonts")
+
+    # Opaque id, date-only path, thin section slug: nothing to compare against.
+    assert not different("https://blog.chrismoore.com/?p=1524", "Anything At All")
+    assert not different("https://x.test/2019/01/22/", "Anything At All")
+    assert not different("https://blog.example.com/topics/how-to-focus", "The Real Article")
+
+    # A title that genuinely echoes its slug is never refused.
+    assert not different("https://x.test/2020/09/08/stl-algorithms-tutorial-unique-copy",
+                         "STL Algorithms Tutorial: unique_copy")
+
+
+def test_query_string_urls_are_judged_on_their_query(reader, meta_conn):
+    """informit.com defeated the path-only version of this guard.
+
+    Its URLs are /articles/article.aspx?p=…&WT.rss_a=<the actual title>. The path
+    is furniture, and worse, "articles" overlapped the site index title
+    "Articles | InformIT" — so a wrong page read as the right one and the stored
+    article was replaced with the section index.
+
+    Query VALUES are now part of the reference, and structural vocabulary
+    (article/index/aspx/…) is excluded from it.
+    """
+    from services.saved_articles import _page_is_a_different_article as different
+
+    url = ("http://www.informit.com/articles/article.aspx?p=2432250&WT.rss_f=Article"
+           "&WT.rss_a=Working%20with%20the%20PowerShell%20Desired%20State%20Configuration"
+           "%2C%20Part%202%3A%20Implementation%20and%20Troubleshooting")
+
+    assert different(url, "Articles | InformIT")
+    assert not different(url, "Working with the PowerShell Desired State Configuration, Part 2")
+
+
+def test_structural_url_words_are_not_evidence():
+    """A path of nothing but CMS furniture leaves no reference, so the guard must
+    stand down rather than match on "article" or "index"."""
+    from services.saved_articles import _url_slug_words
+
+    assert _url_slug_words("https://x.test/articles/article.aspx") == set()
+    assert _url_slug_words("https://x.test/index.php") == set()
+    assert "powershell" in _url_slug_words("https://x.test/a.aspx?t=PowerShell+Desired+State")
+
+
+def test_a_refetch_is_undoable(reader, meta_conn):
+    """A bad re-fetch must be one click to undo.
+
+    Two entries were destroyed before this existed — a parked page returning 200,
+    and a URL whose subject lived only in its query string — and each needed a
+    backup dive to recover. The guard catches what it can recognize; the snapshot
+    covers what it cannot.
+    """
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
+        "content": [{"value": "<p>The body the feed served.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, ARTICLE))
+    meta_conn.commit()
+
+    assert refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
+                                    extract=_extract_ok)["ok"] is True
+
+    row = meta_conn.execute(
+        "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()
+    assert row is not None, "no snapshot was taken"
+    assert "the feed served" in row[0]
+
+    # And the existing revert path restores it.
+    from services.saved_articles import restore_entry_content
+    restore_entry_content(reader, REAL_FEED, ARTICLE, row[0])
+    assert "the feed served" in reader.get_entry((REAL_FEED, ARTICLE)).content[0].value
+
+
+def test_the_snapshot_keeps_the_first_original(reader, meta_conn):
+    """Reverting means "as the feed served it", not "as the last re-fetch left it"
+    — the same semantics the cleanup feature has, since they share the row."""
+    reader.add_feed(REAL_FEED, allow_invalid_url=True, exist_ok=True)
+    reader.disable_feed_updates(REAL_FEED)
+    reader.add_entry({
+        "feed_url": REAL_FEED, "id": ARTICLE, "link": ARTICLE, "title": "Focus",
+        "content": [{"value": "<p>ORIGINAL feed body.</p>"}],
+    })
+    meta_conn.execute("INSERT INTO saved_entries (feed_url, entry_id) VALUES (?, ?)",
+                      (REAL_FEED, ARTICLE))
+    meta_conn.commit()
+
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=_extract_ok)
+    refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE,
+                             extract=lambda u: ("Focus", "<p>A second re-fetch.</p>"))
+
+    original = meta_conn.execute(
+        "SELECT original_content FROM entry_content_edits WHERE feed_url = ? AND entry_id = ?",
+        (REAL_FEED, ARTICLE),
+    ).fetchone()[0]
+    assert "ORIGINAL feed body" in original

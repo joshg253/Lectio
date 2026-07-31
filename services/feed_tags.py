@@ -49,6 +49,12 @@ def _clean_tag_values(values: list[str], cap: int | None = None) -> list[str]:
         # links the same term once as a category ("personal") and once as a
         # hash-prefixed tag ("#personal").
         compact = compact.lstrip("#").strip()
+        # Numbers-only tags carry nothing: comment counts, post ids, pagination,
+        # bare years. Josh's call — "trying to think where a numbers-only tag would
+        # be useful … definitely mixed are useful" — so anything with a non-digit
+        # survives: "80s", "3d", "2.5 Admins", "2020 election", "Fallout 4".
+        if compact.isdigit():
+            continue
         if not compact or len(compact) > 60:
             continue
         lowered = compact.lower()
@@ -115,6 +121,8 @@ _META_ATTR_RE = re.compile(
 )
 _PAGE_TAG_KEYS = {"article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
 _MAX_PAGE_TAGS = 15
+# Distinct 4-digit years on one page that mark an archive list rather than tags.
+_ARCHIVE_YEAR_RUN = 5
 _ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.{0,120}?)</a>", re.IGNORECASE | re.DOTALL)
 # /tag/x, /tags/x, /category/x, /categories/x — trailing slash optional. The
 # capture is the slug, used when the anchor has no text of its own.
@@ -225,6 +233,13 @@ def extract_page_tags(html: str | None) -> list[str]:
         if len(text) >= 2:
             values.append(text)
 
+    # An archive/sidebar year list is not a set of tags. nwcpp.org's page carries
+    # 2000-2026 down the side, and all sixteen were harvested onto one post. A real
+    # post might carry a year or two; nothing carries fifteen — so the whole run is
+    # dropped rather than any single year being judged.
+    years = {v for v in values if v.isdigit() and len(v) == 4 and 1900 <= int(v) <= 2100}
+    if len(years) >= _ARCHIVE_YEAR_RUN:
+        values = [v for v in values if v not in years]
     return _clean_tag_values(values, cap=_MAX_PAGE_TAGS)
 
 

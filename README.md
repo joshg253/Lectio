@@ -150,6 +150,18 @@ The short version:
   is marked read, while tags, the offline copy and protection from cleanup are all
   kept, and anything can be un-archived. Shows the age spread and the resulting
   Inbox size before you commit.
+- **Re-fetch is undoable, and falls back to the Internet Archive.** Re-pulling an
+  article stores the previous body first, so *Revert* puts it back if the result is
+  worse. If the publisher now serves a parked page or a section index over the
+  article's own URL, Lectio notices, refuses to overwrite your copy with it, and
+  asks the Wayback Machine for the real one.
+- **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
+  filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
+  thumbnails, feed type), *Maintenance*, *History*, *Automations*.
+- **Hide subscriber-only posts** — a per-feed toggle for paywalled feeds. A paid
+  Substack post arrives as nothing but a "Read more" link, which Lectio spots
+  without any marker from the publisher, and marks read at fetch time so it drops
+  out of Unread while staying findable under All.
 - **Bulk actions on the view you drilled into** — pick a tag (optionally narrowed
   to one feed) and either **unstar everything here** or **delete the tag
   everywhere**. The button carries the real count, so the set is stated before you

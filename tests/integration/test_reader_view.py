@@ -355,3 +355,24 @@ def test_a_thin_archive_is_still_used_when_nothing_is_richer(monkeypatch):
 
     out = main.resolve_reader_article_html("feed", "entry", "")
     assert "A very short but real post." in out
+
+
+# --- subscriber-only stub detection ---------------------------------------
+def test_paywalled_stub_is_recognized():
+    """Substack marks paid posts NOWHERE in its feed — no category, no audience
+    field. What it ships is a body containing only a "Read more" link back to the
+    post. Measured on abortretry.fail: 17 of 20 items were 9-character stubs
+    against three real posts of 19k-38k characters.
+    """
+    stub = '<p> <a href="https://www.abortretry.fail/p/matrox"> Read more </a> </p>'
+    assert main.is_paywall_stub(stub, "https://www.abortretry.fail/p/matrox")
+
+
+def test_a_short_post_with_outbound_links_is_not_a_stub():
+    """Requiring the link to point at the ENTRY'S OWN URL is what keeps this off a
+    genuinely short post: a two-line link roundup points elsewhere."""
+    roundup = '<p>See <a href="https://other.test/x">this</a> today.</p>'
+    assert not main.is_paywall_stub(roundup, "https://x.test/a")
+    assert not main.is_paywall_stub("<p>Short note, no links.</p>", "https://x.test/a")
+    assert not main.is_paywall_stub("<p>" + ("word " * 300) + "</p>", "https://x.test/a")
+    assert not main.is_paywall_stub(None, "https://x.test/a")

@@ -1435,6 +1435,25 @@ takes two taps**, the first arming a row that spells out what goes, because a
 browser `confirm()` is awkward to hit on that WebView. The row never appears on the
 Archive node: that is a review surface, not a place to bulk-destroy curation.
 
+**A re-fetch snapshots the body before replacing it, and falls back to the archive
+when the live page is refused.** Two entries were destroyed before either existed —
+the-digital-reader served a parked page returning 200, and informit's
+`/articles/article.aspx?p=…` hid its subject in the query string while its path
+("articles") matched the site index title. Each needed a backup dive, and one was
+unrecoverable.
+
+The snapshot reuses `entry_content_edits.original_content`, the same row the cleanup
+feature reverts from, with `INSERT OR IGNORE` so the FIRST original wins — reverting
+means "as the feed served it", not "as the last re-fetch left it". Sharing the row
+also lights up the existing Revert control with no further wiring.
+
+The archive fallback is one JSON call to `archive.org/wayback/available` — no
+crawling, and nothing further asked of a site that already refused. It runs only
+when the guard rejected the page or the source is gone, and the refused result is
+kept unless the archived copy actually succeeds. The guard still applies to the
+archived fetch, comparing the ORIGINAL URL against the archived page's title, so a
+snapshot of the same parked page is refused just as the live one was.
+
 **Re-fetch is gated on KEPT, not on the star.** Both re-fetch items (readability
 and whole-page) appear when the post is one Lectio is keeping — a capture, starred,
 **or manually tagged** — because only then is there a stored copy worth replacing.
@@ -1468,6 +1487,28 @@ Records carry both forms. `title_html` is used where the title is visible text (
 rows, the entry-pane headline, Read Mode rows and the reader headline);
 `title_plain` — the same string with those tags stripped — is used everywhere that
 cannot render markup: `title=` attributes, `<title>`, exports, email.
+
+**Numbers-only tags are dropped at capture, from feed categories and page scraping
+alike.** They are comment counts, post ids, pagination and bare years — Josh's test
+was "trying to think where a numbers-only tag would be useful … definitely mixed are
+useful", so anything carrying a non-digit survives: `80s`, `3d`, `2.5 Admins`,
+`2020 election`, `Windows 11`. A stray `84` reached lemire.me's suggestions this way
+and 580 stored rows were bare numbers.
+
+Separately, **an archive year-list is dropped as a run**: nwcpp.org carries
+2000–2026 down the side of every page and all sixteen landed on one post. Five or
+more distinct 4-digit years on a single page is a sidebar, not a tag set, so the
+whole run goes rather than any single year being judged on its own.
+
+**Subscriber-only posts are detectable without any marker.** Substack publishes
+none — no category, no audience field — but ships a body containing only a "Read
+more" link back to the post. `is_paywall_stub` requires both a body under ~120
+characters of text *and* that its only link points at the entry's own URL, which is
+what keeps it off a genuinely short post (a link roundup points elsewhere). Measured
+on abortretry.fail: 17 of 20 items were 9-character stubs against three real posts of
+19k–38k. The per-feed `hide_paywalled` pref marks them read at fetch time, mirroring
+`hide_shorts` — non-destructive, still findable under All, and opt-in because a
+*partial* feed is all stubs by design and enabling it there would empty the feed.
 
 **Feed-tag suggestions are NOT filtered automatically, and that is a considered
 position.** Two heuristics were tried on live data and both hid tags the user

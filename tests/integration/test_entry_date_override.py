@@ -147,3 +147,54 @@ def test_an_explicit_offset_is_respected(configured):
         ).fetchone()[0])
 
     assert stored == "2023-07-06 00:00:00"
+
+
+# --- publish date learned from a re-fetch ---------------------------------
+def test_refetch_learns_a_date_only_when_we_have_none(configured):
+    """A re-fetch is a free chance to learn a date for the ~1,278 entries still at
+    the Unix epoch, whose importer had none to give.
+
+    Deliberately narrow: re-fetch used to MOVE `published` and destroyed 105 real
+    dates before that was caught, so this never overwrites a date the entry already
+    has.
+    """
+    page = '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
+
+    with main.get_reader() as reader:
+        db = reader._storage.get_db()
+        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'",
+                   (FEED,))
+        db.commit()
+
+    assert main._apply_mined_publish_date(FEED, "e1", page) == "2019-01-22 10:00:00"
+    assert _reader_published() == "2019-01-22 10:00:00"
+
+    # A second re-fetch must not move the date it just learned.
+    later = '<meta property="article:published_time" content="2024-05-05T00:00:00+00:00"/>'
+    assert main._apply_mined_publish_date(FEED, "e1", later) is None
+    assert _reader_published() == "2019-01-22 10:00:00"
+
+
+def test_refetch_never_overrides_a_pinned_date(configured):
+    """An explicit correction outranks anything inferred from a page."""
+    main.set_entry_date_route(feed_url=FEED, entry_id="e1", published="2023-04-05")
+    pinned = _reader_published()
+    with main.get_reader() as reader:
+        db = reader._storage.get_db()
+        db.execute("UPDATE entries SET published = '1970-01-01 00:00:00' WHERE feed = ? AND id = 'e1'",
+                   (FEED,))
+        db.commit()
+
+    page = '<meta property="article:published_time" content="2019-01-22T10:00:00+00:00"/>'
+    assert main._apply_mined_publish_date(FEED, "e1", page) is None
+    assert pinned  # the override row is what protects it
+
+
+def test_mined_dates_are_range_checked():
+    """A 1900 value is a template placeholder and a future date is a clock
+    problem, not a publication."""
+    assert main.mine_publish_date('<meta name="date" content="1900-01-01">') is None
+    assert main.mine_publish_date('<meta name="date" content="2099-01-01">') is None
+    assert main.mine_publish_date("<p>nothing here</p>") is None
+    assert main.mine_publish_date(
+        '<time datetime="2020-03-04T05:06:07Z">x</time>').year == 2020

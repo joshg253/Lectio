@@ -305,3 +305,28 @@ def test_no_actions_row_on_the_archive_node(configured):
         node_selected=True,
     )
     assert ctx["node_actions"] is None
+
+
+def test_rows_carry_a_kept_flag_for_tagged_but_unstarred_posts(configured):
+    """The re-fetch menu keys on `kept`, and it must not key on `manual_tags`.
+
+    `manual_tags` is populated on a row only when a TAG FILTER is active, so a
+    kept flag derived from it read empty on ordinary rows: re-fetch showed up in
+    the entry pane but not from the post list, and appeared at all only once a
+    post was starred. Reported as "this one was only tagged, but no refetch
+    available. I starred it and refetch is available now".
+    """
+    rows = main.list_entries_for_feeds({FEED}, limit=50, star_only=True, kept_scope="kept")
+    by_id = {r["id"]: r for r in rows}
+
+    # The case that was hidden: tagged, never starred, and `manual_tags` still
+    # empty because no tag filter is active — so `kept` cannot be derived from it.
+    assert by_id["filed"]["saved"] is False
+    assert by_id["filed"]["manual_tags"] == []
+    assert by_id["filed"]["kept"] is True
+
+    # Deliberately NOT asserting the starred row here. `saved` depends on the meta
+    # connection resolving to this test's tenancy, which a leaked background thread
+    # from an earlier test can disturb (the "database is locked" flake class in
+    # Plan.md). That path is covered by test_unstar_scope_removes_stars_and_keeps_tags;
+    # this test is about the TAGGED half, which is what was broken.

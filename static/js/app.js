@@ -2682,13 +2682,13 @@ const CAPTURE_MODE_FULL = 'full';
     const feedPropCooldownLabel = document.getElementById('feed-prop-cooldown-label');
     const feedPropCooldown = document.getElementById('feed-prop-cooldown');
     const feedPropTabInfo = document.getElementById('feed-prop-tab-info');
-    const feedPropTabTuning = document.getElementById('feed-prop-tab-tuning');
     const feedPropTabHistory = document.getElementById('feed-prop-tab-history');
     const feedPropTabAutomations = document.getElementById('feed-prop-tab-automations');
     const feedPropYtSection = document.getElementById('feed-prop-yt-section');
     const feedPropImgSection = document.getElementById('feed-prop-img-section');
     const feedPropDevSection = document.getElementById('feed-prop-dev-section');
     const feedPropHideShorts = document.getElementById('feed-prop-hide-shorts');
+    const feedPropHidePaywalled = document.getElementById('feed-prop-hide-paywalled');
     const feedPropFlushBatchBtn = document.getElementById('feed-prop-flush-batch-btn');
     const feedPropFlushBatchStatus = document.getElementById('feed-prop-flush-batch-status');
     document.querySelectorAll('[data-feed-prop-tab]').forEach(btn => {
@@ -2698,10 +2698,12 @@ const CAPTURE_MODE_FULL = 'full';
           b.classList.toggle('hl-tab-btn--active', b === btn);
           b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
         });
-        if (feedPropTabInfo) feedPropTabInfo.hidden = tab !== 'info';
-        if (feedPropTabTuning) feedPropTabTuning.hidden = tab !== 'tuning';
-        if (feedPropTabHistory) feedPropTabHistory.hidden = tab !== 'history';
-        if (feedPropTabAutomations) feedPropTabAutomations.hidden = tab !== 'automations';
+        // Panel ids follow the tab name, so a new tab needs no wiring here.
+        // The previous version named each one, which is why splitting Tuning
+        // would otherwise have left the new panels permanently hidden.
+        document.querySelectorAll('.feed-prop-tab-panel').forEach(panel => {
+          panel.hidden = panel.id !== `feed-prop-tab-${tab}`;
+        });
       });
     });
     let entryArticle = document.querySelector('.entry');
@@ -4268,6 +4270,7 @@ const CAPTURE_MODE_FULL = 'full';
       setActivePreset('');
       if (feedPropShowInArticle) feedPropShowInArticle.checked = true;
       if (feedPropHideShorts) feedPropHideShorts.checked = false;
+      if (feedPropHidePaywalled) feedPropHidePaywalled.checked = false;
       const _thumbSourceSelect = document.getElementById('feed-prop-thumb-source');
       if (_thumbSourceSelect) { _thumbSourceSelect.value = ''; _thumbSourceSelect.dataset.feedUrl = feedUrl; delete _thumbSourceSelect.dataset.savedThumbUrl; }
       const _thumbCustomRow = document.getElementById('feed-prop-thumb-custom-row');
@@ -4305,10 +4308,11 @@ const CAPTURE_MODE_FULL = 'full';
         b.classList.toggle('hl-tab-btn--active', isInfo);
         b.setAttribute('aria-selected', isInfo ? 'true' : 'false');
       });
-      if (feedPropTabInfo) feedPropTabInfo.hidden = false;
-      if (feedPropTabTuning) feedPropTabTuning.hidden = true;
-      if (feedPropTabHistory) feedPropTabHistory.hidden = true;
-      if (feedPropTabAutomations) feedPropTabAutomations.hidden = true;
+      // Same id-derived rule as the tab handler, so opening the modal cannot
+      // leave a newly added panel visible alongside Info.
+      document.querySelectorAll('.feed-prop-tab-panel').forEach(panel => {
+        panel.hidden = panel.id !== 'feed-prop-tab-info';
+      });
       feedPropertiesModal.removeAttribute('hidden');
 
       try {
@@ -4427,6 +4431,10 @@ const CAPTURE_MODE_FULL = 'full';
         setFeedHistory(data.fetch_history || []);
         renderFeedAutomations(data.automations);
 
+        if (feedPropHidePaywalled) {
+          feedPropHidePaywalled.checked = !!data.hide_paywalled;
+          feedPropHidePaywalled.dataset.feedUrl = feedUrl;
+        }
         if (feedPropHideShorts) {
           feedPropHideShorts.checked = !!data.hide_shorts;
           feedPropHideShorts.dataset.feedUrl = feedUrl;
@@ -6048,6 +6056,22 @@ const CAPTURE_MODE_FULL = 'full';
       const feedUrl = feedPropRefreshBtn.dataset.feedUrl;
       if (!feedUrl) return;
       doStrategyRefresh(feedUrl, feedPropRefreshBtn.dataset.entryId || '');
+    });
+
+    feedPropHidePaywalled?.addEventListener('change', async () => {
+      const feedUrl = feedPropHidePaywalled.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        const r = await saveDisplayPref(feedUrl, 'hide_paywalled',
+                                        feedPropHidePaywalled.checked ? 1 : 0);
+        if (!r?.ok) throw new Error(r?.error || 'save failed');
+        showToastMessage(feedPropHidePaywalled.checked
+          ? 'Subscriber-only posts will be marked read at the next fetch.'
+          : 'Subscriber-only posts will be left unread.');
+      } catch (e) {
+        feedPropHidePaywalled.checked = !feedPropHidePaywalled.checked;
+        showToastMessage('Could not save that setting.');
+      }
     });
 
     feedPropHideShorts?.addEventListener('change', async () => {
