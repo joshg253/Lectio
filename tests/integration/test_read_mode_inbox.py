@@ -90,11 +90,14 @@ def test_an_explicit_sort_wins_in_the_inbox(configured):
 
 
 def test_inbox_node_detection_excludes_tag_archive_and_search(configured):
-    assert main._read_is_inbox_node(1, None, False, None, "saved") is True
-    assert main._read_is_inbox_node(1, "python", False, None, "saved") is False
-    assert main._read_is_inbox_node(1, None, True, None, "saved") is False
-    assert main._read_is_inbox_node(1, None, False, "q", "saved") is False
-    assert main._read_is_inbox_node(1, None, False, None, "feeds") is False
+    """Note the folder id is now passed alongside the root id. The old form took
+    only `1` and asserted True — right by coincidence, since 1 IS the root, which
+    is exactly why this test sat green over the missing root check."""
+    assert main._read_is_inbox_node(1, None, False, None, "saved", 1) is True
+    assert main._read_is_inbox_node(1, "python", False, None, "saved", 1) is False
+    assert main._read_is_inbox_node(1, None, True, None, "saved", 1) is False
+    assert main._read_is_inbox_node(1, None, False, "q", "saved", 1) is False
+    assert main._read_is_inbox_node(1, None, False, None, "feeds", 1) is False
 
 
 def test_leaving_the_inbox_does_not_drag_its_sort_along(configured):
@@ -189,7 +192,7 @@ def test_all_saved_is_not_treated_as_the_inbox(configured):
     """It shares the Inbox's folder/tag/archive shape, so only the explicit
     marker separates them — and getting that wrong would give All Saved the
     Inbox's starred-only scope and most-recently-starred default."""
-    assert main._read_is_inbox_node(1, None, False, None, "saved") is True
+    assert main._read_is_inbox_node(1, None, False, None, "saved", 1) is True
     href = main._read_browse_href(1, None, False, None, kept_all=True)
     assert "kept=all" in href
 
@@ -330,3 +333,33 @@ def test_rows_carry_a_kept_flag_for_tagged_but_unstarred_posts(configured):
     # from an earlier test can disturb (the "database is locked" flake class in
     # Plan.md). That path is covered by test_unstar_scope_removes_stars_and_keeps_tags;
     # this test is about the TAGGED half, which is what was broken.
+
+
+# ── the Inbox node is the ROOT node, not "any folder" ──
+def test_only_the_root_folder_is_the_inbox():
+    """Every saved folder node links with its own id, so `folder_id is not None`
+    matched all of them: opening any saved folder in Read Mode inherited the
+    Inbox's semantics — starred-only kept_scope and the most-recently-starred
+    default order — instead of the saved defaults.
+
+    Found by Sourcery reviewing the PR stack. `on_all`, ten lines above it,
+    already compared against root_id correctly.
+    """
+    root = 1
+    assert main._read_is_inbox_node(root, None, False, None, "saved", root)
+    assert not main._read_is_inbox_node(25, None, False, None, "saved", root)
+
+
+def test_the_inbox_still_stands_down_for_every_other_node_kind():
+    root = 1
+    assert not main._read_is_inbox_node(root, "python", False, None, "saved", root)
+    assert not main._read_is_inbox_node(root, None, True, None, "saved", root)
+    assert not main._read_is_inbox_node(root, None, False, "query", "saved", root)
+    assert not main._read_is_inbox_node(root, None, False, None, "feeds", root)
+    assert not main._read_is_inbox_node(None, None, False, None, "saved", root)
+
+
+def test_an_unknown_root_never_makes_something_the_inbox():
+    """Better to lose the Inbox's default sort than to hand a folder the
+    Inbox's narrower star-only scope."""
+    assert not main._read_is_inbox_node(1, None, False, None, "saved", None)

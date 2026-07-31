@@ -1656,7 +1656,11 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/", "/sw.js")
+_AUTH_EXEMPT_PREFIXES = (
+    "/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save",
+    "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/",
+    "/sw.js",
+)
 
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
@@ -17555,9 +17559,21 @@ _READ_SORT_LABELS: dict[str, str] = {
 
 
 def _read_is_inbox_node(folder_id: int | None, tag: str | None,
-                        archived: bool, q: str | None, scope: str) -> bool:
-    """Is this the Inbox node? (saved scope, root folder, no tag/archive/search)"""
-    return scope != "feeds" and not tag and not archived and not q and folder_id is not None
+                        archived: bool, q: str | None, scope: str,
+                        root_id: int | None) -> bool:
+    """Is this the Inbox node? (saved scope, ROOT folder, no tag/archive/search)
+
+    The root check is the whole point and was missing: every saved folder node
+    links with its own id (`_read_browse_href(fid, ...)`), so `folder_id is not
+    None` matched all of them. Opening any saved folder in Read Mode then
+    inherited the Inbox's semantics — starred-only `kept_scope` and the
+    most-recently-starred default order — instead of the saved defaults.
+    Caught by Sourcery on the stack review; `on_all` beside it already compared
+    against root_id correctly.
+    """
+    if scope == "feeds" or tag or archived or q:
+        return False
+    return folder_id is not None and root_id is not None and folder_id == root_id
 
 
 def _read_sort_for_node(sort: str | None, *, is_inbox: bool) -> str:
@@ -17965,7 +17981,7 @@ def _inline_images_as_data_uris(article_html: str) -> tuple[str, int, int]:
     if not article_html or "<img" not in article_html.lower():
         return article_html, 0, 0
 
-    from bs4 import BeautifulSoup   # imported at use site, as elsewhere in main
+    from bs4 import BeautifulSoup  # imported at use site, as elsewhere in main
 
     soup = BeautifulSoup(article_html, "html.parser")
     inlined = skipped = fetched = 0
@@ -18199,8 +18215,10 @@ def reader_view(
 
     # The Inbox opens most-recently-starred; every other node keeps newest-first.
     # An explicit ?sort= always wins, so the switcher still works everywhere.
+    with get_meta_connection() as _root_conn:
+        _read_root_id = get_root_folder_id(_root_conn)
     is_inbox = (not all_saved_view) and _read_is_inbox_node(
-        folder_id, tag_val, archived_view, q_val, scope)
+        folder_id, tag_val, archived_view, q_val, scope, _read_root_id)
     sort_val = _read_sort_for_node(sort, is_inbox=is_inbox)
     if is_feeds and sort_val == "starred":
         # Feed entries mostly carry no star date, so this order would be noise.
