@@ -293,6 +293,103 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .pane-folders {
   cursor: default;
 }
 
+/* ── Single-pane (phone) layout ──────────────────────────────────────────────
+   One column, one pane visible at a time: folders (0) → posts (1) → article (2).
+   This is the same markup the desktop renders, which is the entire point — every
+   feed-appearance feature (lead images, per-feed thumbnail crop/zoom, embeds, the
+   full-image webcomic view) arrives here without being ported. */
+body[data-layout-mode="single"] .panes {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  padding: 0;
+  gap: 0;
+  /* Real viewport height: mobile browsers lie about 100vh while the URL bar
+     animates, which is what --vh is maintained for. */
+  height: calc(var(--vh, 1vh) * 100);
+}
+
+body[data-layout-mode="single"] .pane {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  border: 0;
+  border-radius: 0;
+  /* The keyboard inset keeps the composer and toolbars above the on-screen
+     keyboard rather than behind it. */
+  padding-bottom: var(--vv-bottom-inset, 0px);
+}
+
+body[data-layout-mode="single"] .pane-resizer {
+  display: none;
+}
+
+/* Exactly one pane on screen. Hidden panes are display:none rather than
+   translated off-canvas so their images are not laid out or fetched. */
+body[data-layout-mode="single"] .pane-folders,
+body[data-layout-mode="single"] .pane-posts,
+body[data-layout-mode="single"] .pane-entry {
+  display: none;
+  position: static;
+  width: auto;
+  box-shadow: none;
+}
+
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders,
+body[data-layout-mode="single"][data-single-pane-level="1"] .pane-posts,
+body[data-layout-mode="single"][data-single-pane-level="2"] .pane-entry {
+  display: flex;
+}
+
+/* The medium-mode floating folder drawer must not leak into single mode. */
+body[data-layout-mode="single"] #medium-pane-backdrop {
+  display: none !important;
+}
+
+/* Back out of a pane. Hidden on desktop, where the panes are all on screen. */
+.single-back-btn {
+  display: none;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.6rem;
+  flex: 0 0 auto;
+}
+
+body[data-layout-mode="single"] .single-back-btn {
+  display: inline-flex;
+}
+
+/* Touch targets. 44px is the smallest reliably tappable size; the desktop tree
+   and post rows are tuned for a mouse. */
+body[data-layout-mode="single"] .tree-item,
+body[data-layout-mode="single"] .feed-link,
+body[data-layout-mode="single"] .tag-link {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+body[data-layout-mode="single"] .post-item {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+/* Give the article the full width on a phone: the desktop reading measure is a
+   constraint against over-long lines, and there is no excess width here. */
+body[data-layout-mode="single"] .entry-body,
+body[data-layout-mode="single"] .entry-content {
+  max-width: 100%;
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+}
+
+body[data-layout-mode="single"] .toolbar-row-main {
+  flex-wrap: wrap;
+}
+
 .pane-folders .tree {
   flex: 1 1 0;
   min-height: 0;

@@ -169,6 +169,11 @@ The short version:
   is, the measured time remaining and what is queued behind it, with **Stop** for
   the current batch and **Remove** for anything queued. It survives a reload and
   shows up in any tab.
+- **Phone layout** — below 720px the three panes stack and one shows at a time
+  (folders → posts → article), with a back control on each and Back stepping down
+  the stack rather than leaving the page. It is the *same* app, not a second
+  reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
+  full-image webcomic view all work there without being ported.
 - **Feed Properties is tabbed by job** — *Info*, *Content* (what arrives: dev.to
   filters, YouTube Shorts, subscriber-only posts), *Tuning* (how it looks: images,
   thumbnails, feed type), *Maintenance*, *History*, *Automations*.

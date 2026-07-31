@@ -867,6 +867,29 @@ The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
 
+**One layout owner, three modes.** The inline shell in `index.html` resolves
+`wide` / `medium` / `single` from a single `updateSingleMode()`, at 1100px and
+720px. Single-pane mode was removed in `9dab5a8` and revived rather than replaced
+with a phone-specific renderer, and that is the whole design argument: a second
+renderer means every feed-appearance feature — lead images, per-feed thumbnail
+crop and zoom, embeds, the full-image webcomic view — has to be ported to it, and
+every future one silently misses it. The phone runs the same markup, so it
+inherits all of them and everything added later.
+
+The revival was wiring, not a rewrite: `9dab5a8` stubbed `isSingleMode` /
+`setSinglePaneLevel` as no-ops but left ~10 call sites in `app.js` intact, and
+left `templates/js/_layout_shell.js` on disk holding a complete second
+implementation that was included nowhere (now deleted — dead code that looks live
+is worse than none). Porting into the existing shell rather than re-including that
+file is what stops two shells disagreeing about the current mode.
+
+Three details worth keeping: the pane level is clamped to 0–2 and persisted in
+`sessionStorage`, because a pane swap re-runs the shell and would otherwise drop
+the reader back to the folder list; an `entry_id` in the URL overrides the
+remembered level, so a shared or reloaded article opens the article; and hidden
+panes are `display: none` rather than translated off-canvas, since laying out and
+fetching a hidden pane's images is the expensive half of a page on a phone.
+
 **The tree is not re-rendered by pane-swap navigation, so anything the server
 stamped into it goes stale.** `updateScopeActiveState` already re-derives active
 rows and mode blocks for that reason; sidebar tag links now get the same

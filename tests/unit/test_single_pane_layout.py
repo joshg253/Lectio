@@ -1,0 +1,98 @@
+"""The phone layout: one pane at a time, in the main app.
+
+Single-pane mode was removed in 9dab5a8 ("Desktop-first GUI") and revived here
+because the alternative — a second phone renderer — means every feed-appearance
+feature has to be ported to it and every future one drifts. Lead images, per-feed
+thumbnail crop/zoom, embeds and the full-image webcomic view work on a phone
+precisely because this *is* the same markup the desktop renders.
+
+Source assertions: this is a client-side layout invariant and the repo has no JS
+test harness. They pin the parts that were wrong before or are easy to get wrong.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+INDEX = (ROOT / "templates" / "index.html").read_text()
+ENTRY_PANE = (ROOT / "templates" / "_entry_pane.html").read_text()
+CSS = (ROOT / "static" / "style.css").read_text()
+APP_JS = (ROOT / "static" / "js" / "app.js").read_text()
+
+
+# ── the mode itself ──
+def test_single_mode_is_a_third_mode_in_the_one_layout_owner():
+    """Not a second shell. Two shells disagreeing about the current mode is how
+    the medium-mode folder drawer would leak onto a phone."""
+    assert "const SINGLE_THRESHOLD = 720;" in INDEX
+    assert "const MEDIUM_THRESHOLD = 1100;" in INDEX
+    assert INDEX.count("function updateSingleMode()") == 1
+
+
+def test_the_stubs_are_gone():
+    """They were left behind by the removal commit and made ~10 call sites in
+    app.js silently do nothing."""
+    assert "window.isSingleMode = () => false;" not in INDEX
+    assert "window.isSingleMode = () => layoutMode === 'single';" in INDEX
+    assert "window.setSinglePaneLevel = setSinglePaneLevel;" in INDEX
+
+
+def test_the_orphaned_shell_partials_are_deleted():
+    """templates/js/_layout_shell.js held a full second implementation, included
+    nowhere. Dead code that looks live is worse than no code."""
+    assert not (ROOT / "templates" / "js" / "_layout_shell.js").exists()
+    assert not (ROOT / "templates" / "js" / "_pull_to_refresh.js").exists()
+
+
+def test_app_js_call_sites_still_exist_to_be_driven():
+    """The revival is only wiring because these were never removed."""
+    assert APP_JS.count("window.isSingleMode()") >= 5
+    assert "setSinglePaneLevel(2)" in APP_JS
+
+
+# ── level behavior ──
+def test_the_level_is_clamped_to_the_three_panes():
+    assert "Math.max(0, Math.min(2," in INDEX
+
+
+def test_an_article_in_the_url_wins_over_the_remembered_level():
+    """A shared or reloaded article URL must open the article, not the folder list
+    the session happened to leave behind."""
+    assert "url.searchParams.get('entry_id')" in INDEX
+    assert "level = 2;" in INDEX
+
+
+def test_back_steps_down_the_stack_rather_than_leaving_the_page():
+    assert "window.addEventListener('popstate'" in INDEX
+    assert "restoreSinglePaneLevel();" in INDEX
+
+
+def test_the_back_controls_are_delegated():
+    """The entry pane is replaced wholesale on every pane swap, so a directly
+    bound handler would survive exactly one navigation."""
+    assert "document.addEventListener('click'" in INDEX
+    assert "closest('[data-single-back]')" in INDEX
+    assert 'data-single-back="0"' in INDEX      # posts  → folders
+    assert 'data-single-back="1"' in ENTRY_PANE  # article → posts
+
+
+# ── CSS ──
+def test_exactly_one_pane_shows_per_level():
+    for level, pane in ((0, "pane-folders"), (1, "pane-posts"), (2, "pane-entry")):
+        assert f'body[data-layout-mode="single"][data-single-pane-level="{level}"] .{pane}' in CSS
+
+
+def test_hidden_panes_are_display_none_not_merely_offscreen():
+    """Translating them off-canvas would still lay out and fetch their images —
+    on a phone that is the expensive half of the page."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .pane-folders,'):]
+    assert "display: none;" in block[:400]
+
+
+def test_the_phone_uses_the_measured_viewport_height():
+    """Mobile browsers report a 100vh that is wrong while the URL bar animates."""
+    assert "height: calc(var(--vh, 1vh) * 100);" in CSS
+
+
+def test_the_medium_folder_drawer_cannot_leak_into_single_mode():
+    assert 'body[data-layout-mode="single"] #medium-pane-backdrop' in CSS
