@@ -640,7 +640,7 @@
              on the star: tag-as-keep made a tag a keep signal everywhere else, and
              a tagged-but-unstarred post shows in the Saved view while having no
              way to re-fetch its content. 14,695 items on the live library. #}
-          data-post-kept="{{ 1 if (post.saved or post.manual_tags) else 0 }}"
+          data-post-kept="{{ 1 if post.kept else 0 }}"
           data-post-captured="{{ 1 if post.captured else 0 }}"
           data-post-link="{{ post.link or '' }}"
           data-post-title="{{ post.title or '' }}"

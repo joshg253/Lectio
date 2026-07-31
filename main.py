@@ -12598,6 +12598,7 @@ def merge_orphan_saved_entries(
                 "feed_title": orphan["feed_title"],
                 "feed_icon_url": None,
                 "manual_tags": [],
+                "kept": True,
                 "read": True,
                 "saved": True,
                 "post_sort_value": post_iso,
@@ -12732,6 +12733,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "author": archived.get("author"),
         "read": True,
         "saved": True,
+        "kept": True,
         "manual_tags": [],
         "manual_tags_text": "",
         "feed_tag_suggestions": [],
@@ -14683,6 +14685,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             # See the post-list builder: Re-fetch follows the entry, not the feed.
             "captured": str(getattr(entry, "added_by", "") or "") == "user",
             "manual_tags": manual_tags,
+            # Starred OR tagged, same rule (and same name) the list rows carry, so
+            # the re-fetch hatch keys on one field in both templates rather than
+            # each re-deriving it.
+            "kept": bool(is_saved or manual_tags),
             "manual_tags_text": " ".join(manual_tags),
             "feed_tag_suggestions": feed_tag_suggestions,
             "feed_tag_filter_signs": feed_tag_filter_signs,

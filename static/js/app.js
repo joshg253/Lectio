@@ -7017,7 +7017,6 @@ const CAPTURE_MODE_FULL = 'full';
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
             contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
             contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
-      contextPostKept = postItem.getAttribute('data-post-kept') === '1';
             contextPostKept = postItem.getAttribute('data-post-kept') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
