@@ -449,9 +449,23 @@ body[data-layout-mode="single"] .entry-tags-form {
   grid-column: 1 / -1;
 }
 
-/* A touch larger than the desktop's mouse-sized glyphs. */
+/* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
+   groups move together and cannot drift apart. */
 body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
-  font-size: 1.25rem;
+  font-size: 1.4rem;
+}
+
+/* The middle buttons carried 5.6px of horizontal padding and the view buttons
+   none, so with an identical 0.3rem gap the two groups still read as 36px and
+   27px apart. The gap alone cannot equalise them — the padding has to go. */
+body[data-layout-mode="single"] .entry-primary-actions button {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Sized up with the glyphs so the row reads as one piece. */
+body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
+  font-size: 1.05rem;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance

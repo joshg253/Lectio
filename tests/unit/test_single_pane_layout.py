@@ -189,11 +189,26 @@ def test_the_grouping_wrapper_is_invisible_to_desktop_layout():
 
 
 def test_the_two_glyph_groups_share_one_gap():
-    """Reported: the right-hand glyphs sat much closer together than the middle."""
+    """Reported twice, in both directions — first the right group was too tight,
+    then the middle too loose."""
     mid = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions {'):][:220]
     right = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-alt-actions {'):][:320]
     assert "gap: 0.3rem;" in mid
     assert "gap: 0.3rem;" in right
+
+
+def test_the_gap_alone_cannot_equalise_the_two_groups():
+    """It did not: the middle buttons carried 5.6px of horizontal padding and the
+    view buttons none, so an identical gap still measured 36px against 27px
+    centre-to-centre. The padding has to go too."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions button {'):][:200]
+    assert "padding-left: 0;" in block
+    assert "padding-right: 0;" in block
+
+
+def test_the_glyph_size_is_set_on_the_row_so_both_groups_move_together():
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded'):][:150]
+    assert "font-size: 1.4rem;" in block
 
 
 def test_one_gutter_variable_drives_every_horizontal_edge():
