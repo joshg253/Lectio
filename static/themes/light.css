@@ -22,6 +22,10 @@
   --scrollbar-track: #e7e0d3;
   --scrollbar-thumb: #b8c7cf;
   --scrollbar-thumb-hover: #94adba;
+  /* Same monochrome treatment as dark; the accent already differs per theme. */
+  --state-unread: var(--accent);
+  --state-star: var(--accent);
+  --state-tag: var(--accent);
   --link: #0f5f8f;
   --link-hover: #0a476a;
   --folder-name-ink: #1f252c;

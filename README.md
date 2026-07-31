@@ -174,6 +174,21 @@ The short version:
   the stack rather than leaving the page. It is the *same* app, not a second
   reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
   full-image webcomic view all work there without being ported.
+- **Landscape is 40/60, and the divider drags** — a rotated phone gets the list
+  and the article at 40/60 rather than an even split, resizable by fingertip and
+  remembered separately from the desktop's three-pane widths.
+- **Swipe left or right in an article** to move through the list.
+- **Folders are a drawer on a phone** — a hamburger top-left slides the tree over
+  the post list rather than replacing it, so you can see what you are leaving.
+  Tapping the dimmed list, or picking a folder, closes it.
+- **Curation state reads at a glance** — grey outline when unset, filled accent
+  when set, for all three axes: unread, starred, tagged. On a phone, tapping the
+  tag button reveals a finger-sized ✕ on each tag, since the desktop's hover-to-
+  reveal control is unreachable by touch.
+- **Saved's two sections share the column** — collapse *Folders* and *Tags* rises
+  to fill the space, its header directly under the collapsed one. Collapsed, Tags
+  still parks at the bottom; open alongside an expanded Folders, it takes about
+  an even share of what is left after the app chrome.
 - **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
   *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
   tag only ever filtered kept articles, so it now lives only where it applies.

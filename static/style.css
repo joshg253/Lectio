@@ -251,7 +251,11 @@ body[data-layout-mode="wide"][data-left-collapsed="1"] .pane-entry {
 }
 
 body[data-layout-mode="medium"] .panes {
-  grid-template-columns: minmax(320px, 1fr) var(--resizer-size) minmax(340px, 1fr);
+  /* 40/60 rather than an even split: the list is a scannable index and the
+     article is what you are actually reading. Driven by a variable so the
+     resizer has something to move — the previous 1fr/1fr ignored the pane
+     widths entirely, which is why dragging the divider did nothing here. */
+  grid-template-columns: var(--pane-medium-posts, 40%) var(--resizer-size) minmax(0, 1fr);
   padding: 0.35rem;
   padding-left: 0.35rem;
   gap: 0;
@@ -267,6 +271,23 @@ body[data-layout-mode="medium"] .pane-posts {
 
 body[data-layout-mode="medium"] .pane-resizer[data-resizer="middle-right"] {
   grid-column: 2 / 3;
+}
+
+/* The divider is the one thing here dragged with a fingertip, so give it a
+   touch-sized grab area on touch devices without widening the visible bar. */
+@media (pointer: coarse) {
+  body[data-layout-mode="medium"] .pane-resizer[data-resizer="middle-right"] {
+    position: relative;
+  }
+
+  body[data-layout-mode="medium"] .pane-resizer[data-resizer="middle-right"]::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -8px;
+    right: -8px;
+  }
 }
 
 body[data-layout-mode="medium"] .pane-entry {
@@ -299,6 +320,10 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .pane-folders {
    feed-appearance feature (lead images, per-feed thumbnail crop/zoom, embeds, the
    full-image webcomic view) arrives here without being ported. */
 body[data-layout-mode="single"] .panes {
+  /* Drop the stacking context. .panes carries z-index:1, which scoped the
+     drawer's z-index INSIDE it — so the whole grid sat below the backdrop and the
+     backdrop swallowed every tap meant for the folder tree. */
+  z-index: auto;
   grid-template-columns: 1fr;
   grid-template-rows: 1fr;
   padding: 0;
@@ -322,9 +347,8 @@ body[data-layout-mode="single"] .pane-resizer {
   display: none;
 }
 
-/* Exactly one pane on screen. Hidden panes are display:none rather than
+/* Posts and article swap places; hidden ones are display:none rather than
    translated off-canvas so their images are not laid out or fetched. */
-body[data-layout-mode="single"] .pane-folders,
 body[data-layout-mode="single"] .pane-posts,
 body[data-layout-mode="single"] .pane-entry {
   display: none;
@@ -333,18 +357,68 @@ body[data-layout-mode="single"] .pane-entry {
   box-shadow: none;
 }
 
-body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders,
+/* The post list stays on screen behind the folder drawer (level 0), which is the
+   point of the drawer: you can see what you are leaving. */
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-posts,
 body[data-layout-mode="single"][data-single-pane-level="1"] .pane-posts,
 body[data-layout-mode="single"][data-single-pane-level="2"] .pane-entry {
   display: flex;
 }
 
-/* The medium-mode floating folder drawer must not leak into single mode. */
-body[data-layout-mode="single"] #medium-pane-backdrop {
-  display: none !important;
+/* Folders are a drawer, not a pane: it slides over the list rather than
+   replacing it. Off-canvas rather than display:none so the slide can animate,
+   which is safe here because the tree holds no images to fetch. */
+body[data-layout-mode="single"] .pane-folders {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(330px, 78vw);
+  z-index: 300;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  transform: translateX(-100%);
+  transition: transform 180ms ease;
 }
 
-/* ── Phone: article view ──────────────────────────────────────────────────────
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-layout-mode="single"] .pane-folders {
+    transition: none;
+  }
+}
+
+/* The dimmed list behind the drawer doubles as the way out of it. */
+body[data-layout-mode="single"] #medium-pane-backdrop {
+  display: none;
+}
+
+body[data-layout-mode="single"][data-single-pane-level="0"] #medium-pane-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 290;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+/* Hamburger in the top-left of the list, in place of a text back button — the
+   drawer is not somewhere you navigate "back" to. */
+body[data-layout-mode="single"] .single-menu-btn {
+  padding-left: 0;
+  padding-right: 0.2rem;
+}
+
+/* ── Compact article view ─────────────────────────────────────────────────────
+   Keyed on data-compact-article rather than the single-pane mode, so a rotated
+   phone gets it too: landscape is "medium" mode, which otherwise fell back to the
+   desktop arrangement — a header stack taller than the article on a 390px-tall
+   screen.
+
    Reported: "the header portion above the scrolling area takes up nearly half my
    viewable area". On desktop the header is a fixed block holding title, byline,
    feed/date, the tag row and the view buttons — four or five lines, which on a
@@ -354,16 +428,19 @@ body[data-layout-mode="single"] #medium-pane-backdrop {
    to the top as a single line, and everything else (title, byline, feed · date)
    scrolls away with the article. Nothing is duplicated: the buttons Josh asked
    for on that row are already siblings inside .entry-tags-row. */
-body[data-layout-mode="single"] .pane-entry {
+body[data-compact-article="1"] .pane-entry {
   overflow-y: auto;
   overflow-x: hidden;
+  /* One gutter for the article view, so the title, the byline, the feed/date
+     line and the body all start on the same vertical. */
+  --phone-gutter: 0.85rem;
 }
 
 /* flex: none matters as much as the overflow. As a shrinking flex item the body
    was sized to the leftover 669px and its content spilled *invisibly* — the pane
    measured scrollHeight == clientHeight and nothing scrolled at all. It has to
    take its natural height for the pane above it to have anything to scroll. */
-body[data-layout-mode="single"] .pane-entry .entry-body {
+body[data-compact-article="1"] .pane-entry .entry-body {
   overflow: visible;
   flex: none;
 }
@@ -372,9 +449,14 @@ body[data-layout-mode="single"] .pane-entry .entry-body {
    and a shrinking flex item — it clipped 18,000px of article down to 694 and the
    pane above it saw nothing to scroll. Every level between the scroller and the
    content has to stop clipping, not just the innermost one. */
-body[data-layout-mode="single"] .pane-entry .entry {
+body[data-compact-article="1"] .pane-entry .entry {
   overflow: visible;
   flex: none;
+  /* Its own 12.8px sat under .entry-body's gutter and pushed the article text a
+     step in from the title and byline above it. The gutter belongs to exactly one
+     level; this is the second of the two places that had to give it up. */
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* display:contents dissolves the header box so its children become direct flex
@@ -382,76 +464,230 @@ body[data-layout-mode="single"] .pane-entry .entry {
    a sticky element is confined to its parent's box, so inside the 150px header it
    unpinned and scrolled away the moment the header did. It also lets `order` sort
    the row above the title. */
-body[data-layout-mode="single"] .entry-pane-header {
+body[data-compact-article="1"] .entry-pane-header {
   display: contents;
 }
 
 /* The one pinned row: < Posts | mark star tag | reader web tab share.
    order:-1 lifts it above the title, which is what lets the title scroll. */
-body[data-layout-mode="single"] .entry-tags-row {
+body[data-compact-article="1"] .entry-tags-row {
   order: -1;
   position: sticky;
   top: 0;
   z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
+  /* Three columns with equal 1fr sides put the middle group in the TRUE centre of
+     the window — what it is compared against is the phone's camera cutout, which
+     is dead centre. Auto margins, and equal flex on the side groups, both leave it
+     a few px off: neither side can shrink below its own content, and the back
+     button is not the width of the four view buttons. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.3rem;
   margin: 0;
-  padding: 0.25rem 0.5rem;
+  padding: 0.25rem var(--phone-gutter);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
-/* Auto margins on the outer two groups centre the middle one without needing a
-   wrapper element around it. */
-body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
-  margin-right: auto;
+/* Transparent to layout by default, so the desktop row is unchanged: the three
+   controls stay direct flex children of .entry-tags-row exactly as before. */
+.entry-primary-actions {
+  display: contents;
+}
+
+body[data-compact-article="1"] .entry-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body[data-compact-article="1"] .entry-tags-row .single-back-btn {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
   padding-left: 0;
 }
 
-body[data-layout-mode="single"] .entry-pane-alt-actions {
-  margin-left: auto;
-  gap: 0.1rem;
+body[data-compact-article="1"] .entry-pane-alt-actions {
+  display: flex;
+  align-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  gap: 0.3rem;          /* the same gap the middle group gets */
+}
+
+/* Transparent to layout by default, like .entry-primary-actions. */
+.entry-tags-extra {
+  display: contents;
+}
+
+/* Hidden until Tags is opened. The glyph already says whether the post is tagged
+   (filled vs outline), so the chips are detail on demand rather than a permanent
+   second row eating the phone's screen. */
+body[data-compact-article="1"] .entry-tags-extra {
+  display: none;
+}
+
+/* Opened: one full-width row beneath ALL the glyphs. It has to be a single grid
+   item — as loose children each chip claimed its own cell, which pushed the view
+   buttons off the first row entirely as soon as a post had a tag. */
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 0.15rem;
+}
+
+/* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
+   groups move together and cannot drift apart. */
+body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
+  font-size: 1.4rem;
+}
+
+/* One box for every button in the row, so the pitch is identical in both groups
+   by construction. Zeroing the middle group's padding got them to 26.8px and
+   26.4px — closer, but still not equal, because the buttons themselves were 22px
+   and 21.6px wide. Matching gaps only match if the boxes between them do. */
+body[data-compact-article="1"] .entry-primary-actions button,
+body[data-compact-article="1"] .entry-tags-row .entry-source-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Material Symbols draws every star variant — star, star_outline, star_border,
+   grade — to a 17px ink box where circle and sell fill 20px at the same
+   font-size. It is the typeface, not the glyph name, so no substitution fixes it;
+   the size has to be compensated. 20/17 puts its ink on par with its neighbours.
+   The button box is a fixed 1.75rem, so this changes the glyph and not the pitch. */
+body[data-compact-article="1"] .entry-save-indicator.material-symbols-rounded {
+  font-size: 1.65rem;
+}
+
+/* The read indicator is the one glyph carrying opsz 20 where every other glyph in
+   the row is opsz 24 — visibly a different weight beside them. FILL and wght are
+   left alone in both states: they are what distinguishes read from unread. */
+body[data-compact-article="1"] .entry-read-indicator.material-symbols-rounded {
+  font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+}
+
+body[data-compact-article="1"] .entry-read-toggle[data-read-state="1"] .entry-read-indicator.material-symbols-rounded {
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+}
+
+/* Removing a tag was unreachable on a phone: .entry-tag-remove is opacity:0 and
+   only revealed by :hover, which touch does not have. Tapping the tag button —
+   which already toggles the add-tags form — now also reveals the X on every chip,
+   at finger size rather than the 16px the mouse gets. */
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove {
+  opacity: 1;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1.2rem;
+  margin-left: 0.15rem;
+}
+
+/* Chips get room to breathe while the X is showing, so the two are not adjacent
+   tap targets. */
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-chip-wrap {
+  margin-bottom: 0.3rem;
+}
+
+/* Open-in-new-tab is redundant on a phone: the title is the link, and it opens
+   in a new tab. One less glyph in the row. */
+body[data-compact-article="1"] #entry-open-tab-button {
+  display: none;
+}
+
+/* Cleanup is a deliberate, fiddly hover-then-click interaction — it has no phone
+   equivalent, and it was crowding the row. */
+body[data-compact-article="1"] #entry-cleanup-button {
+  display: none;
+}
+
+/* Sized up with the glyphs so the row reads as one piece. */
+body[data-compact-article="1"] .entry-tags-row .single-back-btn {
+  font-size: 1.05rem;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
    for the desktop tree, and the +/- filter triangles are too small to hit. */
-body[data-layout-mode="single"] .entry-tag-suggestions,
-body[data-layout-mode="single"] .entry-tags-row-sep,
-body[data-layout-mode="single"] .author-filter-signs,
-body[data-layout-mode="single"] .feed-tag-filter-sign {
+body[data-compact-article="1"] .entry-tag-suggestions,
+body[data-compact-article="1"] .entry-tags-row-sep,
+body[data-compact-article="1"] .author-filter-signs,
+body[data-compact-article="1"] .feed-tag-filter-sign {
   display: none;
 }
 
 /* Tags a post already carries stay visible, but wrap to their own line under the
    buttons rather than stretching the bar sideways. Same for the add-tags form,
    which the tag button toggles — it must stay in the flow to be openable. */
-body[data-layout-mode="single"] .entry-tag-chip-wrap {
-  order: 9;
+body[data-compact-article="1"] .entry-pane-title-row,
+body[data-compact-article="1"] .entry-pane-bottom-row {
+  padding: 0 var(--phone-gutter);
 }
 
-body[data-layout-mode="single"] .entry-tags-form {
-  order: 10;
-  flex-basis: 100%;
-}
-
-body[data-layout-mode="single"] .entry-pane-title-row,
-body[data-layout-mode="single"] .entry-pane-bottom-row {
-  padding: 0 0.85rem;
-}
-
-body[data-layout-mode="single"] .entry-pane-title-row {
+body[data-compact-article="1"] .entry-pane-title-row {
   padding-top: 0.6rem;
 }
 
-/* Byline on its own line, then feed · date — the order Josh asked for. */
-body[data-layout-mode="single"] .entry-pane-meta {
+/* Title, then byline, then feed name | date. The byline lives inside
+   .entry-meta-left with the favicon and feed link, so it is lifted onto its own
+   line from there; the date aligns to the bottom line rather than floating
+   between the two. */
+body[data-compact-article="1"] .entry-pane-meta {
+  align-items: flex-end;
+  /* nowrap keeps the date on the feed-name line. Left to wrap, the byline's
+     full-width basis pushed .entry-meta-left across the whole row and the date
+     dropped to a third line of its own. */
+  flex-wrap: nowrap;
+}
+
+body[data-compact-article="1"] .entry-meta-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A long feed name used to wrap onto a second line the moment it reached the
+   middle of the row. Truncate instead: the date holds its place on the right and
+   the meta stays one line. */
+body[data-compact-article="1"] .entry-feed-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Shrink, do not wrap. Without flex-basis 0 the nowrap link kept its full
+     intrinsic width, overflowed the line and pushed itself below the favicon —
+     leaving the favicon stranded on a line of its own. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+body[data-compact-article="1"] .entry-meta-time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+body[data-compact-article="1"] .entry-meta-left {
   flex-wrap: wrap;
 }
 
-body[data-layout-mode="single"] .entry-author-inline {
+body[data-compact-article="1"] .entry-author-inline {
+  order: -1;
   flex-basis: 100%;
+}
+
+body[data-compact-article="1"] .entry-meta-separator {
+  display: none;
 }
 
 /* Back out of a pane. Hidden on desktop, where the panes are all on screen. */
@@ -489,11 +725,19 @@ body[data-layout-mode="single"] .post-item {
 
 /* Give the article the full width on a phone: the desktop reading measure is a
    constraint against over-long lines, and there is no excess width here. */
-body[data-layout-mode="single"] .entry-body,
-body[data-layout-mode="single"] .entry-content {
+/* The gutter is applied ONCE. Setting it on both .entry-body and its
+   .entry-content child stacked to 27px, so the article text sat a visible step
+   inside the title above it. */
+body[data-compact-article="1"] .entry-body {
   max-width: 100%;
-  padding-left: 0.85rem;
-  padding-right: 0.85rem;
+  padding-left: var(--phone-gutter);
+  padding-right: var(--phone-gutter);
+}
+
+body[data-compact-article="1"] .entry-content {
+  max-width: 100%;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 body[data-layout-mode="single"] .toolbar-row-main {
@@ -1114,9 +1358,27 @@ body[data-single-mode="1"] #folders-collapse-btn {
   border-top: 1px solid var(--tree-line);
 }
 
-/* Saved mode: the (long) saved folder list is the scrollable region and the
-   All Feeds row pins to the bottom above Tags, mirroring how Tags itself is
-   pinned. Feeds mode keeps the whole root block scrolling as one. */
+/* The Feeds/Saved tabs pin in BOTH modes: they are the mode switch, and a switch
+   that scrolls out of reach is one you have to hunt for. Feeds mode used to
+   scroll the whole root block as one, so the tabs left with it.
+   In Saved the (long) folder list is the scrollable region and the All Feeds row
+   also pins, to the bottom above Tags. */
+.scope-tabs {
+  flex: 0 0 auto;
+}
+
+.tree .root-tree-block {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tree:not(.saved-mode) .feeds-tree-children {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .tree.saved-mode .root-tree-block {
   display: flex;
   flex-direction: column;
@@ -1962,8 +2224,63 @@ button:hover, .button-link:hover {
 }
 
 .tags-tree-body {
-  max-height: min(35vh, 260px);
+  /* Only a ceiling for the Feeds tree, where Tags is a footer under a full-height
+     folder list. In Saved the two sections split the column instead — see below,
+     where the cap is lifted. */
+  max-height: 50vh;
   overflow: auto;
+}
+
+/* Saved, both sections open: split what is left over EQUALLY. A 50vh cap on the
+   tags list measured half the *browser*, while the folder list got half minus the
+   logo, the Feeds/Saved tabs and both section headers — so Tags visibly won. Two
+   flex:1 1 0 blocks divide the leftover after that chrome instead. */
+nav.tree.saved-mode .root-tree-block {
+  /* The basis offsets the extra chrome this block carries and the tags block does
+     not — the Feeds/Saved tab row above the Folders header. Splitting the leftover
+     evenly (basis 0 on both) still left the folder list ~54px shorter, because
+     "equal blocks" is not "equal lists". */
+  --saved-tabs-offset: 54px;
+  flex: 1 1 var(--saved-tabs-offset);
+  min-height: 0;
+}
+
+nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+nav.tree.saved-mode .tags-tree-block:not(.is-collapsed) .tags-tree-body {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
+/* The block holding the scope tabs and the folder tree grows to fill by default.
+   With Folders collapsed it has nothing to show, so it has to shrink to its
+   content — otherwise it keeps half the column and the Tags header lands in the
+   middle of the sidebar rather than under the collapsed Folders header.
+   Scoped to saved-mode: the same collapse state must not shrink the Feeds tree. */
+nav.tree.saved-mode.saved-folders-collapsed .root-tree-block {
+  flex: 0 0 auto;
+}
+
+/* Folders collapsed: Tags takes the space instead of staying pinned to the
+   bottom, so its header sits directly under the collapsed Folders header. Only
+   while Tags is open — collapsed, it still parks at the bottom. */
+nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) {
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-body {
+  max-height: none;
+  flex: 1 1 auto;
 }
 
 /* Saved's Folders section, collapsing the same way Tags does. */
@@ -2362,6 +2679,9 @@ button:hover, .button-link:hover {
 
 .post-save-toggle[title^="Remove"] .post-save-indicator.material-symbols-rounded {
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+  /* Matches the article pane's star: the same post must not read as saved in one
+     place and unsaved in the other. */
+  color: var(--state-star);
 }
 
 .post-feed {
@@ -2490,7 +2810,7 @@ button:hover, .button-link:hover {
   flex: 0 0 auto;
   font-size: 1rem;
   line-height: 1;
-  color: var(--accent);
+  color: var(--state-unread);
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
   pointer-events: none;
 }
@@ -2830,6 +3150,10 @@ button:hover, .button-link:hover {
 
 .entry-save-toggle[title^="Remove"] .entry-save-indicator.material-symbols-rounded {
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+  /* One colour per curation axis: amber = starred. Fill alone carried the state
+     before, which read fine up close but gave the three toggles no distinguishing
+     colour at a glance. */
+  color: var(--state-star);
 }
 
 .entry-read-toggle {
@@ -2859,7 +3183,7 @@ button:hover, .button-link:hover {
 .entry-read-indicator.material-symbols-rounded {
   font-size: 1rem;
   line-height: 1;
-  color: var(--accent);
+  color: var(--state-unread);
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
   pointer-events: none;
 }
@@ -2920,6 +3244,18 @@ button:hover, .button-link:hover {
   font-size: 0.95rem;
   line-height: 1;
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+}
+
+/* Green = this post is tagged. Derived from the presence of a manual-tag chip
+   rather than a server-rendered flag, so adding or removing a tag in the DOM
+   updates it with no second source of truth to keep in step. :has() is
+   unsupported on very old WebViews, where it simply stays grey. */
+.entry-tags-row:has(.entry-tag-chip-wrap) .entry-tag-add-button {
+  color: var(--state-tag);
+}
+
+.entry-tags-row:has(.entry-tag-chip-wrap) .entry-tag-add-button .material-symbols-rounded {
+  font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
 }
 
 .entry-tag-add-button:hover {

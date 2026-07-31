@@ -22,6 +22,13 @@
   --scrollbar-track: #1a2025;
   --scrollbar-thumb: #465764;
   --scrollbar-thumb-hover: #5d7281;
+  /* Curation state: grey outline when unset, filled accent when set — the same
+     treatment for unread, starred and tagged. Tried one hue per axis (amber for
+     starred, green for tagged); Josh preferred the monochrome read. Kept as
+     variables so going back to per-axis colour is a one-line change per theme. */
+  --state-unread: var(--accent);
+  --state-star: var(--accent);
+  --state-tag: var(--accent);
   --link: #8ec6e8;
   --link-hover: #b0dcf5;
   --folder-name-ink: #dfe7f2;

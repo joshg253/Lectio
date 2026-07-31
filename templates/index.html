@@ -455,10 +455,12 @@
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
         {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
         <div class="toolbar-row-main">
-          {# Phone only: step back to the folder list. CSS hides it elsewhere. #}
-          <button type="button" class="single-back-btn" data-single-back="0"
-                  aria-label="Back to folders">
-            <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span>Feeds
+          {# Phone only: open the folder drawer over the list. CSS hides it at
+             desktop widths. A hamburger rather than a back arrow, because the
+             drawer slides over this list rather than replacing it. #}
+          <button type="button" class="single-back-btn single-menu-btn" data-single-back="0"
+                  aria-label="Show folders" title="Folders">
+            <span class="material-symbols-rounded" aria-hidden="true">menu</span>
           </button>
           <div class="sort-group">
             <details class="toolbar-dropdown filter-menu">
@@ -865,6 +867,12 @@
     function setSinglePaneLevel(level, persist = true) {
       singlePaneLevel = Math.max(0, Math.min(2, Number(level) || 0));
       bodyEl.setAttribute('data-single-pane-level', String(singlePaneLevel));
+      // The backdrop's `hidden` attribute has to come off, not be out-specified:
+      // a global [hidden] { display: none !important } beats any selector.
+      if (mediumPaneBackdrop) {
+        const showBackdrop = layoutMode === 'single' && singlePaneLevel === 0;
+        mediumPaneBackdrop.toggleAttribute('hidden', !showBackdrop);
+      }
       if (persist) {
         try { window.sessionStorage.setItem(SINGLE_LEVEL_KEY, String(singlePaneLevel)); }
         catch (e) { /* private mode */ }
@@ -905,6 +913,34 @@
         restoreSinglePaneLevel();
       } else {
         bodyEl.removeAttribute('data-single-pane-level');
+        mediumPaneBackdrop?.setAttribute('hidden', '');
+      }
+      // A rotated phone is "medium" mode but still ~390px tall, where the desktop
+      // header stack is taller than the article itself. A narrow desktop window is
+      // also medium and has height to spare.
+      //
+      // There is no reliable "is this a phone" bit, so this asks about the thing
+      // that actually matters — is vertical space tight, and is this a finger:
+      //
+      //   * height <= SHORT_VIEWPORT is the real problem, and is true of a
+      //     landscape phone and of a short desktop window alike (where the
+      //     compact header is just as welcome);
+      //   * (pointer: coarse) AND (hover: none) means touch is the PRIMARY input.
+      //     Both halves matter: a touchscreen laptop reports coarse but still
+      //     hovers, and would otherwise be treated as a phone;
+      //   * navigator.userAgentData.mobile is the most direct signal of the three
+      //     but exists only in Chromium, so it can confirm and never decide.
+      const SHORT_VIEWPORT = 560;
+      const touchPrimary = Boolean(window.matchMedia
+        && window.matchMedia('(pointer: coarse) and (hover: none)').matches);
+      const uaMobile = Boolean(navigator.userAgentData && navigator.userAgentData.mobile);
+      const compactArticle = layoutMode === 'single'
+        || (layoutMode === 'medium'
+            && (window.innerHeight <= SHORT_VIEWPORT || (touchPrimary && uaMobile)));
+      if (compactArticle) {
+        bodyEl.setAttribute('data-compact-article', '1');
+      } else {
+        bodyEl.removeAttribute('data-compact-article');
       }
       updateVisualViewportInset();
     }
@@ -949,23 +985,98 @@
     }
 
 
-    function navigateEntry(direction) {
-      // find active post in posts pane
-      const posts = Array.from(document.querySelectorAll('.post-item')).filter(p=>!p.classList.contains('post-item-hidden'));
+    // Returns what happened, so a caller can say so: 'ok', 'start', 'end',
+    // 'pending' (waiting on the next chunk) or 'none' (nothing selected).
+    function navigateEntry(direction, isRetry = false) {
+      const all = Array.from(document.querySelectorAll('.post-item'));
+      const posts = all.filter(p => !p.classList.contains('post-item-hidden'));
       const active = document.querySelector('.post-item.active');
-      if (!active) return;
+      if (!active) return 'none';
       const idx = posts.indexOf(active);
-      if (idx === -1) return;
+      if (idx === -1) return 'none';
       const nextIdx = idx + direction;
-      if (nextIdx < 0 || nextIdx >= posts.length) return;
+      if (nextIdx < 0) return 'start';
+      if (nextIdx >= posts.length) {
+        // The list renders in chunks, so the end of the VISIBLE window is not
+        // the end of the list. Ask for the next chunk and try once more before
+        // telling the user there is nothing left — otherwise "no more articles"
+        // is simply wrong every 50 posts.
+        const moreLoaded = all.length > posts.length;
+        const moreOnServer = Boolean(document.getElementById('posts-chunk-sentinel'));
+        if (!isRetry && (moreLoaded || moreOnServer)) {
+          try { window.revealNextPostChunk && window.revealNextPostChunk(); } catch (e) {}
+          window.setTimeout(() => {
+            if (navigateEntry(direction, true) === 'end') {
+              window.showToastMessage && window.showToastMessage('No more articles.');
+            }
+          }, 450);
+          return 'pending';
+        }
+        return 'end';
+      }
       const target = posts[nextIdx];
       const link = target.querySelector('.post-main-link');
       if (link) loadEntryPaneWithoutFullRefresh(link.href);
+      return 'ok';
     }
+
+    // Swipe left/right in the article to move through the list, the way you would
+    // page through anything else on a phone. Deliberately conservative about what
+    // counts as a swipe: a mostly-horizontal, reasonably long, reasonably quick
+    // drag that did not start on something interactive or sideways-scrollable.
+    // Anything looser steals ordinary scrolling and text selection.
+    (function bindArticleSwipe() {
+      const MIN_DISTANCE = 60;      // px — shorter than this is a tap or a jitter
+      const MAX_DURATION = 700;     // ms — slower than this is a considered drag
+      let startX = 0;
+      let startY = 0;
+      let startedAt = 0;
+      let tracking = false;
+
+      document.addEventListener('touchstart', (event) => {
+        tracking = false;
+        if (event.touches.length !== 1) return;
+        const pane = document.querySelector('.pane-entry');
+        if (!pane || !pane.contains(event.target)) return;
+        // Wide code blocks and tables scroll sideways themselves; controls own
+        // their own gestures.
+        if (event.target.closest('a, button, input, textarea, select, pre, table, .entry-tags-row')) {
+          return;
+        }
+        const touch = event.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startedAt = Date.now();
+        tracking = true;
+      }, { passive: true });
+
+      document.addEventListener('touchend', (event) => {
+        if (!tracking) return;
+        tracking = false;
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) return;
+        if (Date.now() - startedAt > MAX_DURATION) return;
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        if (Math.abs(dx) < MIN_DISTANCE) return;
+        if (Math.abs(dx) < Math.abs(dy) * 2) return;   // mostly vertical: a scroll
+        // Left takes you forward, matching the direction the list runs.
+        const forward = dx < 0;
+        const result = navigateEntry(forward ? 1 : -1);
+        // Say so, rather than looking broken. 'pending' stays quiet: it is
+        // fetching, and it reports for itself if it comes back empty.
+        if (result === 'end') {
+          window.showToastMessage && window.showToastMessage('No more articles.');
+        } else if (result === 'start') {
+          window.showToastMessage && window.showToastMessage('Already at the first article.');
+        }
+      }, { passive: true });
+    })();
 
 
     window.setSinglePaneLevel = setSinglePaneLevel;
     window.isSingleMode = () => layoutMode === 'single';
+    window.isCompactArticle = () => bodyEl.getAttribute('data-compact-article') === '1';
     // Not revived with single mode: swipe gestures and pull-to-refresh were
     // removed separately and are a distinct decision from "can I read on my
     // phone". Left as no-ops so their call sites stay quiet.
@@ -1089,6 +1200,10 @@
 
     if (mediumPaneBackdrop) {
       mediumPaneBackdrop.addEventListener('click', () => {
+        if (window.isSingleMode && window.isSingleMode()) {
+          setSinglePaneLevel(1);      // tapping the dimmed list closes the drawer
+          return;
+        }
         mediumFlyoutClickOpen = false;
         setMediumLeftOpen(false);
       });
