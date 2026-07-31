@@ -205,7 +205,10 @@
              tree, load no posts (All can be huge) — pick All/a folder explicitly. #}
           <div class="scope-tabs" role="tablist">
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&home=1"
+              {# No sort in a scope-switch link: Feeds and Saved remember their
+                 order separately, and an explicit sort_by here would overwrite
+                 the target view's remembered value with this one's. #}
+              href="/?folder_id={{ root_folder_row.id }}&home=1"
               class="tree-item root-item scope-tab {% if not selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-folder-name="{{ root_folder_row.name }}"
@@ -216,7 +219,7 @@
               <span class="name">Feeds</span>
             </a>
             <a
-              href="/?folder_id={{ root_folder_row.id }}{{ _tree_sq }}&star_only=1&home=1"
+              href="/?folder_id={{ root_folder_row.id }}&star_only=1&home=1"
               class="tree-item saved-item scope-tab {% if selected_star_only %}active{% endif %}"
               data-folder-id="{{ root_folder_row.id }}"
               data-saved-items="true"
@@ -2353,6 +2356,7 @@
           <div id="archive-old-results" hidden>
             <p class="action-modal-label archive-old-intro"></p>
             <p class="action-modal-hint">A star means <em>to-do</em>. Anything starred long ago is not something you are still getting to, so this archives it: it leaves the Inbox and is marked read, while its tags, its offline copy and its protection from cleanup all stay. Un-archive any item to put it back.</p>
+            <p class="action-modal-hint archive-old-caveat"><strong>Check the age spread before running this.</strong> The age is the date the star was made, and that date was rewritten for everything carried over by an import or migration — so a large cluster in one month usually means &ldquo;when the data moved&rdquo;, not when you starred it.</p>
             <div class="archive-old-cutoff">
               <span class="action-modal-label">Archive stars older than</span>
               <span id="archive-old-choices" class="archive-old-choices"></span>
@@ -2455,6 +2459,13 @@
               <button type="button" id="feed-prop-alias-add" class="feed-prop-inline-btn feed-prop-inline-btn--primary">Add</button>
               <span id="feed-prop-alias-status" class="feed-prop-inline-status"></span>
             </span>
+          </dd>
+          {# Undo for dismissed suggestion chips. A mis-click on the × must not be
+             permanent, and this is the only place the decision is visible. #}
+          <dt>Hidden tags</dt>
+          <dd id="feed-prop-hidden-tags-row">
+            <ul id="feed-prop-hidden-tag-list" class="feed-prop-alias-list"></ul>
+            <span id="feed-prop-hidden-tag-empty" class="feed-prop-alias-empty">None hidden.</span>
           </dd>
           <dt>Folder</dt>
           <dd id="feed-prop-folder-row">

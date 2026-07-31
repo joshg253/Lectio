@@ -326,6 +326,20 @@ FAILED_FEED_BACKOFF_MAX_SECONDS = 60 * 60 * 24
 AUTO_REFRESH_SETTING_KEY = "auto_refresh_minutes"
 SORT_BY_SETTING_KEY = "sort_by"
 SORT_DIR_SETTING_KEY = "sort_dir"
+# Feeds and Saved remember their sort SEPARATELY. One shared pair meant picking
+# an order in Saved silently changed Feeds, and vice versa — the two are
+# different jobs (a publish-date backlog vs a to-do pile), so they want
+# different orders. The unprefixed keys stay Feeds' so existing installs keep
+# their remembered value.
+SAVED_SORT_BY_SETTING_KEY = "saved_sort_by"
+SAVED_SORT_DIR_SETTING_KEY = "saved_sort_dir"
+
+
+def sort_setting_keys(star_only: bool) -> tuple[str, str]:
+    """The (sort_by, sort_dir) setting keys for the active scope."""
+    if star_only:
+        return SAVED_SORT_BY_SETTING_KEY, SAVED_SORT_DIR_SETTING_KEY
+    return SORT_BY_SETTING_KEY, SORT_DIR_SETTING_KEY
 GLOBAL_NOTE_SETTING_KEY = "global_note"
 PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY = "problematic_feeds_last_viewed_at"
 YOUTUBE_SYNC_LAST_AT_KEY = "youtube_sync_last_at"
@@ -3159,6 +3173,23 @@ def ensure_meta_schema() -> None:
                 entry_id TEXT NOT NULL,
                 saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(feed_url, entry_id)
+            )
+            """
+        )
+        # Feed-tag suggestion chips the user has dismissed, per (feed, tag).
+        #
+        # Manual rather than heuristic on purpose: two automatic rules were tried
+        # and both hid tags that were wanted. "VinylDeals" (a place) is noise while
+        # "Lessons" (a kind of content) is exactly the right filing tag, and nothing
+        # in the feed metadata distinguishes them — see get_feed_tag_suggestions.
+        # Scoped per feed because a tag useless on one feed can matter on another.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS suppressed_feed_tags (
+                feed_url TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                suppressed_at REAL NOT NULL,
+                PRIMARY KEY (feed_url, tag)
             )
             """
         )
@@ -8247,13 +8278,39 @@ def _manually_tagged_entry_keys() -> set[tuple[str, str]]:
 
 
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
-    """Feed-provided tags captured at ingest (entry_feed_tags meta table)."""
+    """Feed-provided tags captured at ingest (entry_feed_tags meta table).
+
+    **Nothing is filtered automatically; dismissal is the user's, per (feed, tag).**
+
+    Two heuristics were tried and both hid tags the user wanted:
+
+    1. *Coverage* — suppress a tag on ~every entry, on the theory that it carries
+       no per-entry signal. Killed by a guitarplayer.com tag feed: "Lessons" is on
+       every post AND is exactly the right tag when filing a guitar lesson. These
+       chips are for **filing**, not for telling entries apart, so uniformity is
+       not disqualifying at all.
+    2. *Feed-name echo* — suppress a uniform tag that restates the feed's title.
+       Killed by the live title, "Latest from Guitar Player in Lessons": a tag
+       feed puts its tag in its own name, so "Lessons" echoes it too. Matching the
+       feed URL fails identically — `/r/VinylDeals/` and `/feeds/tag/lessons` have
+       the same shape.
+
+    The difference between "VinylDeals" (a place, useless) and "Lessons" (a kind of
+    content, wanted) is semantic, and no signal in the feed metadata expresses it.
+    **Showing a useless chip is cheap — it is ignored. Hiding a wanted one is
+    invisible**, so everything is shown until the user says otherwise. The × on a
+    chip records that decision in `suppressed_feed_tags`, undoable from Feed
+    Properties. Resist a third heuristic — the first two each looked convincing
+    against the data that motivated them.
+    """
     try:
         tags = feed_tag_service.get_tags_for_entry(feed_url, entry_id)
+        dismissed = feed_tag_service.suppressed_tags(feed_url)
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
-    return tags[:MAX_FEED_TAG_SUGGESTIONS]
+    return [t for t in tags
+            if t.strip().lower() not in dismissed][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()
@@ -8738,6 +8795,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "url_rewrites": [
                 {"from_host": f, "to_host": t} for f, t in get_feed_url_rewrites(feed_url)
             ],
+            # Dismissed suggestion chips, so a mis-clicked × has a way back.
+            "suppressed_tags": feed_tag_service.suppressed_tag_list(feed_url),
             "strategy_cache": _strat_cache,
             "folder_ids": [int(r["folder_id"]) for r in _folder_id_rows],
             "fetch_history": get_feed_fetch_history(_pc, feed_url),
@@ -9010,11 +9069,20 @@ def title_inferred_pubdate(title: str | None) -> datetime | None:
         return None
 
 
-def normalize_sort_by(sort_by: str | None) -> str:
-    # "starred" orders by when the item was starred (saved_entries.saved_at),
-    # which is the Inbox's natural order — a to-do pile is newest-first by when
-    # you added it, not by when the article was published.
-    if sort_by in {"post", "received", "starred"}:
+def normalize_sort_by(sort_by: str | None, *, allow_starred: bool = False) -> str:
+    """Normalize a list sort key. ``post``/``received`` always; ``starred`` only
+    when the caller opts in.
+
+    *allow_starred* is not decoration. "starred" orders by when the item was
+    starred (saved_entries.saved_at) and exists for Read Mode's Inbox — a to-do
+    pile is newest-first by when you added to it. Blessing it globally let it
+    reach the main index, which **persists** whatever it is handed as the
+    remembered sort; the regular sort menu has no entry for "starred", so nothing
+    rendered as active and the toolbar showed "Published newest" while the list
+    was ordered by star date. Reported as the Feed view reverting to "Pub new"
+    after switching in and out of e-ink mode.
+    """
+    if sort_by in {"post", "received"} or (allow_starred and sort_by == "starred"):
         return sort_by
     return DEFAULT_SORT_BY
 
@@ -11325,7 +11393,7 @@ def list_entries_for_feeds(
     if not feed_urls:
         return entries
 
-    normalized_sort_by = normalize_sort_by(sort_by)
+    normalized_sort_by = normalize_sort_by(sort_by, allow_starred=True)
     normalized_sort_dir = normalize_sort_dir(sort_dir)
     normalized_read_filter = normalize_read_filter(read_filter)
     normalized_star_only = normalize_star_only(star_only)
@@ -12176,7 +12244,9 @@ def merge_orphan_saved_entries(
         return posts
 
     sort_desc = normalize_sort_dir(sort_dir) == "desc"
-    normalized_orphan_sort = normalize_sort_by(sort_by)
+    # Reader path: this runs under resolve_reader_backlog, so the Inbox's
+    # star-date order is a legitimate value here.
+    normalized_orphan_sort = normalize_sort_by(sort_by, allow_starred=True)
 
     def _sort_value_from_epoch(epoch: float | None) -> str:
         # Mirrors datetime_sort_value — ISO-format string, empty for None.
@@ -13210,6 +13280,79 @@ _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
 
+_BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "figure"})
+# Real blocks only, for the "is this <br> at a block boundary" test. Inline tags
+# are deliberately absent: a <br> before a <span> is separating text, and removing
+# it would join two lines the author meant to keep apart.
+_REAL_BLOCK_TAGS = frozenset({
+    "div", "p", "figure", "blockquote", "table", "ul", "ol", "li", "pre", "hr",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+})
+
+
+def _collapse_block_spacers(content_html):
+    """Drop blocks whose only content is <br>/whitespace, and <br> sitting at a
+    block boundary. Returns the (possibly None) html.
+
+    These are spacing hacks, not content: Blogger emits
+    ``</div><br/><div><i><br/></i>`` between blocks, which renders as a large
+    empty gap. It was always there — a second image above it used to fill the
+    space, so removing that image is what made it visible.
+
+    Deliberately narrow. A ``<br><br>`` *inside* a paragraph is how plenty of
+    feeds separate lines when they ship no <p> tags at all, and collapsing those
+    would reflow real prose. Only breaks adjacent to a block boundary, and blocks
+    holding nothing but breaks, are touched.
+    """
+    if not content_html or "<br" not in content_html.lower():
+        return content_html
+    from bs4 import BeautifulSoup, NavigableString
+
+    soup = BeautifulSoup(content_html, "html.parser")
+
+    def _is_spacer_only(el) -> bool:
+        if el.name not in _BLOCK_SPACER_TAGS:
+            return False
+        if el.get_text(strip=True):
+            return False
+        if el.find(["img", "svg", "iframe", "video", "audio", "table"]) is not None:
+            return False
+        return el.find("br") is not None
+
+    # Innermost first, so <div><i><br/></i></div> collapses all the way out
+    # rather than leaving the now-empty wrapper behind.
+    for _ in range(3):
+        victims = [el for el in soup.find_all(list(_BLOCK_SPACER_TAGS)) if _is_spacer_only(el)]
+        if not victims:
+            break
+        for el in victims:
+            if not getattr(el, "decomposed", False):
+                el.decompose()
+
+    # A <br> whose previous/next meaningful sibling is a block element is padding
+    # between blocks, not a line break inside text.
+    for br in list(soup.find_all("br")) + list(soup.find_all("br")):
+        if getattr(br, "decomposed", False):
+            continue
+        def _neighbour(node, forward: bool):
+            sib = node.next_sibling if forward else node.previous_sibling
+            while sib is not None and isinstance(sib, NavigableString) and not sib.strip():
+                sib = sib.next_sibling if forward else sib.previous_sibling
+            return sib
+        prev, nxt = _neighbour(br, False), _neighbour(br, True)
+        # None = the edge of the parent block, so a leading/trailing break is
+        # padding too. A neighbouring <br> counts as a boundary so a run at a
+        # block edge clears out one pass at a time.
+        prev_edge = prev is None or getattr(prev, "name", None) in _REAL_BLOCK_TAGS
+        next_edge = (nxt is None or getattr(nxt, "name", None) in _REAL_BLOCK_TAGS
+                     or getattr(nxt, "name", None) == "br")
+        if prev_edge and next_edge:
+            br.decompose()
+
+    out = str(soup).strip()
+    return out or None
+
+
 def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_lead_in_article: bool):
     """Dedup the lead image against the article body. Returns (content_html, lead_image_url).
 
@@ -13222,7 +13365,30 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
     - Tumblr size-variant dedup (same media hash, different size suffix);
     - when the lead came from source scraping and the body is just a thumbnail
       wrapper (minimal text), strip the inline imgs."""
-    if not (show_lead_in_article and lead_image_url and isinstance(content_html, str)):
+    if not (lead_image_url and isinstance(content_html, str)):
+        return content_html, lead_image_url
+
+    if not show_lead_in_article:
+        # "Don't show the lead image in the article" has to include the case
+        # where the FEED put it there. This setting used to suppress only
+        # Lectio's own copy above the article, so a feed whose body opens with
+        # the same image still showed it — unchecking the box did nothing
+        # visible, which is how it was reported.
+        #
+        # Blogger is the case in hand: it emits the social-preview asset
+        # (…-Blog-Metadata.png) as a real <img> at the top of the post body, and
+        # that is also what the lead-image scorer picks as the thumbnail. So the
+        # article opened with a near-identical crop of its own first picture.
+        # Good thumbnail, unwanted in the body — exactly the split this setting
+        # is for.
+        #
+        # Only the *opener* is stripped, and only when it is the lead image
+        # itself. An occurrence further down is the author placing it in the
+        # flow, which is content rather than a header.
+        if _LEAD_IMG_OPENER_RE.match(content_html):
+            _stripped = _bs4_strip_opener(content_html, lead_image_url)
+            if _stripped is not None:
+                content_html = _stripped or None
         return content_html, lead_image_url
 
     _m = _LEAD_IMG_OPENER_RE.match(content_html)
@@ -13913,6 +14079,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
+        content_html = _collapse_block_spacers(content_html)
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
@@ -18144,13 +18311,21 @@ def _home_inner(
 
     with get_meta_connection() as conn:
         _tick("connect")
-        preferred_sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
-        preferred_sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+        # Per-scope: Feeds and Saved keep their own remembered order.
+        _sort_by_key, _sort_dir_key = sort_setting_keys(normalize_star_only(star_only))
+        preferred_sort_by = normalize_sort_by(get_setting(conn, _sort_by_key))
+        preferred_sort_dir = normalize_sort_dir(get_setting(conn, _sort_dir_key))
         problematic_feeds_last_viewed_at = parse_epoch_setting(get_setting(conn, PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY))
         selected_sort_by = normalize_sort_by(sort_by or preferred_sort_by)
         selected_sort_dir = normalize_sort_dir(sort_dir or preferred_sort_dir)
-        set_setting(conn, SORT_BY_SETTING_KEY, selected_sort_by)
-        set_setting(conn, SORT_DIR_SETTING_KEY, selected_sort_dir)
+        # Persist only an EXPLICIT choice from the sort menu. Re-saving on every
+        # plain load meant any stored value normalize_sort_by did not recognize
+        # was silently replaced by the default — the remembered preference
+        # quietly destroying itself, with no way to tell it had happened.
+        if sort_by:
+            set_setting(conn, _sort_by_key, selected_sort_by)
+        if sort_dir:
+            set_setting(conn, _sort_dir_key, selected_sort_dir)
         _tick("settings")
 
         snapshot = get_meta_structure_snapshot(conn)
@@ -23374,7 +23549,14 @@ def set_entry_date_route(feed_url: str = Form(...), entry_id: str = Form(...), p
             dt = datetime.fromisoformat(published)
         except ValueError:
             return JSONResponse({"ok": False, "error": "Invalid date."}, status_code=400)
-        stored = dt.strftime("%Y-%m-%d %H:%M:%S")  # reader's naive-UTC column format
+        # A naive input is LOCAL time, not UTC. "2023-07-06" from the date picker
+        # means midnight where the user is; storing it straight into reader's
+        # naive-UTC column made it midnight UTC, which then rendered through
+        # format_datetime_for_ui's astimezone() as "Jul 5, 2023 5pm" — the day
+        # before. Reported after setting a date to 7/6/23.
+        if dt.tzinfo is None:
+            dt = dt.astimezone()      # attaches the local zone (naive == local)
+        stored = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         with get_meta_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO entry_date_overrides (feed_url, entry_id, published) VALUES (?, ?, ?)",
@@ -26297,6 +26479,31 @@ def set_entry_manual_tags(
     )
 
 
+@app.post("/feed-tags/dismiss")
+def dismiss_feed_tag(
+    request: Request,
+    feed_url: str = Form(...),
+    tag: str = Form(...),
+    dismissed: int = Form(default=1),
+):
+    """Hide (or restore) one feed-tag suggestion chip for one feed.
+
+    The replacement for two failed heuristics. Automatic suppression hid tags the
+    user wanted — "Lessons" on a guitar-lesson feed reads as boilerplate to every
+    frequency- or name-based rule, yet it is the correct filing tag. The judgment
+    is semantic, so it belongs to the person filing.
+
+    Per feed, not global: "Forum" is noise on Slickdeals and might be a real topic
+    elsewhere. The stored rows in `entry_feed_tags` are untouched either way —
+    this hides a chip, it does not forget a fact.
+    """
+    feed_tag_service.set_tag_suppressed(feed_url, tag, bool(dismissed))
+    return JSONResponse({
+        "ok": True, "feed_url": feed_url, "tag": tag, "dismissed": bool(dismissed),
+        "suppressed": feed_tag_service.suppressed_tag_list(feed_url),
+    })
+
+
 @app.post("/entries/discard")
 def discard_entry(
     request: Request,
@@ -26920,7 +27127,8 @@ def settings_feeds_panel_fragment(request: Request, panel_name: str) -> Response
 
 
 @app.get("/tree/folder-feeds/{folder_id}")
-def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
+def tree_folder_feeds_fragment(request: Request, folder_id: int,
+                               star_only: str | None = Query(default=None)) -> Response:
     """One folder's sidebar feed rows (<li> fragment).
 
     The sidebar renders folder rows only; each collapsed folder's feed list is
@@ -26936,8 +27144,12 @@ def tree_folder_feeds_fragment(request: Request, folder_id: int) -> Response:
         all_feed_urls = cast(set[str], snapshot["all_feed_urls"])
         disabled_feed_urls = get_disabled_feed_urls(conn)
         problematic_feeds = get_problematic_feeds_cached(conn)
-        sort_by = normalize_sort_by(get_setting(conn, SORT_BY_SETTING_KEY))
-        sort_dir = normalize_sort_dir(get_setting(conn, SORT_DIR_SETTING_KEY))
+        # Same per-scope split as a full render: these rows are links into
+        # whichever view the sidebar is currently showing, so stamping them with
+        # the other scope's order would make one click silently re-sort.
+        _sb_key, _sd_key = sort_setting_keys(normalize_star_only(star_only))
+        sort_by = normalize_sort_by(get_setting(conn, _sb_key))
+        sort_dir = normalize_sort_dir(get_setting(conn, _sd_key))
 
     if folder_id == UNCATEGORIZED_FOLDER_ID:
         urls = sorted(
@@ -27322,7 +27534,14 @@ def _import_instapaper_for_current_user(data: bytes) -> dict:
                     "id": bm.url,
                     "link": bm.url,
                     "title": bm.title,
-                    "published": saved_dt,
+                    # NOT saved_dt. An Instapaper CSV records when *you saved*
+                    # the bookmark, never when the article was published — so
+                    # this stored a 2015 article as published 2019 and the UI
+                    # showed that as fact. Measured on the live library: 3,308
+                    # entries whose publish date was exactly their save date.
+                    # The save date is kept where it belongs, on saved_entries
+                    # below. See UNKNOWN_PUBLISHED for why 1970 and not NULL.
+                    "published": saved_articles_service.UNKNOWN_PUBLISHED,
                 }
                 try:
                     reader.add_entry(entry)

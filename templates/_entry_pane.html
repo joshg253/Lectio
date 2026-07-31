@@ -264,6 +264,17 @@
             aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
             aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
           >▼</button>
+          {# Dismiss this suggestion for this feed. Manual because no automatic
+             rule can tell a useless tag ("VinylDeals" — the subreddit) from a
+             wanted one ("Lessons" — what the post IS); both look like boilerplate
+             to a frequency or feed-name test. Undo lives in Feed Properties. #}
+          <button
+            type="button"
+            class="feed-tag-filter-sign dismiss-feed-tag"
+            data-dismiss-feed-tag="{{ tag }}"
+            title="Never suggest #{{ tag }} for this feed"
+            aria-label="Never suggest #{{ tag }} for this feed"
+          >×</button>
         </span>
         {% endfor %}
       </span>

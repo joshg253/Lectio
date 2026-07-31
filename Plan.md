@@ -1237,8 +1237,56 @@ from Later now that "finish it" is the stated goal. All were explicitly parked a
   | 90 days | 3,461 | 6,541 |
   | 1 year | 3,130 | 6,872 |
 
-  The 1–3 month bucket alone holds 6,120 (the filing run of ~2 months ago), which
-  is why 90 days barely helps.
+  **⚠ DO NOT RUN IT YET — `saved_at` is not a real star date for most rows.**
+  Measured 2026-07-29: **6,091 of 10,002 stars carry a `saved_at` in 2026-06**,
+  which is when multi-user went live and the data was migrated — the migration
+  stamped its own run date instead of preserving the original. Those are largely
+  years-old Inoreader stars wearing a seven-week-old timestamp. (This is the
+  "1–3 month bucket holds 6,120" figure, which was first misread as the filing
+  run.) So a 30-day cutoff sweeps 6,091 articles in and a 90-day cutoff protects
+  them, neither for any real reason.
+
+  **Fix before this is usable: offer the date basis, and default to publish
+  date.** Publish date asks the better question anyway ("articles from 2019 I
+  have still never opened"). Josh also said he still wants to go through most of
+  this material, so the whole premise of a bulk cutoff is his call rather than a
+  given.
+
+  **Star provenance, measured 2026-07-29** — only 419 of 10,002 stars were made
+  by hand in Lectio:
+
+  | `saved_at` | stars | meaning |
+  |---|---|---|
+  | before 2026-06 | 3,492 | real dates, read out of the Instapaper CSV |
+  | 2026-06 | 6,091 | **the migration's own run date** |
+  | 2026-07+ | 419 | actually starred in Lectio |
+
+### 7c. Importers fabricated publish dates — FIXED + REPAIRED 2026-07-29
+
+Two capture paths stored "when this arrived in Lectio" as "when this was
+published", and every date-based decision then trusted it:
+
+- **Instapaper import** used the CSV's *save* timestamp as `published`, so a 2015
+  article bookmarked in 2019 read as published 2019. **3,308 entries.**
+- **Save-article (URL capture)** used `now()` at capture time. 5 entries.
+
+Both now write `services.saved_articles.UNKNOWN_PUBLISHED` (the Unix epoch).
+**1970 rather than NULL is the load-bearing choice**: `entry_effective_date`
+falls back published → updated → added, so clearing the field would silently
+substitute the *import* date — the same wrong answer by a longer route. The epoch
+is visibly not a publish date, sorts to the end of every order, and is
+searchable, which makes these findable rather than merely untrusted.
+
+`scripts/repair_fabricated_publish_dates.py` reset the 3,310 already stored (JSON
+log alongside the other repair logs, so it is reversible). It matches only two
+*exact* signatures — `published == saved_at` and `published == first_updated` —
+and **preserves `entry_date_overrides`** (4 rows; an explicit correction outranks
+any inference). A looser rule would have destroyed the **22,543** user-added
+entries that carry genuine publish dates from the Inoreader migration.
+
+⚠ The lesson generalizes: **an importer must never invent a field it does not
+have.** A missing date is recoverable; a plausible wrong one is not, because
+nothing downstream can tell it apart from real data.
 
   **This retires #5.** Those 1,786 starred+tagged items get archived like the
   rest, keeping tag *and* capture, instead of being unstarred and losing the TODO
@@ -1368,6 +1416,113 @@ closed and WiFi turned off.
 
 Sequence after PR D: a 9,979-item Inbox makes "export the next 20" a scoop from a
 pile; at ~420 it is a meaningful unit.
+
+### 7c-2. Epoch-dated articles — 2,030 of 3,308 recovered offline (2026-07-29)
+
+The Instapaper importer had stored save timestamps as publish dates; repairing that
+left 3,308 entries at the Unix epoch. `scripts/recover_publish_dates.py` recovered
+**2,030 (61%) with no network requests at all** — every date came from page HTML
+already captured in the starred archive, which also means it works for articles
+whose sites are long dead:
+
+| source | n |
+|---|---|
+| `article:published_time` (Open Graph) | 1,811 |
+| URL path (`/2019/07/06/`) | 90 |
+| JSON-LD `datePublished` | 89 |
+| `<time datetime=…>` | 40 |
+
+**The save date as an upper bound is what makes the `<time>` tier safe.** The HTML
+was captured *recently*, not when the article was saved, so a stray `<time>` can be
+years newer than the article (a comment, a "latest posts" rail). You cannot save
+something before it is published, so a candidate later than the Instapaper save
+timestamp + 1 day is rejected. That guard threw out ~189 dates a plain regex sweep
+would have accepted.
+
+**1,278 remain at 1970 deliberately**: 324 have no captured HTML, the rest have HTML
+with no date in it. Guessing there would re-create the original bug. `<time>` is
+tried last for the same reason — a page has many, and the first is often a
+comment's.
+
+Manual `entry_date_overrides` are never touched; an explicit correction outranks
+anything inferred.
+
+### 7c-3. Bot-walled pages: no server-side tags available (2026-07-29)
+
+Two feeds where the tags Josh can see are rendered by the site's JavaScript and are
+unreachable from the server. **Not code bugs — do not spend time on them.**
+
+- **behance.net** — the feed carries **zero** `<category>` elements, and the gallery
+  page answers a non-browser client with a JS challenge (`js_challenge_value`
+  cookie + `window.location.reload()`). Page extraction *did* work 2026-07-13 →
+  07-20 (793 tag rows captured, e.g. "Adobe Photoshop" ×39), then stopped dead, so
+  the wall went up around 07-20. Any Behance entry ingested after that has no tags
+  and cannot get them.
+- **realpython.com** — feed has no `<category>` either; the page returns a
+  Cloudflare interstitial. See 7a.
+
+Both would need browser-shaped requests, which Lectio deliberately does not send
+(see the good-web-citizen rule). Worth re-testing occasionally: Behance's wall
+appeared mid-July, so it may lift the same way. If it does, the existing background
+source-fetch fills the tags in with no work from us.
+
+⚠ Knock-on to check if Behance thumbnails ever look wrong: lead-image extraction
+uses the same source-page fetch, so it went blind on the same date.
+
+### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
+
+gottadeal posts carry a real category line on the page:
+
+    Posted on 7/29/26 in Woot!, Pet Supplies
+
+`Woot!` and `Pet Supplies` are genuine categories, but the harvested tag came out
+as **"in XXX, YYY"** — the extractor took surrounding sentence text instead of the
+two anchor texts. First reported as junk chrome and dismissed as such; Josh
+corrected it ("these actually do have tags of sort").
+
+Distinct from the coverage rule shipped the same day: that hides tags a feed puts
+on *everything*, whereas this is a per-post tag being read wrongly. Look at
+`extract_page_tags`' anchor tiers in `services/feed_tags.py` — the `rel="tag"` /
+tag-classed-anchor branches, and whichever path let containing text in.
+
+Example: `https://gottadeal.com/deals/woot-up-to-80-off-petopia-deals-…-475022`
+
+**⚠ Automatic suppression of feed-tag suggestions was tried twice and REVERTED
+(2026-07-29). Do not attempt a third heuristic without reading this.**
+
+- *Coverage* (tag on ~90% of a feed's entries) caught `Popular Deals`, `Forum`,
+  `VinylDeals`, `LaptopDeals`, talkpython's 8-tag block — 661 pairs. Then Josh:
+  "Lessons should be the category". A guitarplayer tag feed puts `Lessons` on every
+  post and it is the right filing tag. **Suggestions are for filing, not for
+  discriminating within a feed, so uniformity is not disqualifying.**
+- *Feed-name echo* (uniform AND tag tokens ⊆ feed-title tokens, camelCase split)
+  looked right: it suppressed `Popular Deals`/`VinylDeals` and kept `Lessons`
+  against the title "Guitar Player" — **which was an assumed title.** The live one
+  is "Latest from Guitar Player in Lessons", so it suppressed `Lessons` too. Feed
+  URLs fail the same way: `/r/VinylDeals/` vs `/feeds/tag/lessons`.
+
+`VinylDeals` is a *place*; `Lessons` is a *kind of content*. That is semantic and
+no feed metadata expresses it. **A useless chip is ignored; a hidden wanted one is
+invisible** — so everything is shown and the user dismisses per (feed, tag).
+
+**BUILT 2026-07-29:** `suppressed_feed_tags(feed_url, tag)`, an × on each chip
+(`POST /feed-tags/dismiss`), and an undo list at Feed Properties → *Hidden tags*.
+Case-insensitive, per feed, and it never deletes the stored `entry_feed_tags` rows.
+
+**More page-tag examples Josh flagged, not yet handled** (2026-07-29). All are
+"there IS a usable tag here and we are not taking it", i.e. the same tier work:
+
+- `guitarplayer.com` — a `DEALS` tag on the post is not picked up
+  (`?feed_url=…/feeds/tag/lessons`, entry `wu6rVpzS4PyZRihCreDbEF`).
+- **Sub-categories from the URL path** — `guitarplayer.com/lessons/advice-tips`
+  carries "Lessons" *and* "Advice & Tips" as path segments. A post URL's own path
+  is a taxonomy source no current tier reads; it would also give the parent
+  category for free on sites that do not link it.
+
+Also still open from the same pass: Real Python's page tag block mixes taxonomies
+(`ai` is a topic, `intermediate` is a **skill level**). A four-word stop-list
+(`beginner`/`intermediate`/`advanced`/`basics`) would express that where coverage
+cannot — it is fixed vocabulary, not per-feed frequency.
 
 ### 8. Small daily-friction items (cheap; slot between the bigger pieces)
 

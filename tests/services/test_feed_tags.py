@@ -29,6 +29,16 @@ def conn():
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE suppressed_feed_tags (
+            feed_url TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            suppressed_at REAL NOT NULL,
+            PRIMARY KEY (feed_url, tag)
+        )
+        """
+    )
     yield c
     c.close()
 
@@ -254,14 +264,23 @@ def test_page_tags_rel_tag_anchors():
 
 
 def test_page_tags_tag_classed_anchors_title_or_slug():
-    # Valnet style: tags-link anchors, some wrapping images (title attr wins);
-    # plain /tag/ links without a tag class are ignored (nav/related noise).
+    """Valnet style: tags-link anchors, some wrapping an image or a junk span, so
+    the title attribute wins and the slug beats one-character text.
+
+    ⚠ This deliberately overturns the old assertion that a plain /tag/ link
+    *without* a tag class is nav noise to be ignored. Hugo (and most static
+    generators) mark taxonomy links only by URL shape — no class, no rel="tag" —
+    so requiring a class found nothing at all on those sites, which is how
+    krshrimali.github.io's category and tags were both missed. A link to
+    /tag/<slug>/ on an article page is overwhelmingly that article's tag; the junk
+    filter and the 15-tag cap bound the cost of the occasional sidebar link.
+    """
     html = (
         '<a class="tags-link image" href="/category/windows/" title="Windows"><img src="x"></a>'
         '<a class="tags-link" href="/tag/windows-tips/"><span>x</span></a>'
         '<a href="/tag/unrelated-nav-link/">Nav</a>'
     )
-    assert extract_page_tags(html) == ["Windows", "windows tips"]
+    assert extract_page_tags(html) == ["Windows", "windows tips", "Nav"]
 
 
 def test_junk_tags_dropped_at_capture():
@@ -324,3 +343,132 @@ def test_commas_are_not_split():
 def test_category_attribute_is_split_too():
     out = extract_feed_entry_tags(_Entry(category="Security;CORS"))
     assert out == ["Security", "CORS"]
+
+
+# --- page tag extraction: taxonomy URLs ---
+def test_taxonomy_url_anchors_are_tags_whatever_their_class():
+    """A link to /tags/<slug>/ IS a tag link. Hugo marks them only by URL shape —
+    krshrimali.github.io puts its category at the top and its tags in the footer
+    with no tag class and no rel="tag", so the class/rel tiers found nothing.
+
+    Plural matters: the old slug fallback matched /tag/ and /category/ only, which
+    misses Hugo's /tags/ and /categories/ entirely.
+    """
+    out = extract_page_tags(
+        '<a href="https://x.test/categories/personal/">personal</a>'
+        '<a href="https://x.test/tags/motivation/">#motivation</a>'
+    )
+    assert out == ["personal", "motivation"]
+
+
+def test_unquoted_attributes_are_parsed():
+    """Minified Hugo output emits `href=https://…` with no quotes, so a
+    quotes-only attribute pattern matched nothing and every anchor tier silently
+    found zero tags on those pages."""
+    out = extract_page_tags("<a href=https://x.test/tags/rust/>rust</a>")
+    assert out == ["rust"]
+
+
+def test_taxonomy_index_links_are_not_tags():
+    """The nav links to the /tags and /categories listing pages carry no slug,
+    which is exactly what keeps them out."""
+    assert extract_page_tags('<a href="/tags">Tags</a><a href="/categories">All</a>') == []
+
+
+def test_anchor_text_beats_the_slug():
+    """The publisher's own casing and punctuation — "Pet Supplies", "Woot!" —
+    rather than "pet-supplies". This is the gottadeal case, where the harvested
+    tag had been the surrounding sentence ("in XXX, YYY") instead of the anchors.
+    """
+    out = extract_page_tags(
+        '<p>Posted on 7/29/26 in <a href="/category/woot/">Woot!</a>, '
+        '<a href="/category/pet-supplies/">Pet Supplies</a></p>'
+    )
+    assert out == ["Woot!", "Pet Supplies"]
+
+
+def test_a_leading_hash_is_stripped():
+    """Display chrome, not part of the name — and Lectio uses "#" as its own tag
+    marker everywhere. Stripping it also folds a term linked once as a category
+    and once as a hash-prefixed tag."""
+    out = extract_page_tags(
+        '<a href="/categories/python/">python</a><a href="/tags/python/">#python</a>'
+    )
+    assert out == ["python"]
+
+
+# --- manual per-(feed, tag) dismissal ---
+def test_dismissed_tags_are_scoped_to_their_feed(service):
+    """Per feed, not global: "Forum" is noise on Slickdeals and might be a real
+    topic elsewhere."""
+    a, b = "https://slickdeals.net/rss", "https://example.test/other"
+    service.set_tag_suppressed(a, "Forum", True)
+
+    assert service.suppressed_tags(a) == {"forum"}
+    assert service.suppressed_tags(b) == set()
+
+
+def test_dismissal_is_case_insensitive(service):
+    """A publisher changing "ILLUSTRATION" to "Illustration" must not quietly
+    resurrect a chip that was already dismissed."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "ILLUSTRATION", True)
+
+    assert "illustration" in service.suppressed_tags(feed)
+
+
+def test_restore_removes_it_whatever_the_casing(service):
+    """A mis-clicked × must have a way back, and the stored row may differ in case
+    from whatever the caller is looking at now."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+    service.set_tag_suppressed(feed, "popular deals", False)
+
+    assert service.suppressed_tags(feed) == set()
+
+
+def test_dismissal_does_not_delete_the_stored_tag(service):
+    """This hides a chip; it does not forget a fact. The rows still feed the
+    tag-filtered feed adapters."""
+    feed = "https://example.test/f"
+    service.record_entry_tags(feed, [("e1", ["Popular Deals", "keepme"])])
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+
+    assert service.get_tags_for_entry(feed, "e1") == ["Popular Deals", "keepme"]
+
+
+def test_blank_tags_are_ignored(service):
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "   ", True)
+    assert service.suppressed_tags(feed) == set()
+
+
+def test_suppressed_tag_list_keeps_original_casing(service):
+    """The undo list shows the user what they dismissed, not a lowercased version."""
+    feed = "https://example.test/f"
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+
+    assert service.suppressed_tag_list(feed) == ["Popular Deals"]
+
+
+def test_suggestions_drop_dismissed_tags(monkeypatch, service):
+    """End to end through the suggestion path: the chip disappears, the row stays.
+
+    This is the replacement for two reverted heuristics. Automatic suppression hid
+    tags the user wanted — "Lessons" on a guitar-lesson feed reads as boilerplate
+    to every frequency- or name-based rule yet is the correct filing tag — so the
+    judgment belongs to the person filing.
+    """
+    import main
+
+    feed = "https://slickdeals.net/rss"
+    service.record_entry_tags(feed, [("e1", ["Popular Deals", "Nintendo Switch"])])
+    monkeypatch.setattr(main, "feed_tag_service", service)
+
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]
+
+    service.set_tag_suppressed(feed, "Popular Deals", True)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Nintendo Switch"]
+
+    service.set_tag_suppressed(feed, "Popular Deals", False)
+    assert main.get_feed_tag_suggestions(feed, "e1") == ["Popular Deals", "Nintendo Switch"]

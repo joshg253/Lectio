@@ -209,6 +209,27 @@ class LeadImageService:
         r"(?:grey-placeholder|image-unavailable|placeholder(?:[._-]|$)|no-image(?:[._-]|$)|fallback(?:[._-]|$)|bg_transparency|blank\.(?:gif|jpe?g|png|webp)|spinner(?:\.|$)|spacer(?:[0-9._-]|$))",
         re.IGNORECASE,
     )
+    # Social/share icons. A post with no images of its own leaves the site's
+    # share row as the best-scoring picture on the page — accu.org shipped
+    # /img/bsky.png as an article's thumbnail.
+    #
+    # Matched on the filename STEM, not anywhere in the URL: an article genuinely
+    # about Bluesky may well carry "bluesky-screenshot-2026.png", and a substring
+    # rule would reject it. Bare names, and the icon-/social- decorations sites
+    # put around them, are what identify chrome.
+    _SOCIAL_ICON_NAMES = (
+        "bsky", "bluesky", "twitter", "tweet", "facebook", "fb", "instagram",
+        "mastodon", "linkedin", "youtube", "reddit", "tumblr", "pinterest",
+        "telegram", "whatsapp", "discord", "threads", "tiktok", "github",
+        "rss", "feed", "email", "mailto", "share", "vimeo", "flickr", "twitch",
+        "patreon", "kofi", "ko-fi", "substack", "signal", "snapchat", "x",
+    )
+    _SOCIAL_ICON_STEM_RE = re.compile(
+        r"^(?:(?:icon|social|share|follow|logo)[._-]*)?"
+        r"(?:" + "|".join(re.escape(n) for n in _SOCIAL_ICON_NAMES) + r")"
+        r"(?:[._-]*(?:icon|social|share|logo|round|circle|sq|small|\d{1,3}(?:x\d{1,3})?))?$",
+        re.IGNORECASE,
+    )
     _TRACKER_URL_PATTERNS = re.compile(
         # statcounter — c.statcounter.com tracking pixels carry alt="Web Analytics"
         # and ship as a 1x1 transparent GIF, which scales up to a grey thumbnail when
@@ -257,6 +278,18 @@ class LeadImageService:
         "github.com", "www.github.com", "gitea.com", "gitlab.com", "codeberg.org",
     })
     _FORGE_AVATAR_PATH_RE = re.compile(r"^/[^/]+\.png$", re.IGNORECASE)
+
+    @classmethod
+    def is_social_icon_url(cls, url: str) -> bool:
+        """True when a URL's filename is a bare social/share icon name."""
+        if not url:
+            return False
+        try:
+            path = urlparse(url).path
+        except ValueError:
+            return False
+        stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        return bool(stem) and bool(cls._SOCIAL_ICON_STEM_RE.match(stem))
     # Detects class attributes on surrounding HTML elements that mark author/bio/speaker sections.
     # Used by _extract_preferred_source_image_data to skip headshot images.
     _AUTHOR_CONTEXT_RE = re.compile(
@@ -1756,6 +1789,7 @@ class LeadImageService:
             if (
                 self._TRACKER_URL_PATTERNS.search(resolved)
                 or self._AVATAR_HINT_PATTERNS.search(resolved)
+                or self.is_social_icon_url(resolved)
                 or self._PLACEHOLDER_URL_PATTERNS.search(resolved)
             ):
                 continue
@@ -2413,6 +2447,8 @@ class LeadImageService:
         # Match host+path only (not the query string) so a non-emoji asset with
         # e.g. "?ref=twemoji" in its query isn't mistaken for an emoji sprite.
         if self._EMOJI_URL_PATTERNS.search(parsed.netloc + parsed.path):
+            return False
+        if self.is_social_icon_url(image_url):
             return False
         if self._AVATAR_HINT_PATTERNS.search(parsed.path):
             return False
