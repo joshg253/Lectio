@@ -277,5 +277,6 @@ def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
     """
     for sel in ('.entry-save-toggle[title^="Remove"] .entry-save-indicator',
                 '.post-save-toggle[title^="Remove"] .post-save-indicator'):
-        block = CSS[CSS.index(sel):][:400]
+        block = CSS[CSS.index(sel):]
+        block = block[:block.index("}")]          # the rule, however long its comment
         assert "color: var(--accent);" in block
