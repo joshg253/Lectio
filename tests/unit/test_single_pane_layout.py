@@ -197,13 +197,32 @@ def test_the_two_glyph_groups_share_one_gap():
     assert "gap: 0.3rem;" in right
 
 
-def test_the_gap_alone_cannot_equalise_the_two_groups():
-    """It did not: the middle buttons carried 5.6px of horizontal padding and the
-    view buttons none, so an identical gap still measured 36px against 27px
-    centre-to-centre. The padding has to go too."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions button {'):][:200]
+def test_matching_gaps_need_matching_boxes_between_them():
+    """Two rounds of this. An identical gap left the groups at 36px vs 27px
+    (middle buttons had 5.6px of padding, view buttons none); zeroing the padding
+    left 26.8px vs 26.4px, because the buttons were 22px and 21.6px wide. Only a
+    uniform box makes the pitch equal by construction."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row button,'):][:400]
+    assert "width: 1.75rem;" in block
     assert "padding-left: 0;" in block
-    assert "padding-right: 0;" in block
+    # The view buttons are <a>, not <button> — selecting on button alone widened
+    # the middle group only and made the mismatch worse.
+    assert ".entry-source-button {" in block
+
+
+def test_the_read_glyph_is_brought_to_the_same_optical_size():
+    """It carried opsz 20 where every other glyph in the row is opsz 24, which
+    reads as a different weight beside them."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-read-indicator'):][:600]
+    assert '"opsz" 24' in block
+    # FILL and wght distinguish read from unread and must survive.
+    assert '"FILL" 1' in block and '"FILL" 0' in block
+
+
+def test_cleanup_is_hidden_on_a_phone():
+    """A hover-then-click interaction with no touch equivalent, and it crowded the
+    row."""
+    assert 'body[data-layout-mode="single"] #entry-cleanup-button' in CSS
 
 
 def test_the_glyph_size_is_set_on_the_row_so_both_groups_move_together():

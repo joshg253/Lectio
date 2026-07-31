@@ -455,17 +455,42 @@ body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
   font-size: 1.4rem;
 }
 
-/* The middle buttons carried 5.6px of horizontal padding and the view buttons
-   none, so with an identical 0.3rem gap the two groups still read as 36px and
-   27px apart. The gap alone cannot equalise them — the padding has to go. */
-body[data-layout-mode="single"] .entry-primary-actions button {
+/* One box for every button in the row, so the pitch is identical in both groups
+   by construction. Zeroing the middle group's padding got them to 26.8px and
+   26.4px — closer, but still not equal, because the buttons themselves were 22px
+   and 21.6px wide. Matching gaps only match if the boxes between them do. */
+body[data-layout-mode="single"] .entry-tags-row button,
+body[data-layout-mode="single"] .entry-tags-row .entry-source-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
   padding-left: 0;
   padding-right: 0;
 }
 
-/* Sized up with the glyphs so the row reads as one piece. */
+/* The read indicator is the one glyph carrying opsz 20 where every other glyph in
+   the row is opsz 24 — visibly a different weight beside them. FILL and wght are
+   left alone in both states: they are what distinguishes read from unread. */
+body[data-layout-mode="single"] .entry-read-indicator.material-symbols-rounded {
+  font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+}
+
+body[data-layout-mode="single"] .entry-read-toggle[data-read-state="1"] .entry-read-indicator.material-symbols-rounded {
+  font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+}
+
+/* Cleanup is a deliberate, fiddly hover-then-click interaction — it has no phone
+   equivalent, and it was crowding the row. */
+body[data-layout-mode="single"] #entry-cleanup-button {
+  display: none;
+}
+
+/* Sized up with the glyphs so the row reads as one piece. Exempt from the
+   uniform glyph box above: it is a text button, not an icon. */
 body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
   font-size: 1.05rem;
+  width: auto;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
