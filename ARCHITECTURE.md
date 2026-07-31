@@ -823,6 +823,20 @@ quarter-hours; a toast fades and takes the job's only visible trace with it. Tim
 remaining is computed from the job's own measured pace rather than the up-front
 estimate, which is the honest number once a few articles are in.
 
+**The mismatch guard has a second reference for opaque URLs.** `article.aspx?p=2438407&WT.rss_a=Classes in C#`
+carries one usable subject word once digits and structural vocabulary are dropped
+— below the guard's three-word floor — so it stood down entirely and informit's
+"Articles | InformIT" section index overwrote two stored articles during a batch
+run. When the slug gives nothing to judge by, the *stored* title becomes the
+reference, but only in conjunction with `looks_like_a_link_index(new_html)`.
+The conjunction is what makes it safe: the slug branch deliberately avoids
+old-vs-new titles (re-fetch exists partly to fix a bad title), and a genuine link
+roundup — Techdirt's weekly history post is 95% anchor text — still echoes its own
+stored title. Thresholds are calibrated against 1,192 captured articles: p95
+anchor-text ratio 0.32, p98 0.46, so the detector fires at 0.40 with a 20-anchor
+floor. Note the guard protects the *first* destruction only; once an entry holds
+the wrong page, its stored title is the wrong page's title.
+
 Scope is kept articles (starred or tagged) with an `http(s)` link — the same rule
 the single-article button uses, because an unkept feed entry is rewritten by the
 next refresh anyway. Everything the interactive re-fetch does still happens per

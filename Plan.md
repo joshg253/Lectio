@@ -1556,9 +1556,15 @@ A second scope started while one runs is **queued**, not refused (Josh, same day
 fixed status pill shows the running scope, progress, measured time remaining and the
 queue — the batch had no visible surface at all once its toast faded.
 
-Deferred from the UI version: resumability across a restart (the job is in memory, so
-a container rebuild mid-run loses the remainder — re-running is safe and skips
-nothing important), and a per-run log file like the script writes.
+Deferred from the UI version: resumability across a restart, and a per-run log file
+like the script writes.
+
+⚠ **The restart gap bit immediately (2026-07-31).** A batch on the informit feed was
+killed 4 minutes in by a container rebuild — 29 of 89 articles done, no trace in the
+logs because only the completion line logs. Re-running is safe, but a job with no
+persistence and no start/interrupt logging is invisible after the fact. Worth either
+persisting the queue+cursor to the meta DB, or at minimum logging a start line and
+marking the job interrupted on the next boot.
 
 ### 7c-1. Page tag extraction grabs the sentence, not the anchors (2026-07-29)
 
