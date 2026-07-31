@@ -357,6 +357,9 @@ body[data-layout-mode="single"] #medium-pane-backdrop {
 body[data-layout-mode="single"] .pane-entry {
   overflow-y: auto;
   overflow-x: hidden;
+  /* One gutter for the article view, so the title, the byline, the feed/date
+     line and the body all start on the same vertical. */
+  --phone-gutter: 0.85rem;
 }
 
 /* flex: none matters as much as the overflow. As a shrinking flex item the body
@@ -375,6 +378,11 @@ body[data-layout-mode="single"] .pane-entry .entry-body {
 body[data-layout-mode="single"] .pane-entry .entry {
   overflow: visible;
   flex: none;
+  /* Its own 12.8px sat under .entry-body's gutter and pushed the article text a
+     step in from the title and byline above it. The gutter belongs to exactly one
+     level; this is the second of the two places that had to give it up. */
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* display:contents dissolves the header box so its children become direct flex
@@ -393,26 +401,57 @@ body[data-layout-mode="single"] .entry-tags-row {
   position: sticky;
   top: 0;
   z-index: 5;
-  display: flex;
-  flex-wrap: wrap;
+  /* Three columns with equal 1fr sides put the middle group in the TRUE centre of
+     the window — what it is compared against is the phone's camera cutout, which
+     is dead centre. Auto margins, and equal flex on the side groups, both leave it
+     a few px off: neither side can shrink below its own content, and the back
+     button is not the width of the four view buttons. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 0.15rem;
+  gap: 0.3rem;
   margin: 0;
-  padding: 0.25rem 0.5rem;
+  padding: 0.25rem var(--phone-gutter);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
-/* Auto margins on the outer two groups centre the middle one without needing a
-   wrapper element around it. */
+/* Transparent to layout by default, so the desktop row is unchanged: the three
+   controls stay direct flex children of .entry-tags-row exactly as before. */
+.entry-primary-actions {
+  display: contents;
+}
+
+body[data-layout-mode="single"] .entry-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  grid-column: 2;
+}
+
 body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
-  margin-right: auto;
+  grid-column: 1;
+  justify-self: start;
   padding-left: 0;
 }
 
 body[data-layout-mode="single"] .entry-pane-alt-actions {
-  margin-left: auto;
-  gap: 0.1rem;
+  display: flex;
+  align-items: center;
+  grid-column: 3;
+  justify-self: end;
+  gap: 0.3rem;          /* the same gap the middle group gets */
+}
+
+/* Tags and the add-tags form drop to their own full-width row beneath. */
+body[data-layout-mode="single"] .entry-tag-chip-wrap,
+body[data-layout-mode="single"] .entry-tags-form {
+  grid-column: 1 / -1;
+}
+
+/* A touch larger than the desktop's mouse-sized glyphs. */
+body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
+  font-size: 1.25rem;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
@@ -427,31 +466,43 @@ body[data-layout-mode="single"] .feed-tag-filter-sign {
 /* Tags a post already carries stay visible, but wrap to their own line under the
    buttons rather than stretching the bar sideways. Same for the add-tags form,
    which the tag button toggles — it must stay in the flow to be openable. */
-body[data-layout-mode="single"] .entry-tag-chip-wrap {
-  order: 9;
-}
-
-body[data-layout-mode="single"] .entry-tags-form {
-  order: 10;
-  flex-basis: 100%;
-}
-
 body[data-layout-mode="single"] .entry-pane-title-row,
 body[data-layout-mode="single"] .entry-pane-bottom-row {
-  padding: 0 0.85rem;
+  padding: 0 var(--phone-gutter);
 }
 
 body[data-layout-mode="single"] .entry-pane-title-row {
   padding-top: 0.6rem;
 }
 
-/* Byline on its own line, then feed · date — the order Josh asked for. */
+/* Title, then byline, then feed name | date. The byline lives inside
+   .entry-meta-left with the favicon and feed link, so it is lifted onto its own
+   line from there; the date aligns to the bottom line rather than floating
+   between the two. */
 body[data-layout-mode="single"] .entry-pane-meta {
+  align-items: flex-end;
+  /* nowrap keeps the date on the feed-name line. Left to wrap, the byline's
+     full-width basis pushed .entry-meta-left across the whole row and the date
+     dropped to a third line of its own. */
+  flex-wrap: nowrap;
+}
+
+body[data-layout-mode="single"] .entry-meta-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body[data-layout-mode="single"] .entry-meta-left {
   flex-wrap: wrap;
 }
 
 body[data-layout-mode="single"] .entry-author-inline {
+  order: -1;
   flex-basis: 100%;
+}
+
+body[data-layout-mode="single"] .entry-meta-separator {
+  display: none;
 }
 
 /* Back out of a pane. Hidden on desktop, where the panes are all on screen. */
@@ -489,11 +540,19 @@ body[data-layout-mode="single"] .post-item {
 
 /* Give the article the full width on a phone: the desktop reading measure is a
    constraint against over-long lines, and there is no excess width here. */
-body[data-layout-mode="single"] .entry-body,
+/* The gutter is applied ONCE. Setting it on both .entry-body and its
+   .entry-content child stacked to 27px, so the article text sat a visible step
+   inside the title above it. */
+body[data-layout-mode="single"] .entry-body {
+  max-width: 100%;
+  padding-left: var(--phone-gutter);
+  padding-right: var(--phone-gutter);
+}
+
 body[data-layout-mode="single"] .entry-content {
   max-width: 100%;
-  padding-left: 0.85rem;
-  padding-right: 0.85rem;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 body[data-layout-mode="single"] .toolbar-row-main {

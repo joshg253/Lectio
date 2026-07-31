@@ -167,3 +167,55 @@ def test_the_add_tags_form_stays_in_the_flow():
     button do nothing."""
     block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-form'):][:200]
     assert "display: none" not in block
+
+
+# ── phone article view, second pass ──
+def test_the_middle_group_is_truly_centred():
+    """Josh compares it against his phone's camera cutout, which is dead centre.
+    Auto margins — and equal flex on the side groups — both leave it a few px off,
+    because neither side can shrink below its own content and the back button is
+    not the width of the four view buttons."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row {'):][:600]
+    assert "display: grid;" in block
+    assert "grid-template-columns: 1fr auto 1fr;" in block
+
+
+def test_the_grouping_wrapper_is_invisible_to_desktop_layout():
+    """display:contents means the three controls stay direct flex children of the
+    row everywhere else, so the desktop row is unchanged."""
+    assert 'class="entry-primary-actions"' in ENTRY_PANE
+    block = CSS[CSS.index(".entry-primary-actions {"):][:120]
+    assert "display: contents;" in block
+
+
+def test_the_two_glyph_groups_share_one_gap():
+    """Reported: the right-hand glyphs sat much closer together than the middle."""
+    mid = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions {'):][:220]
+    right = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-alt-actions {'):][:320]
+    assert "gap: 0.3rem;" in mid
+    assert "gap: 0.3rem;" in right
+
+
+def test_one_gutter_variable_drives_every_horizontal_edge():
+    """Asked for explicitly: the body's margins must match the header area's."""
+    assert "--phone-gutter: 0.85rem;" in CSS
+    assert CSS.count("var(--phone-gutter)") >= 3
+
+
+def test_the_gutter_is_never_applied_twice():
+    """It stacked twice, in two different places: .entry-content inside
+    .entry-body (27px), and article.entry's own 12.8px outside it (26px). Both
+    made the article text sit a visible step in from the title."""
+    for sel in ('.entry-content {', '.pane-entry .entry {'):
+        block = CSS[CSS.index(f'body[data-layout-mode="single"] {sel}'):][:400]
+        assert "padding-left: 0;" in block
+
+
+def test_the_meta_line_keeps_the_date_beside_the_feed_name():
+    """Title / byline / feed name | date. Allowed to wrap, the byline's full-width
+    basis pushed the date onto a third line."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-meta {'):][:400]
+    assert "flex-wrap: nowrap;" in block
+    byline = CSS[CSS.index('body[data-layout-mode="single"] .entry-author-inline {'):][:150]
+    assert "order: -1;" in byline
+    assert "flex-basis: 100%;" in byline

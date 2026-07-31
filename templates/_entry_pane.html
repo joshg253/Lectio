@@ -98,6 +98,10 @@
               aria-label="Back to posts">
         <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span>Posts
       </button>
+      {# Grouped so the phone layout can centre these three as one unit. The
+         wrapper is display:contents everywhere else, so desktop layout is exactly
+         as it was — the three controls stay direct flex children of the row. #}
+      <span class="entry-primary-actions">
       <form method="post" action="/entries/read" class="entry-read-toggle-form">
         <input
           type="hidden"
@@ -224,6 +228,7 @@
       >
         <span class="material-symbols-rounded" aria-hidden="true">sell</span>
       </button>
+      </span>
       <span class="entry-tags-row-sep" aria-hidden="true"></span>
       {% if selected_entry.manual_tags %} {% for tag in
       selected_entry.manual_tags %}
