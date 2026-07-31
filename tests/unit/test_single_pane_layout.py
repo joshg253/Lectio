@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 INDEX = (ROOT / "templates" / "index.html").read_text()
 ENTRY_PANE = (ROOT / "templates" / "_entry_pane.html").read_text()
 CSS = (ROOT / "static" / "style.css").read_text()
+COMPACT = 'body[data-compact-article="1"]'
 APP_JS = (ROOT / "static" / "js" / "app.js").read_text()
 
 
@@ -166,8 +167,8 @@ def test_the_action_row_is_pinned_and_lifted_above_the_title():
     """Reported: "the header portion above the scrolling area takes up nearly half
     my viewable area". The row is pinned; title, byline and feed/date scroll away
     with the article."""
-    assert 'body[data-layout-mode="single"] .entry-tags-row' in CSS
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row'):][:600]
+    assert 'body[data-compact-article="1"] .entry-tags-row' in CSS
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-tags-row'):][:600]
     assert "position: sticky;" in block
     assert "order: -1;" in block
 
@@ -176,7 +177,7 @@ def test_the_header_box_is_dissolved_so_the_pin_can_span_the_pane():
     """A sticky element is confined to its parent's box, so inside the 150px
     header the row unpinned and scrolled away the moment the header did.
     display:contents makes its children direct children of the scrolling pane."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-header'):][:200]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-pane-header'):][:200]
     assert "display: contents;" in block
 
 
@@ -185,7 +186,7 @@ def test_every_level_between_the_scroller_and_the_content_stops_clipping():
     flex item; it clipped 18,000px of article to 694 and the pane saw nothing to
     scroll. Overriding only .entry-body was not enough."""
     for sel in ('.pane-entry .entry-body', '.pane-entry .entry'):
-        block = CSS[CSS.index(f'body[data-layout-mode="single"] {sel} {{'):][:200]
+        block = CSS[CSS.index(f'body[data-compact-article="1"] {sel} {{'):][:200]
         assert "overflow: visible;" in block
         assert "flex: none;" in block
 
@@ -200,13 +201,13 @@ def test_the_omissions_are_the_ones_asked_for():
     """Suggestion chips and the +/- filter triangles: a desktop triage affordance,
     and targets too small to hit on a phone."""
     for sel in (".entry-tag-suggestions", ".author-filter-signs", ".feed-tag-filter-sign"):
-        assert f'body[data-layout-mode="single"] {sel}' in CSS
+        assert f'body[data-compact-article="1"] {sel}' in CSS
 
 
 def test_the_add_tags_form_appears_with_the_row_it_belongs_to():
     """It rides in .entry-tags-extra with the chips, which the tag button reveals.
     Hiding it unconditionally would make that button do nothing at all."""
-    sel = ('body[data-layout-mode="single"] .entry-tags-row'
+    sel = ('body[data-compact-article="1"] .entry-tags-row'
            ':has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra')
     assert "display: flex;" in CSS[CSS.index(sel):][:400]
 
@@ -217,7 +218,7 @@ def test_the_middle_group_is_truly_centred():
     Auto margins — and equal flex on the side groups — both leave it a few px off,
     because neither side can shrink below its own content and the back button is
     not the width of the four view buttons."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row {'):][:600]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-tags-row {'):][:600]
     assert "display: grid;" in block
     assert "grid-template-columns: 1fr auto 1fr;" in block
 
@@ -233,8 +234,8 @@ def test_the_grouping_wrapper_is_invisible_to_desktop_layout():
 def test_the_two_glyph_groups_share_one_gap():
     """Reported twice, in both directions — first the right group was too tight,
     then the middle too loose."""
-    mid = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions {'):][:220]
-    right = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-alt-actions {'):][:320]
+    mid = CSS[CSS.index('body[data-compact-article="1"] .entry-primary-actions {'):][:220]
+    right = CSS[CSS.index('body[data-compact-article="1"] .entry-pane-alt-actions {'):][:320]
     assert "gap: 0.3rem;" in mid
     assert "gap: 0.3rem;" in right
 
@@ -244,7 +245,7 @@ def test_matching_gaps_need_matching_boxes_between_them():
     (middle buttons had 5.6px of padding, view buttons none); zeroing the padding
     left 26.8px vs 26.4px, because the buttons were 22px and 21.6px wide. Only a
     uniform box makes the pitch equal by construction."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions button,'):][:400]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-primary-actions button,'):][:400]
     assert "width: 1.75rem;" in block
     assert "padding-left: 0;" in block
     # The view buttons are <a>, not <button> — selecting on button alone widened
@@ -255,7 +256,7 @@ def test_matching_gaps_need_matching_boxes_between_them():
 def test_the_read_glyph_is_brought_to_the_same_optical_size():
     """It carried opsz 20 where every other glyph in the row is opsz 24, which
     reads as a different weight beside them."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-read-indicator'):][:600]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-read-indicator'):][:600]
     assert '"opsz" 24' in block
     # FILL and wght distinguish read from unread and must survive.
     assert '"FILL" 1' in block and '"FILL" 0' in block
@@ -264,11 +265,11 @@ def test_the_read_glyph_is_brought_to_the_same_optical_size():
 def test_cleanup_is_hidden_on_a_phone():
     """A hover-then-click interaction with no touch equivalent, and it crowded the
     row."""
-    assert 'body[data-layout-mode="single"] #entry-cleanup-button' in CSS
+    assert 'body[data-compact-article="1"] #entry-cleanup-button' in CSS
 
 
 def test_the_glyph_size_is_set_on_the_row_so_both_groups_move_together():
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded'):][:150]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded'):][:150]
     assert "font-size: 1.4rem;" in block
 
 
@@ -283,16 +284,16 @@ def test_the_gutter_is_never_applied_twice():
     .entry-body (27px), and article.entry's own 12.8px outside it (26px). Both
     made the article text sit a visible step in from the title."""
     for sel in ('.entry-content {', '.pane-entry .entry {'):
-        block = CSS[CSS.index(f'body[data-layout-mode="single"] {sel}'):][:400]
+        block = CSS[CSS.index(f'body[data-compact-article="1"] {sel}'):][:400]
         assert "padding-left: 0;" in block
 
 
 def test_the_meta_line_keeps_the_date_beside_the_feed_name():
     """Title / byline / feed name | date. Allowed to wrap, the byline's full-width
     basis pushed the date onto a third line."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-meta {'):][:400]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-pane-meta {'):][:400]
     assert "flex-wrap: nowrap;" in block
-    byline = CSS[CSS.index('body[data-layout-mode="single"] .entry-author-inline {'):][:150]
+    byline = CSS[CSS.index('body[data-compact-article="1"] .entry-author-inline {'):][:150]
     assert "order: -1;" in byline
     assert "flex-basis: 100%;" in byline
 
@@ -303,7 +304,7 @@ def test_the_star_is_size_compensated_against_its_neighbours():
     font-size. It is the typeface, not the glyph name, so swapping names fixes
     nothing. The button box is a fixed width, so this moves the glyph and not the
     pitch."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-save-indicator'):][:200]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-save-indicator'):][:200]
     assert "font-size: 1.65rem;" in block
 
 
@@ -322,7 +323,7 @@ def test_removing_a_tag_is_reachable_without_a_mouse():
     """.entry-tag-remove is opacity:0 and revealed by :hover, which touch does not
     have — so on a phone there was no way to delete a tag at all. Tapping the tag
     button reveals every chip's X at finger size."""
-    sel = 'body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove'
+    sel = 'body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove'
     block = CSS[CSS.index(sel):]
     block = block[:block.index("}")]
     assert "opacity: 1;" in block
@@ -332,7 +333,7 @@ def test_removing_a_tag_is_reachable_without_a_mouse():
 def test_the_tag_row_is_hidden_until_tags_is_opened():
     """The glyph already says whether the post is tagged, so a permanent chips row
     was a second line of phone screen for information already on the first."""
-    closed = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:150]
+    closed = CSS[CSS.index('body[data-compact-article="1"] .entry-tags-extra {'):][:150]
     assert "display: none;" in closed
 
 
@@ -342,7 +343,7 @@ def test_the_opened_tag_row_is_one_grid_item_below_every_glyph():
     assert 'class="entry-tags-extra"' in ENTRY_PANE
     block = CSS[CSS.index(".entry-tags-extra {"):][:120]
     assert "display: contents;" in block
-    sel = ('body[data-layout-mode="single"] .entry-tags-row'
+    sel = ('body[data-compact-article="1"] .entry-tags-row'
            ':has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra')
     phone = CSS[CSS.index(sel):][:400]
     assert "grid-column: 1 / -1;" in phone and "grid-row: 2;" in phone
@@ -355,14 +356,14 @@ def test_the_title_is_the_way_out_and_it_opens_a_new_tab():
     block = ENTRY_PANE[ENTRY_PANE.index('class="entry-pane-title-link"'):][:400]
     assert 'target="_blank"' in block
     assert 'rel="noopener noreferrer"' in block
-    assert 'body[data-layout-mode="single"] #entry-open-tab-button' in CSS
+    assert 'body[data-compact-article="1"] #entry-open-tab-button' in CSS
 
 
 def test_the_uniform_glyph_box_is_scoped_to_the_glyph_buttons():
     """Keyed on the row it also resized the tag X and the Apply button, which are
     not icons."""
-    assert 'body[data-layout-mode="single"] .entry-primary-actions button,' in CSS
-    assert 'body[data-layout-mode="single"] .entry-tags-row button,' not in CSS
+    assert 'body[data-compact-article="1"] .entry-primary-actions button,' in CSS
+    assert 'body[data-compact-article="1"] .entry-tags-row button,' not in CSS
 
 
 def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
@@ -396,7 +397,7 @@ def test_the_article_date_is_compact_on_a_phone():
 
 
 def test_the_feed_name_truncates_instead_of_wrapping():
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-feed-link {'):]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-feed-link {'):]
     block = block[:block.index("}")]
     assert "text-overflow: ellipsis;" in block
     assert "white-space: nowrap;" in block
@@ -406,7 +407,7 @@ def test_the_feed_name_truncates_instead_of_wrapping():
 
 
 def test_the_date_holds_its_place_beside_the_truncated_name():
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-meta-time {'):]
+    block = CSS[CSS.index('body[data-compact-article="1"] .entry-meta-time {'):]
     block = block[:block.index("}")]
     assert "flex: 0 0 auto;" in block
     assert "white-space: nowrap;" in block
@@ -486,3 +487,40 @@ def test_the_shell_can_reach_the_toast_and_the_chunk_loader():
     """index.html is a separate scope from app.js."""
     assert "window.showToastMessage = showToastMessage;" in APP_JS
     assert "window.revealNextPostChunk =" in APP_JS
+
+
+# ── which devices get the compact article header ──
+def test_the_compact_header_is_not_tied_to_the_pane_count():
+    """A rotated phone is "medium" mode and fell back to the desktop arrangement —
+    a header stack taller than the article on a 390px-tall screen. Reported as
+    "split view (rotated phone) has the 'normal' arrangement for the entry pane"."""
+    assert 'body[data-compact-article="1"]' in CSS
+    # And the article rules no longer key on single-pane mode at all.
+    article = CSS[CSS.index("── Compact article view"):CSS.index(".single-back-btn {")]
+    assert 'body[data-layout-mode="single"]' not in article
+
+
+def test_the_signal_is_short_viewport_first():
+    """There is no reliable "is this a phone" bit, so this asks the thing that
+    actually matters: is vertical space tight. True of a landscape phone and of a
+    short desktop window alike, where the compact header is equally welcome."""
+    block = INDEX[INDEX.index("const SHORT_VIEWPORT"):][:900]
+    assert "SHORT_VIEWPORT = 560" in block
+    assert "window.innerHeight <= SHORT_VIEWPORT" in block
+
+
+def test_touch_detection_requires_both_halves():
+    """A touchscreen laptop reports (pointer: coarse) but still hovers, and would
+    otherwise be treated as a phone. userAgentData.mobile is the most direct signal
+    of the three but is Chromium-only, so it confirms and never decides."""
+    block = INDEX[INDEX.index("const SHORT_VIEWPORT"):][:900]
+    assert "(pointer: coarse) and (hover: none)" in block
+    assert "touchPrimary && uaMobile" in block
+
+
+def test_a_tall_narrow_window_keeps_the_desktop_header():
+    """Medium mode alone must not trigger it: a 1000x900 window is medium and has
+    all the height it needs."""
+    block = INDEX[INDEX.index("const compactArticle"):][:400]
+    assert "layoutMode === 'medium'" in block
+    assert "layoutMode === 'medium')" not in block          # never medium on its own

@@ -175,7 +175,7 @@ const CAPTURE_MODE_FULL = 'full';
         
         // Format the post date
         const useLong = node.getAttribute('data-time-format') === 'long';
-        const onPhone = Boolean(window.isSingleMode && window.isSingleMode());
+        const onPhone = Boolean(window.isCompactArticle && window.isCompactArticle());
         const now = new Date();
         const isCurrentYear = postDate.getFullYear() === now.getFullYear();
         const formatted = useLong

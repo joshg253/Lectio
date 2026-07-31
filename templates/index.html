@@ -915,6 +915,33 @@
         bodyEl.removeAttribute('data-single-pane-level');
         mediumPaneBackdrop?.setAttribute('hidden', '');
       }
+      // A rotated phone is "medium" mode but still ~390px tall, where the desktop
+      // header stack is taller than the article itself. A narrow desktop window is
+      // also medium and has height to spare.
+      //
+      // There is no reliable "is this a phone" bit, so this asks about the thing
+      // that actually matters — is vertical space tight, and is this a finger:
+      //
+      //   * height <= SHORT_VIEWPORT is the real problem, and is true of a
+      //     landscape phone and of a short desktop window alike (where the
+      //     compact header is just as welcome);
+      //   * (pointer: coarse) AND (hover: none) means touch is the PRIMARY input.
+      //     Both halves matter: a touchscreen laptop reports coarse but still
+      //     hovers, and would otherwise be treated as a phone;
+      //   * navigator.userAgentData.mobile is the most direct signal of the three
+      //     but exists only in Chromium, so it can confirm and never decide.
+      const SHORT_VIEWPORT = 560;
+      const touchPrimary = Boolean(window.matchMedia
+        && window.matchMedia('(pointer: coarse) and (hover: none)').matches);
+      const uaMobile = Boolean(navigator.userAgentData && navigator.userAgentData.mobile);
+      const compactArticle = layoutMode === 'single'
+        || (layoutMode === 'medium'
+            && (window.innerHeight <= SHORT_VIEWPORT || (touchPrimary && uaMobile)));
+      if (compactArticle) {
+        bodyEl.setAttribute('data-compact-article', '1');
+      } else {
+        bodyEl.removeAttribute('data-compact-article');
+      }
       updateVisualViewportInset();
     }
 
@@ -1049,6 +1076,7 @@
 
     window.setSinglePaneLevel = setSinglePaneLevel;
     window.isSingleMode = () => layoutMode === 'single';
+    window.isCompactArticle = () => bodyEl.getAttribute('data-compact-article') === '1';
     // Not revived with single mode: swipe gestures and pull-to-refresh were
     // removed separately and are a distinct decision from "can I read on my
     // phone". Left as no-ops so their call sites stay quiet.

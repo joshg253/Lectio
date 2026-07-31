@@ -413,7 +413,12 @@ body[data-layout-mode="single"] .single-menu-btn {
   padding-right: 0.2rem;
 }
 
-/* ── Phone: article view ──────────────────────────────────────────────────────
+/* ── Compact article view ─────────────────────────────────────────────────────
+   Keyed on data-compact-article rather than the single-pane mode, so a rotated
+   phone gets it too: landscape is "medium" mode, which otherwise fell back to the
+   desktop arrangement — a header stack taller than the article on a 390px-tall
+   screen.
+
    Reported: "the header portion above the scrolling area takes up nearly half my
    viewable area". On desktop the header is a fixed block holding title, byline,
    feed/date, the tag row and the view buttons — four or five lines, which on a
@@ -423,7 +428,7 @@ body[data-layout-mode="single"] .single-menu-btn {
    to the top as a single line, and everything else (title, byline, feed · date)
    scrolls away with the article. Nothing is duplicated: the buttons Josh asked
    for on that row are already siblings inside .entry-tags-row. */
-body[data-layout-mode="single"] .pane-entry {
+body[data-compact-article="1"] .pane-entry {
   overflow-y: auto;
   overflow-x: hidden;
   /* One gutter for the article view, so the title, the byline, the feed/date
@@ -435,7 +440,7 @@ body[data-layout-mode="single"] .pane-entry {
    was sized to the leftover 669px and its content spilled *invisibly* — the pane
    measured scrollHeight == clientHeight and nothing scrolled at all. It has to
    take its natural height for the pane above it to have anything to scroll. */
-body[data-layout-mode="single"] .pane-entry .entry-body {
+body[data-compact-article="1"] .pane-entry .entry-body {
   overflow: visible;
   flex: none;
 }
@@ -444,7 +449,7 @@ body[data-layout-mode="single"] .pane-entry .entry-body {
    and a shrinking flex item — it clipped 18,000px of article down to 694 and the
    pane above it saw nothing to scroll. Every level between the scroller and the
    content has to stop clipping, not just the innermost one. */
-body[data-layout-mode="single"] .pane-entry .entry {
+body[data-compact-article="1"] .pane-entry .entry {
   overflow: visible;
   flex: none;
   /* Its own 12.8px sat under .entry-body's gutter and pushed the article text a
@@ -459,13 +464,13 @@ body[data-layout-mode="single"] .pane-entry .entry {
    a sticky element is confined to its parent's box, so inside the 150px header it
    unpinned and scrolled away the moment the header did. It also lets `order` sort
    the row above the title. */
-body[data-layout-mode="single"] .entry-pane-header {
+body[data-compact-article="1"] .entry-pane-header {
   display: contents;
 }
 
 /* The one pinned row: < Posts | mark star tag | reader web tab share.
    order:-1 lifts it above the title, which is what lets the title scroll. */
-body[data-layout-mode="single"] .entry-tags-row {
+body[data-compact-article="1"] .entry-tags-row {
   order: -1;
   position: sticky;
   top: 0;
@@ -491,7 +496,7 @@ body[data-layout-mode="single"] .entry-tags-row {
   display: contents;
 }
 
-body[data-layout-mode="single"] .entry-primary-actions {
+body[data-compact-article="1"] .entry-primary-actions {
   display: flex;
   align-items: center;
   gap: 0.3rem;
@@ -499,14 +504,14 @@ body[data-layout-mode="single"] .entry-primary-actions {
   grid-row: 1;
 }
 
-body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
+body[data-compact-article="1"] .entry-tags-row .single-back-btn {
   grid-column: 1;
   grid-row: 1;
   justify-self: start;
   padding-left: 0;
 }
 
-body[data-layout-mode="single"] .entry-pane-alt-actions {
+body[data-compact-article="1"] .entry-pane-alt-actions {
   display: flex;
   align-items: center;
   grid-column: 3;
@@ -523,14 +528,14 @@ body[data-layout-mode="single"] .entry-pane-alt-actions {
 /* Hidden until Tags is opened. The glyph already says whether the post is tagged
    (filled vs outline), so the chips are detail on demand rather than a permanent
    second row eating the phone's screen. */
-body[data-layout-mode="single"] .entry-tags-extra {
+body[data-compact-article="1"] .entry-tags-extra {
   display: none;
 }
 
 /* Opened: one full-width row beneath ALL the glyphs. It has to be a single grid
    item — as loose children each chip claimed its own cell, which pushed the view
    buttons off the first row entirely as soon as a post had a tag. */
-body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tags-extra {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -542,7 +547,7 @@ body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-e
 
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
    groups move together and cannot drift apart. */
-body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
+body[data-compact-article="1"] .entry-tags-row .material-symbols-rounded {
   font-size: 1.4rem;
 }
 
@@ -550,8 +555,8 @@ body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
    by construction. Zeroing the middle group's padding got them to 26.8px and
    26.4px — closer, but still not equal, because the buttons themselves were 22px
    and 21.6px wide. Matching gaps only match if the boxes between them do. */
-body[data-layout-mode="single"] .entry-primary-actions button,
-body[data-layout-mode="single"] .entry-tags-row .entry-source-button {
+body[data-compact-article="1"] .entry-primary-actions button,
+body[data-compact-article="1"] .entry-tags-row .entry-source-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -565,18 +570,18 @@ body[data-layout-mode="single"] .entry-tags-row .entry-source-button {
    font-size. It is the typeface, not the glyph name, so no substitution fixes it;
    the size has to be compensated. 20/17 puts its ink on par with its neighbours.
    The button box is a fixed 1.75rem, so this changes the glyph and not the pitch. */
-body[data-layout-mode="single"] .entry-save-indicator.material-symbols-rounded {
+body[data-compact-article="1"] .entry-save-indicator.material-symbols-rounded {
   font-size: 1.65rem;
 }
 
 /* The read indicator is the one glyph carrying opsz 20 where every other glyph in
    the row is opsz 24 — visibly a different weight beside them. FILL and wght are
    left alone in both states: they are what distinguishes read from unread. */
-body[data-layout-mode="single"] .entry-read-indicator.material-symbols-rounded {
+body[data-compact-article="1"] .entry-read-indicator.material-symbols-rounded {
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
 }
 
-body[data-layout-mode="single"] .entry-read-toggle[data-read-state="1"] .entry-read-indicator.material-symbols-rounded {
+body[data-compact-article="1"] .entry-read-toggle[data-read-state="1"] .entry-read-indicator.material-symbols-rounded {
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
 }
 
@@ -584,7 +589,7 @@ body[data-layout-mode="single"] .entry-read-toggle[data-read-state="1"] .entry-r
    only revealed by :hover, which touch does not have. Tapping the tag button —
    which already toggles the add-tags form — now also reveals the X on every chip,
    at finger size rather than the 16px the mouse gets. */
-body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove {
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove {
   opacity: 1;
   width: 1.75rem;
   height: 1.75rem;
@@ -594,45 +599,45 @@ body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-e
 
 /* Chips get room to breathe while the X is showing, so the two are not adjacent
    tap targets. */
-body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-chip-wrap {
+body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-chip-wrap {
   margin-bottom: 0.3rem;
 }
 
 /* Open-in-new-tab is redundant on a phone: the title is the link, and it opens
    in a new tab. One less glyph in the row. */
-body[data-layout-mode="single"] #entry-open-tab-button {
+body[data-compact-article="1"] #entry-open-tab-button {
   display: none;
 }
 
 /* Cleanup is a deliberate, fiddly hover-then-click interaction — it has no phone
    equivalent, and it was crowding the row. */
-body[data-layout-mode="single"] #entry-cleanup-button {
+body[data-compact-article="1"] #entry-cleanup-button {
   display: none;
 }
 
 /* Sized up with the glyphs so the row reads as one piece. */
-body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
+body[data-compact-article="1"] .entry-tags-row .single-back-btn {
   font-size: 1.05rem;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
    for the desktop tree, and the +/- filter triangles are too small to hit. */
-body[data-layout-mode="single"] .entry-tag-suggestions,
-body[data-layout-mode="single"] .entry-tags-row-sep,
-body[data-layout-mode="single"] .author-filter-signs,
-body[data-layout-mode="single"] .feed-tag-filter-sign {
+body[data-compact-article="1"] .entry-tag-suggestions,
+body[data-compact-article="1"] .entry-tags-row-sep,
+body[data-compact-article="1"] .author-filter-signs,
+body[data-compact-article="1"] .feed-tag-filter-sign {
   display: none;
 }
 
 /* Tags a post already carries stay visible, but wrap to their own line under the
    buttons rather than stretching the bar sideways. Same for the add-tags form,
    which the tag button toggles — it must stay in the flow to be openable. */
-body[data-layout-mode="single"] .entry-pane-title-row,
-body[data-layout-mode="single"] .entry-pane-bottom-row {
+body[data-compact-article="1"] .entry-pane-title-row,
+body[data-compact-article="1"] .entry-pane-bottom-row {
   padding: 0 var(--phone-gutter);
 }
 
-body[data-layout-mode="single"] .entry-pane-title-row {
+body[data-compact-article="1"] .entry-pane-title-row {
   padding-top: 0.6rem;
 }
 
@@ -640,7 +645,7 @@ body[data-layout-mode="single"] .entry-pane-title-row {
    .entry-meta-left with the favicon and feed link, so it is lifted onto its own
    line from there; the date aligns to the bottom line rather than floating
    between the two. */
-body[data-layout-mode="single"] .entry-pane-meta {
+body[data-compact-article="1"] .entry-pane-meta {
   align-items: flex-end;
   /* nowrap keeps the date on the feed-name line. Left to wrap, the byline's
      full-width basis pushed .entry-meta-left across the whole row and the date
@@ -648,7 +653,7 @@ body[data-layout-mode="single"] .entry-pane-meta {
   flex-wrap: nowrap;
 }
 
-body[data-layout-mode="single"] .entry-meta-left {
+body[data-compact-article="1"] .entry-meta-left {
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -656,7 +661,7 @@ body[data-layout-mode="single"] .entry-meta-left {
 /* A long feed name used to wrap onto a second line the moment it reached the
    middle of the row. Truncate instead: the date holds its place on the right and
    the meta stays one line. */
-body[data-layout-mode="single"] .entry-feed-link {
+body[data-compact-article="1"] .entry-feed-link {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -667,21 +672,21 @@ body[data-layout-mode="single"] .entry-feed-link {
   min-width: 0;
 }
 
-body[data-layout-mode="single"] .entry-meta-time {
+body[data-compact-article="1"] .entry-meta-time {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
-body[data-layout-mode="single"] .entry-meta-left {
+body[data-compact-article="1"] .entry-meta-left {
   flex-wrap: wrap;
 }
 
-body[data-layout-mode="single"] .entry-author-inline {
+body[data-compact-article="1"] .entry-author-inline {
   order: -1;
   flex-basis: 100%;
 }
 
-body[data-layout-mode="single"] .entry-meta-separator {
+body[data-compact-article="1"] .entry-meta-separator {
   display: none;
 }
 
@@ -723,13 +728,13 @@ body[data-layout-mode="single"] .post-item {
 /* The gutter is applied ONCE. Setting it on both .entry-body and its
    .entry-content child stacked to 27px, so the article text sat a visible step
    inside the title above it. */
-body[data-layout-mode="single"] .entry-body {
+body[data-compact-article="1"] .entry-body {
   max-width: 100%;
   padding-left: var(--phone-gutter);
   padding-right: var(--phone-gutter);
 }
 
-body[data-layout-mode="single"] .entry-content {
+body[data-compact-article="1"] .entry-content {
   max-width: 100%;
   padding-left: 0;
   padding-right: 0;
