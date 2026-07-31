@@ -2586,11 +2586,17 @@ const CAPTURE_MODE_FULL = 'full';
     const postEditLinkButton = document.getElementById('ctx-post-edit-link');
     const postRefetchButton = document.getElementById('ctx-post-refetch');
     const postRefetchFullButton = document.getElementById('ctx-post-refetch-full');
-    // Both re-fetch items appear under the same condition — the post has to be
-    // a Lectio capture for there to be anything to re-fetch. Read at call time,
-    // so it picks up whichever post the menu was opened on.
+    // Both re-fetch items appear under the same condition: the post has to be one
+    // Lectio is keeping, so there is a stored copy worth replacing. Read at call
+    // time, so it picks up whichever post the menu was opened on.
+    //
+    // KEPT, not starred. This gated on contextPostSaved — the star flag alone —
+    // so a tagged-but-unstarred post appeared in the Saved view with no way to
+    // re-fetch its content. Tag-as-keep made a tag a keep signal everywhere else
+    // and this condition never followed; 14,695 items were affected.
     const postCanRefetch = () =>
-      (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured || contextPostSaved)
+      (contextPostFeedUrl === SAVED_FEED_URL || contextPostCaptured
+       || contextPostSaved || contextPostKept)
       && Boolean(contextPostFeedUrl && contextPostEntryId);
     const postClearImgCacheButton = document.getElementById('ctx-post-clear-img-cache');
     const postReadForm = document.getElementById('context-post-read-form');
@@ -2726,6 +2732,7 @@ const CAPTURE_MODE_FULL = 'full';
     // Whether the entry is starred — starred feed entries are re-fetchable too
     // (enrich a truncated/imageless feed post; the content is pinned).
     let contextPostSaved = false;
+    let contextPostKept = false;      // starred OR tagged — see postCanRefetch
     let contextPostLink = '';
     let contextPostTitle = '';
     let contextPostFolderId = null;
@@ -6356,6 +6363,51 @@ const CAPTURE_MODE_FULL = 'full';
       showTagContextMenu(event);
     }, true);
 
+    // "Unstar all in this view" — scoped to the tag AND whatever feed/folder is
+    // currently active, which is the case it exists for ("drilled down to a single
+    // feed with stars I don't need"). The count comes from the server so the
+    // confirm states the real set rather than one the client guessed.
+    document.getElementById('ctx-tag-unstar-scope')?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const tagName = contextTagName;
+      hideAllContextMenus();
+      if (!tagName) return;
+      const qs = new URLSearchParams(location.search);
+      const scope = new URLSearchParams({ tag: tagName });
+      for (const k of ['folder_id', 'list_feed_url']) {
+        if (qs.get(k)) scope.set(k, qs.get(k));
+      }
+      let count = 0;
+      try {
+        const resp = await fetch('/saved/unstar-scope/preview?' + scope.toString(),
+                                 { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        count = (await resp.json()).count || 0;
+      } catch (err) {
+        showToastMessage('Could not count the stars here: ' + err);
+        return;
+      }
+      if (!count) { showToastMessage('No stars in this view.'); return; }
+      const where = qs.get('list_feed_url') ? 'this feed' : 'this view';
+      if (!window.confirm(`Remove the star from ${count} post(s) tagged #${tagName} in ${where}?` +
+                          `\n\nThe tag and the offline copy are kept — only the star is removed.`)) return;
+      try {
+        const resp = await fetch('/saved/unstar-scope', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'lectio-ajax' },
+          credentials: 'same-origin',
+          body: scope.toString(),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        showToastMessage(`Unstarred ${data.unstarred || 0} post(s).`);
+        window.location.reload();
+      } catch (err) {
+        showToastMessage('Unstarring failed: ' + err);
+      }
+    });
+
     document.getElementById('ctx-tag-delete')?.addEventListener('click', async (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -6572,6 +6624,7 @@ const CAPTURE_MODE_FULL = 'full';
           contextPostRead = entryPaneTitle.getAttribute('data-post-read') === '1';
           contextPostCaptured = entryPaneTitle.getAttribute('data-post-captured') === '1';
           contextPostSaved = entryPaneTitle.getAttribute('data-post-saved') === '1';
+          contextPostKept = entryPaneTitle.getAttribute('data-post-kept') === '1';
           contextPostLink = entryPaneTitle.getAttribute('data-post-link') || '';
           contextPostTitle = entryPaneTitle.getAttribute('data-post-title') || '';
           contextPostFolderId = entryPaneTitle.getAttribute('data-post-folder-id') || null;
@@ -6931,6 +6984,8 @@ const CAPTURE_MODE_FULL = 'full';
             contextPostRead = postItem.getAttribute('data-post-read') === '1';
             contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
             contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
+      contextPostKept = postItem.getAttribute('data-post-kept') === '1';
+            contextPostKept = postItem.getAttribute('data-post-kept') === '1';
             contextPostLink = postItem.getAttribute('data-post-link') || '';
             contextPostTitle = postItem.getAttribute('data-post-title') || '';
             contextPostFolderId = postItem.getAttribute('data-post-folder-id') || null;
@@ -13604,6 +13659,7 @@ const CAPTURE_MODE_FULL = 'full';
       contextPostRead = postItem.getAttribute('data-post-read') === '1';
       contextPostCaptured = postItem.getAttribute('data-post-captured') === '1';
       contextPostSaved = postItem.getAttribute('data-post-saved') === '1';
+      contextPostKept = postItem.getAttribute('data-post-kept') === '1';
       contextPostLink = postItem.getAttribute('data-post-link') || '';
       return Boolean(contextPostFeedUrl && contextPostEntryId);
     }

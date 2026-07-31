@@ -171,3 +171,51 @@ def test_align_is_still_not_global():
     from services.html_sanitize import sanitize_html
     assert "align" not in sanitize_html('<span align="center">x</span>')
     assert "align" not in sanitize_html('<a href="https://x.test" align="center">x</a>')
+
+
+def test_title_inline_formatting_renders_but_code_stays_literal():
+    """Feeds put <em> in titles; they also put std::vector<T> in them.
+
+    Measured on the live library: only 21 titles contain angle brackets, and most
+    are NOT markup — 11 are C++ generics, 2 are headers (#include <chrono>), plus
+    <bits>, <dead>, <guitar>. Treating titles as HTML would silently delete those
+    and mangle a C++ post title, which is worse than showing <em> literally. So a
+    tiny allowlist is restored and everything else stays visible text.
+    """
+    from services.html_sanitize import sanitize_inline_title
+
+    out = sanitize_inline_title(
+        "Beyond the Veil: Deathless Widdling, <em>or</em> Diminished Scales")
+    assert "<em>or</em>" in out
+
+    assert sanitize_inline_title("Why std::vector<T> is slow") == \
+        "Why std::vector&lt;T&gt; is slow"
+    assert "&lt;chrono&gt;" in sanitize_inline_title("#include <chrono> considered harmful")
+
+
+def test_title_sanitizer_cannot_be_used_to_inject():
+    """Escape-then-restore is what makes this provably safe: an attribute or an
+    unknown tag cannot survive a round trip through escaping."""
+    from services.html_sanitize import sanitize_inline_title
+
+    for payload in (
+        '<img src=x onerror=alert(1)>',
+        '<script>alert(1)</script>',
+        '<em onmouseover="x()">hover</em>',
+        '<a href="javascript:alert(1)">x</a>',
+    ):
+        out = sanitize_inline_title(payload)
+        assert "onerror" not in out or "&lt;img" in out
+        assert "<script" not in out.lower()
+        assert "<a" not in out.lower()
+        assert "onmouseover=" not in out or "&lt;em" in out
+
+
+def test_title_plain_text_drops_the_allowlisted_tags_only():
+    """For the title= attribute, the browser tab and exports — none of which can
+    render markup — while a literal <T> is still left alone."""
+    from services.html_sanitize import title_plain_text
+
+    assert title_plain_text("Deathless Widdling, <em>or</em> Diminished") == \
+        "Deathless Widdling, or Diminished"
+    assert title_plain_text("Why std::vector<T> is slow") == "Why std::vector<T> is slow"

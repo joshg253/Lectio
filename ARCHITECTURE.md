@@ -1415,6 +1415,60 @@ rendered as active and the toolbar showed "Published newest" while the list was
 ordered by star date. Reported as the Feed view reverting to "Pub new" after
 switching in and out of e-ink mode.
 
+**Node bulk actions are scoped to the drilled-into view, and Read Mode gets buttons
+rather than a menu.** `_scope_starred_keys(folder_id, list_feed_url, tag)` resolves
+the stars in the *current* view — feed **and** tag together, since the case is
+"drilled down to a single feed with stars I don't need". Stars only: a tagged-but-
+unstarred entry has no star to remove, and unstarring is not how a tag is dropped
+(that is *Delete tag everywhere*, which already existed in the sidebar context menu).
+
+`POST /saved/unstar-scope` recomputes the set server-side and goes through
+`apply_star_state` **per entry** rather than issuing one bulk `DELETE`. That is not
+fastidiousness: the unstar path releases the offline capture and hard-deletes a
+`lectio:saved` husk once no keep signal remains, and a bulk delete skips both,
+leaving orphaned captures and invisible husks.
+
+Read Mode has no right-click, and long-press there offers only text selection — so
+the actions render as visible buttons in the browse header, plain forms in the same
+navigation model as the Sort switcher (no JS, one e-ink repaint). **Deleting a tag
+takes two taps**, the first arming a row that spells out what goes, because a
+browser `confirm()` is awkward to hit on that WebView. The row never appears on the
+Archive node: that is a review surface, not a place to bulk-destroy curation.
+
+**Re-fetch is gated on KEPT, not on the star.** Both re-fetch items (readability
+and whole-page) appear when the post is one Lectio is keeping — a capture, starred,
+**or manually tagged** — because only then is there a stored copy worth replacing.
+
+The gate originally checked the star alone, on both sides (`postCanRefetch` in the
+client, `refresh_captured_article` on the server). Tag-as-keep made a tag a keep
+signal everywhere else and neither followed, so a tagged-but-unstarred post showed
+in the Saved view with no way to re-fetch its content — **14,695 items**, the
+majority of the library.
+
+An *unkept* feed entry is still refused, and the reason is what makes the kept case
+safe: `replace_entry_content(pin_content=not is_capture)` writes an
+`entry_content_overrides` row for a feed entry so the next refresh cannot clobber
+the fuller copy. Without that pin the re-fetch would be silently undone, which is
+exactly the failure the original refusal existed to prevent.
+
+**Titles render a tiny inline allowlist, by escape-then-restore.** Feeds put `<em>`
+in titles — and they also put `std::vector<T>` and `#include <chrono>` in them.
+Measured on the live library: of 21 titles containing angle brackets, only 6 are
+markup; 11 are C++ generics and the rest are header names. **Treating titles as
+HTML would silently delete those**, mangling a C++ post title, which is a worse
+failure than showing `<em>` literally.
+
+`sanitize_inline_title` escapes the whole string and then restores only bare tags
+from a short list (`em`, `i`, `strong`, `b`, `code`, `sub`, `sup`, …). That ordering
+is what makes it provably safe: an attribute or an unknown tag cannot survive a
+round trip through escaping, so `<em onmouseover=…>` and `<img onerror=…>` stay
+escaped text with no allowlist to argue about.
+
+Records carry both forms. `title_html` is used where the title is visible text (post
+rows, the entry-pane headline, Read Mode rows and the reader headline);
+`title_plain` — the same string with those tags stripped — is used everywhere that
+cannot render markup: `title=` attributes, `<title>`, exports, email.
+
 **Feed-tag suggestions are NOT filtered automatically, and that is a considered
 position.** Two heuristics were tried on live data and both hid tags the user
 wanted:
@@ -1440,8 +1494,13 @@ suppression belongs to the user. Resist a third heuristic; the first two each
 looked convincing against the data that motivated them.
 
 The × on a chip records that decision in `suppressed_feed_tags (feed_url, tag)`,
-matched case-insensitively so a publisher re-casing `ILLUSTRATION` cannot resurrect
-a dismissed chip. **Per feed, not global** — `Forum` is noise on Slickdeals and may
+compared through `normalize_tag_value` on **both** sides. That matters: the chips are
+rendered normalized (lowercased, spaces to hyphens), so the × sends `popular-deals`
+while the stored feed tag is `Popular Deals`. A plain lowercase compare yields
+`popular deals` and misses — so every **multi-word** tag reappeared after being
+dismissed while single-word ones like `python` stuck, because those normalize to
+themselves. The asymmetry ("other tags I've removed elsewhere seem to stay gone") is
+what identified it. **Per feed, not global** — `Forum` is noise on Slickdeals and may
 be a real topic elsewhere. It hides a chip; it does not forget a fact, so the
 `entry_feed_tags` rows stay and keep feeding the tag-filtered feed adapters. Undo
 lives in Feed Properties → **Hidden tags**, because a mis-clicked × must have a way

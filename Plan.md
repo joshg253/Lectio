@@ -1447,6 +1447,32 @@ comment's.
 Manual `entry_date_overrides` are never touched; an explicit correction outranks
 anything inferred.
 
+### 7c-4. accu.org: an image-less post with nine chrome images (2026-07-29)
+
+Reported three times as "img-less post, getting a social icon". Each fix revealed
+the next piece of chrome, which is the useful finding:
+
+1. `/img/bsky.png` → rejected by filename → **`/img/mastadon.png`** (the site
+   misspells Mastodon, so a name list is always one spelling behind);
+2. social row stripped structurally → **`ads.accu.org/www/delivery/avw.php`**;
+3. ad servers rejected → **`/img/accu/join.png`**, a "Join ACCU" banner.
+
+**Two general fixes shipped** and both are worth having everywhere:
+`_strip_social_link_images` drops `<a href="<social host>">…<img></a>` before
+scoring (spelling-independent — every icon shares an anchor to the network), and
+`is_ad_url` rejects ad-server hosts plus the Revive/OpenX `/www/delivery/*.php`
+shape.
+
+**But the page is not solvable by heuristics, and further attempts are wasted.**
+It has no `<article>`, no `<main>`, and no content-ish container class (Bootstrap
+`panel-body`), so container-scoping cannot separate the remaining nine chrome
+images from an article image that does not exist. Any scorer will keep finding
+*something*.
+
+**The right answer for this feed is the existing per-feed escape hatch**: Feed
+Properties → lead-image strategy → **None**, which `_is_feed_none_strategy` already
+honors. Reach for that rather than a fourth rejection rule.
+
 ### 7c-3. Bot-walled pages: no server-side tags available (2026-07-29)
 
 Two feeds where the tags Josh can see are rendered by the site's JavaScript and are

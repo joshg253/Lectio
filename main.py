@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import base64
 import hashlib
 import html
 import io
@@ -1654,7 +1655,7 @@ _TRUSTED_PROXIES = os.getenv("LECTIO_TRUSTED_PROXIES", "*").strip()
 # bare/no-proxy setup, etc.). Keeps the headers from depending on the proxy.
 _SECURITY_HEADERS_ENABLED = os.getenv("LECTIO_SECURITY_HEADERS", "0") == "1"
 # Paths that are always public (no login required)
-_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/")
+_AUTH_EXEMPT_PREFIXES = ("/login", "/static", "/healthz", "/api/img", "/api/favicon", "/api/save", "/api/bookmarklet/save", "/dev/feeds/", "/fever", "/greader/", "/websub/", "/sw.js")
 
 manual_refresh_lock = threading.Lock()
 last_manual_refresh_started_at = 0.0
@@ -8309,8 +8310,14 @@ def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     except Exception:
         LOGGER.warning("feed tag suggestion lookup failed for %s", feed_url, exc_info=True)
         return []
+    # Compare through normalize_tag_value on BOTH sides. The chips are rendered
+    # normalized (lowercased, spaces to hyphens), so the × sends "popular-deals"
+    # while the stored feed tag is "Popular Deals" — a plain lowercase compare
+    # gives "popular deals" and misses. Single-word tags normalize to themselves,
+    # which is why "python" and "accu" stuck and every multi-word tag came back.
+    dismissed_norm = {normalize_tag_value(d) for d in dismissed}
     return [t for t in tags
-            if t.strip().lower() not in dismissed][:MAX_FEED_TAG_SUGGESTIONS]
+            if normalize_tag_value(t) not in dismissed_norm][:MAX_FEED_TAG_SUGGESTIONS]
 
 
 _has_manual_tags_cache = _PerUserDict()
@@ -11958,6 +11965,10 @@ def list_entries_for_feeds(
                 "feed_title": getattr(entry, "feed_resolved_title", None) or feed_url_str,
                 "feed_icon_url": get_favicon_url(feed_url_str, _rewrite_url_host(feed_site_map.get(feed_url_str), _host_aliases)),
                 "manual_tags": manual_tags,
+                # Inline formatting a feed put in the title (<em>), rendered
+                # rather than escaped. Everything else stays literal text, so a
+                # C++ title's std::vector<T> survives — see sanitize_inline_title.
+                "title_html": html_sanitize.sanitize_inline_title(title_text),
                 "post_timestamp": published_dt.isoformat() if published_dt else None,
                 "received_timestamp": getattr(entry, "added").isoformat() if getattr(entry, "added", None) else None,
                 "read_timestamp": read_dt.isoformat() if read_dt else None,
@@ -13280,6 +13291,77 @@ _CLOSE_A_RE = re.compile(r"</a\s*>", re.IGNORECASE)
 _TUMBLR_MEDIA_PREFIX_RE = re.compile(r"^(https://64\.media\.tumblr\.com/[^/]+/[^/]+)/", re.IGNORECASE)
 
 
+_ad_asset_hashes_cache = _PerUserDict()
+_ad_asset_hashes_lock = threading.Lock()
+
+
+def _ad_asset_hashes() -> set[str]:
+    """Cached per user: which /starred-asset/<hash> images are ad creatives.
+
+    Cached because it scans every archived asset, and the answer only changes when
+    new articles are captured. Invalidated on process restart, which is often
+    enough for a set that grows slowly.
+    """
+    with _ad_asset_hashes_lock:
+        cached = _ad_asset_hashes_cache.get("v")
+        if cached is not None:
+            return cached
+    try:
+        hashes = starred_archive_service.asset_ad_hashes()
+    except Exception:  # noqa: BLE001 — never block a render on this
+        LOGGER.warning("ad-asset hash scan failed", exc_info=True)
+        hashes = set()
+    with _ad_asset_hashes_lock:
+        _ad_asset_hashes_cache["v"] = hashes
+    return hashes
+
+
+def _strip_ad_images(html_text):
+    """Remove ad creatives from an article body, and their emptied wrappers.
+
+    Publishers upload house ads to the same media directory as everything else, so
+    the signals are the filename ("…-hero-superbanner.gif", "…-content-banner.jpg")
+    and IAB slot sizes (728x90 and friends). In an ARCHIVED article the images have
+    been rewritten to /starred-asset/<hash> and carry no filename at all, so those
+    are matched against the archive's own record of each asset's size and original
+    URL — otherwise the reader would keep showing ads the pane had dropped.
+    """
+    if not html_text or "<img" not in html_text.lower():
+        return html_text
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html_text, "html.parser")
+    ad_hashes: set[str] | None = None
+    removed = 0
+    for img in soup.find_all("img"):
+        src = str(img.get("src") or "")
+        if not src:
+            continue
+        is_ad = lead_image_service.is_ad_url(src)
+        if not is_ad and STARRED_ASSET_URL_PREFIX in src:
+            if ad_hashes is None:
+                ad_hashes = _ad_asset_hashes()
+            digest = src.rsplit("/", 1)[-1].split("?", 1)[0]
+            is_ad = digest in ad_hashes
+        if not is_ad:
+            continue
+        # Climb through wrappers the image leaves empty (a linked ad is
+        # <a><img></a>, often inside a centering <div>), so no gap is left behind.
+        target = img
+        for _ in range(3):
+            parent = target.parent
+            if parent is None or parent.name in ("body", "[document]", None):
+                break
+            if parent.get_text(strip=True) or len(parent.find_all("img")) > 1:
+                break
+            target = parent
+        target.decompose()
+        removed += 1
+    if not removed:
+        return html_text
+    return str(soup).strip() or None
+
+
 _BLOCK_SPACER_TAGS = frozenset({"div", "p", "span", "i", "b", "em", "strong", "figure"})
 # Real blocks only, for the "is this <br> at a block boundary" test. Inline tags
 # are deliberately absent: a <br> before a <span> is separating text, and removing
@@ -13487,7 +13569,9 @@ def _resolve_article_lead_image(entry, video_id, show_lead_in_article: bool):
     # false-positive on a full-URL search.
     if lead_image_url:
         _lead_parsed = urlparse(lead_image_url)
-        if lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path):
+        if (lead_image_service._AVATAR_HINT_PATTERNS.search(_lead_parsed.path)
+                or lead_image_service.is_ad_url(lead_image_url)
+                or lead_image_service.is_social_icon_url(lead_image_url)):
             lead_image_url = None
     # Try source scraping when the entry has never been processed (ABSENT cache) and
     # the feed provides no inline image — covers article-only feeds where the best
@@ -14079,7 +14163,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         content_html, lead_image_url = _strip_lead_image_opener(
             content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article
         )
-        content_html = _collapse_block_spacers(content_html)
+        content_html = _collapse_block_spacers(_strip_ad_images(content_html))
 
         # Fallback: check the alt text on the main image on the source page.
         # Covers feeds that only supply a thumbnail in the content (e.g. Wilde Life)
@@ -14258,6 +14342,15 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "feed_url": entry.feed_url,
             "id": entry.id,
             "title": _display_title(entry) or entry.title,
+            # Two forms of the same string: title_html renders the feed's inline
+            # formatting (<em>), title_plain drops those tags for the title=
+            # attribute and any other context that cannot render HTML. Everything
+            # not on the tiny allowlist stays literal, so `std::vector<T>` in a
+            # C++ post title survives — see sanitize_inline_title.
+            "title_html": html_sanitize.sanitize_inline_title(
+                _display_title(entry) or entry.title or ""),
+            "title_plain": html_sanitize.title_plain_text(
+                _display_title(entry) or entry.title or ""),
             "link": _display_link,
             "summary": _summary,
             "content_html": content_html,
@@ -16574,6 +16667,14 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
         lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
     except Exception:
         lead = None
+    # Cached leads outlive the rules that chose them: a row stored before ad and
+    # social-icon rejection existed would still be prepended here, so the reader
+    # showed decibelmagazine's "…-hero-superbanner.gif" above the article even
+    # after the body strip removed the mid-article copy. Checked at render, which
+    # also means a stale row is harmless rather than needing a sweep.
+    if lead and (lead_image_service.is_ad_url(lead)
+                 or lead_image_service.is_social_icon_url(lead)):
+        return body
     if not lead or lead in body or html.escape(lead, quote=True) in body:
         return body
     lead_html = (
@@ -16585,6 +16686,50 @@ def _prepend_reader_lead_image(feed_url: str | None, entry_id: str | None, body:
     return lead_html + body
 
 
+# Below this many characters of *text*, an archived readability copy is treated as
+# a failed extraction rather than a short article. Chosen to clear a sidebar widget
+# ("Contact: …" at 168 bytes) while sitting well under any real post; a genuinely
+# short article still renders, because the archive is kept as the fallback when
+# nothing richer exists.
+_MIN_ARCHIVED_ARTICLE_TEXT = 400
+
+
+def _reader_text_length(html_text: str | None) -> int:
+    """Visible-text length of a fragment — tags carry no reading value, so a
+    markup-heavy widget must not out-measure real prose."""
+    if not html_text:
+        return 0
+    return len(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_text)).strip())
+
+
+def _reader_img_count(html_text: str | None) -> int:
+    return len(re.findall(r"<img\b", html_text or "", re.IGNORECASE))
+
+
+def _archived_copy_is_plausible(html_text: str) -> bool:
+    """Does an archived readability copy look like a real article body?
+
+    Text length alone is not enough. A picture post is legitimately almost text-
+    free — illogicalcontraption's 2011 entry is 16 images and 57 characters — so
+    images count as substance in their own right, or every comic and photo post
+    would be judged a failed extraction.
+    """
+    return (_reader_text_length(html_text) >= _MIN_ARCHIVED_ARTICLE_TEXT
+            or _reader_img_count(html_text) >= 2)
+
+
+def _reader_copy_is_richer(candidate: str, current: str) -> bool:
+    """Is *candidate* more of an article than *current*? Images first, then text.
+
+    Images lead because the failure being corrected is a text widget beating a
+    picture post; on that comparison a text-length test came down to 57 characters
+    against 47, which is not a margin to trust.
+    """
+    cand = (_reader_img_count(candidate), _reader_text_length(candidate))
+    cur = (_reader_img_count(current), _reader_text_length(current))
+    return cand > cur
+
+
 def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link: str) -> str:
     """Return sanitized article HTML for the e-ink reader, preferring the offline
     archived readability copy, then a live readability extraction of *link*, then
@@ -16592,9 +16737,20 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
     capture, live via sanitize_readability_html, stored via reader_sanitize at
     ingest), so the caller embeds the result directly. The entry's lead image is
     prepended (readability strips it; Lectio tracks it separately)."""
-    archived_html = _resolve_archived_readability_html(feed_url, entry_id)
-    if archived_html:
+    archived_html = _strip_ad_images(_resolve_archived_readability_html(feed_url, entry_id))
+    if archived_html and _archived_copy_is_plausible(archived_html):
         return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
+    # An implausibly short archived copy is a FAILED extraction, not a short
+    # article: readability sometimes locks onto a sidebar widget instead of the
+    # body. illogicalcontraption's 2011 post archived as a 168-byte "Contact:"
+    # block while the feed held 9,208 bytes of the actual post — and because the
+    # archive won unconditionally, the article read as empty online and offline
+    # alike. Prefer the stored feed content when it is genuinely richer.
+    if archived_html and feed_url and entry_id:
+        detail = get_entry_detail(feed_url, entry_id)
+        stored = str((detail or {}).get("content_html") or "")
+        if stored and _reader_copy_is_richer(stored, archived_html):
+            return _prepend_reader_lead_image(feed_url, entry_id, stored)
     if link:
         try:
             _title, article_html = fetch_readability_article(link)
@@ -16606,6 +16762,9 @@ def resolve_reader_article_html(feed_url: str | None, entry_id: str | None, link
         detail = get_entry_detail(feed_url, entry_id)
         if detail and detail.get("content_html"):
             return _prepend_reader_lead_image(feed_url, entry_id, str(detail["content_html"]))
+    if archived_html:
+        # Thin, but better than nothing — a genuinely short article ends up here.
+        return _prepend_reader_lead_image(feed_url, entry_id, _strip_bandcamp_track_signature(archived_html))
     esc = html.escape(link or "", quote=True)
     tail = (
         f" <a href='{esc}' target='_blank' rel='noopener noreferrer'>Open original</a>."
@@ -16812,7 +16971,9 @@ def build_reader_page(
     manual_tags: tuple[str, ...] = (),
     all_tag_names: tuple[str, ...] = (),
 ) -> HTMLResponse:
-    esc_title = html.escape(title or "(untitled)")
+    # Same allowlist as the list rows: the feed's <em> renders, and a literal
+    # <T> or <chrono> in a C++ title stays visible text.
+    esc_title = html_sanitize.sanitize_inline_title(title or "(untitled)")
     esc_src = html.escape(source_link or "", quote=True)
     esc_back = html.escape(back_href or "/read", quote=True)
     esc_feed = html.escape(feed_url or "", quote=True)
@@ -16864,7 +17025,15 @@ def build_reader_page(
         "<button class='reader-ctl' id='reader-tag-btn' type='button'"
         f" aria-expanded='false' title='Tags'>#{len(manual_tags) or ''}</button>"
     )
-    saved_actions = (tag_btn + archive_btn + delete_btn) if show_saved_actions else ""
+    # EXPERIMENT (uncommitted): download this article as a self-contained file,
+    # to test whether the Supernote can reach saved articles with WiFi off. A
+    # plain <a download> — no JS, so nothing to fail on an old WebView. ⤓ (U+2913)
+    offline_btn = (
+        "<a class='reader-ctl' id='reader-offline-btn'"
+        f" href='/read/offline?feed_url={quote_plus(feed_url)}&entry_id={quote_plus(entry_id)}'"
+        " download title='Save local copy'>&#10515;</a>"
+    )
+    saved_actions = (tag_btn + archive_btn + delete_btn + offline_btn) if show_saved_actions else ""
     # Prev/next/back navigation targets are passed as an inline JS object rather
     # than data-* attributes so reader.js never reads them from the DOM (avoids a
     # CodeQL js/xss-through-dom false positive on location.assign). Values are
@@ -17196,6 +17365,8 @@ def _build_feeds_mode_context(
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "title_html": html_sanitize.sanitize_inline_title(
+            str(it.get("title") or it.get("link") or "(untitled)")),
         "subtitle": str(it.get("feed_title") or ""),
         "read": bool(it.get("read", False)),
         "href": _reader_href(str(it["feed_url"]), str(it["id"]),
@@ -17229,6 +17400,7 @@ def _build_read_mode_context(
     *,
     folder_id: int | None,
     tag: str | None,
+    list_feed_url: str | None = None,
     archived: bool,
     q: str | None,
     items: list[dict],
@@ -17236,6 +17408,7 @@ def _build_read_mode_context(
     sort: str = _READ_SORT_DEFAULT,
     resume_sort: str | None = None,
     all_saved: bool = False,
+    confirm_delete_tag: str | None = None,
 ) -> dict:
     """Assemble the Read Mode 2-pane context: the simplified saved tree (folders
     + tag buckets + Archive, pinned) and the item list for the selected node.
@@ -17338,6 +17511,8 @@ def _build_read_mode_context(
 
     list_items = [{
         "title": str(it.get("title") or it.get("link") or "(untitled)"),
+        "title_html": html_sanitize.sanitize_inline_title(
+            str(it.get("title") or it.get("link") or "(untitled)")),
         "subtitle": _read_mode_subtitle(it),
         "date": _read_mode_date(it),
         "read": bool(it.get("read", False)),
@@ -17349,7 +17524,35 @@ def _build_read_mode_context(
     _saved_search_fields = _read_mode_search_fields(
         scope="saved", folder_id=folder_id, tag=tag, archived=archived,
     )
+    # Bulk actions for the node you drilled into. Read Mode has no right-click and
+    # long-press offers only text selection, so these are visible buttons with big
+    # tap targets — the same plain-navigation model as the Sort switcher, which
+    # means they work with no JS and cost one e-ink repaint each.
+    node_actions = None
+    if node_selected and not archived and (tag or list_feed_url):
+        _scope_stars = len(_scope_starred_keys(folder_id, list_feed_url, tag))
+        node_actions = {
+            "tag": tag or "",
+            "folder_id": folder_id,
+            "list_feed_url": list_feed_url or "",
+            "star_count": _scope_stars,
+            # Deleting a tag is irreversible, so it takes two taps rather than a
+            # modal: the first re-renders this row with the count spelled out. A
+            # browser confirm() is an awkward thing to hit on that WebView.
+            "confirm_delete_tag": bool(tag) and confirm_delete_tag == "1",
+            "confirm_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                              list_feed_url=list_feed_url) + (
+                ("&" if "?" in _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                                 list_feed_url=list_feed_url) else "?")
+                + "confirm_delete_tag=1"),
+            "cancel_href": _read_browse_href(folder_id, tag, False, None, sort=sort,
+                                             list_feed_url=list_feed_url),
+        }
     return {
+        "node_actions": node_actions,
+        # request is None in unit tests that build the context directly; the
+        # actions row simply renders without a token there.
+        "csrf_token": _csrf_token_for(request) if request is not None else "",
         "sort_options": _read_mode_sort_options(
             sort,
             lambda key: _read_browse_href(folder_id, tag, archived, q, sort=key,
@@ -17378,6 +17581,216 @@ def _build_read_mode_context(
         "exit_href": "/",
         "static_asset_version": STATIC_ASSET_VERSION,
     }
+
+
+_OFFLINE_IMG_MAX_BYTES = 2 * 1024 * 1024      # per image, inlined as base64
+_OFFLINE_IMG_TOTAL_BYTES = 12 * 1024 * 1024   # whole document budget
+_OFFLINE_IMG_MAX_FETCHES = 20                 # network fetches per saved article
+
+
+def _fetch_image_for_offline(url: str) -> tuple[bytes, str] | None:
+    """Fetch one image through the proxy's own route, so the SSRF guard, the
+    honest UA and the cache write are exactly those of a normal image load —
+    rather than a second, subtly different outbound path."""
+    import asyncio
+
+    resp = asyncio.run(api_img_proxy(url))
+    body = getattr(resp, "body", b"") or b""
+    ctype = resp.headers.get("content-type", "")
+    if resp.status_code != 200 or not ctype.startswith("image/") or not body:
+        return None
+    return bytes(body), ctype
+
+
+def _inline_images_as_data_uris(article_html: str) -> tuple[str, int, int]:
+    """Rewrite <img src> to data: URIs so the document needs no network at all.
+
+    EXPERIMENT (2026-07-29), not committed yet. The Supernote has no browser
+    launcher — Read Mode is reached from a saved hyperlink — so with WiFi off the
+    navigation itself fails and nothing cached is reachable. A downloaded,
+    self-contained file sidesteps the entry-point problem entirely, which is the
+    thing a service worker cannot be assumed to solve in a WebView.
+
+    Images come from the /api/img byte cache when it has them (zero extra
+    requests). Misses are fetched — bounded, and only because this is an explicit
+    "save this for offline" click rather than anything speculative; the cache
+    turns out to hold only recently-viewed images (1,800 rows), so cache-only
+    would leave most saved articles full of broken pictures. The fetch reuses the
+    proxy's own path, so the SSRF guard, the polite UA and the cache write all
+    behave identically to a normal image load.
+
+    → (html, inlined_count, skipped_count)
+    """
+    if not article_html or "<img" not in article_html.lower():
+        return article_html, 0, 0
+
+    from bs4 import BeautifulSoup   # imported at use site, as elsewhere in main
+
+    soup = BeautifulSoup(article_html, "html.parser")
+    inlined = skipped = fetched = 0
+    budget = _OFFLINE_IMG_TOTAL_BYTES
+    for img in soup.find_all("img"):
+        src = str(img.get("src") or "")
+        if not src or src.startswith("data:"):
+            continue
+        # Unwrap our own proxy URL back to the real one before hashing: the cache
+        # is keyed on the upstream URL, not on /api/img?u=…
+        target = src
+        if "/api/img" in src:
+            qs = parse_qs(urlparse(src).query)
+            target = (qs.get("u") or [""])[0] or src
+        try:
+            key = hashlib.sha256(_img_cache_key_url(target).encode("utf-8")).hexdigest()
+            hit = _img_cache_get(key)
+        except Exception:  # noqa: BLE001 — an offline copy is best-effort
+            hit = None
+        if hit is None and fetched < _OFFLINE_IMG_MAX_FETCHES:
+            fetched += 1
+            try:
+                hit = _fetch_image_for_offline(target)
+            except Exception:  # noqa: BLE001 — best-effort
+                hit = None
+        if hit is None or len(hit[0]) > _OFFLINE_IMG_MAX_BYTES or len(hit[0]) > budget:
+            skipped += 1
+            continue
+        body, content_type = hit
+        budget -= len(body)
+        img["src"] = f"data:{content_type or 'image/jpeg'};base64," + base64.b64encode(body).decode("ascii")
+        # srcset would re-introduce network fetches the moment the browser
+        # preferred one of its candidates over the inlined src.
+        for attr in ("srcset", "data-src", "data-srcset", "loading"):
+            if img.has_attr(attr):
+                del img[attr]
+        inlined += 1
+    return str(soup), inlined, skipped
+
+
+@app.get("/read/offline")
+def read_offline_copy(
+    feed_url: str = Query(...),
+    entry_id: str = Query(...),
+):
+    """Download one article as a single self-contained HTML file.
+
+    EXPERIMENT — the cheapest possible test of offline reading on the Supernote,
+    and deliberately not a design commitment. It answers the two questions a
+    capability probe cannot: can that WebView download a file at all, and can the
+    file be found and opened with WiFi off.
+
+    No JS, no external references, CSS inlined, images as data: URIs. Nothing in
+    it can phone home, so if it opens offline it works offline.
+    """
+    detail = get_entry_detail(feed_url, entry_id)
+    if detail is None:
+        return JSONResponse({"ok": False, "error": "No such entry."}, status_code=404)
+    title = str(detail.get("title") or detail.get("link") or "(untitled)")
+    link = str(detail.get("link") or "")
+    article_html = resolve_reader_article_html(feed_url, entry_id, link)
+    article_html, inlined, skipped = _inline_images_as_data_uris(article_html)
+
+    try:
+        css = (Path(__file__).parent / "static" / "reader.css").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        css = ""
+        LOGGER.warning("offline copy: reader.css unreadable", exc_info=True)
+
+    date_display = _read_mode_date(detail)
+    # <title> cannot contain markup, so it gets the tag-stripped text; the <h1>
+    # gets the same inline allowlist the on-screen reader uses.
+    esc_title = html.escape(html_sanitize.title_plain_text(title))
+    head_title = html_sanitize.sanitize_inline_title(title)
+    doc = (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        f"<title>{esc_title}</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<style>{css}</style>"
+        # The saved file is read as one long scroll, not paged: pagination is
+        # reader.js's job and there is no JS here by design.
+        "<style>body{overflow:auto}.reader-columns{columns:auto!important;"
+        "height:auto!important;overflow:visible!important}</style>"
+        "</head><body class='reader-body'>"
+        "<main class='reader-columns'>"
+        f"<h1 class='reader-title'>{head_title}</h1>"
+        + (f"<p class='reader-dateline'>{html.escape(date_display)}</p>" if date_display else "")
+        + article_html
+        + (f"<p class='reader-dateline'>Source: {html.escape(link)}</p>" if link else "")
+        + f"<p class='reader-dateline'>Offline copy — {inlined} image(s) embedded, {skipped} skipped.</p>"
+        "</main></body></html>"
+    )
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()[:60] or "article"
+    return HTMLResponse(doc, headers={
+        "Content-Disposition": f'attachment; filename="{slug}.html"',
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/sw.js")
+def offline_service_worker():
+    """Serve the probe worker from the ROOT path — EXPERIMENT, uncommitted.
+
+    A worker's default scope is its own directory, so /static/sw.js could only
+    ever control /static/*. Read Mode lives at /read, so it has to be served from
+    "/" (or carry Service-Worker-Allowed); the header is sent as well so the
+    registration cannot silently fall back to a scope that controls nothing.
+
+    Auth-exempt like the other static assets: the worker is fetched by the
+    browser's registration machinery, and its own requests carry the session.
+    """
+    try:
+        body = (Path(__file__).parent / "static" / "sw.js").read_text(encoding="utf-8")
+    except Exception:
+        return Response(status_code=404)
+    return Response(body, media_type="application/javascript", headers={
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-store",
+    })
+
+
+@app.get("/read/offline/manifest")
+def read_offline_manifest(
+    folder_id: int | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    kept: str | None = Query(default=None),
+    n: int = Query(default=20),
+):
+    """The URLs a device should precache to read the next *n* Inbox items offline.
+
+    The page cannot work this out for itself: the browse list holds hrefs, but an
+    article also needs its images, and those live inside the rendered HTML.
+
+    Assembled server-side and capped, because the whole point is a bounded set —
+    "cache the Inbox" on a 9,979-item backlog is not a request anyone means.
+    """
+    n = max(1, min(int(n), 50))
+    is_all = kept == "all"
+    tag_val = normalize_tag_value(tag)
+    items = resolve_reader_backlog(
+        folder_id=folder_id, list_feed_url=None, read_filter="all", star_only=True,
+        tag=tag_val, sort_by=("starred" if not (tag_val or is_all) else "post"),
+        sort_dir="desc", search_query=None, archived=False, limit=n,
+        kept_scope=("kept" if (tag_val or is_all) else "starred"),
+    )[:n]
+
+    urls: list[str] = []
+    for it in items:
+        feed_u, eid = str(it["feed_url"]), str(it["id"])
+        urls.append(_reader_href(feed_u, eid, folder_id=folder_id, tag=tag_val,
+                                 archived=False, q=None, kept_all=is_all))
+        # Same-origin image URLs from the rendered article. Cross-origin ones are
+        # skipped: a no-cors response is opaque, so caching one stores a result
+        # the worker cannot tell apart from a failure.
+        article = resolve_reader_article_html(feed_u, eid, str(it.get("link") or ""))
+        if article and "<img" in article.lower():
+            from bs4 import BeautifulSoup
+            for img in BeautifulSoup(article, "html.parser").find_all("img"):
+                src = str(img.get("src") or "")
+                if src.startswith("/"):
+                    urls.append(src)
+    # Dedupe, order preserved: articles first, so a quota cut-off loses images
+    # rather than whole articles.
+    seen: set[str] = set()
+    deduped = [u for u in urls if not (u in seen or seen.add(u))]
+    return JSONResponse({"ok": True, "count": len(items), "urls": deduped})
 
 
 # Distinct User-Agents seen on /read, logged once each (capped) so we can learn
@@ -17409,6 +17822,7 @@ def reader_view(
     sort: str | None = Query(default=None),
     resume_sort: str | None = Query(default=None),
     kept: str | None = Query(default=None),
+    confirm_delete_tag: str | None = Query(default=None),
 ):
     """Read Mode. No entry selected -> the 2-pane browse; an entry selected ->
     the full-screen paginated reader. Two scopes: ``saved`` (the starred backlog;
@@ -17476,9 +17890,11 @@ def reader_view(
             )
         else:
             context = _build_read_mode_context(
-                request, folder_id=folder_id, tag=tag_val, archived=archived_view,
+                request, folder_id=folder_id, tag=tag_val, list_feed_url=feed_scope,
+                archived=archived_view,
                 q=q_val, items=items, node_selected=node_selected, sort=sort_val,
                 resume_sort=resume_sort_val, all_saved=all_saved_view,
+                confirm_delete_tag=confirm_delete_tag,
             )
         return templates.TemplateResponse(
             request, "read_mode.html", context, headers={"Cache-Control": "no-store"},
@@ -26477,6 +26893,84 @@ def set_entry_manual_tags(
         ),
         status_code=303,
     )
+
+
+def _scope_starred_keys(
+    folder_id: int | None, list_feed_url: str | None, tag: str | None
+) -> list[tuple[str, str]]:
+    """The starred entries inside a drilled-down view: feed and/or tag.
+
+    Scoped exactly as the user drilled — "a single feed with stars I don't need"
+    means feed AND tag together, not either alone. Stars only: a tagged-but-
+    unstarred entry has no star to remove, and unstarring is not the way to drop a
+    tag (that is Delete tag everywhere).
+    """
+    normalized_tag = normalize_tag_value(tag)
+    with get_meta_connection() as conn:
+        if list_feed_url:
+            feeds = {list_feed_url}
+        elif folder_id is not None:
+            feeds = set(get_folder_feed_urls(conn, int(folder_id)))
+        else:
+            feeds = set(get_all_reader_feed_urls())
+        # Disabled feeds keep their stars visible, so they keep them removable too.
+        starred = {
+            (str(f), str(e)) for f, e in conn.execute(
+                "SELECT feed_url, entry_id FROM saved_entries"
+            ) if str(f) in feeds
+        }
+    if normalized_tag:
+        starred &= get_entry_keys_for_manual_tag(feeds, normalized_tag)
+    return sorted(starred)
+
+
+@app.get("/saved/unstar-scope/preview")
+def preview_unstar_scope(
+    folder_id: int | None = Query(default=None),
+    list_feed_url: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+):
+    """How many stars the current view holds. Changes nothing.
+
+    The count comes from the server so the button can state the exact number
+    before it is pressed — the rule every bulk action here follows, because a
+    number the client guessed is a number the action does not honor.
+    """
+    keys = _scope_starred_keys(folder_id, list_feed_url, tag)
+    return JSONResponse({"ok": True, "count": len(keys),
+                         "tag": normalize_tag_value(tag), "feed_url": list_feed_url})
+
+
+@app.post("/saved/unstar-scope")
+def apply_unstar_scope(
+    request: Request,
+    folder_id: int | None = Form(default=None),
+    list_feed_url: str | None = Form(default=None),
+    tag: str | None = Form(default=None),
+):
+    """Remove every star in the drilled-down view.
+
+    Recomputes the set server-side from the scope rather than trusting an id list,
+    matching the other bulk actions.
+
+    Goes through ``apply_star_state`` per entry rather than one bulk DELETE. That
+    is not fastidiousness: the unstar path releases the offline capture and
+    hard-deletes a `lectio:saved` husk once no keep signal remains, and a bulk
+    DELETE would skip both — leaving orphaned captures and invisible husks behind.
+    Tags are untouched; dropping a tag is *Delete tag everywhere*.
+    """
+    keys = _scope_starred_keys(folder_id, list_feed_url, tag)
+    for feed_u, entry_id in keys:
+        try:
+            apply_star_state(feed_u, entry_id, False)
+        except Exception:  # noqa: BLE001 — one bad entry must not abort the sweep
+            LOGGER.warning("unstar-scope failed for %s/%s", feed_u, entry_id, exc_info=True)
+    invalidate_unread_counts_cache()
+    LOGGER.info("[unstar-scope] removed %d star(s) (feed=%s tag=%s folder=%s)",
+                len(keys), list_feed_url, tag, folder_id)
+    if is_async_action_request(request, "lectio-ajax"):
+        return JSONResponse({"ok": True, "unstarred": len(keys)})
+    return RedirectResponse(url=request.headers.get("referer") or "/read", status_code=303)
 
 
 @app.post("/feed-tags/dismiss")
