@@ -427,10 +427,12 @@ body[data-layout-mode="single"] .entry-primary-actions {
   align-items: center;
   gap: 0.3rem;
   grid-column: 2;
+  grid-row: 1;
 }
 
 body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
   grid-column: 1;
+  grid-row: 1;
   justify-self: start;
   padding-left: 0;
 }
@@ -439,14 +441,31 @@ body[data-layout-mode="single"] .entry-pane-alt-actions {
   display: flex;
   align-items: center;
   grid-column: 3;
+  grid-row: 1;
   justify-self: end;
   gap: 0.3rem;          /* the same gap the middle group gets */
 }
 
-/* Tags and the add-tags form drop to their own full-width row beneath. */
-body[data-layout-mode="single"] .entry-tag-chip-wrap,
-body[data-layout-mode="single"] .entry-tags-form {
+/* Transparent to layout by default, like .entry-primary-actions. */
+.entry-tags-extra {
+  display: contents;
+}
+
+/* Tags and the add-tags form drop to their own full-width row beneath the
+   buttons. They have to be ONE grid item to do that: as loose children each chip
+   claimed its own cell, which pushed the view buttons off the first row entirely
+   as soon as a post had a tag. */
+body[data-layout-mode="single"] .entry-tags-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
   grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+body[data-layout-mode="single"] .entry-tags-extra:empty {
+  display: none;
 }
 
 /* Larger than the desktop's mouse-sized glyphs. Applied to the row, so both
@@ -459,7 +478,7 @@ body[data-layout-mode="single"] .entry-tags-row .material-symbols-rounded {
    by construction. Zeroing the middle group's padding got them to 26.8px and
    26.4px — closer, but still not equal, because the buttons themselves were 22px
    and 21.6px wide. Matching gaps only match if the boxes between them do. */
-body[data-layout-mode="single"] .entry-tags-row button,
+body[data-layout-mode="single"] .entry-primary-actions button,
 body[data-layout-mode="single"] .entry-tags-row .entry-source-button {
   display: inline-flex;
   align-items: center;
@@ -489,17 +508,33 @@ body[data-layout-mode="single"] .entry-read-toggle[data-read-state="1"] .entry-r
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
 }
 
+/* Removing a tag was unreachable on a phone: .entry-tag-remove is opacity:0 and
+   only revealed by :hover, which touch does not have. Tapping the tag button —
+   which already toggles the add-tags form — now also reveals the X on every chip,
+   at finger size rather than the 16px the mouse gets. */
+body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove {
+  opacity: 1;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1.2rem;
+  margin-left: 0.15rem;
+}
+
+/* Chips get room to breathe while the X is showing, so the two are not adjacent
+   tap targets. */
+body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-chip-wrap {
+  margin-bottom: 0.3rem;
+}
+
 /* Cleanup is a deliberate, fiddly hover-then-click interaction — it has no phone
    equivalent, and it was crowding the row. */
 body[data-layout-mode="single"] #entry-cleanup-button {
   display: none;
 }
 
-/* Sized up with the glyphs so the row reads as one piece. Exempt from the
-   uniform glyph box above: it is a text button, not an icon. */
+/* Sized up with the glyphs so the row reads as one piece. */
 body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
   font-size: 1.05rem;
-  width: auto;
 }
 
 /* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
@@ -2471,7 +2506,7 @@ button:hover, .button-link:hover {
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
   /* Matches the article pane's star: the same post must not read as saved in one
      place and unsaved in the other. */
-  color: var(--accent);
+  color: var(--state-star);
 }
 
 .post-feed {
@@ -2600,7 +2635,7 @@ button:hover, .button-link:hover {
   flex: 0 0 auto;
   font-size: 1rem;
   line-height: 1;
-  color: var(--accent);
+  color: var(--state-unread);
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
   pointer-events: none;
 }
@@ -2940,11 +2975,10 @@ button:hover, .button-link:hover {
 
 .entry-save-toggle[title^="Remove"] .entry-save-indicator.material-symbols-rounded {
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
-  /* Fill alone is not enough of a difference to read at a glance — reported as
-     "filled star after toggle looks about the same as outline star". Colour is
-     the convention the toggle beside it already uses: the read indicator is
-     accent when unread, muted when read. */
-  color: var(--accent);
+  /* One colour per curation axis: amber = starred. Fill alone carried the state
+     before, which read fine up close but gave the three toggles no distinguishing
+     colour at a glance. */
+  color: var(--state-star);
 }
 
 .entry-read-toggle {
@@ -2974,7 +3008,7 @@ button:hover, .button-link:hover {
 .entry-read-indicator.material-symbols-rounded {
   font-size: 1rem;
   line-height: 1;
-  color: var(--accent);
+  color: var(--state-unread);
   font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
   pointer-events: none;
 }
@@ -3035,6 +3069,18 @@ button:hover, .button-link:hover {
   font-size: 0.95rem;
   line-height: 1;
   font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+}
+
+/* Green = this post is tagged. Derived from the presence of a manual-tag chip
+   rather than a server-rendered flag, so adding or removing a tag in the DOM
+   updates it with no second source of truth to keep in step. :has() is
+   unsupported on very old WebViews, where it simply stays grey. */
+.entry-tags-row:has(.entry-tag-chip-wrap) .entry-tag-add-button {
+  color: var(--state-tag);
+}
+
+.entry-tags-row:has(.entry-tag-chip-wrap) .entry-tag-add-button .material-symbols-rounded {
+  font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
 }
 
 .entry-tag-add-button:hover {

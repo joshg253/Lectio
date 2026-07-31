@@ -174,6 +174,10 @@ The short version:
   the stack rather than leaving the page. It is the *same* app, not a second
   reader, so lead images, per-feed thumbnail crop and zoom, embeds and the
   full-image webcomic view all work there without being ported.
+- **Curation state reads at a glance** — grey outline when unset, filled accent
+  when set, for all three axes: unread, starred, tagged. On a phone, tapping the
+  tag button reveals a finger-sized ✕ on each tag, since the desktop's hover-to-
+  reveal control is unreachable by touch.
 - **The sidebar splits by mode** — *Feeds* is the folder list and nothing else;
   *Saved* has two independently collapsible sections, **Folders** and **Tags**. A
   tag only ever filtered kept articles, so it now lives only where it applies.

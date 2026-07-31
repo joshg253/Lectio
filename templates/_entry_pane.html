@@ -229,6 +229,10 @@
         <span class="material-symbols-rounded" aria-hidden="true">sell</span>
       </button>
       </span>
+      {# Chips, suggestions and the add-tags form, grouped so the phone layout can
+         drop them onto their own line beneath the buttons. display:contents
+         everywhere else, so the desktop row is unchanged. #}
+      <span class="entry-tags-extra">
       <span class="entry-tags-row-sep" aria-hidden="true"></span>
       {% if selected_entry.manual_tags %} {% for tag in
       selected_entry.manual_tags %}
@@ -356,6 +360,7 @@
         />
         <button type="submit" class="entry-tags-submit">Apply</button>
       </form>
+      </span>
       <div class="entry-pane-alt-actions">
         {% if selected_entry.link %}
         <span

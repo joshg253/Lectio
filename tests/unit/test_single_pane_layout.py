@@ -164,9 +164,12 @@ def test_the_omissions_are_the_ones_asked_for():
 
 def test_the_add_tags_form_stays_in_the_flow():
     """The tag button toggles it, so hiding it with the chips would make the
-    button do nothing."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-form'):][:200]
-    assert "display: none" not in block
+    button do nothing. It now rides in .entry-tags-extra with them, which is only
+    hidden when it is genuinely empty."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:400]
+    assert "display: flex;" in block
+    empty = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra:empty'):][:120]
+    assert "display: none;" in empty
 
 
 # ── phone article view, second pass ──
@@ -202,7 +205,7 @@ def test_matching_gaps_need_matching_boxes_between_them():
     (middle buttons had 5.6px of padding, view buttons none); zeroing the padding
     left 26.8px vs 26.4px, because the buttons were 22px and 21.6px wide. Only a
     uniform box makes the pitch equal by construction."""
-    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row button,'):][:400]
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-primary-actions button,'):][:400]
     assert "width: 1.75rem;" in block
     assert "padding-left: 0;" in block
     # The view buttons are <a>, not <button> — selecting on button alone widened
@@ -265,6 +268,45 @@ def test_the_star_is_size_compensated_against_its_neighbours():
     assert "font-size: 1.65rem;" in block
 
 
+def test_curation_state_is_one_monochrome_treatment_across_all_three_axes():
+    """Grey outline when unset, filled accent when set — unread, starred, tagged.
+    A per-axis palette (amber star, green tag) was built and rejected: "the
+    monochrome empty grey & filled blue looks pretty slick for all". Kept behind
+    variables so per-axis colour is a one-line change per theme."""
+    for theme in ("dark.css", "light.css"):
+        css = (ROOT / "static" / "themes" / theme).read_text()
+        for var in ("--state-unread", "--state-star", "--state-tag"):
+            assert f"{var}: var(--accent);" in css, (theme, var)
+
+
+def test_removing_a_tag_is_reachable_without_a_mouse():
+    """.entry-tag-remove is opacity:0 and revealed by :hover, which touch does not
+    have — so on a phone there was no way to delete a tag at all. Tapping the tag
+    button reveals every chip's X at finger size."""
+    sel = 'body[data-layout-mode="single"] .entry-tags-row:has(.entry-tag-add-button[aria-expanded="true"]) .entry-tag-remove'
+    block = CSS[CSS.index(sel):]
+    block = block[:block.index("}")]
+    assert "opacity: 1;" in block
+    assert "width: 1.75rem;" in block
+
+
+def test_the_chips_are_one_grid_item_so_the_buttons_keep_their_row():
+    """As loose children each chip claimed its own grid cell, which pushed the view
+    buttons off the first row entirely the moment a post had a tag."""
+    assert 'class="entry-tags-extra"' in ENTRY_PANE
+    block = CSS[CSS.index(".entry-tags-extra {"):][:120]
+    assert "display: contents;" in block
+    phone = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-extra {'):][:300]
+    assert "grid-column: 1 / -1;" in phone and "grid-row: 2;" in phone
+
+
+def test_the_uniform_glyph_box_is_scoped_to_the_glyph_buttons():
+    """Keyed on the row it also resized the tag X and the Apply button, which are
+    not icons."""
+    assert 'body[data-layout-mode="single"] .entry-primary-actions button,' in CSS
+    assert 'body[data-layout-mode="single"] .entry-tags-row button,' not in CSS
+
+
 def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
     """Reported: "filled star after toggle looks about the same as outline star".
     FILL does work — the axis is served (FILL@0..1) and measurably changes the
@@ -279,4 +321,4 @@ def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
                 '.post-save-toggle[title^="Remove"] .post-save-indicator'):
         block = CSS[CSS.index(sel):]
         block = block[:block.index("}")]          # the rule, however long its comment
-        assert "color: var(--accent);" in block
+        assert "color: var(--state-star);" in block
