@@ -344,6 +344,116 @@ body[data-layout-mode="single"] #medium-pane-backdrop {
   display: none !important;
 }
 
+/* ── Phone: article view ──────────────────────────────────────────────────────
+   Reported: "the header portion above the scrolling area takes up nearly half my
+   viewable area". On desktop the header is a fixed block holding title, byline,
+   feed/date, the tag row and the view buttons — four or five lines, which on a
+   phone is most of the screen before a word of article.
+
+   So on a phone the PANE scrolls rather than the body, the action row is pinned
+   to the top as a single line, and everything else (title, byline, feed · date)
+   scrolls away with the article. Nothing is duplicated: the buttons Josh asked
+   for on that row are already siblings inside .entry-tags-row. */
+body[data-layout-mode="single"] .pane-entry {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* flex: none matters as much as the overflow. As a shrinking flex item the body
+   was sized to the leftover 669px and its content spilled *invisibly* — the pane
+   measured scrollHeight == clientHeight and nothing scrolled at all. It has to
+   take its natural height for the pane above it to have anything to scroll. */
+body[data-layout-mode="single"] .pane-entry .entry-body {
+  overflow: visible;
+  flex: none;
+}
+
+/* The <article class="entry"> between the pane and the body is overflow:hidden
+   and a shrinking flex item — it clipped 18,000px of article down to 694 and the
+   pane above it saw nothing to scroll. Every level between the scroller and the
+   content has to stop clipping, not just the innermost one. */
+body[data-layout-mode="single"] .pane-entry .entry {
+  overflow: visible;
+  flex: none;
+}
+
+/* display:contents dissolves the header box so its children become direct flex
+   children of the scrolling pane. That is what makes the pinned row work at all:
+   a sticky element is confined to its parent's box, so inside the 150px header it
+   unpinned and scrolled away the moment the header did. It also lets `order` sort
+   the row above the title. */
+body[data-layout-mode="single"] .entry-pane-header {
+  display: contents;
+}
+
+/* The one pinned row: < Posts | mark star tag | reader web tab share.
+   order:-1 lifts it above the title, which is what lets the title scroll. */
+body[data-layout-mode="single"] .entry-tags-row {
+  order: -1;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Auto margins on the outer two groups centre the middle one without needing a
+   wrapper element around it. */
+body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
+  margin-right: auto;
+  padding-left: 0;
+}
+
+body[data-layout-mode="single"] .entry-pane-alt-actions {
+  margin-left: auto;
+  gap: 0.1rem;
+}
+
+/* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
+   for the desktop tree, and the +/- filter triangles are too small to hit. */
+body[data-layout-mode="single"] .entry-tag-suggestions,
+body[data-layout-mode="single"] .entry-tags-row-sep,
+body[data-layout-mode="single"] .author-filter-signs,
+body[data-layout-mode="single"] .feed-tag-filter-sign {
+  display: none;
+}
+
+/* Tags a post already carries stay visible, but wrap to their own line under the
+   buttons rather than stretching the bar sideways. Same for the add-tags form,
+   which the tag button toggles — it must stay in the flow to be openable. */
+body[data-layout-mode="single"] .entry-tag-chip-wrap {
+  order: 9;
+}
+
+body[data-layout-mode="single"] .entry-tags-form {
+  order: 10;
+  flex-basis: 100%;
+}
+
+body[data-layout-mode="single"] .entry-pane-title-row,
+body[data-layout-mode="single"] .entry-pane-bottom-row {
+  padding: 0 0.85rem;
+}
+
+body[data-layout-mode="single"] .entry-pane-title-row {
+  padding-top: 0.6rem;
+}
+
+/* Byline on its own line, then feed · date — the order Josh asked for. */
+body[data-layout-mode="single"] .entry-pane-meta {
+  flex-wrap: wrap;
+}
+
+body[data-layout-mode="single"] .entry-author-inline {
+  flex-basis: 100%;
+}
+
 /* Back out of a pane. Hidden on desktop, where the panes are all on screen. */
 .single-back-btn {
   display: none;

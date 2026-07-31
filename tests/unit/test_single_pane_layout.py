@@ -118,3 +118,52 @@ def test_there_really_are_two_interceptors_to_keep_in_step():
     simplify — not to delete."""
     assert ".feed-link, .tag-link, .tree-item" in INDEX          # index.html's
     assert ".tree-item, .feed-link, .tag-link" in APP_JS         # app.js's
+
+
+# ── the phone article view ──
+def test_the_action_row_is_pinned_and_lifted_above_the_title():
+    """Reported: "the header portion above the scrolling area takes up nearly half
+    my viewable area". The row is pinned; title, byline and feed/date scroll away
+    with the article."""
+    assert 'body[data-layout-mode="single"] .entry-tags-row' in CSS
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-row'):][:600]
+    assert "position: sticky;" in block
+    assert "order: -1;" in block
+
+
+def test_the_header_box_is_dissolved_so_the_pin_can_span_the_pane():
+    """A sticky element is confined to its parent's box, so inside the 150px
+    header the row unpinned and scrolled away the moment the header did.
+    display:contents makes its children direct children of the scrolling pane."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-pane-header'):][:200]
+    assert "display: contents;" in block
+
+
+def test_every_level_between_the_scroller_and_the_content_stops_clipping():
+    """The <article class="entry"> in between is overflow:hidden and a shrinking
+    flex item; it clipped 18,000px of article to 694 and the pane saw nothing to
+    scroll. Overriding only .entry-body was not enough."""
+    for sel in ('.pane-entry .entry-body', '.pane-entry .entry'):
+        block = CSS[CSS.index(f'body[data-layout-mode="single"] {sel} {{'):][:200]
+        assert "overflow: visible;" in block
+        assert "flex: none;" in block
+
+
+def test_the_back_button_shares_the_action_row():
+    """Josh's layout: < Posts | mark star tag | reader web tab share — one line."""
+    row = ENTRY_PANE[ENTRY_PANE.index('class="entry-tags-row"'):][:600]
+    assert 'class="single-back-btn"' in row
+
+
+def test_the_omissions_are_the_ones_asked_for():
+    """Suggestion chips and the +/- filter triangles: a desktop triage affordance,
+    and targets too small to hit on a phone."""
+    for sel in (".entry-tag-suggestions", ".author-filter-signs", ".feed-tag-filter-sign"):
+        assert f'body[data-layout-mode="single"] {sel}' in CSS
+
+
+def test_the_add_tags_form_stays_in_the_flow():
+    """The tag button toggles it, so hiding it with the chips would make the
+    button do nothing."""
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-tags-form'):][:200]
+    assert "display: none" not in block

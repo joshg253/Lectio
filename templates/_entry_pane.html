@@ -1,11 +1,6 @@
 <section class="pane pane-entry">
   {% if selected_entry %}
   <div class="entry-pane-header">
-    {# Phone only: step back to the post list. CSS hides it elsewhere. #}
-    <button type="button" class="single-back-btn" data-single-back="1"
-            aria-label="Back to posts">
-      <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span>Posts
-    </button>
     <div class="entry-pane-title-row">
       <h2
         class="entry-pane-title"
@@ -97,6 +92,12 @@
       </div>
     </div>
     <div class="entry-tags-row">
+      {# Phone only: step back to the post list, and it lives in THIS row so the
+         phone's whole action bar is one line. CSS hides it at desktop widths. #}
+      <button type="button" class="single-back-btn" data-single-back="1"
+              aria-label="Back to posts">
+        <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span>Posts
+      </button>
       <form method="post" action="/entries/read" class="entry-read-toggle-form">
         <input
           type="hidden"
