@@ -632,6 +632,25 @@ body[data-layout-mode="single"] .entry-meta-left {
   min-width: 0;
 }
 
+/* A long feed name used to wrap onto a second line the moment it reached the
+   middle of the row. Truncate instead: the date holds its place on the right and
+   the meta stays one line. */
+body[data-layout-mode="single"] .entry-feed-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Shrink, do not wrap. Without flex-basis 0 the nowrap link kept its full
+     intrinsic width, overflowed the line and pushed itself below the favicon —
+     leaving the favicon stranded on a line of its own. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+body[data-layout-mode="single"] .entry-meta-time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 body[data-layout-mode="single"] .entry-meta-left {
   flex-wrap: wrap;
 }

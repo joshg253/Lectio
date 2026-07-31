@@ -68,6 +68,16 @@ const CAPTURE_MODE_FULL = 'full';
       day: 'numeric',
       year: 'numeric',
     });
+    // Phone article header: the long form ("Tue, July 28, 2026 at 5:00 PM") is
+    // most of a line on a 390px screen. Numeric date + time in the user's own
+    // locale, so this is mm/dd/yyyy here and dd/mm/yyyy where that is the norm.
+    const localTimeFormatterCompact = new Intl.DateTimeFormat(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
     const localTimeFormatterLong = new Intl.DateTimeFormat(undefined, {
       weekday: 'short',
       month: 'long',
@@ -165,10 +175,13 @@ const CAPTURE_MODE_FULL = 'full';
         
         // Format the post date
         const useLong = node.getAttribute('data-time-format') === 'long';
+        const onPhone = Boolean(window.isSingleMode && window.isSingleMode());
         const now = new Date();
         const isCurrentYear = postDate.getFullYear() === now.getFullYear();
         const formatted = useLong
-          ? localTimeFormatterLong.format(postDate)
+          ? (onPhone
+              ? localTimeFormatterCompact.format(postDate)
+              : localTimeFormatterLong.format(postDate))
           : isCurrentYear
             ? localTimeFormatterShort.format(postDate)
             : localTimeFormatterShortWithYear.format(postDate);

@@ -380,3 +380,33 @@ def test_the_saved_star_differs_by_colour_and_not_only_by_fill():
         block = CSS[CSS.index(sel):]
         block = block[:block.index("}")]          # the rule, however long its comment
         assert "color: var(--state-star);" in block
+
+
+# ── phone meta line ──
+def test_the_article_date_is_compact_on_a_phone():
+    """"Tue, July 28, 2026 at 5:00 PM" is most of a line on a 390px screen. The
+    locale is left to the browser, so this is mm/dd/yyyy here and dd/mm/yyyy where
+    that is the norm — not hardcoded."""
+    assert "localTimeFormatterCompact" in APP_JS
+    block = APP_JS[APP_JS.index("const localTimeFormatterCompact"):][:300]
+    assert "month: '2-digit'" in block and "day: '2-digit'" in block
+    assert "undefined" in block                     # the user's own locale
+    # And it is chosen by mode, not baked into the template.
+    assert "onPhone" in APP_JS
+
+
+def test_the_feed_name_truncates_instead_of_wrapping():
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-feed-link {'):]
+    block = block[:block.index("}")]
+    assert "text-overflow: ellipsis;" in block
+    assert "white-space: nowrap;" in block
+    # Shrink, not wrap: without a zero basis the nowrap link kept its intrinsic
+    # width and pushed itself below the favicon, stranding it on its own line.
+    assert "flex: 1 1 0;" in block
+
+
+def test_the_date_holds_its_place_beside_the_truncated_name():
+    block = CSS[CSS.index('body[data-layout-mode="single"] .entry-meta-time {'):]
+    block = block[:block.index("}")]
+    assert "flex: 0 0 auto;" in block
+    assert "white-space: nowrap;" in block
