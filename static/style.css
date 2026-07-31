@@ -293,6 +293,213 @@ body[data-layout-mode="medium"][data-medium-left-open="1"] .pane-folders {
   cursor: default;
 }
 
+/* ── Single-pane (phone) layout ──────────────────────────────────────────────
+   One column, one pane visible at a time: folders (0) → posts (1) → article (2).
+   This is the same markup the desktop renders, which is the entire point — every
+   feed-appearance feature (lead images, per-feed thumbnail crop/zoom, embeds, the
+   full-image webcomic view) arrives here without being ported. */
+body[data-layout-mode="single"] .panes {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  padding: 0;
+  gap: 0;
+  /* Real viewport height: mobile browsers lie about 100vh while the URL bar
+     animates, which is what --vh is maintained for. */
+  height: calc(var(--vh, 1vh) * 100);
+}
+
+body[data-layout-mode="single"] .pane {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  border: 0;
+  border-radius: 0;
+  /* The keyboard inset keeps the composer and toolbars above the on-screen
+     keyboard rather than behind it. */
+  padding-bottom: var(--vv-bottom-inset, 0px);
+}
+
+body[data-layout-mode="single"] .pane-resizer {
+  display: none;
+}
+
+/* Exactly one pane on screen. Hidden panes are display:none rather than
+   translated off-canvas so their images are not laid out or fetched. */
+body[data-layout-mode="single"] .pane-folders,
+body[data-layout-mode="single"] .pane-posts,
+body[data-layout-mode="single"] .pane-entry {
+  display: none;
+  position: static;
+  width: auto;
+  box-shadow: none;
+}
+
+body[data-layout-mode="single"][data-single-pane-level="0"] .pane-folders,
+body[data-layout-mode="single"][data-single-pane-level="1"] .pane-posts,
+body[data-layout-mode="single"][data-single-pane-level="2"] .pane-entry {
+  display: flex;
+}
+
+/* The medium-mode floating folder drawer must not leak into single mode. */
+body[data-layout-mode="single"] #medium-pane-backdrop {
+  display: none !important;
+}
+
+/* ── Phone: article view ──────────────────────────────────────────────────────
+   Reported: "the header portion above the scrolling area takes up nearly half my
+   viewable area". On desktop the header is a fixed block holding title, byline,
+   feed/date, the tag row and the view buttons — four or five lines, which on a
+   phone is most of the screen before a word of article.
+
+   So on a phone the PANE scrolls rather than the body, the action row is pinned
+   to the top as a single line, and everything else (title, byline, feed · date)
+   scrolls away with the article. Nothing is duplicated: the buttons Josh asked
+   for on that row are already siblings inside .entry-tags-row. */
+body[data-layout-mode="single"] .pane-entry {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* flex: none matters as much as the overflow. As a shrinking flex item the body
+   was sized to the leftover 669px and its content spilled *invisibly* — the pane
+   measured scrollHeight == clientHeight and nothing scrolled at all. It has to
+   take its natural height for the pane above it to have anything to scroll. */
+body[data-layout-mode="single"] .pane-entry .entry-body {
+  overflow: visible;
+  flex: none;
+}
+
+/* The <article class="entry"> between the pane and the body is overflow:hidden
+   and a shrinking flex item — it clipped 18,000px of article down to 694 and the
+   pane above it saw nothing to scroll. Every level between the scroller and the
+   content has to stop clipping, not just the innermost one. */
+body[data-layout-mode="single"] .pane-entry .entry {
+  overflow: visible;
+  flex: none;
+}
+
+/* display:contents dissolves the header box so its children become direct flex
+   children of the scrolling pane. That is what makes the pinned row work at all:
+   a sticky element is confined to its parent's box, so inside the 150px header it
+   unpinned and scrolled away the moment the header did. It also lets `order` sort
+   the row above the title. */
+body[data-layout-mode="single"] .entry-pane-header {
+  display: contents;
+}
+
+/* The one pinned row: < Posts | mark star tag | reader web tab share.
+   order:-1 lifts it above the title, which is what lets the title scroll. */
+body[data-layout-mode="single"] .entry-tags-row {
+  order: -1;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Auto margins on the outer two groups centre the middle one without needing a
+   wrapper element around it. */
+body[data-layout-mode="single"] .entry-tags-row .single-back-btn {
+  margin-right: auto;
+  padding-left: 0;
+}
+
+body[data-layout-mode="single"] .entry-pane-alt-actions {
+  margin-left: auto;
+  gap: 0.1rem;
+}
+
+/* Omitted on a phone, at Josh's call: suggestion chips are a triage affordance
+   for the desktop tree, and the +/- filter triangles are too small to hit. */
+body[data-layout-mode="single"] .entry-tag-suggestions,
+body[data-layout-mode="single"] .entry-tags-row-sep,
+body[data-layout-mode="single"] .author-filter-signs,
+body[data-layout-mode="single"] .feed-tag-filter-sign {
+  display: none;
+}
+
+/* Tags a post already carries stay visible, but wrap to their own line under the
+   buttons rather than stretching the bar sideways. Same for the add-tags form,
+   which the tag button toggles — it must stay in the flow to be openable. */
+body[data-layout-mode="single"] .entry-tag-chip-wrap {
+  order: 9;
+}
+
+body[data-layout-mode="single"] .entry-tags-form {
+  order: 10;
+  flex-basis: 100%;
+}
+
+body[data-layout-mode="single"] .entry-pane-title-row,
+body[data-layout-mode="single"] .entry-pane-bottom-row {
+  padding: 0 0.85rem;
+}
+
+body[data-layout-mode="single"] .entry-pane-title-row {
+  padding-top: 0.6rem;
+}
+
+/* Byline on its own line, then feed · date — the order Josh asked for. */
+body[data-layout-mode="single"] .entry-pane-meta {
+  flex-wrap: wrap;
+}
+
+body[data-layout-mode="single"] .entry-author-inline {
+  flex-basis: 100%;
+}
+
+/* Back out of a pane. Hidden on desktop, where the panes are all on screen. */
+.single-back-btn {
+  display: none;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0.45rem 0.6rem;
+  flex: 0 0 auto;
+}
+
+body[data-layout-mode="single"] .single-back-btn {
+  display: inline-flex;
+}
+
+/* Touch targets. 44px is the smallest reliably tappable size; the desktop tree
+   and post rows are tuned for a mouse. */
+body[data-layout-mode="single"] .tree-item,
+body[data-layout-mode="single"] .feed-link,
+body[data-layout-mode="single"] .tag-link {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+body[data-layout-mode="single"] .post-item {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+/* Give the article the full width on a phone: the desktop reading measure is a
+   constraint against over-long lines, and there is no excess width here. */
+body[data-layout-mode="single"] .entry-body,
+body[data-layout-mode="single"] .entry-content {
+  max-width: 100%;
+  padding-left: 0.85rem;
+  padding-right: 0.85rem;
+}
+
+body[data-layout-mode="single"] .toolbar-row-main {
+  flex-wrap: wrap;
+}
+
 .pane-folders .tree {
   flex: 1 1 0;
   min-height: 0;
@@ -1757,6 +1964,25 @@ button:hover, .button-link:hover {
 .tags-tree-body {
   max-height: min(35vh, 260px);
   overflow: auto;
+}
+
+/* Saved's Folders section, collapsing the same way Tags does. */
+.saved-section-header-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+
+.saved-section-header-row[hidden] {
+  display: none;
+}
+
+.tree-children.saved-tree-children.is-collapsed {
+  display: none;
+}
+
+#saved-folders-header-btn.is-collapsed .tags-collapse-chevron {
+  transform: rotate(-90deg);
 }
 
 .tags-tree-block.is-collapsed .tags-tree-body {

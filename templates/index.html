@@ -231,7 +231,18 @@
           </div>
 
           {# Folders that hold saved articles — the Saved counterpart of the
-             feeds tree; visible only in Saved mode (badges = total saved). #}
+             feeds tree; visible only in Saved mode (badges = total saved).
+             Collapsible, so Saved's two sections (Folders and Tags) can each be
+             folded away independently. The Feeds tree has no such header: it is
+             the only section there, and a collapse control for the whole of it
+             would just be a way to empty the sidebar. #}
+          <div class="saved-section-header-row"{% if not selected_star_only %} hidden{% endif %}>
+            <button type="button" class="tags-header section-block-header"
+                    id="saved-folders-header-btn">
+              Folders
+              <span class="tags-collapse-chevron material-symbols-rounded" aria-hidden="true">expand_more</span>
+            </button>
+          </div>
           <div class="tree-children saved-tree-children"{% if not selected_star_only %} hidden{% endif %}>
             {# Inbox: auto-saved articles (Save/Star automation) awaiting review —
                a pinned tag bucket; file items out by removing the 'inbox' tag. #}
@@ -380,7 +391,9 @@
           </div>
         </div>
 
-        <div class="tree-block tags-tree-block" id="tags-tree-block">
+        {# Tags are a Saved-mode section. In the Feeds tree they duplicated a
+           filter that only ever applied to kept articles anyway. #}
+        <div class="tree-block tags-tree-block" id="tags-tree-block"{% if not selected_star_only %} hidden{% endif %}>
           <div class="tags-header-row">
             <button type="button" class="tags-header section-block-header" id="tags-header-btn">
               Tags
@@ -442,6 +455,11 @@
         {% set sort_by_label = 'Pub' if selected_sort_by == 'post' else 'Rec' %}
         {% set sort_dir_label = 'new' if selected_sort_dir == 'desc' else 'old' %}
         <div class="toolbar-row-main">
+          {# Phone only: step back to the folder list. CSS hides it elsewhere. #}
+          <button type="button" class="single-back-btn" data-single-back="0"
+                  aria-label="Back to folders">
+            <span class="material-symbols-rounded" aria-hidden="true">chevron_left</span>Feeds
+          </button>
           <div class="sort-group">
             <details class="toolbar-dropdown filter-menu">
               <summary class="sort-pill toolbar-dropdown-summary {% if filter_is_active %}active{% endif %}" title="Filter: {{ filter_label }}">
@@ -806,6 +824,12 @@
   <script>
   (function(){
     const MEDIUM_THRESHOLD = 1100;
+    // Phone width. Below this the three panes stack and exactly one is on screen
+    // at a time — folders (0) → posts (1) → article (2). This is the main app,
+    // not a second renderer, so lead images, thumbnail tuning, embeds and the
+    // full-image webcomic view all apply here by construction.
+    const SINGLE_THRESHOLD = 720;
+    const SINGLE_LEVEL_KEY = 'lectio-next-single-pane-level';
     const WIDE_LEFT_COLLAPSED_KEY = 'lectio-wide-left-collapsed';
     let layoutMode = 'wide';
     const bodyEl = document.body;
@@ -833,9 +857,40 @@
       }
     }
 
+    // Which pane is on screen in single mode. Persisted for the next render
+    // because a pane swap re-runs this shell and would otherwise drop the user
+    // back to the folder list mid-read.
+    let singlePaneLevel = 0;
+
+    function setSinglePaneLevel(level, persist = true) {
+      singlePaneLevel = Math.max(0, Math.min(2, Number(level) || 0));
+      bodyEl.setAttribute('data-single-pane-level', String(singlePaneLevel));
+      if (persist) {
+        try { window.sessionStorage.setItem(SINGLE_LEVEL_KEY, String(singlePaneLevel)); }
+        catch (e) { /* private mode */ }
+      }
+    }
+
+    function restoreSinglePaneLevel() {
+      let level = 0;
+      try { level = Number.parseInt(window.sessionStorage.getItem(SINGLE_LEVEL_KEY), 10) || 0; }
+      catch (e) { level = 0; }
+      // An article in the URL means the article pane is what the user is looking
+      // at, whatever the last remembered level said.
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('entry_id')) {
+        level = 2;
+      } else if (level === 2) {
+        level = 1;
+      }
+      setSinglePaneLevel(level, false);
+    }
+
     function updateSingleMode() {
       const width = window.innerWidth;
-      layoutMode = width <= MEDIUM_THRESHOLD ? 'medium' : 'wide';
+      layoutMode = width <= SINGLE_THRESHOLD
+        ? 'single'
+        : (width <= MEDIUM_THRESHOLD ? 'medium' : 'wide');
       bodyEl.setAttribute('data-layout-mode', layoutMode);
 
       if (layoutMode === 'wide') {
@@ -845,6 +900,11 @@
         setWideLeftCollapsed(false, false);
         setMediumLeftOpen(false);
         bodyEl.removeAttribute('data-left-floating');
+      }
+      if (layoutMode === 'single') {
+        restoreSinglePaneLevel();
+      } else {
+        bodyEl.removeAttribute('data-single-pane-level');
       }
       updateVisualViewportInset();
     }
@@ -904,13 +964,31 @@
     }
 
 
-    // Stubs: single-pane mode removed; kept so call-sites are no-ops
-    window.setSinglePaneLevel = () => {};
-    window.isSingleMode = () => false;
+    window.setSinglePaneLevel = setSinglePaneLevel;
+    window.isSingleMode = () => layoutMode === 'single';
+    // Not revived with single mode: swipe gestures and pull-to-refresh were
+    // removed separately and are a distinct decision from "can I read on my
+    // phone". Left as no-ops so their call sites stay quiet.
     window.bindSinglePanePullToRefresh = () => {};
     window.bindSwipeGestures = () => {};
 
+    // Back steps down the pane stack before it leaves the page: on a phone the
+    // article pane IS the page, so a plain Back that navigated away would lose
+    // the list every time.
+    window.addEventListener('popstate', () => {
+      if (window.isSingleMode()) restoreSinglePaneLevel();
+    });
+
+    // Delegated so it survives pane swaps, which replace the entry pane wholesale.
+    document.addEventListener('click', (event) => {
+      const back = event.target.closest('[data-single-back]');
+      if (!back || !window.isSingleMode()) return;
+      event.preventDefault();
+      setSinglePaneLevel(Number(back.getAttribute('data-single-back')) || 0);
+    });
+
     window.addEventListener('resize', () => updateSingleMode());
+    updateSingleMode();
 
     // Intercept internal app navigation links and perform SPA loads.
     // Do not intercept external links, modified clicks, or the brand/logo
@@ -969,7 +1047,11 @@
       if (window.loadScopePanesWithoutFullRefresh) {
         loadScopePanesWithoutFullRefresh(navUrl).then(()=> {
           try {
-            if (window.isSingleMode && window.isSingleMode()) {
+            // Scope tabs (FEEDS / SAVED) switch which tree you are browsing —
+            // nothing has been picked to read yet, so advancing to the post list
+            // takes the folder list away exactly when it is needed. Every other
+            // tree link (folder, feed, tag) does mean "show me these posts".
+            if (window.isSingleMode && window.isSingleMode() && !a.matches('.scope-tab')) {
               setSinglePaneLevel(1);
             }
           } catch(e){}

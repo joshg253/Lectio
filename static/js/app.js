@@ -2297,6 +2297,28 @@ const CAPTURE_MODE_FULL = 'full';
       }
     }
 
+    // Saved's Folders section collapses like Tags does, with its own remembered
+    // state — the two sections are independent, which is the point of splitting
+    // them.
+    const savedFoldersHeaderBtn = document.getElementById('saved-folders-header-btn');
+    const SAVED_FOLDERS_COLLAPSED_KEY = 'lectio-saved-folders-collapsed';
+
+    function applySavedFoldersCollapsed(collapsed) {
+      document.querySelector('.saved-tree-children')
+        ?.classList.toggle('is-collapsed', collapsed);
+      savedFoldersHeaderBtn?.classList.toggle('is-collapsed', collapsed);
+    }
+
+    if (savedFoldersHeaderBtn) {
+      applySavedFoldersCollapsed(
+        window.localStorage.getItem(SAVED_FOLDERS_COLLAPSED_KEY) === '1');
+      savedFoldersHeaderBtn.addEventListener('click', () => {
+        const next = !savedFoldersHeaderBtn.classList.contains('is-collapsed');
+        window.localStorage.setItem(SAVED_FOLDERS_COLLAPSED_KEY, next ? '1' : '0');
+        applySavedFoldersCollapsed(next);
+      });
+    }
+
     async function markProblematicFeedsViewed() {
       if (problematicFeedsViewedThisSession) return;
       problematicFeedsViewedThisSession = true;
@@ -2875,6 +2897,12 @@ const CAPTURE_MODE_FULL = 'full';
       let nextFolderId = nextUrl.searchParams.get('folder_id');
       let nextFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextTag = nextUrl.searchParams.get('tag');
+      // The scope the URL itself names, captured before the fallbacks below
+      // reassign nextFolderId/nextFeedUrl from whatever row is currently lit.
+      // Tag links must follow the URL, not the leftover selection: inheriting it
+      // is the bug they are being repointed to fix.
+      const scopeFolderId = nextUrl.searchParams.get('folder_id');
+      const scopeFeedUrl = nextUrl.searchParams.get('list_feed_url');
       const nextStarOnly = nextUrl.searchParams.get('star_only') === '1';
       const nextHome = nextUrl.searchParams.get('home') === '1'
         || (nextStarOnly && nextUrl.searchParams.get('saved_home') === '1');
@@ -2968,6 +2996,12 @@ const CAPTURE_MODE_FULL = 'full';
       // pane-swap path doesn't re-render the tree, so toggle them here.
       document.querySelector('.saved-tree-children')?.toggleAttribute('hidden', !nextStarOnly);
       document.querySelector('.feeds-tree-children')?.toggleAttribute('hidden', nextStarOnly);
+      // Saved's own section chrome: the Folders header, and Tags — which is a
+      // Saved-only section now. The tree is not re-rendered on a mode switch, so
+      // the server-side condition alone would leave whichever state the last full
+      // page load happened to produce.
+      document.querySelector('.saved-section-header-row')?.toggleAttribute('hidden', !nextStarOnly);
+      document.getElementById('tags-tree-block')?.toggleAttribute('hidden', !nextStarOnly);
       // saved-mode drives the pinned layout (All Feeds stuck above Tags while
       // the saved sublist scrolls).
       document.querySelector('nav.tree')?.classList.toggle('saved-mode', nextStarOnly);
@@ -3016,8 +3050,29 @@ const CAPTURE_MODE_FULL = 'full';
 
       for (const tagLink of document.querySelectorAll('.tag-link, .entry-tag-link')) {
         const href = tagLink.getAttribute('href') || '';
-        const tagValue = new URL(href, window.location.origin).searchParams.get('tag');
+        const tagUrl = new URL(href, window.location.origin);
+        const tagValue = tagUrl.searchParams.get('tag');
         tagLink.classList.toggle('active', Boolean(nextTag) && tagValue === nextTag);
+
+        // Re-point the link at the scope we are looking at NOW. The pane-swap
+        // path never re-renders the tree, so a server-rendered folder_id sticks
+        // around for the life of the page: open Video Games, click Feeds, then
+        // click #gamedev and you land back in Video Games. Same staleness would
+        // apply to a feed scope and to the filter the tag view resumes to.
+        if (scopeFolderId) {
+          tagUrl.searchParams.set('folder_id', scopeFolderId);
+        } else {
+          tagUrl.searchParams.delete('folder_id');
+        }
+        if (scopeFeedUrl) {
+          tagUrl.searchParams.set('list_feed_url', scopeFeedUrl);
+        } else {
+          tagUrl.searchParams.delete('list_feed_url');
+        }
+        // A tag view forces read_filter=all and carries the filter to come back
+        // to; that must be the one in effect now, not one from a page load ago.
+        tagUrl.searchParams.set('resume_read_filter', nextResumeReadFilter);
+        tagLink.setAttribute('href', tagUrl.pathname + tagUrl.search);
       }
 
       // Sidebar tree-filter state: hide sidebar feeds with 0 unread when the
@@ -13316,7 +13371,15 @@ const CAPTURE_MODE_FULL = 'full';
       event.preventDefault();
       link.closest('.hamburger-menu')?.removeAttribute('open');
       loadScopePanesWithoutFullRefresh(targetUrl.toString()).then(() => {
-        try { if (window.isSingleMode && window.isSingleMode()) setSinglePaneLevel(1); } catch(e) {}
+        // On a phone, advance to the post list — except for the FEEDS/SAVED scope
+        // tabs. Those switch which tree you are browsing; the user has not picked
+        // anything to read yet, so jumping to posts takes the folder list away
+        // exactly when it is needed. Reported on a Galaxy S21+.
+        try {
+          if (window.isSingleMode && window.isSingleMode() && !link.matches('.scope-tab')) {
+            setSinglePaneLevel(1);
+          }
+        } catch(e) {}
       }).catch(() => {});
     });
 

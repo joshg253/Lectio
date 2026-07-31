@@ -867,6 +867,50 @@ The UI gates the control the same way, on a per-entry `captured` flag
 (`data-post-captured`) rather than on feed identity. Gating on the feed is what
 silently stripped the escape hatch from every article the filer moved.
 
+**One layout owner, three modes.** The inline shell in `index.html` resolves
+`wide` / `medium` / `single` from a single `updateSingleMode()`, at 1100px and
+720px. Single-pane mode was removed in `9dab5a8` and revived rather than replaced
+with a phone-specific renderer, and that is the whole design argument: a second
+renderer means every feed-appearance feature — lead images, per-feed thumbnail
+crop and zoom, embeds, the full-image webcomic view — has to be ported to it, and
+every future one silently misses it. The phone runs the same markup, so it
+inherits all of them and everything added later.
+
+The revival was wiring, not a rewrite: `9dab5a8` stubbed `isSingleMode` /
+`setSinglePaneLevel` as no-ops but left ~10 call sites in `app.js` intact, and
+left `templates/js/_layout_shell.js` on disk holding a complete second
+implementation that was included nowhere (now deleted — dead code that looks live
+is worse than none). Porting into the existing shell rather than re-including that
+file is what stops two shells disagreeing about the current mode.
+
+Three details worth keeping: the pane level is clamped to 0–2 and persisted in
+`sessionStorage`, because a pane swap re-runs the shell and would otherwise drop
+the reader back to the folder list; an `entry_id` in the URL overrides the
+remembered level, so a shared or reloaded article opens the article; and hidden
+panes are `display: none` rather than translated off-canvas, since laying out and
+fetching a hidden pane's images is the expensive half of a page on a phone.
+
+**The tree is not re-rendered by pane-swap navigation, so anything the server
+stamped into it goes stale.** `updateScopeActiveState` already re-derives active
+rows and mode blocks for that reason; sidebar tag links now get the same
+treatment, because their server-rendered `folder_id` otherwise survives every SPA
+navigation for the life of the page — open a folder, click Feeds, click a tag,
+and you are back in the folder you left. The stamp reads the URL's *own*
+`folder_id`/`list_feed_url`, captured before the fallbacks in that function
+reassign them from whichever row is still lit: those fallbacks exist to stop
+active-state flicker on bare URLs, and reusing their result here would reproduce
+the staleness rather than fix it. `resume_read_filter` is refreshed alongside,
+since a tag view forces `read_filter=all` and carries the filter to come back to.
+
+**A URL can carry a month without carrying a day.** `url_inferred_pubdate` reads
+the `/YYYY/MM/DD/` permalink; `url_inferred_pubmonth` reads `/YYYY/MM/` and
+resolves it to the first of the month. The day is a placeholder, the month is not
+— WordPress generates the permalink from the publish date. It is the last tier in
+`recover_publish_dates.py` for that reason, but on blog.guitar-pro.com (67 of the
+68 entries it recovered) it is also the *only honest* signal: those pages publish
+`dateModified` and nothing else, so mining the page would have dated a 2021 post
+to October 2024. A real month beats a precise-looking lie.
+
 **A re-fetch moves Received, never Pub.** Surfacing a re-pulled capture at the top of the backlog used to be done by writing `entries.published = now` — which corrupted the data it sorted by. Pub means the date the article was published, and re-fetching does not republish it; worse, under a **Pub oldest** sort the bump did the opposite of surfacing, sending the article to the far end of the list. Measured on the live library 2026-07-25: **101 entries** had lost their real publish dates this way, some by 16 years. `replace_entry_content(bump_received=...)` now moves the Received date instead — which is honest ("this content arrived just now"), sorts correctly in both directions, and needs no new per-entry field. Both received columns move together: `first_updated` backs `Entry.added`, which the UI displays and the render-path sort reads, and `recent_sort` backs the list's SQL fast path.
 
 `scripts/restore_bumped_publish_dates.py` repairs entries already damaged. The original date is recovered from the starred archive (`archived_entry.published_at`), which snapshots each entry's dates at capture and is untouched by a content re-fetch, and is cross-checked against reader's own `recent_sort` (the entry's original sort position, likewise untouched). Only forward drift qualifies — a bump can only move a date later — and by default only rows where the two independent records agree are restored; on the live library that was all 101, with zero disagreements.

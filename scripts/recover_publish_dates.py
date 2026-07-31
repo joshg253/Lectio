@@ -17,7 +17,13 @@ Sources, in order of trust:
 3. ``itemprop="datePublished"`` (2);
 4. ``<time datetime=…>`` (42) — **last**, because a page has many `<time>` tags and
    the first one may belong to a comment or a "latest posts" rail;
-5. the entry URL's own ``/2019/07/06/`` path, for entries with no stored HTML.
+5. the entry URL's own ``/2019/07/06/`` path, for entries with no stored HTML;
+6. failing that, a ``/2021/04/`` year-month permalink, resolved to the first of the
+   month. Last because the day is a placeholder — but the month is real (WordPress
+   generates the permalink from the publish date), and on blog.guitar-pro.com, which
+   accounts for 67 of these, the page carries **only** a `dateModified` ("Last
+   update: oct. 21, 2024" on a post published 2021/04). A real month beats a
+   precise-looking lie.
 
 **The save date is an upper bound, and it is what makes tier 4 safe.** The HTML was
 captured *recently*, not when the article was saved — so a stray `<time>` can be
@@ -153,11 +159,21 @@ def recover_for_user(uid: str, apply: bool) -> int:
         if candidate is None:
             url_dt = (main.url_inferred_pubdate(row["link"])
                       or main.url_inferred_pubdate(str(row["id"])))
+            source_name = "url-path"
+            if url_dt is None:
+                # /YYYY/MM/slug — month precision, first of the month. Last tier
+                # because the day is a placeholder, but a real month beats the
+                # epoch, and on the hosts that use this permalink the page itself
+                # carries only a `dateModified` that postdates publication by
+                # years. See url_inferred_pubmonth.
+                url_dt = (main.url_inferred_pubmonth(row["link"])
+                          or main.url_inferred_pubmonth(str(row["id"])))
+                source_name = "url-month"
             if url_dt is not None:
                 if url_dt.tzinfo is None:
                     url_dt = url_dt.replace(tzinfo=timezone.utc)
                 if limit is None or url_dt <= limit + _SAVE_SLACK:
-                    candidate, source = url_dt, "url-path"
+                    candidate, source = url_dt, source_name
 
         if candidate is None:
             if html:

@@ -3,7 +3,18 @@
 Backlog and staging area for future work. Completed work lives in git history —
 this file only tracks what's still open.
 
-## Now (priority order)
+## Now
+
+### Phone layout revived (2026-07-31)
+
+Single-pane mode is back as a third mode in the main app's layout shell (≤720px).
+Deliberately *not* revived alongside it: swipe gestures and pull-to-refresh, which
+`9dab5a8` removed as part of the same commit but are a separate decision from "can I
+read on my phone". Their `bindSwipeGestures` / `bindSinglePanePullToRefresh` call
+sites remain as no-ops, so either can come back on its own.
+
+Untested on real hardware: verified with Playwright at 390x844 (levels step 0→1→2,
+back controls, 44px touch targets), but not on Josh's actual phone. (priority order)
 
 **Rule-management UI shipped 2026-07-25** — Feed Properties → **Other domains**
 lists a feed's declared domain aliases with add/remove (`POST
